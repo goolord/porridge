@@ -1,0 +1,38 @@
+//  Voice state. A voice holds 16 unison copies of both oscillators, the noise source, four
+//  filters (filter 1/2 for left or mono, and for right when unison spreads the voice in
+//  stereo), two distortion stages, and its envelopes and per-note LFOs.
+
+namespace porridge
+{
+    let maxVoices = 32;
+    let maxUnison = 16;
+
+    struct Voice
+    {
+        bool active, stereoLatch;
+        int key;                        // MIDI key, plus arp transposition index << 8
+        float glideF0, freq, glideProg, glideInc;   // block-rate glide of the note frequency (freq > pan, keytrack)
+
+        Noise noise;
+        Osc[maxUnison] osc1, osc2;
+        float[maxUnison] jit, panr, ratio, uniL, uniR;
+
+        Filter f1L, f2L, f1R, f2R;
+        Env fenv1L, fenv2L, fenv1R, fenv2R;
+        Distortion distL, distR;
+
+        Env ampEnv, modEnv1, modEnv2;
+        LFO lfo1, lfo2;
+        float lfo2Prev;
+
+        int relCount;                   // -1 while held, samples since release otherwise
+        float vel, randAmp, velGainTarget, velGain;
+        float basePan, panL, panR;
+        float envSpeed, mix, m1Last, m2Last;
+        float penvR;
+        int penvStage;
+    }
+
+    /// The voice's current amp level (used for stealing and re-strike velocity).
+    float ampLevel (const Voice& this)      { return this.ampEnv.L; }
+}

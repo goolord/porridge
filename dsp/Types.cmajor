@@ -1,0 +1,18 @@
+//  Event payload types shared by the graph and the synth.
+
+namespace porridge
+{
+    /// User waveform / LFO shape: which = 0 osc 1, 1 osc 2, 2 LFO 1, 3 LFO 2.
+    struct Shape
+    {
+        int which;
+        float[512] data;
+    }
+
+    /// Response curve: which = 0 velocity, 1 aftertouch.
+    struct Curve
+    {
+        int which;
+        float[64] data;
+    }
+}

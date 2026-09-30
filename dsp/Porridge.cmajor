@@ -1,0 +1,40 @@
+//  Porridge: a Cmajor re-implementation of Oatmeal (Fuzzpilz, release 38-1, 2008).
+//
+//  The parameter endpoints (dsp/ParamStore.cmajor, generated) carry the same internal values
+//  an Oatmeal preset stores. The synth keeps a flat mirror of the original program struct so
+//  the DSP reads fields by their original chunk offsets (see dsp/Slots.cmajor and docs/).
+
+graph Porridge  [[ main ]]
+{
+    input params.*;
+
+    input event std::midi::Message midiIn               [[ name: "MIDI In" ]];
+    input event std::timeline::Tempo tempoIn;
+    input event std::timeline::TransportState transportIn;
+    input event std::timeline::Position positionIn;
+    input event porridge::Shape shapeIn;
+    input event porridge::Curve curveIn;
+    input event int panic;
+
+    output stream float<2> out                            [[ name: "Audio Out" ]];
+    output event float<2> xyOut;
+    output event int ccOut;
+
+    node params = ParamStore;
+    node synth  = porridge::Synth;
+
+    connection
+    {
+        params.paramOut -> synth.paramIn;
+        midiIn          -> synth.midiIn;
+        tempoIn         -> synth.tempoIn;
+        transportIn     -> synth.transportIn;
+        positionIn      -> synth.positionIn;
+        shapeIn         -> synth.shapeIn;
+        curveIn         -> synth.curveIn;
+        panic           -> synth.panicIn;
+        synth.out       -> out;
+        synth.xyOut     -> xyOut;
+        synth.ccOut     -> ccOut;
+    }
+}

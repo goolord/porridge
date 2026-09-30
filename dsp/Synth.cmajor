@@ -1,0 +1,2209 @@
+//  The synth engine: MIDI, controller smoothing, note handling and arpeggiator, the voice
+//  manager, the per-voice renderer and the global effects, all in 64-sample control blocks
+//  as in Oatmeal. Behaviour notes refer to docs/internals/.
+
+namespace porridge
+{
+    processor Synth
+    {
+        input event ParamChange paramIn;
+        input event std::midi::Message midiIn;
+        input event std::timeline::Tempo tempoIn;
+        input event std::timeline::TransportState transportIn;
+        input event std::timeline::Position positionIn;
+        input event Shape shapeIn;
+        input event Curve curveIn;
+        input event int panicIn;
+
+        // test-only: lets the offline test graph replace the voices with a recorded signal
+        input stream float<2> testIn;
+        input event int testModeIn;
+
+        output stream float<2> out;
+        output event float<2> xyOut;
+        output event int ccOut;
+
+        //==============================================================================
+        float[numSlots] P;                          // program mirror, slot = chunk offset / 4
+        float[512] wave1, wave2, lfoShape1, lfoShape2;
+        float[64] velCurve, touchCurve;
+        bool user1Dirty, user2Dirty;
+
+        float64 sampleRate, samplesPerBeat;
+        float bpm = 120.0f;
+        int srInt;
+
+        Rand rng;
+        WaveTables tables;
+        FxTables fxTables;
+        DistTables distTables;
+
+        Distortion globalDist;
+        Chorus chorus;
+        Delay delay;
+        Reverb reverb;
+        EQ eq;
+
+        //==============================================================================
+        // voices: a pool with an explicit list, newest first
+        Voice[maxVoices] voices;
+        int[maxVoices] order;
+        int numActive;
+
+        bool[256] keyReleased;
+        float[128] perKeyAT;
+        Env phantom1, phantom2;
+        float phantom1Val, phantom2Val;
+        LFO gLfo1, gLfo2;
+        float gLfo2Prev;
+
+        // per-block values computed by the voice manager for all voices
+        EnvCoefs ampC, filtC, filt2C, mod1C, mod2C;
+        PitchEnvCoefs penvC;
+        float lnOct, octave;
+        float gv1, gv2, gLfo1Pitch, gLfo2Pitch, gLfo1Pan, gLfo2Pan, globalPitch, globalPan;
+        int64 pwMod1, pwMod2;
+        float pwmRateMod1, pwmDepthMod1, pwmRateMod2, pwmDepthMod2;
+
+        // controllers
+        float bendTarget, bendSmooth, pressureTarget, pressureSmooth, xSmooth, ySmooth;
+        float[128] rawCC;
+        float[6] ccSmooth;
+        bool sustainDown;
+        float[4] walkX, walkY;
+        float walkT;
+        float curX, curY;
+        int xyReportCounter;
+
+        // note object / arpeggiator
+        int[128] heldKey, heldVel, heldStamp, heldSub;
+        float[128] heldOff;
+        int heldCount, stampCounter;
+        int prevCmd, dir, prevDir, stepIdx, curKey, arpPos, arpPrevPos, gSub, gSubPrev;
+        bool firstNote, subFlag;
+        float64 arpPhase;
+
+        // MIDI arriving during a block is handled at the start of the next one
+        std::midi::Message[256] midiQueue;
+        int midiCount;
+        bool panicPending;
+
+        // block buffers
+        float<2>[blockSize] mix, testBuf, testNext;
+        bool useTestInput;
+        float[blockSize] bufM, bufR, bufE, bufNZ, bufTmp, bufX, bufMix;
+        float[blockSize * maxUnison] bufV;
+        int[blockSize] syncBuf;
+        float[65] fmBuf;
+
+        //==============================================================================
+        event paramIn (ParamChange c)
+        {
+            P.at (c.slot) = c.value;
+        }
+
+        event shapeIn (Shape s)
+        {
+            if (s.which == 0)      { wave1 = s.data; user1Dirty = true; }
+            else if (s.which == 1) { wave2 = s.data; user2Dirty = true; }
+            else if (s.which == 2) lfoShape1 = s.data;
+            else if (s.which == 3) lfoShape2 = s.data;
+        }
+
+        event curveIn (Curve c)
+        {
+            if (c.which == 0) velCurve = c.data;
+            else if (c.which == 1) touchCurve = c.data;
+        }
+
+        event tempoIn (std::timeline::Tempo t)          { if (t.bpm > 0) bpm = t.bpm; }
+        event transportIn (std::timeline::TransportState t) {}
+        event positionIn (std::timeline::Position p)    {}
+        event panicIn (int x)                           { panicPending = true; }
+        event testModeIn (int x)                        { useTestInput = x != 0; }
+
+        event midiIn (std::midi::Message m)
+        {
+            if (midiCount < 256)
+            {
+                midiQueue.at (midiCount) = m;
+                ++midiCount;
+            }
+        }
+
+        //==============================================================================
+        void init()
+        {
+            sampleRate = processor.frequency;
+            srInt = int (sampleRate + 0.5);
+            samplesPerBeat = 21000.0;
+            rng.state = 1;
+
+            fxTables.build();
+            distTables.build();
+            tables.buildStatic();
+
+            // defaults until the patch sends its shapes: sine waves, sine LFO shapes, linear curves
+            for (int i = 0; i < 512; ++i)
+            {
+                let s = float (sin (twoPi * float64 (i) / 512.0));
+                wave1.at (i) = s;
+                wave2.at (i) = s;
+                lfoShape1.at (i) = 0.5f + 0.5f * s;
+                lfoShape2.at (i) = 0.5f + 0.5f * s;
+            }
+
+            for (int i = 0; i < 64; ++i)
+            {
+                velCurve.at (i) = float (i) / 63.0f;
+                touchCurve.at (i) = float (i) / 63.0f;
+            }
+
+            user1Dirty = true;
+            user2Dirty = true;
+
+            P[slot::Tune_Octave] = 2.0f;
+            P[slot::Tune_Main] = 440.0f;
+
+            globalDist.clearState();
+            delay.prepare();
+            reverb.prepare();
+            eq.clearState();
+            chorus.clearState (rng, P, sampleRate);
+
+            for (wrap<maxVoices> i)
+                constructVoice (voices[i]);
+
+            numActive = 0;
+            allNotesOff();
+            walkT = 0;
+        }
+
+        void resetEffects()
+        {
+            globalDist.clearState();
+            chorus.clearState (rng, P, sampleRate);
+            delay.clearState();
+            reverb.clearState();
+            eq.clearState();
+        }
+
+        //==============================================================================
+        // helpers for the modulation matrix
+
+        float xySum (int target, float x, float y)
+        {
+            float s = 0;
+
+            for (int k = 0; k < 4; ++k)
+            {
+                if (int (P.at (slot::XY_H_Target_1 + k)) == target) s += x * P.at (slot::XY_H_Depth_1 + k);
+                if (int (P.at (slot::XY_V_Target_1 + k)) == target) s += y * P.at (slot::XY_V_Depth_1 + k);
+            }
+
+            return s;
+        }
+
+        float ccDepthSum (int target, bool bipolar)
+        {
+            float s = 0;
+
+            for (int c = 0; c < 6; ++c)
+            {
+                let cc = ccSmooth.at (c);
+                let v = bipolar ? 2.0f * cc - 1.0f : cc;
+
+                for (int k = 0; k < 4; ++k)
+                    if (int (P.at (slot::CC1_Target_1 + c * 9 + k)) == target)
+                        s += v * P.at (slot::CC1_Depth_1 + c * 9 + k);
+            }
+
+            return s;
+        }
+
+        float ccDbProduct (int target)
+        {
+            var f = 1.0f;
+
+            for (int c = 0; c < 6; ++c)
+                for (int k = 0; k < 4; ++k)
+                    if (int (P.at (slot::CC1_Target_1 + c * 9 + k)) == target)
+                        f *= dbFactor (ccSmooth.at (c), P.at (slot::CC1_Depth_1 + c * 9 + k));
+
+            return f;
+        }
+
+        float ccLinearProduct (int target)
+        {
+            var f = 1.0f;
+
+            for (int c = 0; c < 6; ++c)
+                for (int k = 0; k < 4; ++k)
+                    if (int (P.at (slot::CC1_Target_1 + c * 9 + k)) == target)
+                        f *= 1.0f + ccSmooth.at (c) * P.at (slot::CC1_Depth_1 + c * 9 + k);
+
+            return f;
+        }
+
+        float xyLinearProduct (int target, float x, float y)
+        {
+            var f = 1.0f;
+
+            for (int k = 0; k < 4; ++k)
+            {
+                if (int (P.at (slot::XY_H_Target_1 + k)) == target) f *= 1.0f + x * P.at (slot::XY_H_Depth_1 + k);
+                if (int (P.at (slot::XY_V_Target_1 + k)) == target) f *= 1.0f + y * P.at (slot::XY_V_Depth_1 + k);
+            }
+
+            return f;
+        }
+
+        /// sum over mod-env slots with a target: me1*d (ME1 slots) + me2*d (ME2 slots)
+        float meSum (int target, float me1, float me2)
+        {
+            float s = 0;
+
+            for (int k = 0; k < 4; ++k)
+            {
+                if (int (P.at (slot::M1_Target_1 + k)) == target) s += me1 * P.at (slot::M1_Depth_1 + k);
+                if (int (P.at (slot::M2_Target_1 + k)) == target) s += me2 * P.at (slot::M2_Depth_1 + k);
+            }
+
+            return s;
+        }
+
+        float meDbProduct (int target, float me1, float me2)
+        {
+            var f = 1.0f;
+
+            for (int k = 0; k < 4; ++k)
+            {
+                if (int (P.at (slot::M1_Target_1 + k)) == target) f *= dbFactor (me1, P.at (slot::M1_Depth_1 + k));
+                if (int (P.at (slot::M2_Target_1 + k)) == target) f *= dbFactor (me2, P.at (slot::M2_Depth_1 + k));
+            }
+
+            return f;
+        }
+
+        float pow2 (float x)            { return float (pow (2.0, float64 (x))); }
+        float octPow (float semis)      { return float (pow (float64 (octave), float64 (semis) / 12.0)); }
+
+        float curveLerp (bool touch, float x)
+        {
+            let i = int (x);
+            let f = x - float (i);
+            let i0 = min (i, 63);
+            let i1 = min (i + 1, 63);
+            return touch ? (1.0f - f) * touchCurve.at (i0) + f * touchCurve.at (i1)
+                         : (1.0f - f) * velCurve.at (i0) + f * velCurve.at (i1);
+        }
+
+        //==============================================================================
+        // voice pool
+
+        void constructVoice (Voice& v)
+        {
+            v = Voice();
+
+            for (wrap<maxUnison> k)
+            {
+                v.osc1[k].construct();
+                v.osc2[k].construct();
+            }
+
+            v.distL.clearState();
+            v.distR.clearState();
+            v.f1L.clearState(); v.f2L.clearState(); v.f1R.clearState(); v.f2R.clearState();
+        }
+
+        void resetVoice (Voice& v)
+        {
+            v.relCount = -1;
+            v.key = -1;
+            v.stereoLatch = false;
+            v.active = false;
+            v.m1Last = 0;
+            v.m2Last = 0;
+            v.basePan = 0.5f;
+            v.glideF0 = P[slot::Tune_Main];
+            v.freq = P[slot::Tune_Main];
+            v.glideProg = 2.0f;
+            v.glideInc = 0;
+            v.noise.resetNoise();
+
+            let c = 6.10370189e-05f;
+
+            for (wrap<maxUnison> k)
+            {
+                v.osc1[k].resetOsc();
+                v.osc1[k].setPhase (rng, P);
+                v.osc1[k].setPwmPhase (rng, P);
+                v.osc2[k].resetOsc();
+                v.osc2[k].setPhase (rng, P);
+                v.osc2[k].setPwmPhase (rng, P);
+                v.ratio[k] = 1.0f;
+                v.uniL[k] = 1.0f;
+                v.uniR[k] = 1.0f;
+                v.jit[k] = (float (rng.next()) * c - 1.0f) * (1.0f / 1200.0f);
+                v.panr[k] = float (rng.next()) * c - 1.0f;
+            }
+
+            v.lfo1.resetPhase (rng, P);
+            v.lfo2.resetPhase (rng, P);
+            v.f1L.clearState(); v.f2L.clearState(); v.f1R.clearState(); v.f2R.clearState();
+            v.fenv1L = Env(); v.fenv2L = Env(); v.fenv1R = Env(); v.fenv2R = Env();
+            v.ampEnv = Env(); v.modEnv1 = Env(); v.modEnv2 = Env();
+            v.vel = 1.0f;
+            v.randAmp = 1.0f;
+            v.velGainTarget = 1.0f;
+            v.velGain = 1.0f;
+            v.lfo2Prev = 0;
+            v.penvR = 0;
+            v.penvStage = 0;
+        }
+
+        int listPos (int vi)
+        {
+            for (int i = 0; i < numActive; ++i)
+                if (order.at (i) == vi) return i;
+
+            return -1;
+        }
+
+        void moveToHead (int vi)
+        {
+            let p = listPos (vi);
+            if (p <= 0) return;
+
+            for (int i = p; i > 0; --i)
+                order.at (i) = order.at (i - 1);
+
+            order.at (0) = vi;
+        }
+
+        void removeFromList (int vi)
+        {
+            let p = listPos (vi);
+            if (p < 0) return;
+
+            for (int i = p; i < numActive - 1; ++i)
+                order.at (i) = order.at (i + 1);
+
+            --numActive;
+        }
+
+        /// A new (fresh) voice at the head of the list.
+        int allocateVoice()
+        {
+            for (int vi = 0; vi < maxVoices; ++vi)
+            {
+                if (listPos (vi) < 0)
+                {
+                    constructVoice (voices.at (vi));
+                    resetVoice (voices.at (vi));
+
+                    for (int i = numActive; i > 0; --i)
+                        order.at (i) = order.at (i - 1);
+
+                    order.at (0) = vi;
+                    ++numActive;
+                    return vi;
+                }
+            }
+
+            return -1;
+        }
+
+        //==============================================================================
+        // voice note-on / note-off
+
+        void voiceRelease (Voice& v)
+        {
+            v.relCount = 0;
+            v.ampEnv.release (ampC, false);
+            v.fenv1L.release (filtC, true);
+            v.fenv2L.release (filt2C, true);
+            v.fenv1R.release (filtC, true);
+            v.fenv2R.release (filt2C, true);
+            v.modEnv1.release (mod1C, true);
+            v.modEnv2.release (mod2C, true);
+            v.penvStage = 8;
+        }
+
+        float freqPanOffset (float f)
+        {
+            let fp = P[slot::FreqPan];
+            if (abs (fp) <= 0.001f) return 0.0f;
+            return fp * float (log (float64 (f) / float64 (P[slot::Tune_Main])) / float64 (lnOct) - float64 (P[slot::Tune_PanReference]) / 12.0);
+        }
+
+        float velAmpScale (float vel)
+        {
+            let s = P[slot::VeloSens];
+            return s > 0 ? float (pow (float64 (vel), 2.0 * float64 (s))) : 1.0f + s * vel;
+        }
+
+        void voiceStart (int vi, int refIdx, float64 freq, int key, float velc)
+        {
+            // everything read from the reference voice is taken before this voice changes
+            let hasRef = refIdx >= 0;
+            var refInc1 = 0i64, refInc2 = 0i64;
+            float refNoiseFreq = 0, refGlideF0 = 0, refFreq = 0, refGlideProg = 2.0f;
+
+            if (hasRef)
+            {
+                refInc1 = voices.at (refIdx).osc1[0].base;
+                refInc2 = voices.at (refIdx).osc2[0].base;
+                refNoiseFreq = voices.at (refIdx).noise.freq;
+                refGlideF0 = voices.at (refIdx).glideF0;
+                refFreq = voices.at (refIdx).freq;
+                refGlideProg = voices.at (refIdx).glideProg;
+            }
+
+            voiceStartOn (voices.at (vi), vi == refIdx, hasRef, refInc1, refInc2, refNoiseFreq, refGlideF0, refFreq, refGlideProg,
+                          freq, key, velc);
+        }
+
+        void voiceStartOn (Voice& v, bool refIsSelf, bool hasRef, int64 refInc1, int64 refInc2, float refNoiseFreq,
+                           float refGlideF0, float refFreq, float refGlideProg, float64 freq, int key, float velc)
+        {
+            let fresh = ! v.active;
+            v.relCount = -1;
+            v.vel = velc;
+            v.randAmp = float (pow (10.0, float64 ((float (rng.next()) * (1.0f / 16384.0f) - 1.0f) * P[slot::RandomAmp] * 0.05f)));
+
+            if (fresh)
+            {
+                v.m1Last = 0;
+                v.m2Last = 0;
+                v.velGainTarget = v.randAmp * velAmpScale (velc);
+                v.velGain = v.velGainTarget;
+                v.basePan = (float (rng.next()) * (1.0f / 32768.0f) - 0.5f) * P[slot::RandomPan] + 0.5f;
+                let g = panGains (clamp (v.basePan + freqPanOffset (float (freq)), 0.0f, 1.0f));
+                v.panL = g[0];
+                v.panR = g[1];
+
+                for (wrap<maxUnison> k)
+                {
+                    v.osc1[k].setPhase (rng, P);
+                    v.osc2[k].setPhase (rng, P);
+                    v.osc1[k].setPwmPhase (rng, P);
+                    v.osc2[k].setPwmPhase (rng, P);
+                }
+
+                v.lfo1.resetPhase (rng, P);
+                v.lfo2.resetPhase (rng, P);
+            }
+            else
+            {
+                if (P[slot::OscRetrig] != 0)
+                    for (wrap<maxUnison> k) { v.osc1[k].setPhase (rng, P); v.osc2[k].setPhase (rng, P); }
+
+                if (P[slot::PWMRetrig] != 0)
+                    for (wrap<maxUnison> k) { v.osc1[k].setPwmPhase (rng, P); v.osc2[k].setPwmPhase (rng, P); }
+
+                if (P[slot::LFORetrig] != 0)
+                {
+                    v.lfo1.resetPhase (rng, P);
+                    v.lfo2.resetPhase (rng, P);
+                }
+            }
+
+            v.envSpeed = float (pow (float64 (octave), 2.0 * float64 (P[slot::FreqEnv])
+                                      * (log (freq / float64 (P[slot::Tune_Main])) / float64 (lnOct) - float64 (P[slot::Tune_PanReference]) / 12.0)));
+
+            let voiceMode = int (P[slot::PolyMode]);
+
+            if (voiceMode < 2 || fresh)
+            {
+                if (fresh)
+                {
+                    v.mix = P[slot::F_Mix];
+                    v.penvR = float (penvC.S);
+                    v.penvStage = 2;
+                }
+                else
+                {
+                    v.penvStage = 1;
+                }
+
+                v.ampEnv.trigger (ampC, false);
+                v.fenv1L.trigger (filtC, true);
+                v.fenv2L.trigger (filt2C, true);
+
+                if (voiceMode < 2)
+                {
+                    v.fenv1R.trigger (filtC, true);
+                    v.fenv2R.trigger (filt2C, true);
+                }
+
+                v.modEnv1.trigger (mod1C, true);
+                v.modEnv2.trigger (mod2C, true);
+            }
+            else
+            {
+                if (v.penvStage > 7 || v.penvStage < 2)
+                    v.penvStage = 2;
+
+                if (v.ampEnv.stage == 0 || v.ampEnv.stage >= 8)   v.ampEnv.trigger (ampC, false);
+                if (v.fenv1L.stage == 0 || v.fenv1L.stage >= 8)   v.fenv1L.trigger (filtC, true);
+                if (v.fenv2L.stage == 0 || v.fenv2L.stage >= 8)   v.fenv2L.trigger (filt2C, true);
+                if (v.modEnv1.stage == 0 || v.modEnv1.stage >= 8) v.modEnv1.trigger (mod1C, true);
+                if (v.modEnv2.stage == 0 || v.modEnv2.stage >= 8) v.modEnv2.trigger (mod2C, true);
+            }
+
+            // glide
+            let G = int (float64 (P[slot::Glide]) * float64 (srInt) * 0.001 + 0.5);
+            let newInc1 = int64 (two32 * freq / float64 (srInt) + 0.5) & u32;
+            let noiseTarget = float (freq * pow (float64 (octave), float64 (P[slot::N_Transpose]) / 12.0));
+            let glide = G > 10 && (fresh || refIsSelf) && hasRef;
+
+            if (! glide)
+            {
+                v.osc1[0].base = newInc1;
+                v.osc1[0].glideOn = false;
+                v.osc1[0].step = 0;
+                v.noise.freq = noiseTarget;
+                v.noise.glideOn = false;
+                v.glideProg = 2.0f;
+                v.glideF0 = float (freq);
+            }
+            else
+            {
+                let oldInc = refInc1 == 0 ? 1i64 : refInc1;
+                let o = abs (log (float64 (newInc1) / float64 (oldInc))) / float64 (lnOct);
+                let oc = max (o, 0.001);
+                let mode = int (P[slot::GlideMode]);
+                float64 factor = 1.0;
+
+                if (mode == 1)      factor = o;
+                else if (mode == 2) factor = 1.0 / oc;
+                else if (mode == 3) factor = oc + 1.0 / oc;
+                else if (mode == 4) factor = 1.0 + o;
+                else if (mode == 5) factor = 1.0 + 1.0 / oc;
+                else if (mode == 6) factor = 1.0 + oc + 1.0 / oc;
+
+                let Ng = int (float64 (G) * factor + 0.5);
+                v.osc1[0].base = oldInc;
+                v.osc1[0].glideTo (newInc1, Ng);
+                v.osc2[0].base = refInc2;
+                v.noise.freq = refNoiseFreq;
+                v.noise.glideTo (noiseTarget, Ng);
+
+                if (Ng > 0)
+                {
+                    v.glideInc = 1.0f / float (Ng);
+                    v.glideF0 = refGlideProg < 1.0f ? refGlideF0 + (refFreq - refGlideF0) * refGlideProg : refFreq;
+                    v.glideProg = 0;
+                }
+                else
+                {
+                    v.glideProg = 2.0f;
+                    v.glideF0 = float (freq);
+                }
+            }
+
+            v.freq = float (freq);
+            v.active = true;
+            v.key = key;
+        }
+
+        //==============================================================================
+        // voice manager note-on (allocation, stealing, voice modes)
+
+        void vmNoteOn (float64 freq, int key, float velc)
+        {
+            int same = -1;
+
+            for (int i = 0; i < numActive; ++i)
+            {
+                let vi = order.at (i);
+                if (voices.at (vi).key == key && voices.at (vi).relCount < 0) { same = vi; break; }
+            }
+
+            keyReleased.at (key & 0xff) = false;
+            let voiceMode = int (P[slot::PolyMode]);
+
+            bool anyHeld = false;
+            for (int i = 0; i < numActive; ++i)
+                if (voices.at (order.at (i)).relCount < 0) anyHeld = true;
+
+            if (! (voiceMode == 2 && anyHeld))
+            {
+                phantom1.trigger (mod1C, true);
+                phantom2.trigger (mod2C, true);
+            }
+
+            if (P[slot::LFO_1_Sync] < 2) gLfo1.resetPhase (rng, P);
+            if (P[slot::LFO_2_Sync] < 2) gLfo2.resetPhase (rng, P);
+
+            let oldHead = numActive > 0 ? order.at (0) : -1;
+
+            if (same >= 0)
+            {
+                // re-striking a held key: same voice, velocity plus its current envelope level
+                voiceStart (same, oldHead, freq, key, velc + voices.at (same).ampEnv.L);
+                moveToHead (same);
+                return;
+            }
+
+            int vi = -1;
+            int ref = oldHead;
+            let maxPoly = clamp (int (P[slot::Voices]), 1, maxVoices);
+
+            if (voiceMode == 2)
+            {
+                if (numActive == 0)
+                {
+                    vi = allocateVoice();
+                    ref = -1;
+                }
+                else
+                {
+                    vi = order.at (0);
+                    keyReleased.at (voices.at (vi).key & 0xff) = true;
+                    ref = vi;
+                }
+            }
+            else if (numActive >= maxPoly)
+            {
+                var best = 0;
+
+                for (int i = 0; i < numActive; ++i)
+                {
+                    let u = order.at (i);
+                    if (voices.at (u).relCount >= best) { best = voices.at (u).relCount; vi = u; }
+                }
+
+                if (vi < 0)
+                    vi = order.at (numActive - 1);
+
+                moveToHead (vi);
+                keyReleased.at (voices.at (vi).key & 0xff) = true;
+
+                if (voices.at (vi).ampEnv.L <= 1e-4f && vi != oldHead)
+                    resetVoice (voices.at (vi));
+            }
+            else
+            {
+                vi = allocateVoice();
+            }
+
+            if (vi < 0)
+                return;
+
+            voiceStart (vi, ref, freq, key, velc);
+
+            if (voiceMode != 1)
+            {
+                for (int i = 1; i < numActive; ++i)
+                {
+                    let u = order.at (i);
+                    keyReleased.at (voices.at (u).key & 0xff) = true;
+                    voiceRelease (voices.at (u));
+                }
+            }
+        }
+
+        /// The note trigger: velocity through the curve, random detune, frequency.
+        void voiceNote (int key, int vel, float off)
+        {
+            if (key < 0)
+                return;
+
+            if (vel == 0)
+            {
+                let k = key & 0xff;
+                keyReleased.at (k) = true;
+
+                for (int i = 0; i < numActive; ++i)
+                {
+                    let vi = order.at (i);
+                    if ((voices.at (vi).key & 0xff) == k)
+                        voiceRelease (voices.at (vi));
+                }
+
+                bool anyHeld = false;
+                for (int i = 0; i < numActive; ++i)
+                    if (voices.at (order.at (i)).relCount < 0) anyHeld = true;
+
+                if (! anyHeld)
+                {
+                    phantom1.release (mod1C, true);
+                    phantom2.release (mod2C, true);
+                }
+
+                return;
+            }
+
+            let x = float (vel) * 0.00787401572f * 64.0f;
+            let velc = curveLerp (false, x);
+            let det = (float (rng.next()) * (1.0f / 16384.0f) - 1.0f) * P[slot::RandomFreq] * 0.01f;
+            let semis = float (det + off);
+            let freq = float64 (P[slot::Tune_Main]) * pow (float64 (octave), (float64 ((key & 0xff) - 69) + float64 (semis)) / 12.0);
+            vmNoteOn (freq, key, velc);
+        }
+
+        //==============================================================================
+        // note object: held notes, return-to-held, arpeggiator
+
+        void allNotesOff()
+        {
+            gSub = 0; gSubPrev = 0; prevCmd = 0; firstNote = false;
+            numActive = 0;
+
+            for (int k = 0; k < 256; ++k) keyReleased.at (k) = true;
+            for (int k = 0; k < 128; ++k) perKeyAT.at (k) = 0;
+
+            phantom1 = Env();
+            phantom2 = Env();
+            heldCount = 0; stampCounter = 0; subFlag = false; arpPhase = 0; stepIdx = 0;
+            dir = 1; prevDir = 1; curKey = -1; arpPos = -1; arpPrevPos = -1;
+        }
+
+        bool keyHasHeldVoice (int k)
+        {
+            for (int i = 0; i < numActive; ++i)
+            {
+                let vi = order.at (i);
+                if (voices.at (vi).key == k && voices.at (vi).relCount < 0) return true;
+            }
+
+            return false;
+        }
+
+        void heldInsert (int key, float off, int vel)
+        {
+            if (key < 0 || heldCount >= 128) return;
+
+            var i = 0;
+
+            while (i < heldCount)
+            {
+                if (heldKey.at (i) == key) return;
+                if (heldKey.at (i) > key) break;
+                ++i;
+            }
+
+            for (int j = heldCount; j > i; --j)
+            {
+                heldKey.at (j) = heldKey.at (j - 1);
+                heldVel.at (j) = heldVel.at (j - 1);
+                heldStamp.at (j) = heldStamp.at (j - 1);
+            }
+
+            if (arpPos >= i) ++arpPos;
+            if (arpPrevPos >= i) ++arpPrevPos;
+
+            heldKey.at (i) = key;
+            heldOff.at (i) = off;
+            heldVel.at (i) = vel;
+            heldSub.at (i) = 0;
+            heldStamp.at (i) = stampCounter;
+            ++stampCounter;
+            ++heldCount;
+        }
+
+        void heldRemove (int key)
+        {
+            if (heldCount > 0)
+            {
+                var found = -1;
+
+                for (int i = 0; i < heldCount; ++i)
+                    if (heldKey.at (i) == key) { found = i; break; }
+
+                if (found >= 0)
+                {
+                    let i = found;
+                    if (arpPos > i || (arpPos == i && i == heldCount - 1)) --arpPos;
+                    if (arpPrevPos > i || (arpPrevPos == i && i == heldCount - 1)) --arpPrevPos;
+                    --heldCount;
+
+                    for (int j = i; j < heldCount; ++j)
+                    {
+                        heldKey.at (j) = heldKey.at (j + 1);
+                        heldVel.at (j) = heldVel.at (j + 1);
+                        heldStamp.at (j) = heldStamp.at (j + 1);
+                    }
+                }
+
+                if (int (P[slot::Arp_Mode]) == 0)
+                    returnToHeld (key);
+            }
+
+            if (heldCount <= 0)
+            {
+                heldCount = 0;
+                gSub = 0;
+                gSubPrev = 0;
+            }
+        }
+
+        /// Mono/legato: releasing the sounding note brings back the OLDEST still-held note.
+        void returnToHeld (int key)
+        {
+            let k = key & 0xff;
+            let hasActive = keyHasHeldVoice (k);
+
+            if (! hasActive && keyReleased.at (k))
+                return;
+
+            if (! (P[slot::Sustain] > 0.001f) && int (P[slot::PolyMode]) == 1)
+                return;
+
+            var best = 0x7fffffff;
+            var bi = -1;
+
+            for (int i = 0; i < heldCount; ++i)
+            {
+                if (keyHasHeldVoice (heldKey.at (i) & 0xff))
+                    continue;
+
+                if (heldStamp.at (i) <= best)
+                {
+                    best = heldStamp.at (i);
+                    bi = i;
+                }
+            }
+
+            if (bi >= 0)
+            {
+                heldStamp.at (bi) = stampCounter;
+                ++stampCounter;
+                voiceNote (heldKey.at (bi), heldVel.at (bi), 0.0f);
+            }
+        }
+
+        bool arpNoteOn (int j)          { return j >= 1 && j <= 7 && P.at (slot::Arp_Add_1_On + (j - 1)) != 0; }
+        float arpShift (int j)          { return j >= 1 && j <= 7 ? P.at (slot::Arp_Add_1_Shift + (j - 1)) : 0.0f; }
+
+        int advanceSub (int cIn)
+        {
+            var c = cIn;
+
+            if (c > 0 && ! arpNoteOn (c))
+            {
+                loop
+                {
+                    if (c > 7) break;
+                    ++c;
+                    if (arpNoteOn (c)) break;
+                }
+            }
+
+            if (c > 7) c = 0;
+            return c;
+        }
+
+        void handleNote (int key, float off, int vel)
+        {
+            if (vel > 0) heldInsert (key, off, vel);
+            else         heldRemove (key);
+
+            if (vel > 0 && heldCount == 1)
+            {
+                firstNote = true;
+                gSub = 0;
+                gSubPrev = 0;
+            }
+
+            let mode = int (P[slot::Arp_Mode]);
+
+            if (mode == 0)
+            {
+                voiceNote (key, vel, off);
+                return;
+            }
+
+            if (vel == 0)
+            {
+                if (mode >= 4) voiceNote (key, 0, 0);
+                return;
+            }
+
+            if (mode < 4 || prevCmd == 0)
+                return;
+
+            if (mode == 4)
+            {
+                voiceNote (key, vel, off);
+
+                for (int j = 1; j <= 7; ++j)
+                    if (arpNoteOn (j))
+                        voiceNote (key + 256 * j, vel, off + arpShift (j));
+            }
+            else
+            {
+                gSub = advanceSub (gSub);
+
+                if (gSub <= 0) voiceNote (key, vel, 0.0f);
+                else           voiceNote (key + (gSub << 8), vel, off + arpShift (gSub));
+            }
+        }
+
+        float64 arpStepLength()
+        {
+            var s = float64 (P[slot::Arp_Step]);
+
+            if (P[slot::Arp_Quantize] != 0)
+                s = (3.0 * s >= 2.0) ? float64 (int (s + 0.5)) : 1.0 / float64 (int (1.0 / s + 0.5));
+
+            let unit = int (P[slot::Arp_Unit]);
+            let beats = float64[15] (0.1, 1.0 / 12.0, 0.125, 0.2, 1.0 / 6.0, 0.25, 0.4, 1.0 / 3.0, 0.5, 0.8, 2.0 / 3.0, 1.0, 1.6, 4.0 / 3.0, 2.0);
+            float64 L;
+
+            if (unit == 0)      L = s * float64 (srInt) * 0.001;
+            else if (unit == 1) L = s * float64 (srInt) * 0.01;
+            else if (unit == 2) L = s * float64 (srInt);
+            else                L = s * samplesPerBeat * beats.at (clamp (unit - 3, 0, 14));
+
+            return max (L, 1.0);
+        }
+
+        int arpCommand (int c)
+        {
+            let n = heldCount;
+
+            if (c == 1)       { prevDir = dir; dir = 1;  arpPrevPos = arpPos; ++arpPos; if (arpPos >= n || arpPos < 0) arpPos = 0; }
+            else if (c == 2)  { prevDir = dir; dir = 1;  arpPrevPos = arpPos; ++arpPos; if (arpPos >= n) arpPos = n - 1; else if (arpPos < 0) arpPos = 0; }
+            else if (c == 3)  { prevDir = dir; dir = -1; arpPrevPos = arpPos; --arpPos; if (arpPos >= n || arpPos < 0) arpPos = n - 1; }
+            else if (c == 4)  { prevDir = dir; dir = -1; arpPrevPos = arpPos; --arpPos; if (arpPos >= n) arpPos = n - 1; else if (arpPos < 0) arpPos = 0; }
+            else if (c == 5 || c == 6)
+            {
+                prevDir = dir;
+                let d = (rng.next() & 1) != 0 ? 1 : -1;
+                dir = d;
+                arpPrevPos = arpPos;
+                arpPos += d;
+
+                if (c == 5) { if (arpPos >= n) arpPos = 0; else if (arpPos < 0) arpPos = n - 1; }
+                else        { if (arpPos >= n) arpPos = n - 1; else if (arpPos < 0) arpPos = 0; }
+            }
+            else if (c == 7)
+            {
+                return curKey;
+            }
+            else if (c == 8)
+            {
+                if (dir == 0) dir = (rng.next() & 1) != 0 ? 1 : -1;
+                prevDir = dir; arpPrevPos = arpPos; arpPos += dir;
+                if (arpPos >= n) arpPos = 0; else if (arpPos < 0) arpPos = n - 1;
+            }
+            else if (c == 9)
+            {
+                if (dir == 0) dir = (rng.next() & 1) != 0 ? 1 : -1;
+                arpPrevPos = arpPos; arpPos += dir; prevDir = dir;
+
+                if (arpPos >= n)     { dir = -1; arpPos = n - 2; if (arpPos < 0) arpPos = 0; }
+                else if (arpPos < 0) { dir = 1;  arpPos = n > 1 ? 1 : 0; }
+            }
+            else if (c >= 10 && c <= 12)
+            {
+                if (arpPrevPos < 0 || arpPrevPos >= n)
+                {
+                    arpPrevPos = arpPos;
+                    prevDir = 1;
+                    dir = 1;
+                    return curKey;
+                }
+
+                let old = arpPos;
+
+                if (c == 10)
+                {
+                    arpPos = arpPrevPos;
+                    arpPrevPos = old;
+                    let t = dir; dir = prevDir; prevDir = t;
+                }
+                else
+                {
+                    arpPos = c == 11 ? arpPrevPos + 1 : arpPrevPos - 1;
+                    if (arpPos >= n) arpPos = 0;
+                    if (arpPos < 0) arpPos = n - 1;
+                    arpPrevPos = old;
+                    let t = dir; dir = -prevDir; prevDir = t;
+                }
+            }
+            else if (c == 13) { prevDir = dir; dir = 1;  arpPrevPos = arpPos; arpPos = n - 1; }
+            else if (c == 14) { prevDir = dir; dir = -1; arpPrevPos = arpPos; arpPos = 0; }
+            else if (c == 15)
+            {
+                prevDir = dir;
+                arpPrevPos = arpPos;
+                arpPos = clamp (int (float (rng.next()) * float (n - 1) * (1.0f / 32768.0f) + 0.5f), 0, n - 1);
+                dir = arpPos > arpPrevPos ? 1 : (arpPos == arpPrevPos ? 0 : -1);
+            }
+
+            return heldKey.at (clamp (arpPos, 0, 127));
+        }
+
+        void arpChordStep (int c, int mode)
+        {
+            if (c == 0)
+            {
+                for (int i = 0; i < heldCount; ++i)
+                    voiceNote (heldKey.at (i), 0, 0);
+
+                return;
+            }
+
+            if (mode == 4)
+            {
+                if (prevCmd == 0)
+                {
+                    for (int i = 0; i < heldCount; ++i)
+                    {
+                        voiceNote (heldKey.at (i), heldVel.at (i), heldOff.at (i));
+
+                        for (int j = 1; j <= 7; ++j)
+                            if (arpNoteOn (j))
+                                voiceNote (heldKey.at (i) + 256 * j, heldVel.at (i), heldOff.at (i) + arpShift (j));
+                    }
+                }
+
+                return;
+            }
+
+            if (c == 7) gSub = gSubPrev;
+            gSub = advanceSub (gSub);
+
+            if (! (gSub == gSubPrev && prevCmd != 0))
+            {
+                for (int i = 0; i < heldCount; ++i)
+                    voiceNote (heldKey.at (i), 0, 0);
+
+                for (int i = 0; i < heldCount; ++i)
+                {
+                    if (gSub == 0) voiceNote (heldKey.at (i), heldVel.at (i), heldOff.at (i));
+                    else           voiceNote (heldKey.at (i) + (gSub << 8), heldVel.at (i), heldOff.at (i) + arpShift (gSub));
+                }
+            }
+
+            gSubPrev = gSub;
+            ++gSub;
+            if (gSub > 7) gSub = 0;
+        }
+
+        void arpDoStep()
+        {
+            if (stepIdx > int (P[slot::Arp_End])) stepIdx = 0;
+            if (stepIdx > 15 || stepIdx < 0) stepIdx = 0;
+
+            let c = int (P.at (slot::Arp_P0 + stepIdx));
+            let mode = int (P[slot::Arp_Mode]);
+
+            if (mode >= 4)
+            {
+                arpChordStep (c, mode);
+            }
+            else if (c == 0)
+            {
+                if (curKey >= 0) voiceNote (curKey, 0, 0);
+            }
+            else
+            {
+                var key = heldCount > 0 ? arpCommand (c) : -1;
+                float shift = 0;
+
+                if (mode != 3 && arpPos >= 0 && arpPos < 128 && (arpNoteOn (1) || arpNoteOn (2) || arpNoteOn (3) || arpNoteOn (4)))
+                {
+                    if (mode == 1)
+                    {
+                        if (c == 7)
+                        {
+                            if (subFlag && ((curKey ^ key) & 0xff) == 0)
+                            {
+                                heldSub.at (arpPos) = heldSub.at (arpPos) - 1;
+                                if (heldSub.at (arpPos) < 0) heldSub.at (arpPos) = 7;
+                            }
+
+                            subFlag = false;
+                        }
+
+                        heldSub.at (arpPos) = advanceSub (heldSub.at (arpPos));
+                        let s = heldSub.at (arpPos);
+
+                        if (s > 0)
+                        {
+                            if (key >= 0) key = (key & 0xff) + (s << 8);
+                            shift = arpShift (s);
+                        }
+
+                        subFlag = true;
+                        heldSub.at (arpPos) = heldSub.at (arpPos) + 1;
+                        if (heldSub.at (arpPos) > 7) heldSub.at (arpPos) = 0;
+                    }
+                    else
+                    {
+                        if (c == 7)
+                        {
+                            if (subFlag) gSub = gSubPrev;
+                            subFlag = false;
+                        }
+
+                        gSub = advanceSub (gSub);
+
+                        if (gSub > 0)
+                        {
+                            if (key >= 0) key = (key & 0xff) + (gSub << 8);
+                            shift = arpShift (gSub);
+                        }
+
+                        gSubPrev = gSub;
+                        ++gSub;
+                        if (gSub > 7) gSub = 0;
+                        subFlag = true;
+                    }
+                }
+
+                if (! (int (P[slot::PolyMode]) == 2 && key != -1))
+                    if (curKey != key && curKey >= 0)
+                        voiceNote (curKey, 0, 0);
+
+                if (((curKey != key && key >= 0) || prevCmd == 0) && key >= 0)
+                {
+                    let p = clamp (arpPos, 0, 127);
+
+                    if (mode == 3)
+                    {
+                        voiceNote (key, heldVel.at (p), heldOff.at (p));
+
+                        for (int j = 1; j <= 7; ++j)
+                            if (arpNoteOn (j))
+                                voiceNote (key + 256 * j, heldVel.at (p), heldOff.at (p) + arpShift (j));
+                    }
+                    else
+                    {
+                        voiceNote (key, heldVel.at (p), shift + heldOff.at (p));
+                    }
+                }
+
+                curKey = key;
+            }
+
+            prevCmd = c;
+            ++stepIdx;
+        }
+
+        void arpTick()
+        {
+            if (int (P[slot::Arp_Mode]) == 0)
+                return;
+
+            let L = arpStepLength();
+
+            if (firstNote)
+            {
+                firstNote = false;
+                dir = 0;
+                arpPhase = 0;
+                stepIdx = 0;
+                arpDoStep();
+            }
+            else
+            {
+                arpPhase += float64 (blockSize);
+
+                if (arpPhase >= L)
+                {
+                    arpPhase -= float64 (int (arpPhase / L)) * L;
+                    arpDoStep();
+                }
+            }
+        }
+
+        //==============================================================================
+        // MIDI
+
+        void handleMidi()
+        {
+            for (int i = 0; i < midiCount; ++i)
+            {
+                let m = midiQueue.at (i).message;
+                let status = (m >> 16) & 0xff;
+                let type = status & 0xf0;
+                let ch = status & 15;
+                let d1 = (m >> 8) & 0x7f;
+                let d2 = m & 0x7f;
+
+                if (P.at (slot::MIDI_Channel_1 + ch) == 0)
+                    continue;
+
+                if (type == 0x90 && d2 > 0)
+                {
+                    let x = float (d2) * 0.00787401572f * 64.0f;
+                    let at = curveLerp (true, x);
+                    pressureTarget = at;
+                    perKeyAT.at (d1) = at;
+                    handleNote (d1, 0.0f, d2);
+                }
+                else if (type == 0x80 || type == 0x90)
+                {
+                    handleNote (d1, 0.0f, 0);
+                }
+                else if (type == 0xb0)
+                {
+                    if (d1 >= 123)
+                    {
+                        allNotesOff();
+                        continue;
+                    }
+
+                    if (d1 == 64)
+                        sustainDown = P[slot::SustainPedal] != 0 && d2 >= 63;
+
+                    if (d1 > 0)
+                    {
+                        rawCC.at (d1) = float (d2) / 127.0f;
+                        ccOut <- d1;
+
+                        if (int (P[slot::XY_H_CC]) == d1) P[slot::XY_X] = 2.0f * float (d2) / 127.0f - 1.0f;
+                        if (int (P[slot::XY_V_CC]) == d1) P[slot::XY_Y] = 2.0f * float (d2) / 127.0f - 1.0f;
+                    }
+                }
+                else if (type == 0xa0)
+                {
+                    perKeyAT.at (d1) = curveLerp (true, float (d2) * 0.00787401572f * 64.0f);
+                }
+                else if (type == 0xd0)
+                {
+                    pressureTarget = curveLerp (true, float (d1) * 0.00787401572f * 64.0f);
+                }
+                else if (type == 0xe0)
+                {
+                    bendTarget = float ((d2 - 64) * 128 + d1) * P[slot::BendRange] * (1.0f / 8192.0f);
+                }
+            }
+
+            midiCount = 0;
+        }
+
+        //==============================================================================
+        // per-block preparation: derived coefficients, controller smoothing, XY walk
+
+        float catmull (const float[4]& p, float t)
+        {
+            return (((-0.5f * p[0] + 1.5f * p[1] - 1.5f * p[2] + 0.5f * p[3]) * t
+                      + (p[0] - 2.5f * p[1] + 2.0f * p[2] - 0.5f * p[3])) * t + 0.5f * (p[2] - p[0])) * t + p[1];
+        }
+
+        /// Derived values the original recomputes at the start of every process call.
+        void computeDerived()
+        {
+            samplesPerBeat = 60.0 / float64 (bpm) * float64 (srInt);
+            octave = P[slot::Tune_Octave];
+            if (octave < 1.001f) octave = 2.0f;
+            lnOct = float (log (float64 (octave)));
+
+            let fr = P[slot::F_Speed];
+            ampC   = makeEnvCoefs (P, 8232 / 4, sampleRate, 1.0f);
+            filtC  = makeEnvCoefs (P, 8300 / 4, sampleRate, 1.0f);
+            filt2C = makeEnvCoefs (P, 8300 / 4, sampleRate, fr > 0 ? fr : 1.0f);
+            mod1C  = makeEnvCoefs (P, 9312 / 4, sampleRate, 1.0f);
+            mod2C  = makeEnvCoefs (P, 9408 / 4, sampleRate, 1.0f);
+            penvC  = makePitchEnvCoefs (P, float64 (srInt));
+
+            if (user1Dirty) { tables.buildUserSet (setUser1, wave1); user1Dirty = false; }
+            if (user2Dirty) { tables.buildUserSet (setUser2, wave2); user2Dirty = false; }
+        }
+
+        /// Controller smoothing and the XY random walk, once per block after MIDI.
+        void smoothControllers()
+        {
+            if (P[slot::SustainPedal] == 0)
+                sustainDown = false;
+
+            if (abs (bendTarget) < 0.01f) bendTarget = 0;
+            if (abs (bendSmooth - bendTarget) < 0.001f) bendSmooth = bendTarget;
+            if (abs (pressureSmooth - pressureTarget) < 0.001f) pressureSmooth = pressureTarget;
+            if (abs (xSmooth - P[slot::XY_X]) < 0.001f) xSmooth = P[slot::XY_X];
+            if (abs (ySmooth - P[slot::XY_Y]) < 0.001f) ySmooth = P[slot::XY_Y];
+
+            let c = pow (10.0, -2.0 / (0.05 * float64 (srInt)));
+            let k64 = float (1.0 - pow (c, 64.0));
+
+            // XY random walk (Catmull-Rom through random points inside the radius)
+            if (walkT >= 1.0f)
+            {
+                walkT -= 1.0f;
+                let r = float (sqrt (float64 (rng.next()) * (1.0 / 32768.0))) * P[slot::XY_Var_Radius];
+                let a = float64 (rng.next()) * float64 (piF) * (1.0 / 16384.0);
+
+                for (int k = 0; k < 3; ++k)
+                {
+                    walkX.at (k) = walkX.at (k + 1);
+                    walkY.at (k) = walkY.at (k + 1);
+                }
+
+                walkX[3] = r * float (cos (a));
+                walkY[3] = r * float (sin (a));
+            }
+
+            let wx = catmull (walkX, walkT);
+            let wy = catmull (walkY, walkT);
+            walkT += float (float64 (blockSize) * float64 (P[slot::XY_Var_Rate]) / float64 (srInt));
+
+            bendSmooth += (bendTarget - bendSmooth) * k64;
+            pressureSmooth += (pressureTarget - pressureSmooth) * k64;
+            xSmooth += (P[slot::XY_X] - xSmooth) * k64;
+            ySmooth += (P[slot::XY_Y] - ySmooth) * k64;
+
+            for (int cc = 0; cc < 6; ++cc)
+            {
+                let num = int (P.at (slot::CC1 + cc * 9));
+                if (num > 0) ccSmooth.at (cc) = ccSmooth.at (cc) + (rawCC.at (num & 127) - ccSmooth.at (cc)) * k64;
+                else ccSmooth.at (cc) = 0;
+            }
+
+            curX = xSmooth + wx;
+            curY = ySmooth + wy;
+
+            if (++xyReportCounter >= 8)
+            {
+                xyReportCounter = 0;
+                xyOut <- float<2> (curX, curY);
+            }
+        }
+
+        //==============================================================================
+        // voice manager render
+
+        bool renderVoices()
+        {
+            for (wrap<blockSize> i)
+                mix[i] = float<2>();
+
+            let X = curX, Y = curY;
+
+            if (numActive == 0)
+            {
+                gLfo1.step (tables, rng, P, lfoShape1, false, blockSize, xySum (8, X, Y), sampleRate, samplesPerBeat);
+                gLfo2.step (tables, rng, P, lfoShape2, true, blockSize, xySum (8, X, Y) + xySum (9, X, Y), sampleRate, samplesPerBeat);
+                return false;
+            }
+
+            // global XY depth from the phantom envelopes of the previous block
+            let f = meDbProduct (28, phantom1Val, phantom2Val) * ccDbProduct (28);
+            let Xg = clamp (f * X, -2.0f, 2.0f);
+            let Yg = clamp (f * Y, -2.0f, 2.0f);
+
+            let Sm = xySum (30, Xg, Yg) + ccDepthSum (31, false);
+            let phSpeed = Sm != 0 ? pow2 (2.0f * Sm) : 1.0f;
+            let me1Fac = xyLinearProduct (26, Xg, Yg) * ccLinearProduct (26);
+            let me2Fac = xyLinearProduct (27, Xg, Yg) * ccLinearProduct (27);
+            phantom1Val = phantom1.renderBlock (mod1C, phSpeed, sustainDown) * me1Fac;
+            phantom2Val = phantom2.renderBlock (mod2C, phSpeed, sustainDown) * me2Fac;
+
+            let A = meSum (18, phantom1Val, phantom2Val) + ccDepthSum (8, false);
+            let gSpeed1 = abs (A) > 0.001f ? pow2 (2.0f * A) : 1.0f;
+            let B = meSum (19, phantom1Val, phantom2Val) + ccDepthSum (9, false);
+            let gSpeed2 = abs (B) > 0.001f ? pow2 (2.0f * B) : 1.0f;
+
+            let g1n = int ((P[slot::LFO_2_1] * gLfo2Prev * 3.0f + gSpeed1) * float (blockSize) + 0.5f);
+            gv1 = gLfo1.step (tables, rng, P, lfoShape1, false, g1n, xySum (8, Xg, Yg), sampleRate, samplesPerBeat);
+            let g2n = int ((P[slot::LFO_1_2] * gv1 * 3.0f + gSpeed2) * float (blockSize) + 0.5f);
+            gv2 = gLfo2.step (tables, rng, P, lfoShape2, true, g2n, xySum (8, Xg, Yg) + xySum (9, Xg, Yg), sampleRate, samplesPerBeat);
+            gLfo2Prev = gv2;
+
+            gLfo1Pitch = 0; gLfo1Pan = 0; gLfo2Pitch = 0; gLfo2Pan = 0;
+
+            if (P[slot::LFO_1_Sync] > 0)
+            {
+                let D1 = xySum (10, Xg, Yg) + ccDepthSum (10, false);
+                var pd = 24.0f * float (pow (float64 (P[slot::LFO_1_Pitch]), 4.0));
+                var g = 1.0f;
+                if (abs (D1) > 0.005f) { pd *= float (pow (float64 (octave), 4.0 * float64 (D1))); g = pow2 (4.0f * D1); }
+                gLfo1Pitch = (2.0f * gv1 - 1.0f) * pd;
+                gLfo1Pan = (2.0f * gv1 - 1.0f) * P[slot::LFO_1_Pan] * g;
+                gv1 *= g;
+            }
+
+            if (P[slot::LFO_2_Sync] > 0)
+            {
+                let D2 = xySum (11, Xg, Yg) + ccDepthSum (11, false);
+                var pd = 24.0f * float (pow (float64 (P[slot::LFO_2_Pitch]), 4.0));
+                var g = 1.0f;
+                if (abs (D2) > 0.005f) { pd *= float (pow (float64 (octave), 4.0 * float64 (D2))); g = pow2 (4.0f * D2); }
+                gLfo2Pitch = (2.0f * gv2 - 1.0f) * pd;
+                gLfo2Pan = (2.0f * gv2 - 1.0f) * P[slot::LFO_2_Pan] * g;
+                gv2 *= g;
+            }
+
+            globalPitch = bendSmooth + xySum (5, Xg, Yg) * 24.0f + ccDepthSum (5, true) * 24.0f;
+            globalPan = xySum (6, Xg, Yg) + ccDepthSum (6, true);
+            pwMod1 = int64 (float64 (xySum (12, Xg, Yg) + ccDepthSum (12, false)) * two32 + 0.5) & u32;
+            pwmRateMod1 = xySum (13, Xg, Yg) + ccDepthSum (13, false);
+            pwmDepthMod1 = xySum (14, Xg, Yg) + ccDepthSum (14, false);
+            pwMod2 = int64 (float64 (xySum (15, Xg, Yg) + ccDepthSum (15, false)) * two32 + 0.5) & u32;
+            pwmRateMod2 = xySum (16, Xg, Yg) + ccDepthSum (16, false);
+            pwmDepthMod2 = xySum (17, Xg, Yg) + ccDepthSum (17, false);
+
+            let maxPoly = clamp (int (P[slot::Voices]), 1, maxVoices);
+            let atMode = int (P[slot::AftertouchMode]);
+            bool any = false;
+            var i = 0;
+
+            while (i < numActive)
+            {
+                if (i >= maxPoly)
+                {
+                    numActive = i;      // voices beyond max polyphony are cut
+                    break;
+                }
+
+                let vi = order.at (i);
+                let key = voices.at (vi).key;
+                let at = atMode == 0 ? 1.0f : (atMode == 1 ? pressureSmooth : perKeyAT.at (key & 0x7f));
+                let semisArg = P.at (slot::Tune_C + ((key & 0xff) % 12)) * 0.01f + P[slot::GlobalTranspose] * 12.0f + globalPitch;
+
+                if (renderVoice (voices.at (vi), at, semisArg, X, Y))
+                {
+                    any = true;
+                    ++i;
+                }
+                else
+                {
+                    removeFromList (vi);
+                }
+            }
+
+            return any;
+        }
+
+        //==============================================================================
+        // one voice, one block
+
+        bool renderVoice (Voice& v, float at, float semisArg, float X, float Y)
+        {
+            let n = blockSize;
+
+            if (! v.active)
+                return false;
+
+            if (v.relCount >= 0)
+                v.relCount += n;
+
+            // XY depth for this voice (mod env values of the previous block)
+            let fxy = meDbProduct (28, v.m1Last, v.m2Last) * ccDbProduct (28);
+            let Xv = clamp (fxy * X, -2.0f, 2.0f);
+            let Yv = clamp (fxy * Y, -2.0f, 2.0f);
+
+            // envelope speeds
+            let Sa = xySum (28, Xv, Yv) + ccDepthSum (29, false);
+            let Sf = xySum (29, Xv, Yv) + ccDepthSum (30, false);
+            let Smd = xySum (30, Xv, Yv) + ccDepthSum (31, false);
+            let Sp = xySum (31, Xv, Yv) + ccDepthSum (32, false);
+            let ampSpeed = Sa != 0 ? pow2 (2.0f * Sa) : 1.0f;
+            let filterSpeed = Sf != 0 ? pow2 (2.0f * Sf) : 1.0f;
+            let modSpeed = Smd != 0 ? pow2 (2.0f * Smd) : 1.0f;
+            let pitchSpeed = Sp != 0 ? pow2 (2.0f * Sp) : 1.0f;
+
+            // mod envelopes, velocity, ME depth
+            var me1 = v.modEnv1.renderBlock (mod1C, modSpeed, sustainDown);
+            var me2 = v.modEnv2.renderBlock (mod2C, modSpeed, sustainDown);
+            me1 *= velScale (v.vel, P[slot::M1_VeloSens]);
+            me2 *= velScale (v.vel, P[slot::M2_VeloSens]);
+            me1 *= xyLinearProduct (26, Xv, Yv) * ccLinearProduct (26);
+            me2 *= xyLinearProduct (27, Xv, Yv) * ccLinearProduct (27);
+
+            // LFOs
+            let S1d = meSum (20, me1, me2) + ccDepthSum (10, false);
+            let S2d = meSum (21, me1, me2) + ccDepthSum (11, false);
+            let S1s = meSum (18, me1, me2) + ccDepthSum (8, false);
+            let S2s = meSum (19, me1, me2) + ccDepthSum (9, false);
+            let lfo1DepthF = abs (S1d) > 0.001f ? pow2 (3.0f * S1d) : 1.0f;
+            let lfo2DepthF = abs (S2d) > 0.001f ? pow2 (3.0f * S2d) : 1.0f;
+            let lfo1SpeedF = abs (S1s) > 0.001f ? pow2 (2.0f * S1s) : 1.0f;
+            let lfo2SpeedF = abs (S2s) > 0.001f ? pow2 (2.0f * S2s) : 1.0f;
+            let perNote1 = P[slot::LFO_1_Sync] == 0;
+            let perNote2 = P[slot::LFO_2_Sync] == 0;
+            let kPitch = (perNote1 && perNote2) ? 2.0 : 4.0;
+
+            float v1, v2, lfo1Pitch, lfo2Pitch, lfo1Pan, lfo2Pan;
+
+            if (perNote1)
+            {
+                let n1 = int ((P[slot::LFO_2_1] * v.lfo2Prev * lfo2DepthF * 3.0f + lfo1SpeedF) * float (n) + 0.5f);
+                v1 = v.lfo1.step (tables, rng, P, lfoShape1, false, n1, xySum (8, Xv, Yv), sampleRate, samplesPerBeat);
+                let D1 = xySum (10, Xv, Yv);
+                var pd = 24.0f * float (pow (float64 (P[slot::LFO_1_Pitch]), 4.0));
+                var g = 1.0f;
+                if (abs (D1) > 0.005f) { pd *= float (pow (float64 (octave), kPitch * float64 (D1))); g = pow2 (4.0f * D1); }
+                lfo1Pitch = (2.0f * v1 - 1.0f) * pd;
+                lfo1Pan = (2.0f * v1 - 1.0f) * P[slot::LFO_1_Pan] * g;
+                v1 *= g;
+            }
+            else
+            {
+                v1 = gv1; lfo1Pitch = gLfo1Pitch; lfo1Pan = gLfo1Pan;
+            }
+
+            if (perNote2)
+            {
+                let n2 = int ((P[slot::LFO_1_2] * v1 * lfo1DepthF * 3.0f + lfo2SpeedF) * float (n) + 0.5f);
+                v2 = v.lfo2.step (tables, rng, P, lfoShape2, true, n2, xySum (8, Xv, Yv) + xySum (9, Xv, Yv), sampleRate, samplesPerBeat);
+                let D2 = xySum (11, Xv, Yv);
+                var pd = 24.0f * float (pow (float64 (P[slot::LFO_2_Pitch]), 4.0));
+                var g = 1.0f;
+                if (abs (D2) > 0.005f) { pd *= float (pow (float64 (octave), kPitch * float64 (D2))); g = pow2 (4.0f * D2); }
+                lfo2Pitch = (2.0f * v2 - 1.0f) * pd;
+                lfo2Pan = (2.0f * v2 - 1.0f) * P[slot::LFO_2_Pan] * g;
+                v2 *= g;
+            }
+            else
+            {
+                v2 = gv2; lfo2Pitch = gLfo2Pitch; lfo2Pan = gLfo2Pan;
+            }
+
+            v.lfo2Prev = v2;
+
+            // amp envelope
+            if (! v.ampEnv.renderAmp (ampC, ampSpeed * v.envSpeed, sustainDown, sampleRate, bufE))
+            {
+                v.active = false;
+                return false;
+            }
+
+            // pitch envelope
+            var penvRatio = 1.0f;
+
+            if (P[slot::PEnv_On] != 0)
+            {
+                advancePitchEnv (v.penvR, v.penvStage, penvC, float64 (n) * float64 (pitchSpeed * v.envSpeed), float64 (srInt));
+                let R = float64 (v.penvR);
+                let vs = float64 (P[slot::PEnv_VeloSens]);
+
+                if (vs > 0.001)       penvRatio = float (pow (R, 1.0 + (float64 (v.vel) - 1.0) * vs));
+                else if (vs < -0.001) penvRatio = float (pow (R, 1.0 + float64 (v.vel) * vs));
+                else                  penvRatio = float (R);
+            }
+
+            // per-voice modulation sums
+            let U = clamp (int (P[slot::U_Voices]), 1, maxUnison);
+            let uniNorm = U > 1 ? float (sqrt (1.0 / float64 (U))) : 1.0f;
+            var amp1 = uniNorm, amp2 = uniNorm, ampN = 1.0f;
+            float pitch1 = 0, pitch2 = 0, pitchN = 0;
+            var pw1 = 0i64, pw2 = 0i64;
+            float pwmRate1 = 0, pwmRate2 = 0, pwmDepth1 = 0, pwmDepth2 = 0;
+            float noiseResMod = 0, resMod = 0, mixMod = 0, cutSemis1 = 0, cutSemis2 = 0, panOffset = 0;
+            var D = P[slot::U_Detune];
+            var spread = P[slot::U_Spread];
+
+            for (int k = 0; k < 8; ++k)
+            {
+                let isME2 = k >= 4;
+                let s = k & 3;
+                let t = int (P.at ((isME2 ? slot::M2_Target_1 : slot::M1_Target_1) + s));
+                let d = P.at ((isME2 ? slot::M2_Depth_1 : slot::M1_Depth_1) + s);
+                let me = isME2 ? me2 : me1;
+                let sus = isME2 ? P[slot::M2_Sustain] : P[slot::M1_Sustain];
+
+                if (t == 0) continue;
+
+                if (t == 1)       cutSemis1 += (me - sus) * d * 48.0f;
+                else if (t == 2)  cutSemis2 += (me - sus) * d * 48.0f;
+                else if (t == 23) cutSemis1 += me * d * 24.0f;
+                else if (t == 24) cutSemis2 += me * d * 24.0f;
+                else if (t == 7)  pitch1 += (me - sus) * d * 48.0f;
+                else if (t == 8)  pitch2 += (me - sus) * d * 48.0f;
+                else if (t == 9)  pitchN += (me - sus) * d * 48.0f;
+                else if (t == 25) pitch1 += me * d * 24.0f;
+                else if (t == 26) pitch2 += me * d * 24.0f;
+                else if (t == 27) pitchN += me * d * 24.0f;
+                else if (t == 4)  amp1 *= dbFactor (me, d);
+                else if (t == 5)  amp2 *= dbFactor (me, d);
+                else if (t == 6)  ampN *= dbFactor (me, d);
+                else if (t == 16) panOffset += (me - sus) * d * 2.0f;
+                else if (t == 3)  resMod += me * d;
+                else if (t == 17) noiseResMod += me * d;
+                else if (t == 22) mixMod += me * d;
+                else if (t == 10) pw1 = (pw1 + int64 (float64 (me * d) * two32 + 0.5)) & u32;
+                else if (t == 13) pw2 = (pw2 + int64 (float64 (me * d) * two32 + 0.5)) & u32;
+                else if (t == 11) pwmRate1 += me * d;
+                else if (t == 14) pwmRate2 += me * d;
+                else if (t == 12) pwmDepth1 += me * d;
+                else if (t == 15) pwmDepth2 += me * d;
+                else if (t == 29) D += abs (d) * d * me * 1200.0f;
+                else if (t == 30) spread += me * d;
+            }
+
+            for (int k = 0; k < 8; ++k)
+            {
+                let isY = k >= 4;
+                let s = k & 3;
+                let t = int (P.at ((isY ? slot::XY_V_Target_1 : slot::XY_H_Target_1) + s));
+                let d = P.at ((isY ? slot::XY_V_Depth_1 : slot::XY_H_Depth_1) + s);
+                let x = isY ? Yv : Xv;
+
+                if (t == 21)      pitch1 += x * d * 24.0f;
+                else if (t == 22) pitch2 += x * d * 24.0f;
+                else if (t == 23) pitchN += x * d * 24.0f;
+                else if (t == 18) amp1 *= float (pow (10.0, 3.0 * float64 (x * d)));
+                else if (t == 19) amp2 *= float (pow (10.0, 3.0 * float64 (x * d)));
+                else if (t == 20) ampN *= float (pow (10.0, 3.0 * float64 (x * d)));
+                else if (t == 24) mixMod += x * d;
+                else if (t == 25) noiseResMod += x * d;
+                else if (t == 32) D += abs (d) * d * x * 1200.0f;
+                else if (t == 33) spread += x * d;
+            }
+
+            for (int c = 0; c < 6; ++c)
+            {
+                let cc = ccSmooth.at (c);
+
+                for (int k = 0; k < 4; ++k)
+                {
+                    let t = int (P.at (slot::CC1_Target_1 + c * 9 + k));
+                    let d = P.at (slot::CC1_Depth_1 + c * 9 + k);
+
+                    if (t == 21)      pitch1 += cc * d * 24.0f;
+                    else if (t == 22) pitch2 += cc * d * 24.0f;
+                    else if (t == 23) pitchN += cc * d * 24.0f;
+                    else if (t == 18) amp1 *= dbFactor (cc, d);
+                    else if (t == 19) amp2 *= dbFactor (cc, d);
+                    else if (t == 20) ampN *= dbFactor (cc, d);
+                    else if (t == 24) mixMod += cc * d;
+                    else if (t == 25) noiseResMod += cc * d;
+                    else if (t == 33) D += abs (d) * d * cc * 1200.0f;
+                    else if (t == 34) spread += cc * d;
+                }
+            }
+
+            spread = clamp (spread, -1.0f, 1.0f);
+
+            // unison detune ratios
+            let J = P[slot::U_PitchJitter];
+
+            if (U <= 1)
+            {
+                v.ratio[0] = 1.0f;
+            }
+            else if ((U & 1) != 0)
+            {
+                v.ratio[0] = J > 0 ? float (pow (float64 (octave), float64 (J * v.jit[0] * D * (1.0f / 1200.0f)))) : 1.0f;
+                let h = (U - 1) / 2;
+                let inv = 1.0f / (float (h) * 1200.0f);
+
+                for (int k = 1; k < U; ++k)
+                {
+                    let m = (k + 1) >> 1;
+                    let sg = (k & 1) != 0 ? -D : D;
+                    v.ratio.at (k) = float (pow (float64 (octave), float64 ((float (m) * inv * (1.0f - J) + J * v.jit.at (k)) * sg)));
+                }
+            }
+            else
+            {
+                let h = U / 2;
+                let inv = 1.0f / (float (h) * 1200.0f);
+
+                for (int k = 0; k < U; ++k)
+                {
+                    let m = (k >> 1) + 1;
+                    let sg = (k & 1) != 0 ? -D : D;
+                    v.ratio.at (k) = float (pow (float64 (octave), float64 ((float (m) * inv * (1.0f - J) + J * v.jit.at (k)) * sg)));
+                }
+            }
+
+            // pitch ratios
+            let Rg = float (pow (float64 (octave), float64 (lfo1Pitch * lfo1DepthF + lfo2Pitch * lfo2DepthF + semisArg) / 12.0)) * penvRatio;
+            let ap1 = abs (P[slot::O1_Afterpitch]) > 0.01f ? octPow (at * P[slot::O1_Afterpitch]) : 1.0f;
+            let ap2 = abs (P[slot::O2_Afterpitch]) > 0.01f ? octPow (at * P[slot::O2_Afterpitch]) : 1.0f;
+            let r1 = abs (pitch1) > 0.001f ? octPow (pitch1) : 1.0f;
+            let mult1 = r1 * ap1 * Rg;
+            let mult2 = ap2 * Rg;
+
+            // glided note frequency (freq > pan, filter keytrack)
+            float fG;
+
+            if (v.glideProg < 1.0f)
+            {
+                v.glideProg = min (1.0f, v.glideProg + float (n) * v.glideInc);
+                fG = v.glideF0 + (v.freq - v.glideF0) * v.glideProg;
+            }
+            else
+            {
+                v.glideF0 = v.freq;
+                v.glideProg = 1.0f;
+                fG = v.freq;
+            }
+
+            let stereo = U > 1 && (spread != 0 || v.stereoLatch);
+            if (stereo) v.stereoLatch = true;
+            let noiseOn = P[slot::N_Amp] > 0;
+
+            for (wrap<blockSize> i) { bufM[i] = 0; bufR[i] = 0; bufNZ[i] = 0; }
+
+            // noise
+            if (noiseOn)
+            {
+                let ratioN = octPow (pitchN + P[slot::N_Transpose]);
+                let toHzN = float64 (srInt) / two32;
+                v.noise.freq = float (float64 (v.osc1[0].base) * toHzN * float64 (ratioN));
+
+                if (v.osc1[0].glideOn)
+                    v.noise.glideTo (float (float64 (v.osc1[0].glideTarget) * toHzN * float64 (ratioN)), v.osc1[0].glideRem);
+
+                if (stereo) v.noise.renderNoise (rng, P, Rg, at, ampN, noiseResMod, sampleRate, bufNZ);
+                else        v.noise.renderNoise (rng, P, Rg, at, ampN, noiseResMod, sampleRate, bufM);
+            }
+
+            // oscillator parameters
+            var atGain = 1.0f;
+            let oat = P[slot::OscAftertouch];
+            if (oat > 0.01f)       atGain = float (pow (10.0, float64 ((at - 1.0f) * oat * 0.05f)));
+            else if (oat < -0.01f) atGain = float (pow (10.0, float64 (at * oat * 0.05f)));
+
+            setOscParams (v.osc1[0], int (P[slot::O1_Waveform]), amp1 * P[slot::O1_Amp] * atGain, P[slot::O1_PWM_W],
+                          pw1 + pwMod1, pwmDepth1 + pwmDepthMod1 + P[slot::O1_PWM_D], pwmRate1 + pwmRateMod1, P[slot::O1_PWM_R]);
+            setOscParams (v.osc2[0], int (P[slot::O2_Waveform]), amp2 * P[slot::O2_Amp] * atGain, P[slot::O2_PWM_W],
+                          pw2 + pwMod2, pwmDepth2 + pwmDepthMod2 + P[slot::O2_PWM_D], pwmRate2 + pwmRateMod2, P[slot::O2_PWM_R]);
+
+            // oscillators
+            let oscMix = int (P[slot::OscMix]);
+            let o2ratio = float64 (float (pow (float64 (octave), float64 (pitch2) / 12.0 + float64 (P[slot::Transpose]))));
+            let detune = float64 (P[slot::Detune]);
+            let toHz = float64 (srInt) / two32;
+
+            for (int k = 1; k < U; ++k)
+                v.osc1.at (k).copyShared (v.osc1[0]);
+
+            renderOsc (v.osc1[0], setUser1, oscMix, false, mult1 * v.ratio[0], bufM);
+
+            v.osc2[0].base = int64 ((float64 (v.osc1[0].base) * toHz * o2ratio + detune) / toHz + 0.5) & u32;
+
+            if (v.osc1[0].glideOn)
+                v.osc2[0].glideTo (int64 ((float64 (v.osc1[0].glideTarget) * toHz * o2ratio + detune) / toHz + 0.5) & u32, v.osc1[0].glideRem);
+            else
+                v.osc2[0].glideOn = false;
+
+            for (int k = 1; k < U; ++k)
+                v.osc2.at (k).copyShared (v.osc2[0]);
+
+            renderOsc (v.osc2[0], setUser2, oscMix, true, mult2 * v.ratio[0], bufM);
+
+            for (int k = 1; k < U; ++k)
+            {
+                if (stereo)
+                    for (wrap<blockSize> i) bufTmp[i] = 0;
+                else
+                    bufTmp = bufM;
+
+                let m1 = oscMix == 0 ? mult1 * v.ratio.at (k) : mult1;
+                let m2 = oscMix == 0 ? mult2 * v.ratio.at (k) : mult2;
+                renderOsc (v.osc1.at (k), setUser1, oscMix, false, m1, bufTmp);
+                v.osc2.at (k).base = int64 ((float64 (v.osc1.at (k).base) * toHz * o2ratio + detune) / toHz + 0.5) & u32;
+                renderOsc (v.osc2.at (k), setUser2, oscMix, true, m2, bufTmp);
+
+                if (stereo)
+                    for (wrap<blockSize> i) bufV.at (k * blockSize + int (i)) = bufTmp[i];
+                else
+                    bufM = bufTmp;
+            }
+
+            // pan
+            var p = v.basePan + freqPanOffset (Rg * fG);
+            p += lfo1Pan * lfo1DepthF + lfo2Pan * lfo2DepthF + globalPan + panOffset;
+            p = clamp (p, 0.0f, 1.0f);
+            let pg = panGains (p);
+            let stepL = (pg[0] - v.panL) / float (n);
+            let stepR = (pg[1] - v.panR) / float (n);
+
+            if (stereo)
+            {
+                if (! noiseOn) { v.panL = pg[0]; v.panR = pg[1]; }
+
+                let W = min (p, 1.0f - p) * spread;
+                let pj = P[slot::U_PanJitter];
+                float[maxUnison] pans;
+
+                for (int k = 0; k < U; ++k)
+                    pans.at (k) = ((float (k) * (2.0f / float (U - 1)) - 1.0f) * (1.0f - pj) + pj * v.panr.at (k)) * W + p;
+
+                let mid = U >> 1;
+                let t0 = pans[0];
+                pans[0] = pans.at (mid);
+                pans.at (mid) = t0;
+
+                for (int k = 0; k < U; ++k)
+                {
+                    let gk = panGains (pans.at (k));
+                    let sL = (gk[0] - v.uniL.at (k)) / float (n);
+                    let sR = (gk[1] - v.uniR.at (k)) / float (n);
+                    var uL = v.uniL.at (k), uR = v.uniR.at (k);
+
+                    for (wrap<blockSize> i)
+                    {
+                        uL += sL;
+                        uR += sR;
+
+                        if (k == 0)
+                        {
+                            bufR[i] = uR * bufM[i];
+                            bufM[i] = uL * bufM[i];
+                        }
+                        else
+                        {
+                            let s = bufV.at (k * blockSize + int (i));
+                            bufM[i] += uL * s;
+                            bufR[i] += uR * s;
+                        }
+                    }
+
+                    v.uniL.at (k) = uL;
+                    v.uniR.at (k) = uR;
+                }
+
+                if (noiseOn)
+                {
+                    for (wrap<blockSize> i)
+                    {
+                        v.panL += stepL;
+                        v.panR += stepR;
+                        bufM[i] += v.panL * bufNZ[i];
+                        bufR[i] += v.panR * bufNZ[i];
+                    }
+                }
+            }
+
+            // velocity gain target
+            v.velGainTarget = velAmpScale (v.vel) * v.randAmp;
+            let smoothGain = abs (v.velGainTarget - v.velGain) > 1e-5f;
+            if (! smoothGain) v.velGain = v.velGainTarget;
+
+            // distortion / filter / output
+            let distOn = P[slot::Sat_Type] != 0;
+            let distMode = int (P[slot::Sat_Mode]);
+            let distMod = xySum (7, Xv, Yv) + ccDepthSum (7, false);
+
+            if (distOn && (distMode == 2 || distMode == 3))
+            {
+                for (wrap<blockSize> i)
+                {
+                    if (smoothGain) v.velGain = 0.002f * v.velGainTarget + 0.998f * v.velGain;
+                    let g = v.velGain * bufE[i];
+                    bufM[i] *= g;
+                    if (stereo) bufR[i] *= g;
+                }
+
+                v.distL.processMono (distTables, P, distMod, sampleRate, bufM);
+                if (stereo) v.distR.processMono (distTables, P, distMod, sampleRate, bufR);
+            }
+
+            // filter mix ramp, shared by both channels
+            let mm = clamp (mixMod, -1.0f, 1.0f);
+            let fmix = P[slot::F_Mix];
+            let M = mm > 0 ? fmix + (1.0f - fmix) * mm : fmix * (1.0f + mm);
+            let dm = (M - v.mix) / float (n);
+
+            for (wrap<blockSize> i)
+            {
+                v.mix += dm;
+                bufMix[i] = v.mix;
+            }
+
+            filterChannel (v, false, v.vel, at, fG, Rg, Xv, Yv, v1 * lfo1DepthF, v2 * lfo2DepthF,
+                           cutSemis1, cutSemis2, resMod, filterSpeed * v.envSpeed, bufM);
+
+            if (stereo)
+                filterChannel (v, true, v.vel, at, fG, Rg, Xv, Yv, v1 * lfo1DepthF, v2 * lfo2DepthF,
+                               cutSemis1, cutSemis2, resMod, filterSpeed * v.envSpeed, bufR);
+
+            if (distOn && distMode == 1)
+            {
+                for (wrap<blockSize> i)
+                {
+                    if (smoothGain) v.velGain = 0.002f * v.velGainTarget + 0.998f * v.velGain;
+                    let g = v.velGain * bufE[i];
+                    bufM[i] *= g;
+                    if (stereo) bufR[i] *= g;
+                }
+
+                v.distL.processMono (distTables, P, distMod, sampleRate, bufM);
+                if (stereo) v.distR.processMono (distTables, P, distMod, sampleRate, bufR);
+            }
+
+            if (distOn && distMode != 0)
+            {
+                for (wrap<blockSize> i)
+                {
+                    let e = bufE[i];
+
+                    if (e < 0.0625f)
+                    {
+                        bufM[i] = e * bufM[i] * 16.0f;
+                        bufR[i] = e * bufR[i] * 16.0f;
+                    }
+
+                    if (stereo)
+                    {
+                        mix[i] += float<2> (bufM[i], bufR[i]);
+                    }
+                    else
+                    {
+                        v.panL += stepL;
+                        v.panR += stepR;
+                        mix[i] += float<2> (bufM[i] * v.panL, bufM[i] * v.panR);
+                    }
+                }
+            }
+            else
+            {
+                for (wrap<blockSize> i)
+                {
+                    if (smoothGain) v.velGain = 0.002f * v.velGainTarget + 0.998f * v.velGain;
+                    let g = bufE[i] * v.velGain;
+                    let x = bufM[i] * g;
+
+                    if (stereo)
+                    {
+                        mix[i] += float<2> (x, bufR[i] * g);
+                    }
+                    else
+                    {
+                        v.panL += stepL;
+                        v.panR += stepR;
+                        mix[i] += float<2> (x * v.panL, x * v.panR);
+                    }
+                }
+            }
+
+            v.m1Last = me1;
+            v.m2Last = me2;
+            return true;
+        }
+
+        void setOscParams (Osc& o, int waveform, float ampTarget, float pwFraction, int64 pwAdd, float depthSum, float rateMod, float baseRate)
+        {
+            o.waveform = waveform;
+            o.ampTarget = ampTarget;
+
+            if (waveform == 2 || waveform == 5)
+            {
+                o.pw = ((int64 (float64 (pwFraction) * two32 + 0.5) & u32) + pwAdd) & u32;
+                o.pwmDepth = depthSum * 0.5f;
+                let rate = rateMod > 0 ? baseRate + (16.0f - baseRate) * rateMod : (rateMod + 1.0f) * baseRate;
+                o.pwmInc = int64 (float64 (rate) * two32 / float64 (srInt) + 0.5) & u32;
+            }
+        }
+
+        void renderOsc (Osc& o, int userSet, int oscMix, bool isOsc2, float mult, float[blockSize]& buf)
+        {
+            if (oscMix == 1)      o.renderSync (tables, userSet, mult, buf, isOsc2, syncBuf);
+            else if (oscMix == 2) o.renderFM (tables, userSet, mult, buf, isOsc2, fmBuf, float64 (srInt));
+            else                  o.renderPlain (tables, userSet, mult, buf);
+        }
+
+        //==============================================================================
+        // filters for one channel: filter 1, and filter 2 when doubling is on
+
+        float cutoffHz (bool isF2, float envIn, float vel, float at, float keyFreq, float Rg, float X, float Y,
+                        float lfo1, float lfo2, float semisMod)
+        {
+            var env = envIn;
+            let vs = P[slot::F_VeloSens];
+            if (vs > 0.001f)       env *= float (pow (float64 (vel), 2.0 * float64 (vs)));
+            else if (vs < -0.001f) env *= 1.0f + vel * vs;
+
+            let c = float64 (P[slot::Cutoff]);
+            var hz = float (c * c * c * 10980.0 + 20.0);
+            let ft = P[slot::F_Aftertouch];
+            if (abs (ft) > 1e-4f) hz = float (float64 (hz) * pow (float64 (octave), float64 (at * ft) / 12.0));
+
+            let kt = P[slot::F_Track];
+
+            if (abs (kt) > 1e-6f)
+            {
+                let rel = float64 (keyFreq) / float64 (P[slot::Tune_Main]) * max (float64 (Rg), 0.0625);
+                hz = float (float64 (hz) * exp (float64 (kt) * log (rel) + float64 (P[slot::Tune_CutReference]) * float64 (lnOct) / 12.0));
+            }
+
+            var envmod = P[slot::F_EnvMod];
+            float cutX = 0, cutY = 0, cutCC = 0;
+            let tgt = isF2 ? 2 : 1;
+
+            for (int k = 0; k < 4; ++k)
+            {
+                let tx = int (P.at (slot::XY_H_Target_1 + k)), dx = P.at (slot::XY_H_Depth_1 + k);
+                let ty = int (P.at (slot::XY_V_Target_1 + k)), dy = P.at (slot::XY_V_Depth_1 + k);
+
+                if (tx == 4) envmod += X * dx;
+                if (tx == tgt) cutX += dx;
+                if (ty == 4) envmod += Y * dy;
+                if (ty == tgt) cutY += dy;
+
+                for (int cc = 0; cc < 6; ++cc)
+                {
+                    let t = int (P.at (slot::CC1_Target_1 + cc * 9 + k));
+                    let d = P.at (slot::CC1_Depth_1 + cc * 9 + k);
+                    if (t == 4) envmod += ccSmooth.at (cc) * d;
+                    if (t == tgt) cutCC += ccSmooth.at (cc) * d;
+                }
+            }
+
+            envmod = clamp (envmod, -1.0f, 1.0f);
+            var oct = isF2 ? (lfo1 * P[slot::LFO_1_Cutoff_2] + lfo2 * P[slot::LFO_2_Cutoff_2] + cutX * X + cutY * Y + cutCC) * 4.0f
+                             + 2.0f * P[slot::F_Split]
+                           : (lfo1 * P[slot::LFO_1_Cutoff_1] + lfo2 * P[slot::LFO_2_Cutoff_1] + cutX * X + cutY * Y + cutCC) * 4.0f;
+            oct += envmod * env * 8.0f;
+            hz = float (float64 (hz) * pow (float64 (octave), float64 (oct)));
+            if (abs (semisMod) > 1e-4f) hz = float (float64 (hz) * pow (float64 (octave), float64 (semisMod) / 12.0));
+            return max (hz, 5.0f);
+        }
+
+        float resonance (float X, float Y, float lfo1, float lfo2, float resMod)
+        {
+            float resX = 0, resY = 0, resCC = 0;
+
+            for (int k = 0; k < 4; ++k)
+            {
+                if (int (P.at (slot::XY_H_Target_1 + k)) == 3) resX += P.at (slot::XY_H_Depth_1 + k);
+                if (int (P.at (slot::XY_V_Target_1 + k)) == 3) resY += P.at (slot::XY_V_Depth_1 + k);
+
+                for (int cc = 0; cc < 6; ++cc)
+                    if (int (P.at (slot::CC1_Target_1 + cc * 9 + k)) == 3)
+                        resCC += ccSmooth.at (cc) * P.at (slot::CC1_Depth_1 + cc * 9 + k);
+            }
+
+            let r0 = P[slot::Resonance];
+            var res = (lfo1 * P[slot::LFO_1_Resonance] + lfo2 * P[slot::LFO_2_Resonance]) * (1.0f - r0) + r0;
+            let mods = float[4] (resX * X, resY * Y, resCC, resMod);
+
+            for (wrap<4> k)
+                res += mods[k] > 0 ? (1.0f - r0) * mods[k] : r0 * mods[k];
+
+            return clamp (res, 0.0f, 1.0f);
+        }
+
+        void runFilter (Voice& v, bool right, bool isF2, int type, float vel, float at, float keyFreq, float Rg, float X, float Y,
+                        float lfo1, float lfo2, float semisMod, float res, float speed, float[blockSize]& buf)
+        {
+            float env;
+
+            if (isF2) env = right ? v.fenv2R.renderBlock (filt2C, speed, sustainDown) : v.fenv2L.renderBlock (filt2C, speed, sustainDown);
+            else      env = right ? v.fenv1R.renderBlock (filtC, speed, sustainDown)  : v.fenv1L.renderBlock (filtC, speed, sustainDown);
+
+            let hz = cutoffHz (isF2, env, vel, at, keyFreq, Rg, X, Y, lfo1, lfo2, semisMod);
+
+            if (isF2)
+            {
+                if (right) v.f2R.process (fxTables, type, hz, res, sampleRate, buf);
+                else       v.f2L.process (fxTables, type, hz, res, sampleRate, buf);
+            }
+            else
+            {
+                if (right) v.f1R.process (fxTables, type, hz, res, sampleRate, buf);
+                else       v.f1L.process (fxTables, type, hz, res, sampleRate, buf);
+            }
+        }
+
+        void filterChannel (Voice& v, bool right, float vel, float at, float keyFreq, float Rg, float X, float Y,
+                            float lfo1, float lfo2, float cutSemis1, float cutSemis2, float resMod, float envSpeed,
+                            float[blockSize]& buf)
+        {
+            let t1 = int (P[2594]);
+            let t2raw = int (P[2595]);
+            let t2 = t2raw != 0 ? t2raw : t1;
+            let dbl = int (P[slot::F_Double]);
+            let speed = max (envSpeed, 0.01f);
+            let res = resonance (X, Y, lfo1, lfo2, resMod);
+
+            if (dbl == 0)
+            {
+                if (t1 != 0)
+                    runFilter (v, right, false, t1, vel, at, keyFreq, Rg, X, Y, lfo1, lfo2, cutSemis1, res, speed, buf);
+
+                return;
+            }
+
+            bufX = buf;
+            var a = buf;
+
+            if (t1 != 0)
+                runFilter (v, right, false, t1, vel, at, keyFreq, Rg, X, Y, lfo1, lfo2, cutSemis1, res, speed, a);
+
+            if (dbl == 1)
+            {
+                var b = bufX;
+
+                if (t2 != 0)
+                    runFilter (v, right, true, t2, vel, at, keyFreq, Rg, X, Y, lfo1, lfo2, cutSemis2, res, speed, b);
+
+                for (wrap<blockSize> i)
+                    buf[i] = (1.0f - bufMix[i]) * a[i] + bufMix[i] * b[i];
+            }
+            else
+            {
+                for (wrap<blockSize> i)
+                    a[i] = a[i] + 8.0f * max (bufMix[i] - 0.5f, 0.0f) * bufX[i];
+
+                var b = a;
+
+                if (t2 != 0)
+                    runFilter (v, right, true, t2, vel, at, keyFreq, Rg, X, Y, lfo1, lfo2, cutSemis2, res, speed, b);
+
+                for (wrap<blockSize> i)
+                    buf[i] = b[i] + 8.0f * max (0.5f - bufMix[i], 0.0f) * a[i];
+            }
+        }
+
+        //==============================================================================
+        void renderBlock()
+        {
+            if (panicPending)
+            {
+                panicPending = false;
+                allNotesOff();
+                resetEffects();
+            }
+
+            computeDerived();
+            handleMidi();
+            smoothControllers();
+
+            var active = renderVoices();
+            arpTick();
+
+            if (useTestInput)
+            {
+                mix = testBuf;
+                active = anyAbove (mix, 0.0f);
+            }
+
+            if (active && P[slot::Sat_Type] != 0)
+            {
+                let mode = int (P[slot::Sat_Mode]);
+
+                if (mode == 0 || mode == 3)
+                    globalDist.processStereo (distTables, P, xySum (7, curX, curY) + ccDepthSum (7, false), sampleRate, mix);
+            }
+
+            if (P[slot::C_Mode] != 0)  active = chorus.process (fxTables, rng, mix, active, P, sampleRate);
+            if (P[slot::D_On] != 0)    active = delay.process (fxTables, mix, active, P, sampleRate, samplesPerBeat);
+            if (P[slot::R_On] != 0)    active = reverb.process (mix, active, P, sampleRate);
+
+            let outputOn = eq.process (mix, active, P, sampleRate);
+            let gain = P[slot::Gain];
+
+            for (wrap<blockSize> i)
+                mix[i] = outputOn ? mix[i] * gain : float<2>();
+        }
+
+        void main()
+        {
+            loop
+            {
+                renderBlock();
+
+                for (wrap<blockSize> i)
+                {
+                    out <- mix[i];
+                    testNext[i] = testIn;
+                    advance();
+                }
+
+                testBuf = testNext;
+            }
+        }
+    }
+}

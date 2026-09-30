@@ -1,0 +1,28 @@
+{
+    "CmajorVersion":    1,
+    "ID":               "dev.porridge.oatmeal",
+    "version":          "1.0",
+    "name":             "Porridge",
+    "description":      "A Cmajor re-implementation of Fuzzpilz's Oatmeal (2008) that loads Oatmeal programs and banks",
+    "category":         "generator",
+    "manufacturer":     "Porridge",
+    "isInstrument":     true,
+
+    "plugin":
+    {
+        "manufacturerCode":  "Prdg",
+        "pluginCode":        "Oatm"
+    },
+
+    "source":           [ "dsp/Porridge.cmajor", "dsp/Types.cmajor", "dsp/Slots.cmajor", "dsp/ParamStore.cmajor", "dsp/Effects.cmajor", "dsp/Filter.cmajor", "dsp/Tables.cmajor", "dsp/Modulation.cmajor", "dsp/Oscillator.cmajor", "dsp/Voice.cmajor", "dsp/Synth.cmajor" ],
+    "worker":           "worker/worker.js",
+    "resources":        [ "presets/*" ],
+
+    "view":
+    {
+        "src":       "ui/index.js",
+        "width":     1344,
+        "height":    732,
+        "resizable": true
+    }
+}

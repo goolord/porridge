@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Porridge UI preview</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #6d6040; }
+  #host { position: absolute; inset: 0; }
+</style>
+</head>
+<body>
+<div id="host"></div>
+<script type="module">
+// Stand-in for Cmajor's PatchConnection so the view can be developed in a plain browser.
+class MockPatchConnection
+{
+    constructor()
+    {
+        this.params = new Map();
+        this.paramListeners = [];
+        this.state = new Map();
+        this.stateListeners = [];
+        this.endpointListeners = new Map();
+        this.log = [];
+    }
+    addAllParameterListener (fn)    { this.paramListeners.push (fn); }
+    removeAllParameterListener (fn) { this.paramListeners = this.paramListeners.filter (f => f !== fn); }
+    requestParameterValue (id)      { if (this.params.has (id)) this.paramListeners.forEach (f => f ({ endpointID: id, value: this.params.get (id) })); }
+    sendEventOrValue (id, value)
+    {
+        this.log.push ([id, value]);
+        if (typeof value === "number" && this.params.get (id) !== value)
+        {
+            this.params.set (id, value);
+            this.paramListeners.forEach (f => f ({ endpointID: id, value }));
+        }
+    }
+    sendParameterGestureStart() {}
+    sendParameterGestureEnd() {}
+    addStoredStateValueListener (fn)    { this.stateListeners.push (fn); }
+    removeStoredStateValueListener (fn) { this.stateListeners = this.stateListeners.filter (f => f !== fn); }
+    requestStoredStateValue (key)   { setTimeout (() => this.stateListeners.forEach (f => f ({ key, value: this.state.get (key) })), 0); }
+    sendStoredStateValue (key, v)   { this.state.set (key, v); this.stateListeners.forEach (f => f ({ key, value: v })); }
+    addEndpointListener (id, fn)    { if (! this.endpointListeners.has (id)) this.endpointListeners.set (id, []); this.endpointListeners.get (id).push (fn); }
+    removeEndpointListener() {}
+    getResourceAddress (p)          { return "../../" + p.replace (/^\//, ""); }
+    async readResource (p)          { const r = await fetch (this.getResourceAddress (p)); return await r.arrayBuffer(); }
+}
+
+const pc = new MockPatchConnection();
+window.pc = pc;
+const worker = await import ("../../worker/worker.js");
+worker.default (pc);
+const mod = await import ("../../ui/index.js");
+const view = mod.default (pc);
+document.getElementById ("host").appendChild (view);
+window.view = view;
+const page = new URLSearchParams (location.search).get ("page");
+if (page) setTimeout (() => view.showPage (page), 0);
+</script>
+</body>
+</html>

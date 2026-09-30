@@ -1,0 +1,54 @@
+# ==========================================
+# Cmajor Specific
+# ==========================================
+# If you run Cmajor code generators that output C++ or WASM targets locally
+/build/
+/dist/
+
+# ==========================================
+# JavaScript / Web GUI Dependencies
+# ==========================================
+# Cmajor views and GUIs often use HTML/JS 
+node_modules/
+.npm/
+package-lock.json
+yarn-error.log
+
+# ==========================================
+# Operating System & Editor Files
+# ==========================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# ==========================================
+# Audio Assets & Large Binary files (Optional)
+# ==========================================
+# Audio files can be heavy. Use Git LFS for these instead, 
+# or uncomment the lines below if they shouldn't be in git at all.
+# *.wav
+# *.mp3
+# *.aif
+
+# AI
+.claude
+
+# Porridge build and test output
+tools/test/build/
+tools/re/out/
+__pycache__/

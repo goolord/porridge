@@ -1,0 +1,544 @@
+//  Voice filter (16 types) and distortion, following Oatmeal's per-64-sample-block structure:
+//  cutoff and resonance are computed once per block; smoothed coefficients ramp per sample.
+
+namespace porridge
+{
+    /// Oatmeal's tanh lookup (4097 entries over +-8, linearly interpolated). Same table as the effects' saturator.
+    float tanhTable (const FxTables& t, float v)
+    {
+        let u = (abs (v + 8.0f) - abs (v - 8.0f)) * 128.0f + 2048.0f;
+        let i = int (u);
+        let fr = u - float (i);
+        return (1.0f - fr) * t.tanhTable.at (i) + fr * t.tanhTable.at (i + 1);
+    }
+
+    struct Filter
+    {
+        bool first;
+        float c1, x1, y1;                          // 1P LP
+        float c4, hx1, hy1;                        // 1P HP
+        float f2, q2, low2, band2;                 // 2P LP, nonlinear 2P LP
+        float f5, q5, low5, band5, hp5;            // 2P HP
+        float f3, q3, l31, b31, l32, b32;          // 4P LP, nonlinear 4P LP
+        float f6, q6, l61, b61, l62, b62, h6;      // 4P HP
+        float w7x1, w7y1, w7o;                     // 2P wide BP
+        float f8, q8, l8, b8;                      // 2P narrow BP
+        float f9, q9, l91, b91, l92, b92;          // 4P BP
+        float lN, bN;                              // notch
+        float pa, pr, pfb;                         // phaser
+        float[36] px, py;
+    }
+
+    void clearState (Filter& this)
+    {
+        this = Filter();
+        this.first = true;
+        this.c1 = 1.0f; this.c4 = 1.0f;
+        this.f2 = 1.0f; this.q2 = 1.0f;
+        this.f5 = 1.0f; this.q5 = 1.0f;
+        this.f3 = 1.0f; this.q3 = 1.0f;
+        this.f6 = 1.0f; this.q6 = 1.0f;
+        this.f8 = 1e-4f; this.q8 = 1.0f;
+        this.f9 = 1e-4f; this.q9 = 1.0f;
+    }
+
+    bool filterIsHalfRate (int t)
+    {
+        return t == 2 || t == 3 || t == 8 || t == 9 || t == 11 || t == 12;
+    }
+
+    /// Filters one block in place. hz = modulated cutoff (>= 5), res = 0..1.
+    void process (Filter& this, const FxTables& tables, int t, float hz, float res, float64 sampleRate,
+                  float[blockSize]& buf)
+    {
+        if (t <= 0 || t > 15)
+            return;
+
+        let n = blockSize;
+        let SR = max (float (sampleRate), 44100.0f);
+        var w = float (2.0 / float64 (SR) * float64 (piF) * float64 (hz));
+
+        if (filterIsHalfRate (t))
+            w = w * 0.5f;
+
+        if (w > piF * 0.98f)
+            w = piF * 0.98f;
+
+        let ksm = float (1.0 - pow (10.0, (-float64 (n) * 1.5) / float64 (SR * 0.02f)));
+        let invN = 1.0f / float (n);
+        let first = this.first;
+        this.first = false;
+        let wd = float64 (w);
+
+        if (t == 1 || t == 4)
+        {
+            var c = (sin (wd) + cos (wd) - 1.0) / cos (wd) * 0.5;
+            if (t == 4) c = 1.0 - c;
+            var s = t == 1 ? this.c1 : this.c4;
+            if (first) s = float (c);
+            let tt = first ? c : (c - float64 (s)) * float64 (ksm) + float64 (s);
+            let d = float ((tt - float64 (s)) / float64 (n));
+
+            for (wrap<blockSize> i)
+            {
+                let cc = float64 (s) + float64 (d);
+                s = float (cc);
+                let x = buf[i];
+
+                if (t == 1)
+                {
+                    let y = float ((1.0 - 2.0 * cc) * float64 (this.y1) + cc * (float64 (x) + float64 (this.x1)));
+                    this.x1 = x; this.y1 = y; buf[i] = y;
+                }
+                else
+                {
+                    let y = float ((2.0 * cc - 1.0) * float64 (this.hy1) + cc * (float64 (x) - float64 (this.hx1)));
+                    this.hx1 = x; this.hy1 = y; buf[i] = y;
+                }
+            }
+
+            if (t == 1) this.c1 = s; else this.c4 = s;
+            return;
+        }
+
+        if (t == 7)
+        {
+            let c = float ((sin (wd) + cos (wd) - 1.0) / cos (wd) * 0.5);
+            let r1 = 1.0f - res;
+            let a1 = r1 * (1.0f - c) + c;
+            let a2 = float64 (1.0f - c) + float64 (r1) * float64 (c);
+            var x1 = this.w7x1, y1 = this.w7y1, op = this.w7o;
+
+            for (wrap<blockSize> i)
+            {
+                let x = buf[i];
+                let y = float ((1.0 - 2.0 * float64 (a1)) * float64 (y1) + float64 (a1) * (float64 (x) + float64 (x1)));
+                x1 = x;
+                let o = float ((2.0 * a2 - 1.0) * float64 (op) + a2 * (float64 (y) - float64 (y1)));
+                y1 = y;
+                op = o;
+                buf[i] = o;
+            }
+
+            this.w7x1 = x1; this.w7y1 = y1; this.w7o = op;
+            return;
+        }
+
+        if (t == 10)
+        {
+            let f = 2.0 * sin (wd * 0.5);
+            let fN = f <= 1.2 ? float (f) : 1.2f;
+            let q = 1.0f - res * 0.995f;
+            let g = 1.0f / q;
+            var lo = this.lN, ba = this.bN;
+
+            for (wrap<blockSize> i)
+            {
+                let x = buf[i];
+                lo = ba * fN + lo;
+                let h = x * q - lo - ba * q;
+                ba = h * fN + ba;
+                buf[i] = (h + lo) * g;
+            }
+
+            this.lN = lo; this.bN = ba;
+            return;
+        }
+
+        if (t >= 13)
+        {
+            let N = t == 13 ? 4 : (t == 14 ? 12 : 36);
+            let p = 2.0 / wd * float64 (piF) * float64 (float (2.0 / float64 (N)));
+            let a = (1.0 - p) / (p + 1.0);
+
+            if (first)
+            {
+                this.pa = float (a);
+                this.pr = res;
+            }
+            else
+            {
+                this.pa = float ((a - float64 (this.pa)) * float64 (ksm) + float64 (this.pa));
+                this.pr = (res - this.pr) * ksm + this.pr;
+            }
+
+            let da = float ((a - float64 (this.pa)) * float64 (invN));
+            let dr = (res - this.pr) * invN;
+            var pa = this.pa, pr = this.pr, fb = this.pfb;
+
+            for (wrap<blockSize> i)
+            {
+                pa = pa + da;
+                pr = pr + dr;
+                var v = buf[i] - tanhTable (tables, fb) * pr;
+
+                for (int k = 0; k < N; ++k)
+                {
+                    let y = v * pa + this.px.at (k) - this.py.at (k) * pa;
+                    this.px.at (k) = v;
+                    this.py.at (k) = y;
+                    v = y;
+                }
+
+                fb = v;
+                buf[i] = fb;
+            }
+
+            this.pa = pa; this.pr = pr; this.pfb = fb;
+            return;
+        }
+
+        // state-variable family
+        var f = 2.0 * sin (wd * 0.5);
+        if (f > 1.2) f = float64 (1.2f);
+        let q = 1.0 - float64 (res) * float64 (0.995f);
+        let qf = float (q);
+
+        float fs, qs;
+
+        if (t == 2 || t == 11)      { fs = this.f2; qs = this.q2; }
+        else if (t == 3 || t == 12) { fs = this.f3; qs = this.q3; }
+        else if (t == 5)            { fs = this.f5; qs = this.q5; }
+        else if (t == 6)            { fs = this.f6; qs = this.q6; }
+        else if (t == 8)            { fs = this.f8; qs = this.q8; }
+        else                        { fs = this.f9; qs = this.q9; }
+
+        float64 fn, qn;
+
+        if (first)
+        {
+            fs = float (f); qs = qf;
+            fn = f; qn = float64 (qf);
+        }
+        else
+        {
+            fn = (f - float64 (fs)) * float64 (ksm) + float64 (fs);
+            qn = float64 (float ((q - float64 (qs)) * float64 (ksm) + float64 (qs)));
+        }
+
+        let df = float ((fn - float64 (fs)) * float64 (invN));
+        let dq = float ((qn - float64 (qs)) * float64 (invN));
+        float64 G, dG;
+
+        if (t == 2 || t == 11)      { G = sqrt (1.0 / float64 (qs));       dG = float64 (float ((sqrt (1.0 / qn) - G) * float64 (invN))); }
+        else if (t == 5)            { G = sqrt (1.0 / float64 (qs)) * 0.5; dG = float64 (float ((sqrt (1.0 / qn) * 0.5 - G) * float64 (invN))); }
+        else if (t == 3 || t == 12) { G = 1.0 / float64 (qs);             dG = float64 (float ((1.0 / qn - G) * float64 (invN))); }
+        else if (t == 6)            { G = 0.5 / float64 (qs);             dG = float64 (float ((0.5 / qn - G) * float64 (invN))); }
+        else if (t == 8)
+        {
+            G = sqrt (float64 (0.01f) / (float64 (fs) * float64 (qs))) * 0.5;
+            dG = float64 (float ((sqrt (float64 (0.01f) / (float64 (float (fn)) * qn)) * 0.5 - G) * float64 (invN)));
+        }
+        else
+        {
+            G = float64 (0.005f) / (float64 (fs) * float64 (qs));
+            dG = float64 (float ((float64 (0.005f) / (float64 (float (fn)) * qn) - G) * float64 (invN)));
+        }
+
+        for (wrap<blockSize> i)
+        {
+            let fe = float64 (fs) + float64 (df); fs = float (fe);
+            let qe = float64 (qs) + float64 (dq); qs = float (qe);
+            G += dG;
+            let x = float64 (buf[i]);
+
+            if (t == 2 || t == 11)
+            {
+                var lo = this.low2, ba = this.band2;
+
+                for (int it = 0; it < 2; ++it)
+                {
+                    let v = fe * float64 (ba) + float64 (lo);
+                    lo = t == 11 ? tanhTable (tables, float (v)) : float (v);
+                    ba = float ((qe * x - float64 (lo) - qe * float64 (ba)) * fe + float64 (ba));
+                }
+
+                this.low2 = lo; this.band2 = ba;
+                buf[i] = float (G * float64 (lo));
+            }
+            else if (t == 5)
+            {
+                let lo = float (fe * float64 (this.band5) + float64 (this.low5));
+                let h = qe * x - float64 (lo) - qe * float64 (this.band5);
+                this.band5 = float (fe * h + float64 (this.band5));
+                this.low5 = lo;
+                buf[i] = float ((h + float64 (this.hp5)) * G);
+                this.hp5 = float (h);
+            }
+            else if (t == 3 || t == 12)
+            {
+                var l1 = this.l31, b1 = this.b31, l2 = this.l32, b2 = this.b32;
+
+                for (int it = 0; it < 2; ++it)
+                {
+                    l1 = float (fe * float64 (b1) + float64 (l1));
+                    b1 = float ((qe * x - float64 (l1) - qe * float64 (b1)) * fe + float64 (b1));
+                    let v = fe * float64 (b2) + float64 (l2);
+                    l2 = t == 12 ? tanhTable (tables, float (v)) : float (v);
+                    b2 = float ((qe * float64 (l1) - float64 (l2) - qe * float64 (b2)) * fe + float64 (b2));
+                }
+
+                this.l31 = l1; this.b31 = b1; this.l32 = l2; this.b32 = b2;
+                buf[i] = float (G * float64 (l2));
+            }
+            else if (t == 6)
+            {
+                let l1 = float (fe * float64 (this.b61) + float64 (this.l61));
+                let h1 = qe * x - float64 (l1) - qe * float64 (this.b61);
+                this.b61 = float (h1 * fe + float64 (this.b61)); this.l61 = l1;
+                let l2 = float (fe * float64 (this.b62) + float64 (this.l62));
+                let h2 = h1 * qe - float64 (l2) - qe * float64 (this.b62);
+                this.b62 = float (h2 * fe + float64 (this.b62)); this.l62 = l2;
+                buf[i] = float ((h2 + float64 (this.h6)) * G);
+                this.h6 = float (h2);
+            }
+            else if (t == 8)
+            {
+                var lo = this.l8, ba = this.b8;
+                lo = float (fe * float64 (ba) + float64 (lo));
+                ba = float ((qe * x - float64 (lo) - qe * float64 (ba)) * fe + float64 (ba));
+                let bmid = ba;
+                lo = float (fe * float64 (ba) + float64 (lo));
+                ba = float ((qe * x - float64 (lo) - qe * float64 (ba)) * fe + float64 (ba));
+                this.l8 = lo; this.b8 = ba;
+                buf[i] = float ((float64 (ba) + float64 (bmid)) * G);
+            }
+            else
+            {
+                var l1 = this.l91, b1 = this.b91, l2 = this.l92, b2 = this.b92;
+                float64 h0 = 0, hLast = 0;
+
+                for (int it = 0; it < 2; ++it)
+                {
+                    l1 = float (fe * float64 (b1) + float64 (l1));
+                    b1 = float ((qe * x - float64 (l1) - qe * float64 (b1)) * fe + float64 (b1));
+                    l2 = float (fe * float64 (b2) + float64 (l2));
+                    let h2 = qe * float64 (l1) - float64 (l2) - qe * float64 (b2);
+                    b2 = float (h2 * fe + float64 (b2));
+                    if (it == 0) h0 = h2; else hLast = h2;
+                }
+
+                this.l91 = l1; this.b91 = b1; this.l92 = l2; this.b92 = b2;
+                buf[i] = float ((hLast + float64 (float (h0))) * G);
+            }
+        }
+
+        if (t == 2 || t == 11)      { this.f2 = fs; this.q2 = qs; }
+        else if (t == 3 || t == 12) { this.f3 = fs; this.q3 = qs; }
+        else if (t == 5)            { this.f5 = fs; this.q5 = qs; }
+        else if (t == 6)            { this.f6 = fs; this.q6 = qs; }
+        else if (t == 8)            { this.f8 = fs; this.q8 = qs; }
+        else                        { this.f9 = fs; this.q9 = qs; }
+    }
+
+    //==============================================================================
+    //  Distortion (per voice: mono; global: stereo)
+
+    struct DistTables
+    {
+        float[2050] soft;       // tanh((i-1024)/128)
+        float[2050] sine;       // sin(j*pi/1024)
+        float[2050] asym;       // Gompertz curve
+        float[32 * 3 * 4] fir;  // [set][2x,4x,8x][32]
+    }
+
+    void build (DistTables& this)
+    {
+        for (int i = 0; i <= 2048; ++i)
+        {
+            this.soft.at (i) = float (tanh (float64 (i - 1024) / 128.0));
+            this.sine.at (i) = float (sin (float64 (i) * float64 (piF) / 1024.0));
+            let c = float64 (float (log (2.0)));
+            this.asym.at (i) = float (2.0 * exp (-c * exp ((2.0 - float64 (i) / 128.0) * float64 (float (1.0 / c)))) - 1.0);
+        }
+
+        this.soft.at (2049) = 0; this.sine.at (2049) = 0; this.asym.at (2049) = 0;
+
+        // first 16 taps of each symmetric 32-tap FIR (set = SR range, then 2x / 4x / 8x)
+        let halfTaps = float[16 * 12] (
+            -0.000729989493f,-0.00555753848f,-0.0135504249f,-0.0143905282f,0.000386684609f,0.0167762768f,0.00824460667f,-0.0202910695f,-0.0231291335f,0.0191786028f,0.0465012304f,-0.00685944688f,-0.0845687762f,-0.0353548639f,0.18493399f,0.403144836f,
+            0.00228226185f,0.00480223121f,0.00746307708f,0.00804945454f,0.00416513346f,-0.00574596785f,-0.0210167337f,-0.0378923528f,-0.0498275124f,-0.049202431f,-0.0300765261f,0.0089996662f,0.0633200333f,0.12243297f,0.172769383f,0.201722875f,
+            -0.00126208563f,0.00125461002f,0.00302423304f,0.00612585992f,0.0107180299f,0.0169317331f,0.0247897096f,0.0341765583f,0.0448106974f,0.0562515445f,0.0679231808f,0.0791568011f,0.0892457813f,0.0975145027f,0.10338439f,0.106431723f,
+            0.000714151189f,-0.00125134375f,-0.00747857848f,-0.0104524232f,-0.000276158709f,0.0139544671f,0.00755497254f,-0.0184321608f,-0.0220366362f,0.0179940108f,0.0452956632f,-0.00627887435f,-0.0835914835f,-0.0355942063f,0.184358627f,0.403412551f,
+            0.00247393968f,0.0061032814f,0.0109078949f,0.014646356f,0.0142715573f,0.0070925178f,-0.00744477613f,-0.0263193566f,-0.0427714661f,-0.0479419455f,-0.0340422653f,0.00206159172f,0.0564177334f,0.118026756f,0.171712026f,0.202969193f,
+            -0.00048500151f,0.00175015407f,0.00355905085f,0.00673236372f,0.0113371983f,0.0174944773f,0.0252285432f,0.0344263613f,0.0448159948f,0.0559733957f,0.0673417822f,0.0782737806f,0.0880862474f,0.0961255729f,0.101831101f,0.104792438f,
+            -8.14509986e-06f,9.24569977e-05f,0.000587028393f,0.00122850994f,0.000364132313f,-0.00336672971f,-0.00652577681f,-0.00105146074f,0.0140335029f,0.021008132f,-0.00296973437f,-0.0477030799f,-0.0543041788f,0.0357576273f,0.203174561f,0.339860767f,
+            -0.000300386106f,-0.00118230062f,-0.00311021344f,-0.00642000791f,-0.011059328f,-0.0162817892f,-0.0204799268f,-0.0212996192f,-0.0161117539f,-0.00278419117f,0.0194502231f,0.0493300371f,0.083398141f,0.116492212f,0.142835826f,0.157448113f,
+            0.00134671666f,0.00268536387f,0.00467012962f,0.00789050199f,0.0118392212f,0.0171235856f,0.0232114885f,0.0304225404f,0.0381408744f,0.0463988259f,0.0545141101f,0.0623074323f,0.0691312104f,0.0747342333f,0.0786433592f,0.080684796f,
+            9.73037022e-05f,0.0004424449f,0.00076496962f,-4.90614002e-05f,-0.00284952507f,-0.00555029465f,-0.00273392769f,0.0082663605f,0.018835647f,0.0113155199f,-0.0211239662f,-0.0533956215f,-0.0361708924f,0.0606655888f,0.205781683f,0.315010279f,
+            -2.69251996e-05f,-0.000427582389f,-0.00140781177f,-0.00328214234f,-0.00603572885f,-0.00911144633f,-0.0112158516f,-0.0103724524f,-0.00429987488f,0.00891248137f,0.0300055742f,0.0579071864f,0.0895308927f,0.120188653f,0.144581854f,0.158112839f,
+            -8.04110969e-05f,0.00123617996f,0.00255127507f,0.00489620725f,0.00833775289f,0.013011775f,0.0189716332f,0.0261534825f,0.0343611389f,0.0432637222f,0.0524119735f,0.0612719581f,0.0692703873f,0.0758528337f,0.0805388168f,0.0829754695f);
+
+        for (int k = 0; k < 12; ++k)
+        {
+            for (int j = 0; j < 16; ++j)
+            {
+                let v = halfTaps.at (k * 16 + j);
+                this.fir.at (k * 32 + j) = v;
+                this.fir.at (k * 32 + 31 - j) = v;
+            }
+        }
+    }
+
+    float distShape (const DistTables& t, int type, float v)
+    {
+        if (type == 1)
+            return (abs (v + 1.0f) - abs (v - 1.0f)) * 0.5f;
+
+        if (type == 2)
+        {
+            let u = (abs (v + 8.0f) - abs (v - 8.0f)) * 64.0f + 1024.0f;
+            let i = int (u);
+            let fr = u - float (i);
+            return (1.0f - fr) * t.soft.at (i) + fr * t.soft.at (i + 1);
+        }
+
+        if (type == 3)
+        {
+            let u = float64 (v) * 2048.0;
+            var i = int (u);
+            if (u < 0) i -= 1;
+            let fr = float (u - float64 (i));
+            let k = i & 2047;
+            return (1.0f - fr) * t.sine.at (k) + fr * t.sine.at (k + 1);
+        }
+
+        let u = (abs (v + 2.0f) - abs (v - 14.0f) + 16.0f) * 64.0f;
+        let i = int (u);
+        let fr = u - float (i);
+        return (1.0f - fr) * t.asym.at (i) + fr * t.asym.at (i + 1);
+    }
+
+    struct Distortion
+    {
+        bool needsReset;
+        float preS, postS;
+        float[32] hL, hR, uL, uR;
+        int idx;
+    }
+
+    void clearState (Distortion& this)
+    {
+        this = Distortion();
+        this.needsReset = true;
+        this.preS = 1.0f;
+        this.postS = 1.0f;
+    }
+
+    int distFirSet (float64 sr)
+    {
+        let s = int (sr);
+        if (s <= 46050) return 0;
+        if (s < 68100) return 1;
+        if (s < 92100) return 2;
+        return 3;
+    }
+
+    /// Sets up the block's gain ramps. Returns false when the distortion is off.
+    bool beginBlock (Distortion& this, const float[numSlots]& P, float modDb, bool isGlobal, float& dpre, float& dpost)
+    {
+        let type = int (P[slot::Sat_Type]);
+
+        if (type == 0)
+            return false;
+
+        let dm = modDb * 30.0f;
+        let lim = P[slot::Sat_Limit] - dm;
+        let pre = float (pow (10.0, float64 ((P[slot::Sat_Pregain] - lim) * 0.05f)));
+        var post = float (pow (10.0, float64 ((lim + P[slot::Sat_Postgain] + dm) * 0.05f)));
+
+        if (int (P[slot::Sat_Mode]) == 3 && ! isGlobal)
+            post = 1.0f;
+
+        if (this.needsReset)
+        {
+            this.needsReset = false;
+            this.preS = pre;
+            this.postS = post;
+        }
+
+        dpre = (pre - this.preS) / float (blockSize);
+        dpost = (post - this.postS) / float (blockSize);
+        return true;
+    }
+
+    float distSample (const DistTables& t, int type, int os, int firSet, float x, float preS, float postS,
+                      float[32]& h, float[32]& u, int idx)
+    {
+        if (os <= 1)
+            return distShape (t, type, x * preS) * postS;
+
+        let base = (firSet * 3 + (os == 2 ? 0 : (os == 4 ? 1 : 2))) * 32;
+        h.at (idx) = x * preS * float (os);
+        let taps = 32 / os;
+
+        for (int p = 0; p < os; ++p)
+        {
+            float64 s = 0;
+
+            for (int k = 0; k < taps; ++k)
+                s += float64 (h.at ((idx - os * k) & 31)) * float64 (t.fir.at (base + p + os * k));
+
+            u.at ((idx + p) & 31) = distShape (t, type, float (s));
+        }
+
+        float64 y = 0;
+
+        for (int j = 0; j < 32; ++j)
+            y += float64 (u.at ((idx + os - 1 - j) & 31)) * float64 (t.fir.at (base + j));
+
+        return float (y) * postS;
+    }
+
+    int distOversampling (const float[numSlots]& P)
+    {
+        let o = int (P[slot::Sat_Oversample]);
+        return o == 1 ? 2 : (o == 2 ? 4 : (o == 3 ? 8 : 1));
+    }
+
+    /// Per-voice (mono) distortion of one block.
+    void processMono (Distortion& this, const DistTables& t, const float[numSlots]& P, float modDb, float64 sr,
+                      float[blockSize]& buf)
+    {
+        float dpre, dpost;
+
+        if (! this.beginBlock (P, modDb, false, dpre, dpost))
+            return;
+
+        let type = int (P[slot::Sat_Type]);
+        let os = distOversampling (P);
+        let set = distFirSet (sr);
+
+        for (wrap<blockSize> i)
+        {
+            this.preS = this.preS + dpre;
+            this.postS = this.postS + dpost;
+            buf[i] = distSample (t, type, os, set, buf[i], this.preS, this.postS, this.hL, this.uL, this.idx);
+            if (os > 1) this.idx = (this.idx + os) & 31;
+        }
+    }
+
+    /// Global (stereo) distortion of one block.
+    void processStereo (Distortion& this, const DistTables& t, const float[numSlots]& P, float modDb, float64 sr,
+                        float<2>[blockSize]& buf)
+    {
+        float dpre, dpost;
+
+        if (! this.beginBlock (P, modDb, true, dpre, dpost))
+            return;
+
+        let type = int (P[slot::Sat_Type]);
+        let os = distOversampling (P);
+        let set = distFirSet (sr);
+
+        for (wrap<blockSize> i)
+        {
+            this.preS = this.preS + dpre;
+            this.postS = this.postS + dpost;
+            let l = distSample (t, type, os, set, buf[i][0], this.preS, this.postS, this.hL, this.uL, this.idx);
+            let r = distSample (t, type, os, set, buf[i][1], this.preS, this.postS, this.hR, this.uR, this.idx);
+            buf[i] = float<2> (l, r);
+            if (os > 1) this.idx = (this.idx + os) & 31;
+        }
+    }
+}

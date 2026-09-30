@@ -1,0 +1,517 @@
+//  Envelopes, LFOs and the pitch envelope, as in Oatmeal.
+//
+//  Envelope parameters live in the program mirror as 16-float blocks (chunk offsets 8232 amp,
+//  8300 filter, 8364 filter 2, 9312 mod 1, 9408 mod 2): [0] kill ms (4.0), [1] attack, [2] hold,
+//  [3] decay 1, [4] decay 2, [5] release, [6] release/2, [11] breakpoint, [13] sustain.
+//  The derived coefficients are computed per block into EnvCoefs.
+
+namespace porridge
+{
+    struct EnvCoefs
+    {
+        float killDec, attInc, d1coef, d2coef, relCoef, bp, sus;
+        int holdSamples;
+    }
+
+    EnvCoefs makeEnvCoefs (const float[numSlots]& P, int baseSlot, float64 sr, float timeScale)
+    {
+        EnvCoefs c;
+        let kill    = 4.0 * float64 (timeScale);        // 'kill' fade time: always 4 ms in Oatmeal (not a parameter)
+        let attack  = float64 (P.at (baseSlot + 1) * timeScale);
+        let hold    = float64 (P.at (baseSlot + 2) * timeScale);
+        let d1      = float64 (P.at (baseSlot + 3) * timeScale);
+        let d2      = float64 (P.at (baseSlot + 4) * timeScale);
+        let release = float64 (P.at (baseSlot + 5) * timeScale);
+        var bp  = P.at (baseSlot + 11);
+        var sus = P.at (baseSlot + 13);
+
+        if (bp  > 0.998f) bp  = 1.0f;
+        if (sus > 0.998f) sus = 1.0f;
+
+        c.bp = bp;
+        c.sus = sus;
+        c.killDec = float (1000.0 / (sr * max (kill, 1e-3)));
+        c.attInc = float (1000.0 / (sr * max (attack, 1e-3)));
+        c.holdSamples = int (hold * sr * 0.001 + 0.5);
+        c.d1coef = float (pow (max (float64 (bp), 1e-6), 1.0 / max (sr * d1 * 0.001, 1.0)));
+        c.d2coef = float (pow (max (float64 (sus) / max (float64 (bp), 1e-6), 1e-6), 1.0 / max (sr * d2 * 0.001, 1.0)));
+        c.relCoef = float (pow (10.0, -3.0 / max (sr * release * 0.001, 1.0)));
+        return c;
+    }
+
+    struct Env
+    {
+        int stage;          // 0 off, 1 kill ramp, 2 attack, 3 hold, 4 decay 1, 5 decay 2 falling, 6 rising, 7 sustain, 8 release
+        float L, y, X, k;
+        int holdCnt;
+    }
+
+    float envCubic (float64 L, float64 lo, float64 hi)
+    {
+        return float ((-2.0 * L * L * L + 3.0 * (lo + hi) * L * L - 6.0 * lo * hi * L + (lo + hi) * lo * hi)
+                        / max ((hi - lo) * (hi - lo), 1e-8));
+    }
+
+    void trigger (Env& this, const EnvCoefs& c, bool fade)
+    {
+        if (this.stage == 0)
+        {
+            this.y = 0;
+            this.L = 0;
+        }
+        else if (this.stage == 4)
+        {
+            this.L = envCubic (this.L, c.bp, 1.0);
+        }
+        else if (this.stage == 5 || this.stage == 6)
+        {
+            this.L = envCubic (this.L, c.sus, c.bp);
+        }
+
+        if (this.stage != 0 && this.stage != 1 && this.stage != 2)
+            this.L = this.L < 1e-5f ? 0.0f : (this.L > 0.99999f ? 1.0f : float (1.0 - sqrt (1.0 - float64 (this.L))));
+
+        this.holdCnt = 0;
+        this.stage = (fade && this.stage != 0) ? 1 : 2;
+    }
+
+    void release (Env& this, const EnvCoefs& c, bool blockEnv)
+    {
+        if (blockEnv)
+        {
+            if (this.stage != 0)
+                this.stage = 8;
+
+            return;
+        }
+
+        if (this.stage == 0 || this.stage >= 8)
+            return;
+
+        if (this.stage == 1 || this.stage == 2)       this.L = (2.0f - this.L) * this.L;
+        else if (this.stage == 4)                     this.L = envCubic (this.L, c.bp, 1.0);
+        else if (this.stage == 5 || this.stage == 6)  this.L = envCubic (this.L, c.sus, c.bp);
+
+        this.X = this.L;
+
+        if (this.X <= 0.001f)
+        {
+            this.stage = 0;
+            return;
+        }
+
+        this.k = this.X / (this.X - 0.001f);
+        this.stage = 8;
+    }
+
+    /// Amp envelope, per sample. Fills out[0..n); returns false once the envelope has ended.
+    bool renderAmp (Env& this, const EnvCoefs& c, float speedIn, bool pedalDown, float64 sr, float[blockSize]& out)
+    {
+        for (wrap<blockSize> i)
+            out[i] = 0;
+
+        if (this.stage == 0)
+            return false;
+
+        let speed = float64 (max (speedIn, 0.01f));
+        let sm = float (1.0 - pow (10.0, -1.0 / (sr * 0.0005)));
+        let att = float (speed * float64 (c.attInc));
+        let kill = float (speed * float64 (c.killDec));
+        let bp = max (c.bp, 1e-4f);
+        let sus = max (c.sus, 1e-4f);
+        let d1 = float (pow (float64 (c.d1coef), speed));
+        let d2 = float (pow (float64 (c.d2coef), speed));
+        let rel = float (pow (float64 (c.relCoef), pedalDown ? speed * 0.0078125 : speed));
+
+        if (this.stage == 5)      { if (bp < sus) this.stage = 6; else if (bp == sus) this.stage = 7; }
+        else if (this.stage == 6) { if (bp > sus) this.stage = 5; else if (bp == sus) this.stage = 7; }
+
+        if (this.stage == 5) { if (this.L > bp) this.L = bp; else if (this.L < sus) this.L = sus; }
+        if (this.stage == 6) { if (this.L < bp) this.L = bp; else if (this.L > sus) this.L = sus; }
+
+        var i = 0;
+        var guard = 0;
+
+        while (i < blockSize && guard < 4 * blockSize)
+        {
+            ++guard;
+            let s = this.stage;
+
+            if (s == 1)
+            {
+                this.y += ((2.0f - this.L) * this.L - this.y) * sm;
+                out.at (i) = this.y;
+                this.L -= kill;
+                if (this.L <= 0) { this.L = 0; this.stage = 2; continue; }
+            }
+            else if (s == 2)
+            {
+                this.y += ((2.0f - this.L) * this.L - this.y) * sm;
+                out.at (i) = this.y;
+                this.L += att;
+
+                if (this.L >= 1.0f)
+                {
+                    this.L = 1.0f;
+
+                    if (c.holdSamples > 0)
+                    {
+                        this.stage = 3;
+                        this.holdCnt = int (float64 (c.holdSamples) * speed);
+                    }
+                    else
+                    {
+                        this.stage = bp < 1.0f ? 4 : (sus < 1.0f ? 5 : 7);
+                    }
+
+                    continue;
+                }
+            }
+            else if (s == 3)
+            {
+                this.y += (this.L - this.y) * sm;
+                out.at (i) = this.y;
+                this.holdCnt -= 1;
+                if (this.holdCnt < 0) { this.stage = bp < 1.0f ? 4 : (sus < 1.0f ? 5 : 7); continue; }
+            }
+            else if (s == 4)
+            {
+                this.y += (envCubic (this.L, bp, 1.0) - this.y) * sm;
+                out.at (i) = this.y;
+                this.L *= d1;
+                if (this.L <= bp) { this.L = bp; this.stage = bp < sus ? 6 : (bp > sus ? 5 : 7); continue; }
+            }
+            else if (s == 5 || s == 6)
+            {
+                this.y += (envCubic (this.L, sus, bp) - this.y) * sm;
+                out.at (i) = this.y;
+                this.L *= d2;
+
+                if (s == 5 ? this.L <= sus : this.L >= sus)
+                {
+                    this.L = sus;
+                    this.stage = 7;
+                    continue;
+                }
+            }
+            else if (s == 7)
+            {
+                this.y += (this.L - this.y) * sm;
+                out.at (i) = this.y;
+                this.L = sus;
+
+                if (this.y < 0.001f)
+                {
+                    this.L = 0;
+                    this.stage = 0;
+                    return true;
+                }
+            }
+            else if (s == 8)
+            {
+                if (this.L > 0.001f)
+                {
+                    this.y += ((this.L - 0.001f) * this.k - this.y) * sm;
+                    this.L *= rel;
+                }
+                else
+                {
+                    this.L = 0;
+                    this.y += (0.0f - this.y) * sm;
+                }
+
+                out.at (i) = this.y;
+
+                if (this.y < 1e-6f)
+                {
+                    this.L = 0;
+                    this.stage = 0;
+                    return true;
+                }
+            }
+            else
+            {
+                return true;
+            }
+
+            ++i;
+        }
+
+        return true;
+    }
+
+    /// Block envelope (filter, mod and phantom envelopes): one update per block, returns the level
+    /// after advancing n samples (0 if off).
+    float renderBlock (Env& this, const EnvCoefs& c, float speedIn, bool pedalDown)
+    {
+        if (this.stage == 0)
+            return 0.0f;
+
+        let speed = max (speedIn, 0.01f);
+        let bp = max (c.bp, 1e-6f);
+        let sus = c.sus;
+        let rel = pedalDown ? float (pow (float64 (c.relCoef), 0.0078125)) : c.relCoef;
+        let s = float (blockSize) * speed;
+
+        if (this.stage == 5)      { if (bp < sus) this.stage = 6; else if (bp == sus) this.stage = 7; }
+        else if (this.stage == 6) { if (bp > sus) this.stage = 5; else if (bp == sus) this.stage = 7; }
+
+        if (this.stage == 5) { if (this.L > bp) this.L = bp; else if (this.L < sus) this.L = sus; }
+        if (this.stage == 6) { if (this.L < bp) this.L = bp; else if (this.L > sus) this.L = sus; }
+
+        if (this.stage == 1)
+        {
+            this.L -= s * c.killDec;
+            if (this.L <= 0) { this.L = 0; this.stage = 2; }
+        }
+
+        if (this.stage == 2)
+        {
+            this.L += s * c.attInc;
+
+            if (this.L >= 1.0f)
+            {
+                this.L = 1.0f;
+
+                if (c.holdSamples > 0)
+                {
+                    this.stage = 3;
+                    this.holdCnt = c.holdSamples;
+                }
+                else
+                {
+                    this.stage = bp < 1.0f ? 4 : (sus < 1.0f ? 5 : 7);
+                }
+            }
+        }
+
+        if (this.stage == 3)
+        {
+            this.holdCnt -= max (int (float (blockSize) * speed), 1);
+            if (this.holdCnt < 0) this.stage = bp < 1.0f ? 4 : (sus < 1.0f ? 5 : 7);
+        }
+
+        if (this.stage == 4)
+        {
+            this.L *= float (pow (float64 (c.d1coef), float64 (s)));
+            if (this.L <= bp) this.stage = bp < sus ? 6 : (bp > sus ? 5 : 7);
+        }
+
+        if (this.stage == 5)
+        {
+            this.L *= float (pow (float64 (c.d2coef), float64 (s)));
+            if (this.L <= sus) { this.stage = 7; this.L = sus; }
+        }
+
+        if (this.stage == 6)
+        {
+            this.L *= float (pow (float64 (c.d2coef), float64 (s)));
+            if (this.L >= sus) { this.stage = 7; this.L = sus; }
+        }
+
+        if (this.stage == 7)
+        {
+            this.L = sus;
+            if (sus < 0.001f) { this.L = 0; this.stage = 0; }
+        }
+
+        if (this.stage == 8)
+        {
+            this.L *= float (pow (float64 (rel), float64 (s)));
+            if (this.L < 0.001f) { this.L = 0; this.stage = 0; }
+        }
+
+        return this.L;
+    }
+
+    float velScale (float vel, float vs)
+    {
+        if (vs > 0.001f)  return float (pow (float64 (vel), 2.0 * float64 (vs)));
+        if (vs < -0.001f) return 1.0f + vel * vs;
+        return 1.0f;
+    }
+
+    //==============================================================================
+    struct LFO
+    {
+        int64 phase;        // uint32
+        float prevR, curR;
+    }
+
+    void resetPhase (LFO& this, Rand& rng, const float[numSlots]& P)
+    {
+        let r = float64 (float (rng.next()) * (1.0f / 16384.0f) - 1.0f);
+        this.phase = int64 ((r * float64 (P[slot::LFOPhaseRand]) * 0.5 + float64 (P[slot::LFOPhase])) * 4294967296.0 + 0.5) & 0xffffffffi64;
+        this.prevR = float (rng.next()) / 32768.0f;
+        this.curR = float (rng.next()) / 32768.0f;
+    }
+
+    float64 lfoUnitBeats (int unit)
+    {
+        let beats = float64[15] (0.2, 1.0 / 6.0, 0.25, 0.4, 1.0 / 3.0, 0.5, 0.8, 2.0 / 3.0, 1.0, 1.6, 4.0 / 3.0, 2.0, 3.2, 8.0 / 3.0, 4.0);
+        return beats.at (clamp (unit - 3, 0, 14));
+    }
+
+    /// Advances an LFO by nAdv samples (after speed modulation) and returns its value (0..1).
+    /// xySpeed = the X/Y "LFO speed" sum for this LFO (quirk: LFO 2 also follows target 8).
+    float step (LFO& this, const WaveTables& tables, Rand& rng, const float[numSlots]& P, const float[512]& userShape,
+                bool isLFO2, int nAdvIn, float xySpeed, float64 sr, float64 samplesPerBeat)
+    {
+        var nAdv = nAdvIn;
+
+        if (abs (xySpeed) > 0.01f)
+            nAdv = int (pow (2.0, 2.0 * float64 (xySpeed)) * float64 (nAdv) + 0.5);
+
+        var speed = float64 (P.at (isLFO2 ? slot::LFO_2_Speed : slot::LFO_1_Speed));
+
+        if (P.at (isLFO2 ? slot::LFO_2_Quantize : slot::LFO_1_Quantize) != 0)
+            speed = (3.0 * speed >= 2.0) ? floor (speed + 0.5) : 1.0 / floor (1.0 / speed + 0.5);
+
+        let unit = int (P.at (isLFO2 ? slot::LFO_2_Unit : slot::LFO_1_Unit));
+        float64 period;
+
+        if (unit == 0)      period = sr * speed * 0.001;
+        else if (unit == 1) period = sr * speed * 0.01;
+        else if (unit == 2) period = sr * speed;
+        else                period = speed * samplesPerBeat * lfoUnitBeats (unit);
+
+        let inc = int64 (4294967296.0 / max (period, 1e-9) + 0.5) & 0xffffffffi64;
+        let old = this.phase;
+        this.phase = (this.phase + inc * int64 (nAdv)) & 0xffffffffi64;
+
+        let shape = int (P.at (isLFO2 ? slot::LFO_2_Shape : slot::LFO_1_Shape));
+
+        if (shape == 4 || shape == 5)
+        {
+            if (old > this.phase)
+            {
+                this.prevR = this.curR;
+                this.curR = float (rng.next()) / 32768.0f;
+            }
+
+            if (shape == 5)
+                return this.curR;
+
+            return float (float64 (this.prevR) + float64 (this.curR - this.prevR) * float64 (this.phase) * (1.0 / 4294967296.0));
+        }
+
+        if (shape == 6)
+        {
+            let i = int (this.phase >> 23);
+            let f = float64 (this.phase & 0x7fffff) * (1.0 / 8388608.0);
+            let a = float64 (userShape.at (i & 511));
+            return float (a + (float64 (userShape.at ((i + 1) & 511)) - a) * f);
+        }
+
+        let t = clamp (shape, 0, 3) * 32769;
+        let i = int (this.phase >> 17);
+        let f = float64 (this.phase & 0x1ffff) * (1.0 / 131072.0);
+        let a = float64 (tables.lfo.at (t + i));
+        return float (a + (float64 (tables.lfo.at (t + i + 1)) - a) * f);
+    }
+
+    //==============================================================================
+    /// Pitch envelope constants (per block): start ratio S, peak Pk, sustain Su, attack step,
+    /// decay and release multipliers.
+    struct PitchEnvCoefs
+    {
+        float64 S, Pk, Su, att, dec, rel;
+    }
+
+    PitchEnvCoefs makePitchEnvCoefs (const float[numSlots]& P, float64 sr)
+    {
+        PitchEnvCoefs c;
+        let oct = float64 (P[slot::Tune_Octave]);
+        let start = P[slot::PEnv_Start];
+        c.S  = start <= -48.0f ? 0.0 : float64 (float (pow (2.0, float64 (start) / 12.0)));
+        c.Pk = float64 (float (pow (oct, float64 (P[slot::PEnv_Peak]) / 12.0)));
+        c.Su = float64 (float (pow (oct, float64 (P[slot::PEnv_Sustain]) / 12.0)));
+        c.att = float64 (float ((c.Pk - c.S) / (sr * float64 (P[slot::PEnv_Attack] * 0.001f))));
+        c.dec = float64 (float (pow (c.Su / c.Pk, 1.0 / (sr * float64 (P[slot::PEnv_Decay] * 0.001f)))));
+        c.rel = float64 (float (pow (oct, float64 (P[slot::PEnv_Release]) / (12.0 * sr))));
+        return c;
+    }
+
+    /// Advances the pitch envelope state (ratio R, stage) by x = n * speed samples.
+    void advancePitchEnv (float& R, int& stage, const PitchEnvCoefs& c, float64 x, float64 sr)
+    {
+        var r = float64 (R);
+
+        if (stage == 0)
+        {
+            r = 0;
+        }
+        else if (stage == 1)
+        {
+            let stepAmt = x / (sr * 0.002);
+
+            if (r < c.S)
+            {
+                r += stepAmt;
+                if (r >= c.S) { r = c.S; stage = 2; }
+            }
+            else
+            {
+                r -= stepAmt;
+                if (r <= c.S) { r = c.S; stage = 2; }
+            }
+        }
+        else if (stage == 2)
+        {
+            if (c.Pk > c.S)
+            {
+                r += r >= c.S ? x * c.att : (c.S - r + 1.0) * c.att * x / (c.Pk - c.S);
+                if (r >= c.Pk) { r = c.Pk; stage = c.Su <= c.Pk ? 5 : 6; }
+            }
+            else
+            {
+                r += r <= c.S ? x * c.att : (r - c.S + 1.0) * x * c.att / (c.S - c.Pk + 0.001);
+                r += x * c.att;
+                if (r <= c.Pk) { r = c.Pk; stage = c.Su <= c.Pk ? 5 : 6; }
+            }
+        }
+        else if (stage == 5)
+        {
+            r *= pow (c.dec, x);
+            if (r <= c.Su) { r = c.Su; stage = 7; }
+        }
+        else if (stage == 6)
+        {
+            r *= pow (c.dec, x);
+            if (r >= c.Su) { r = c.Su; stage = 7; }
+        }
+        else if (stage == 7)
+        {
+            r = c.Su;
+        }
+        else if (stage == 8)
+        {
+            r *= pow (c.rel, x);
+            if (r < 1e-4) { r = 0; stage = 0; }
+            else if (r > 1048576.0) r = 1048576.0;
+        }
+
+        R = float (r);
+    }
+
+    //==============================================================================
+    /// "dB-type" modulation factor used by amp and XY-depth targets.
+    float dbFactor (float v, float d)
+    {
+        if (d > 0)
+        {
+            let a = float (pow (10.0, -3.0 * float64 (d)));
+            return a + (1.0f - a) * v;
+        }
+
+        let a = float (pow (10.0, 3.0 * float64 (d)));
+        return a + (1.0f - a) * (1.0f - v);
+    }
+
+    /// Constant-power pan gains: centre = (1, 1).
+    float<2> panGains (float p)
+    {
+        let g = float (2.0 / sqrt (2.0 - 4.0 * float64 (p) * float64 (1.0f - p)));
+        return float<2> ((1.0f - p) * g, p * g);
+    }
+}

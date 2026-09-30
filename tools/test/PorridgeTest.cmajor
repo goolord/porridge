@@ -1,0 +1,33 @@
+//  Test graph: the production graph plus an audio input that can replace the voices,
+//  so the effects can be compared with recordings from the original plugin.
+
+graph PorridgeTest  [[ main ]]
+{
+    input params.*;
+
+    input event std::midi::Message midiIn;
+    input event std::timeline::Tempo tempoIn;
+    input event porridge::Shape shapeIn;
+    input event porridge::Curve curveIn;
+    input event int panic;
+    input event int testMode;
+    input stream float<2> testIn;
+
+    output stream float<2> out;
+
+    node params = ParamStore;
+    node synth  = porridge::Synth;
+
+    connection
+    {
+        params.paramOut -> synth.paramIn;
+        midiIn          -> synth.midiIn;
+        tempoIn         -> synth.tempoIn;
+        shapeIn         -> synth.shapeIn;
+        curveIn         -> synth.curveIn;
+        panic           -> synth.panicIn;
+        testMode        -> synth.testModeIn;
+        testIn          -> synth.testIn;
+        synth.out       -> out;
+    }
+}

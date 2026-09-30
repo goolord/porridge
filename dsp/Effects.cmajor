@@ -1,0 +1,968 @@
+//  Global effects: chorus -> delay -> reverb -> EQ, as in Oatmeal.
+//  Each effect works on the synth's 64-frame stereo block, recomputes its coefficients from
+//  the program mirror at the start of every block, and reports whether it still produced
+//  output (tails below the original's silence thresholds are cut to zero, as in the original).
+
+namespace porridge
+{
+    let blockSize = 64;
+    let piF = 3.14159274f;
+
+    /// MSVCRT's rand(): the original draws all its randomness from it.
+    struct Rand
+    {
+        int64 state;
+    }
+
+    int next (Rand& this)
+    {
+        this.state = (this.state * 214013 + 2531011) & 0xffffffffi64;
+        return int ((this.state >> 16) & 0x7fff);
+    }
+
+    float bilinearK (float64 w)
+    {
+        return float (0.5 * (sin (w) + cos (w) - 1.0) / cos (w));
+    }
+
+    //==============================================================================
+    /// Tables shared by the effects, built once.
+    struct FxTables
+    {
+        float[4098] tanhTable;
+        float[2050] window;
+        float[32769] lfoSine, lfoRamp, lfoFM;
+    }
+
+    void build (FxTables& this)
+    {
+        for (wrap<4097> i)
+            this.tanhTable[i] = float (tanh ((float64 (i) * (1.0 / 2048.0) - 1.0) * 8.0));
+        this.tanhTable[4097] = 0.0f;
+
+        for (wrap<2048> i)
+        {
+            let h = (cos (float64 (i) * float64 (piF) * (1.0 / 512.0)) + 1.0) * 0.5;
+            this.window[i] = float (1.0 - pow (h, 32.0));
+        }
+        this.window[2048] = this.window[0];
+        this.window[2049] = 0.0f;
+
+        for (wrap<32768> i)
+        {
+            let x = float64 (i) / 32768.0;
+            let s = sin (2.0 * float64 (piF) * x);
+            this.lfoSine[i] = float ((1.0 + s) * 0.5);
+            this.lfoRamp[i] = float (sin ((x + pow (x, 16.0)) * float64 (piF) * 0.5));
+            this.lfoFM[i]   = float ((1.0 + sin (2.0 * float64 (piF) * (x + 0.7 * s))) * 0.5);
+        }
+        this.lfoSine[32768] = this.lfoSine[0];
+        this.lfoRamp[32768] = this.lfoRamp[0];
+        this.lfoFM[32768]   = this.lfoFM[0];
+    }
+
+    /// ~ 10 * tanh (v / 10), table-interpolated exactly like the original.
+    float sat10 (const FxTables& t, float v)
+    {
+        let u = v * 0.1f;
+        let idx = (abs (u + 8.0f) - abs (u - 8.0f)) * 128.0f + 2048.0f;
+        let i = int (idx);
+        let f = idx - float (i);
+        let a = t.tanhTable.at (i);
+        let b = t.tanhTable.at (i + 1);
+        return 10.0f * (a + (b - a) * f);
+    }
+
+    float reverseWindow (const FxTables& t, int pos, float inv)
+    {
+        let tt = float (pos) * inv;
+        let x = (abs (tt) - abs (tt - 1.0f) + 1.0f) * 1024.0f;
+        let j = int (x);
+        let f = x - float (j);
+        return (1.0f - f) * t.window.at (j) + f * t.window.at (j + 1);
+    }
+
+    bool anyAbove (const float<2>[blockSize]& buf, float threshold)
+    {
+        for (wrap<blockSize> i)
+            if (abs (buf[i][0]) > threshold || abs (buf[i][1]) > threshold)
+                return true;
+
+        return false;
+    }
+
+    /// Samples per delay/LFO/arp unit. Units 3.. are note lengths relative to the tempo.
+    float64 delayUnitSamples (int unit, float64 sr, float64 spb)
+    {
+        if (unit == 0)  return sr * 0.001;
+        if (unit == 1)  return sr * 0.01;
+        if (unit == 2)  return sr;
+        if (unit == 3)  return spb * 0.2;
+        if (unit == 4)  return spb / 6.0;
+        if (unit == 5)  return spb * 0.25;
+        if (unit == 6)  return spb * 0.4;
+        if (unit == 7)  return spb / 3.0;
+        if (unit == 8)  return spb * 0.5;
+        if (unit == 9)  return spb * 0.8;
+        if (unit == 10) return spb * 2.0 / 3.0;
+        if (unit == 11) return spb;
+        if (unit == 12) return spb * 1.6;
+        if (unit == 13) return spb * 4.0 / 3.0;
+        if (unit == 14) return spb * 2.0;
+        return 1.0;
+    }
+
+    //==============================================================================
+    let delayMax = 1323000;
+    let delayHalf = delayMax / 2;   // each line is stored in two halves: WebAssembly targets cap arrays below 2^20 elements
+
+    struct Delay
+    {
+        float[delayHalf] bufL0, bufL1, bufR0, bufR1;
+        int lenL, lenR, posL, posR;
+        float lpxL, lpyL, lpxR, lpyR, hpxL, hpyL, hpxR, hpyR;
+        bool idle;
+        int silentCount;
+        float rotCur;
+    }
+
+    void prepare (Delay& this)
+    {
+        this.lenL = -1;
+        this.lenR = -1;
+        this.clearState();
+    }
+
+    void clearState (Delay& this)
+    {
+        this.idle = true;
+        this.silentCount = 0;
+        this.posL = 0; this.posR = 0;
+        this.lpxL = 0; this.lpyL = 0; this.lpxR = 0; this.lpyR = 0;
+        this.hpxL = 0; this.hpyL = 0; this.hpxR = 0; this.hpyR = 0;
+        this.rotCur = 0;
+        this.clearL (max (this.lenL, 0));
+        this.clearR (max (this.lenR, 0));
+    }
+
+    void clearL (Delay& this, int n) { for (int i = 0; i < n; ++i) this.writeL (i, 0.0f); }
+    void clearR (Delay& this, int n) { for (int i = 0; i < n; ++i) this.writeR (i, 0.0f); }
+
+    float readL (const Delay& this, int i)          { return i < delayHalf ? this.bufL0.at (i) : this.bufL1.at (i - delayHalf); }
+    float readR (const Delay& this, int i)          { return i < delayHalf ? this.bufR0.at (i) : this.bufR1.at (i - delayHalf); }
+    void writeL (Delay& this, int i, float v)       { if (i < delayHalf) this.bufL0.at (i) = v; else this.bufL1.at (i - delayHalf) = v; }
+    void writeR (Delay& this, int i, float v)       { if (i < delayHalf) this.bufR0.at (i) = v; else this.bufR1.at (i - delayHalf) = v; }
+
+    bool process (Delay& this, const FxTables& t, float<2>[blockSize]& buf, bool active,
+                  const float[numSlots]& P, float64 sr, float64 spb)
+    {
+        if (this.idle && ! active)
+            return false;
+
+        let unit = delayUnitSamples (int (P[slot::D_Unit]), sr, spb);
+        var lL = float64 (P[slot::D_LengthL]);
+        var lR = float64 (P[slot::D_LengthR]);
+
+        if (P[slot::D_Quantize] != 0)
+        {
+            lL = floor (lL + 0.5);
+            lR = floor (lR + 0.5);
+        }
+
+        let nL = clamp (int (lL * unit + 0.5), 2, delayMax);
+        let nR = clamp (int (lR * unit + 0.5), 2, delayMax);
+
+        if (nL != this.lenL) { this.lenL = nL; this.clearL (nL); this.posL = 0; }
+        if (nR != this.lenR) { this.lenR = nR; this.clearR (nR); this.posR = 0; }
+
+        let fbL = P[slot::D_FeedbackL];
+        let fbR = P[slot::D_FeedbackR];
+        let target = P[slot::D_Rotation];
+        let ramp = target != this.rotCur;
+        let inc = ramp ? float ((target - this.rotCur) / float (blockSize)) : 0.0f;
+        var r = ramp ? this.rotCur : target;
+
+        var a = float (cos (r) * fbL);
+        var b = float (-sin (r) * fbR);
+        var c = float (sin (r) * fbL);
+        var d = float (cos (r) * fbR);
+
+        let panR = 2.0f * P[slot::D_InputPan];
+        let panL = 2.0f - panR;
+
+        let lp = float64 (P[slot::D_LP]);
+        let hp = float64 (P[slot::D_HP]);
+        let kl = bilinearK ((lp * lp * lp * 10980.0 + 20.0) * float64 (piF) * 2.0 / sr);
+        let pl = 1.0f - 2.0f * kl;
+        let kh = 1.0f - bilinearK ((hp * hp * hp * 10980.0 + 20.0) * float64 (piF) * 2.0 / sr);
+        let ph = 2.0f * kh - 1.0f;
+
+        if (this.posL < 0 || this.posL >= this.lenL) this.posL = 0;
+        if (this.posR < 0 || this.posR >= this.lenR) this.posR = 0;
+
+        let invL = float (1.0 / float64 (this.lenL - 1));
+        let invR = float (1.0 / float64 (this.lenR - 1));
+
+        if (this.lenL == this.lenR)
+            this.posR = this.posL;
+
+        let revL = int (P[slot::D_ReverseL]);
+        let revR = int (P[slot::D_ReverseR]);
+        let wet = P[slot::D_Wet];
+        let dry = P[slot::D_Dry];
+
+        for (wrap<blockSize> i)
+        {
+            let inL = buf[i][0];
+            let inR = buf[i][1];
+
+            let rL = revL == 2 ? reverseWindow (t, this.posL, invL) * this.readL (this.lenL - 1 - this.posL) : this.readL (this.posL);
+            let rR = revR == 2 ? reverseWindow (t, this.posR, invR) * this.readR (this.lenR - 1 - this.posR) : this.readR (this.posR);
+
+            let yL = kl * (rL + this.lpxL) + pl * this.lpyL + 1e-15f;  this.lpxL = rL; this.lpyL = yL;
+            let hL = kh * (yL - this.hpxL) + ph * this.hpyL + 1e-15f;  this.hpxL = yL; this.hpyL = hL;
+            let yR = kl * (rR + this.lpxR) + pl * this.lpyR + 1e-15f;  this.lpxR = rR; this.lpyR = yR;
+            let hR = kh * (yR - this.hpxR) + ph * this.hpyR + 1e-15f;  this.hpxR = yR; this.hpyR = hR;
+
+            this.writeL (this.posL, sat10 (t, inL * panL + b * hR + a * hL) + 1e-15f);
+            this.writeR (this.posR, sat10 (t, inR * panR + d * hR + c * hL) + 1e-15f);
+
+            let oL = revL == 1 ? reverseWindow (t, this.posL, invL) * this.readL (this.lenL - 1 - this.posL) : hL;
+            let oR = revR == 1 ? reverseWindow (t, this.posR, invR) * this.readR (this.lenR - 1 - this.posR) : hR;
+
+            buf[i] = float<2> (oL * wet + inL * dry, oR * wet + inR * dry);
+
+            this.posL = this.posL + 1 >= this.lenL ? 0 : this.posL + 1;
+            this.posR = this.posR + 1 >= this.lenR ? 0 : this.posR + 1;
+
+            if (ramp)
+            {
+                this.rotCur = inc + this.rotCur;
+                a = float (cos (this.rotCur) * fbL);
+                b = float (-sin (this.rotCur) * fbR);
+                c = float (sin (this.rotCur) * fbL);
+                d = float (cos (this.rotCur) * fbR);
+            }
+        }
+
+        this.rotCur = target;
+
+        if (anyAbove (buf, 1e-9f))
+        {
+            this.silentCount = 0;
+            this.idle = false;
+            return true;
+        }
+
+        this.silentCount += blockSize;
+
+        if (this.silentCount >= this.lenL + this.lenR)
+            this.idle = true;
+
+        return false;
+    }
+
+    //==============================================================================
+    struct EQBand
+    {
+        float s1L, s2L, s1R, s2R;
+    }
+
+    struct EQ
+    {
+        EQBand[5] bands;
+        float dc;
+        int tailCount;
+    }
+
+    void clearState (EQ& this)
+    {
+        this.dc = 1e-15f;
+        this.tailCount = -1;
+
+        for (wrap<5> k)
+            this.bands[k] = EQBand();
+    }
+
+    bool process (EQ& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
+    {
+        if (! active && this.tailCount < 0)
+            return false;
+
+        this.tailCount -= blockSize;
+
+        bool any = false;
+
+        for (wrap<5> k)
+            if (P.at (slot::EQ_1_Type + k) != 0)
+                any = true;
+
+        if (! any)
+            return active;
+
+        this.dc = -this.dc;
+
+        for (wrap<5> k)
+        {
+            let type = int (P.at (slot::EQ_1_Type + k));
+
+            if (type == 0)
+                continue;
+
+            let freq  = float64 (P.at (slot::EQ_1_Freq + k));
+            let amp   = P.at (slot::EQ_1_Amp + k);
+            let slope = float64 (P.at (slot::EQ_1_Slope + k));
+
+            let A = float (pow (10.0, float64 (amp * 0.025f)));
+            var w = float64 (piF) * freq * 2.0 / sr;
+            w = min (w, float64 (piF * 0.98f));
+            let sn = float (sin (w));
+            let cs = float (cos (w));
+            let alpha = float (sn / (2.0 * slope));
+            let beta = float (sqrt (float64 (A)) / slope * sn);
+            let Ad = float64 (A);
+
+            float64 b0, b1, b2, a0, a1, a2;
+
+            if (type == 1)
+            {
+                b0 = 1.0 + alpha * Ad;  b1 = -2.0 * cs;  b2 = 1.0 - alpha * Ad;
+                a0 = 1.0 + alpha / Ad;  a1 = -2.0 * cs;  a2 = 1.0 - alpha / Ad;
+            }
+            else if (type == 2)
+            {
+                b0 = Ad * ((Ad + 1) - (Ad - 1) * cs + beta);
+                b1 = 2.0 * Ad * ((Ad - 1) - (Ad + 1) * cs);
+                b2 = Ad * ((Ad + 1) - (Ad - 1) * cs - beta);
+                a0 = (Ad + 1) + (Ad - 1) * cs + beta;
+                a1 = -2.0 * ((Ad - 1) + (Ad + 1) * cs);
+                a2 = (Ad + 1) + (Ad - 1) * cs - beta;
+            }
+            else
+            {
+                b0 = Ad * ((Ad + 1) + (Ad - 1) * cs + beta);
+                b1 = -2.0 * Ad * ((Ad - 1) + (Ad + 1) * cs);
+                b2 = Ad * ((Ad + 1) + (Ad - 1) * cs - beta);
+                a0 = (Ad + 1) - (Ad - 1) * cs + beta;
+                a1 = 2.0 * ((Ad - 1) - (Ad + 1) * cs);
+                a2 = (Ad + 1) - (Ad - 1) * cs - beta;
+            }
+
+            let inv = 1.0 / a0;
+            let B0 = float (b0 * inv), B1 = float (b1 * inv), B2 = float (b2 * inv);
+            let A1 = float (-a1 * inv), A2 = float (-a2 * inv);
+
+            var s1L = this.bands[k].s1L, s2L = this.bands[k].s2L;
+            var s1R = this.bands[k].s1R, s2R = this.bands[k].s2R;
+
+            for (wrap<blockSize> i)
+            {
+                let xL = buf[i][0] + this.dc;
+                let yL = B0 * xL + s1L;
+                s1L = A1 * yL + B1 * xL + s2L;
+                s2L = A2 * yL + B2 * xL;
+
+                let xR = buf[i][1] - this.dc;
+                let yR = B0 * xR + s1R;
+                s1R = A1 * yR + B1 * xR + s2R;
+                s2R = A2 * yR + B2 * xR;
+
+                buf[i] = float<2> (yL, yR);
+            }
+
+            this.bands[k].s1L = s1L; this.bands[k].s2L = s2L;
+            this.bands[k].s1R = s1R; this.bands[k].s2R = s2R;
+        }
+
+        if (anyAbove (buf, 1e-9f))
+        {
+            this.tailCount = int (sr * 0.05 + 0.5);
+            return true;
+        }
+
+        return false;
+    }
+
+    //==============================================================================
+    struct Chorus
+    {
+        float[32769] bufL, bufR;
+        int wpos;
+        float lastSpeed;
+        bool idle;
+        int tailCount;
+        int64 phase;               // uint32 LFO phase
+        int64[16] dposL, dposR;    // irregular mode: delay in samples * 2^17 (uint32)
+        int[16] velL, velR;
+        float x1L, y1L, x1R, y1R;
+    }
+
+    void clearState (Chorus& this, Rand& rng, const float[numSlots]& P, float64 sr)
+    {
+        this.x1L = 0; this.y1L = 0; this.x1R = 0; this.y1R = 0;
+        this.idle = true;
+        this.tailCount = 0;
+        this.wpos = 0;
+        this.phase = 0;
+
+        for (wrap<32769> i) { this.bufL[i] = 0; this.bufR[i] = 0; }
+
+        let delayMs = P[slot::C_MinDelay];
+        let depthMs = P[slot::C_Depth];
+        let minD = min (float (sr) * delayMs * 0.001f, 32766.0f);
+        let maxD = min ((depthMs + delayMs) * float (sr) * 0.001f, 32766.0f);
+        let range = maxD - minD;
+        let r = min (float (P[slot::C_Rate] * 8190.0f / float (sr)), 8190.0f);
+
+        for (wrap<16> k)
+        {
+            this.dposL[k] = int64 (int (float (rng.next()) * range / 32768.0f + minD + 0.5f)) << 17;
+            this.dposR[k] = int64 (int (float (rng.next()) * range / 32768.0f + minD + 0.5f)) << 17;
+            this.velL[k] = int (float (rng.next() - 16384) * r * 8.0f + 0.5f);
+            this.velR[k] = int (float (rng.next() - 16384) * r * 8.0f + 0.5f);
+        }
+    }
+
+    float lfoTable (const FxTables& t, int mode, int j)
+    {
+        if (mode == 2) return t.lfoRamp.at (j);
+        if (mode == 3) return t.lfoFM.at (j);
+        return t.lfoSine.at (j);
+    }
+
+    int64 chorusOffset (float64 x)
+    {
+        return int64 (4294967296.0 * x * x + 0.5) & 0xffffffffi64;
+    }
+
+    float chorusTap (const FxTables& t, const float[32769]& line, int mode, int64 offset, int64 phase,
+                     int wpos, float minD, float range)
+    {
+        let ph = (offset + phase) & 0xffffffffi64;
+        let j = int (ph >> 17);
+        let f = float64 (ph & 0x1ffff) * (1.0 / 131072.0);
+        let a = float64 (lfoTable (t, mode, j));
+        let lfo = a + (float64 (lfoTable (t, mode, j + 1)) - a) * f;
+        let pos = (float64 (wpos) - float64 (minD)) - lfo * float64 (range) + 65536.0;
+        let ip = int (pos);
+        let fr = pos - float64 (ip);
+        return float ((1.0 - fr) * float64 (line.at (ip & 0x7fff)) + fr * float64 (line.at ((ip + 1) & 0x7fff)));
+    }
+
+    float chorusRead (const float[32769]& line, int64 rp)
+    {
+        let p = rp & 0xffffffffi64;
+        let fr = float (p & 0x1ffff) * (1.0f / 131072.0f);
+        let j = int (p >> 17);
+        return (1.0f - fr) * line.at (j & 0x7fff) + fr * line.at ((j + 1) & 0x7fff);
+    }
+
+    void chorusStep (Chorus& this, Rand& rng, bool right, int v, int64 minF, int64 maxF, float r)
+    {
+        let vel = right ? this.velR.at (v) : this.velL.at (v);
+        let d = ((right ? this.dposR.at (v) : this.dposL.at (v)) + int64 (vel)) & 0xffffffffi64;
+
+        if (d < minF)
+        {
+            if (right) { this.dposR.at (v) = minF; this.velR.at (v) = int (float (rng.next() + 1) * r * 131072.0f / 32768.0f + 0.5f); }
+            else       { this.dposL.at (v) = minF; this.velL.at (v) = int (float (rng.next() + 1) * r * 131072.0f / 32768.0f + 0.5f); }
+        }
+        else if (d > maxF)
+        {
+            if (right) { this.dposR.at (v) = maxF; this.velR.at (v) = -int (float (rng.next() + 1) * r * 131072.0f / 32768.0f + 0.5f); }
+            else       { this.dposL.at (v) = maxF; this.velL.at (v) = -int (float (rng.next() + 1) * r * 131072.0f / 32768.0f + 0.5f); }
+        }
+        else
+        {
+            if (right) this.dposR.at (v) = d;
+            else       this.dposL.at (v) = d;
+        }
+    }
+
+    bool process (Chorus& this, const FxTables& t, Rand& rng, float<2>[blockSize]& buf, bool active,
+                  const float[numSlots]& P, float64 sr)
+    {
+        let speed = P[slot::C_Rate];
+        let inc = int64 (float64 (speed) / sr * 4294967296.0 + 0.5) & 0xffffffffi64;
+        let mode = int (P[slot::C_Mode]);
+
+        if (mode == 0 || (this.idle && ! active))
+        {
+            this.phase = (this.phase + inc * blockSize) & 0xffffffffi64;
+            return mode == 0 ? active : false;
+        }
+
+        if (active)
+        {
+            this.tailCount = 0x8000;
+            this.idle = false;
+        }
+
+        let nv = clamp (int (P[slot::C_Voices]), 1, 16);
+        let mix = P[slot::C_Mix];
+        let stereo = int (P[slot::C_Stereo]);
+        let norm = float (1.0 / sqrt (float64 (nv)));
+        let fb = P[slot::C_Feedback];
+        let fb3 = fb * fb * fb;
+        let delayMs = P[slot::C_MinDelay];
+        let depthMs = P[slot::C_Depth];
+        var minD = float (sr) * delayMs * 0.001f;
+
+        if (mode != 4)
+        {
+            minD = min (minD, 32766.0f);
+            let maxD = min ((depthMs + delayMs) * float (sr) * 0.001f, 32766.0f);
+            let range = maxD - minD;
+
+            int64[16] offL, offR;
+
+            for (wrap<16> v)
+            {
+                if (v >= nv) break;
+                let fv = float64 (v);
+                let n2 = 2.0 * float64 (nv);
+
+                if (stereo == 0)
+                {
+                    offL[v] = chorusOffset (fv / float64 (nv));
+                }
+                else if (stereo == 1)
+                {
+                    offL[v] = chorusOffset (fv / n2);
+                    offR[v] = chorusOffset ((float64 (nv) + fv) / n2);
+                }
+                else
+                {
+                    offL[v] = chorusOffset (2.0 * fv / n2);
+                    offR[v] = chorusOffset ((2.0 * fv + 1.0) / n2);
+                }
+            }
+
+            for (wrap<blockSize> i)
+            {
+                let inL = buf[i][0];
+                let inR = buf[i][1];
+
+                if (stereo == 0)
+                {
+                    float64 acc = 0;
+
+                    for (wrap<16> v)
+                    {
+                        if (v >= nv) break;
+                        acc += chorusTap (t, this.bufL, mode, offL[v], this.phase, this.wpos, minD, range);
+                    }
+
+                    let w = norm * float (acc);
+                    buf[i] = float<2> ((w - inL) * mix + inL, (w - inR) * mix + inR);
+
+                    this.phase = (this.phase + inc) & 0xffffffffi64;
+                    this.wpos = (this.wpos + 1) & 0x7fff;
+
+                    let y = 0.999f * (float (acc) - this.x1L) + 0.998f * this.y1L;
+                    this.y1L = y;
+                    this.x1L = float (acc);
+                    let s = sat10 (t, y * fb3 * norm + (inL + inR) * 0.5f);
+                    this.bufR.at (this.wpos) = s;
+                    this.bufL.at (this.wpos) = s;
+                }
+                else
+                {
+                    float64 aL = 0, aR = 0;
+
+                    for (wrap<16> v)
+                    {
+                        if (v >= nv) break;
+                        aL += chorusTap (t, this.bufL, mode, offL[v], this.phase, this.wpos, minD, range);
+                        aR += chorusTap (t, this.bufR, mode, offR[v], this.phase, this.wpos, minD, range);
+                    }
+
+                    buf[i] = float<2> ((norm * float (aL) - inL) * mix + inL, (norm * float (aR) - inR) * mix + inR);
+
+                    this.phase = (this.phase + inc) & 0xffffffffi64;
+                    this.wpos = (this.wpos + 1) & 0x7fff;
+
+                    let yL = 0.999f * (float (aL) - this.x1L) + 0.998f * this.y1L;
+                    this.y1L = yL; this.x1L = float (aL);
+                    let yR = 0.999f * (float (aR) - this.x1R) + 0.998f * this.y1R;
+                    this.y1R = yR; this.x1R = float (aR);
+                    this.bufL.at (this.wpos) = sat10 (t, yL * fb3 * norm + inL);
+                    this.bufR.at (this.wpos) = sat10 (t, yR * fb3 * norm + inR);
+                }
+            }
+        }
+        else
+        {
+            minD = clamp (minD, 2.0f, 32766.0f);
+            let maxD = clamp ((depthMs + delayMs) * float (sr) * 0.001f, 2.0f, 32766.0f);
+            let minF = int64 (int (minD + 0.5f)) << 17;
+            let maxF = int64 (int (maxD + 0.5f)) << 17;
+            let r = min (speed * 8190.0f / float (sr), 8190.0f);
+
+            if (speed != this.lastSpeed)
+            {
+                this.lastSpeed = speed;
+
+                for (wrap<16> k)
+                {
+                    this.velL[k] = int (float (rng.next() - 16384) * r * 8.0f + 0.5f);
+                    this.velR[k] = int (float (rng.next() - 16384) * r * 8.0f + 0.5f);
+                }
+            }
+
+            let phaseOld = this.phase;
+            var wF = int64 (this.wpos) << 17;
+
+            for (wrap<blockSize> i)
+            {
+                let inL = buf[i][0];
+                let inR = buf[i][1];
+                float aL = 0, aR = 0;
+
+                for (wrap<16> v)
+                {
+                    if (v >= nv) break;
+
+                    this.chorusStep (rng, false, v, minF, maxF, r);
+                    aL += chorusRead (this.bufL, wF - this.dposL[v]);
+
+                    if (stereo == 1)
+                    {
+                        this.chorusStep (rng, true, v, minF, maxF, r);
+                        aR += chorusRead (this.bufR, wF - this.dposR[v]);
+                    }
+                    else if (stereo == 2)
+                    {
+                        aR += chorusRead (this.bufR, wF + this.dposL[v] - maxF - 1);
+                    }
+                }
+
+                if (stereo == 0)
+                {
+                    let w = norm * aL;
+                    buf[i] = float<2> ((w - inL) * mix + inL, (w - inR) * mix + inR);
+                }
+                else
+                {
+                    buf[i] = float<2> ((norm * aL - inL) * mix + inL, (norm * aR - inR) * mix + inR);
+                }
+
+                this.wpos = (this.wpos + 1) & 0x7fff;
+                wF = (wF + 131072) & 0xffffffffi64;
+
+                if (stereo == 0)
+                {
+                    let y = 0.999f * (aL - this.x1L) + 0.998f * this.y1L;
+                    this.y1L = y; this.x1L = aL;
+                    let s = sat10 (t, y * fb3 + (inL + inR) * 0.5f);
+                    this.bufR.at (this.wpos) = s;
+                    this.bufL.at (this.wpos) = s;
+                }
+                else
+                {
+                    let yL = 0.999f * (aL - this.x1L) + 0.998f * this.y1L;
+                    this.y1L = yL; this.x1L = aL;
+                    let yR = 0.999f * (aR - this.x1R) + 0.998f * this.y1R;
+                    this.y1R = yR; this.x1R = aR;
+                    this.bufL.at (this.wpos) = sat10 (t, yL * fb3 * norm + inL);
+                    this.bufR.at (this.wpos) = sat10 (t, yR * fb3 * norm + inR);
+                }
+
+                this.phase = (this.phase + inc) & 0xffffffffi64;
+            }
+
+            if (phaseOld > this.phase)
+            {
+                for (wrap<16> k)
+                {
+                    this.velL[k] = int (float (rng.next() - 16384) * r * 8.0f + 0.5f);
+                    this.velR[k] = int (float (rng.next() - 16384) * r * 8.0f + 0.5f);
+                }
+            }
+        }
+
+        if (anyAbove (buf, 1e-9f))
+        {
+            this.tailCount = 0x8000;
+            this.idle = false;
+            return true;
+        }
+
+        this.tailCount -= blockSize;
+
+        if (this.tailCount <= 0)
+            this.idle = true;
+
+        return false;
+    }
+
+    //==============================================================================
+    let reverbLineMax = 52000;     // 1.0689 * 250 ms at 192 kHz, plus margin
+    let predelayMax = 96010;       // SR/2 + 4.5 at 192 kHz
+
+    struct Reverb
+    {
+        float dc;
+        float[8] lpx, lpy, hpx, hpy, apx, apy, apc;
+        float[1024] erL, erR;
+        int erPos;
+        float[predelayMax] pdL, pdR;
+        int pdSize, pdW, pdRd;
+        float[reverbLineMax * 8] lines;     // line j occupies [j * reverbLineMax, ...)
+        int[8] len, pos;
+        float lastSize;
+        bool idle;
+        int silentCount;
+    }
+
+    void prepare (Reverb& this)
+    {
+        this.lastSize = -1.0f;
+        this.pdSize = 0;
+        this.clearState();
+    }
+
+    void clearState (Reverb& this)
+    {
+        this.dc = 1e-12f;
+        this.idle = false;
+        this.silentCount = 0;
+        this.erPos = 0;
+        this.pdW = 0;
+        this.pdRd = 0;
+
+        for (wrap<8> j)
+        {
+            this.pos[j] = 0;
+            this.lpx[j] = 0; this.lpy[j] = 0; this.hpx[j] = 0; this.hpy[j] = 0;
+            this.apx[j] = 0; this.apy[j] = 0;
+
+            for (int i = 0; i < this.len[j]; ++i)
+                this.lines.at (j * reverbLineMax + i) = 0;
+        }
+
+        for (wrap<1024> i) { this.erL[i] = 0; this.erR[i] = 0; }
+        for (int i = 0; i < this.pdSize; ++i) { this.pdL.at (i) = 0; this.pdR.at (i) = 0; }
+    }
+
+    let reverbMult = float[8] (1.03f, 0.92f, 0.73f, 0.638f, 1.0689f, 0.883f, 0.747f, 0.677f);
+    let erGainL = float[8] (0.48482826f, -0.35969245f, -0.3163195f, 0.25308281f, -0.50701547f, -0.3154127f, 0.14677593f, -0.30555025f);
+    let erGainR = float[8] (0.060517289f, -0.24290182f, -0.34840450f, -0.42788872f, 0.074636072f, -0.40043476f, 0.51584524f, 0.44815964f);
+
+    int erTap (int sr, bool right, int k)
+    {
+        let t0L = int[8] (7, 79, 103, 137, 241, 349, 379, 421);
+        let t0R = int[8] (17, 29, 67, 151, 179, 229, 277, 307);
+        let t1L = int[8] (8, 86, 112, 149, 262, 380, 413, 458);
+        let t1R = int[8] (19, 32, 73, 164, 195, 249, 301, 334);
+        let t2L = int[8] (14, 158, 206, 274, 482, 698, 758, 842);
+        let t2R = int[8] (34, 58, 132, 302, 358, 458, 554, 614);
+        let t3L = int[8] (15, 172, 224, 298, 525, 760, 825, 916);
+        let t3R = int[8] (37, 63, 146, 329, 390, 499, 603, 668);
+        let i = wrap<8> (k);
+
+        if (sr < 46050) return right ? t0R[i] : t0L[i];
+        if (sr < 68100) return right ? t1R[i] : t1L[i];
+        if (sr < 92100) return right ? t2R[i] : t2L[i];
+        return right ? t3R[i] : t3L[i];
+    }
+
+    bool process (Reverb& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
+    {
+        if (! active && this.idle)
+            return false;
+
+        let srI = int (sr);
+        let sizeS = float (sr) * P[slot::R_Size] * 0.001f;
+        this.dc = -this.dc;
+
+        if (abs (sizeS - this.lastSize) > 0.1f)
+        {
+            this.lastSize = sizeS;
+
+            for (wrap<8> j)
+            {
+                let Lj = sizeS * reverbMult[j];
+                let li = int (Lj);
+                var fr = Lj - float (li);
+                fr = clamp (fr, 0.1f, 1.1f);
+                this.apc[j] = (1.0f - fr) / (1.0f + fr);
+                this.len[j] = clamp (li, 2, reverbLineMax);
+                this.pos[j] = 0;
+
+                for (int i = 0; i < this.len[j]; ++i)
+                    this.lines.at (j * reverbLineMax + i) = 0;
+            }
+        }
+
+        let pdSizeNew = min (int (sr * 0.5 + 4.5), predelayMax);
+
+        if (pdSizeNew != this.pdSize)
+        {
+            this.pdSize = pdSizeNew;
+            for (int i = 0; i < this.pdSize; ++i) { this.pdL.at (i) = 0; this.pdR.at (i) = 0; }
+            this.pdW = 0;
+            this.pdRd = 0;
+        }
+
+        let predelay = P[slot::R_Predelay];
+        let dSamples = int (float64 (abs (predelay)) * sr * 0.001 + 0.5);
+        this.pdW = (this.pdRd + dSamples) % this.pdSize;
+        let wetDelay = predelay > 0.1f;
+        let dryDelay = predelay < -0.1f;
+
+        float[8] g;
+        let T60 = P[slot::R_Length];
+
+        if (T60 >= 30.0f)
+        {
+            for (wrap<8> j) g[j] = 1.0f;
+        }
+        else
+        {
+            let inv = float (1.0 / (float64 (float (sr)) * float64 (T60)));
+            for (wrap<8> j) g[j] = float (pow (10.0, -3.0 * float64 (this.len[j]) * float64 (inv)));
+        }
+
+        var wd = (float64 (P[slot::R_Dullness]) * 16980.0 + 20.0) * float64 (piF) * 2.0 / float64 (float (sr));
+        wd = min (wd, float64 (piF * 0.99f));
+        let kLP = bilinearK (wd);
+        let pLP = 1.0 - 2.0 * float64 (kLP);
+        let br = float64 (P[slot::R_Brightness]);
+        var wb = (br * br * br * 10980.0 + 20.0) * float64 (piF) * 2.0 / float64 (float (sr));
+        wb = min (wb, float64 (piF * 0.99f));
+        let kHP = 1.0f - bilinearK (wb);
+        let pHP = 2.0f * kHP - 1.0f;
+
+        let R1 = P[slot::R_1], R2 = P[slot::R_2], R3 = P[slot::R_3];
+        let s1 = float (sin (R1)), c1 = float (cos (R1));
+        let s2 = float (sin (R2)), c2 = float (cos (R2));
+        let s3 = float (sin (R3)), c3 = float (cos (R3));
+
+        let M00 = c2 * c1 * c1;
+        let M01 = -c2 * c1 * s1;
+        let M02 = -s2 * c1;
+        let M03 = s1;
+        let t2c = c3 * s1 - s3 * s2 * c1;
+        let M10 = t2c * c2 - c2 * s2 * c1 * s1;
+        let M11 = (s2 * s1 * s1 + (c3 * c1 + s3 * s2 * s1)) * c2;
+        let t24 = s3 * c2;
+        let M12 = s2 * s2 * s1 - t24 * c2;
+        let M13 = s2 * c1;
+        let t48 = -(t2c * s2) - c2 * c2 * c1 * s1;
+        let u2c = c3 * s2;
+        let t4c = s3 * s1 + u2c * c1;
+        let t1c = c2 * c2 * s1 * s1 - (c3 * c1 + s3 * s2 * s1) * s2;
+        let v2c = (s3 + s1) * c2 * s2;
+        let M20 = t4c * c3 + t48 * s3;
+        let M21 = c3 * (s3 * c1 - u2c * s1) + t1c * s3;
+        let M22 = c3 * c3 * c2 + v2c * s3;
+        let M23 = t24 * c1;
+        let M30 = t48 * c3 - t4c * s3;
+        let M31 = t1c * c3 - (s3 * c1 - u2c * s1) * s3;
+        let M32 = (v2c - t24) * c3;
+        let M33 = c3 * c2 * c1;
+
+        let rot = P[slot::R_Rotation];
+        let c = float (cos (rot)), s = float (sin (rot));
+        let e = P[slot::R_EarlyMix];
+        let ome = 1.0f - e;
+        let wet = P[slot::R_Wet], dry = P[slot::R_Dry];
+        let dc = this.dc;
+
+        for (wrap<blockSize> i)
+        {
+            let xL = buf[i][0] + dc;
+            let xR = dc + buf[i][1];
+
+            float erSumL = 0, erSumR = 0;
+
+            for (wrap<8> k)
+            {
+                erSumL += erGainL[k] * this.erL.at ((this.erPos - erTap (srI, false, k)) & 1023);
+                erSumR += erGainR[k] * this.erR.at ((this.erPos - erTap (srI, true, k)) & 1023);
+            }
+
+            let aL = ome * xL + e * erSumL;
+            let aR = ome * xR + e * erSumR;
+            this.erL.at (this.erPos) = xL;
+            this.erR.at (this.erPos) = xR;
+            this.erPos = (this.erPos + 1) & 1023;
+
+            float[8] ap, u;
+
+            for (wrap<8> j)
+            {
+                let r = this.lines.at (j * reverbLineMax + this.pos[j]);
+                let y = float ((float64 (r) + float64 (this.lpx[j]) + float64 (dc)) * float64 (kLP) + pLP * float64 (this.lpy[j]));
+                this.lpy[j] = y; this.lpx[j] = r;
+                let h = (y + dc - this.hpx[j]) * kHP + pHP * this.hpy[j];
+                this.hpx[j] = y; this.hpy[j] = h;
+                ap[j] = (h + dc - this.apy[j]) * this.apc[j] + this.apx[j];
+                this.apy[j] = ap[j]; this.apx[j] = h;
+                u[j] = h * g[j];
+            }
+
+            let A0 = aL + M02 * u[0] + M12 * u[1] + M22 * u[2] + M32 * u[3];
+            let A1 = M03 * u[0] + M13 * u[1] + M23 * u[2] + M33 * u[3];
+            let A2 = M00 * u[0] + M10 * u[1] + M20 * u[2] + M30 * u[3];
+            let A3 = M01 * u[0] + M11 * u[1] + M21 * u[2] + M31 * u[3];
+            let B0 = M30 * u[4] + M31 * u[5] + M32 * u[6] + M33 * u[7];
+            let B1 = M00 * u[4] + M01 * u[5] + M02 * u[6] + M03 * u[7];
+            let B2 = aR + M10 * u[4] + M11 * u[5] + M12 * u[6] + M13 * u[7];
+            let B3 = M20 * u[4] + M21 * u[5] + M22 * u[6] + M23 * u[7];
+
+            this.lines.at (0 * reverbLineMax + this.pos[0]) = c * A0 - s * B1 + 1e-15f;
+            this.lines.at (1 * reverbLineMax + this.pos[1]) = c * A1 + s * B2 - 1e-15f;
+            this.lines.at (2 * reverbLineMax + this.pos[2]) = s * B3 + c * A2 - 1e-15f;
+            this.lines.at (3 * reverbLineMax + this.pos[3]) = c * A3 - s * B0 - 1e-15f;
+            this.lines.at (4 * reverbLineMax + this.pos[4]) = s * A3 + c * B0 + 1e-15f;
+            this.lines.at (5 * reverbLineMax + this.pos[5]) = c * B1 + s * A0 + 1e-15f;
+            this.lines.at (6 * reverbLineMax + this.pos[6]) = c * B2 - s * A1 - 1e-15f;
+            this.lines.at (7 * reverbLineMax + this.pos[7]) = c * B3 - s * A2 - 1e-15f;
+
+            var wL = ap[0] + ap[1] + ap[2] + ap[3];
+            var wR = ap[4] + ap[5] + ap[6] + ap[7];
+            var dL = xL, dR = xR;
+
+            if (wetDelay)
+            {
+                this.pdL.at (this.pdW) = wL; this.pdR.at (this.pdW) = wR;
+                wL = this.pdL.at (this.pdRd); wR = this.pdR.at (this.pdRd);
+            }
+            else if (dryDelay)
+            {
+                this.pdL.at (this.pdW) = xL; this.pdR.at (this.pdW) = xR;
+                dL = this.pdL.at (this.pdRd); dR = this.pdR.at (this.pdRd);
+            }
+
+            if (wetDelay || dryDelay)
+            {
+                this.pdW = (this.pdW + 1) % this.pdSize;
+                this.pdRd = (this.pdRd + 1) % this.pdSize;
+            }
+
+            buf[i] = float<2> (wL * wet + dL * dry, wR * wet + dR * dry);
+
+            for (wrap<8> j)
+            {
+                let np = this.pos[j] + 1;
+                this.pos[j] = np >= this.len[j] ? 0 : np;
+            }
+        }
+
+        if (active || anyAbove (buf, 1e-8f))
+        {
+            this.silentCount = 0;
+            this.idle = false;
+            return true;
+        }
+
+        this.silentCount += blockSize;
+
+        if (float (this.silentCount) >= abs (predelay) * float (sr) * 0.001f + float (4 * this.len[4]))
+            this.idle = true;
+
+        return false;
+    }
+}

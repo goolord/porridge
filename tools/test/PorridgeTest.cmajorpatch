@@ -1,0 +1,20 @@
+{
+    "CmajorVersion": 1,
+    "ID": "dev.porridge.test",
+    "version": "1.0",
+    "name": "PorridgeTest",
+    "isInstrument": true,
+    "source": [
+        "../../dsp/Types.cmajor",
+        "../../dsp/Slots.cmajor",
+        "../../dsp/ParamStore.cmajor",
+        "../../dsp/Effects.cmajor",
+        "../../dsp/Filter.cmajor",
+        "../../dsp/Tables.cmajor",
+        "../../dsp/Modulation.cmajor",
+        "../../dsp/Oscillator.cmajor",
+        "../../dsp/Voice.cmajor",
+        "../../dsp/Synth.cmajor",
+        "PorridgeTest.cmajor"
+    ]
+}

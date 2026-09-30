@@ -1,0 +1,557 @@
+//  Oscillators and noise, following Oatmeal's per-block structure: pitch, amplitude and pulse
+//  width are set once per 64-sample block and ramped linearly within it. Phases are 32-bit
+//  unsigned integers (a full cycle = 2^32), kept in int64 and masked.
+
+namespace porridge
+{
+    let u32 = 0xffffffffi64;
+    let two32 = 4294967296.0;
+
+    int64 toS32 (int64 u)
+    {
+        let m = u & u32;
+        return m >= 0x80000000i64 ? m - 0x100000000i64 : m;
+    }
+
+    struct Osc
+    {
+        int waveform;
+        float ampTarget, amp;
+        bool first;
+        int64 phase, offset, base, glideTarget;
+        int glideRem;
+        int64 step;
+        bool glideOn;
+        int64 pw, pwCur, pwmPhase, pwmInc;
+        float pwmDepth;
+        float[32] ring;
+        int ringIdx;
+        float s1, s2, fx1, fy1;
+    }
+
+    void construct (Osc& this)
+    {
+        this = Osc();
+        this.ampTarget = 1.0f;
+        this.first = true;
+        this.pw = 0x80000000i64;
+        this.pwCur = 0x80000000i64;
+    }
+
+    /// Voice reset: clears ramps, glide, BLEP ring and FM state (not the pulse width).
+    void resetOsc (Osc& this)
+    {
+        this.amp = 0;
+        this.offset = 0;
+        this.base = 0;
+        this.glideTarget = 0;
+        this.glideRem = 0;
+        this.step = 0;
+        this.glideOn = false;
+        this.pwmInc = 0;
+        this.ring = float[32]();
+        this.ringIdx = 0;
+        this.s1 = 0; this.s2 = 0; this.fx1 = 0; this.fy1 = 0;
+        this.first = true;
+    }
+
+    void setPhase (Osc& this, Rand& rng, const float[numSlots]& P)
+    {
+        let r = float64 (float (rng.next()) * (1.0f / 16384.0f) - 1.0f);
+        this.phase = int64 ((float64 (P[slot::OscPhase]) + r * float64 (P[slot::OscPhaseRand]) * 0.5) * two32 + 0.5) & u32;
+    }
+
+    void setPwmPhase (Osc& this, Rand& rng, const float[numSlots]& P)
+    {
+        let r = float64 (float (rng.next()) * (1.0f / 16384.0f) - 1.0f);
+        this.pwmPhase = int64 ((float64 (P[slot::PWMPhase]) + r * float64 (P[slot::PWMPhaseRand]) * 0.5) * two32 + 0.5) & u32;
+    }
+
+    /// Glide the base increment to t over m samples (linear in frequency).
+    void glideTo (Osc& this, int64 t, int m)
+    {
+        this.glideTarget = t;
+        let d = float64 (t) - float64 (this.base);
+
+        if (abs (d) > 1000.0)
+        {
+            let s = d / float64 (max (m, 1));
+            this.step = int64 (s > 0 ? s + 0.5 : s - 0.5);
+
+            if (this.step == 0)
+                this.step = d > 0 ? 1 : -1;
+
+            this.glideOn = true;
+            this.glideRem = int (abs (d / float64 (this.step)) + 0.5);
+        }
+        else
+        {
+            this.base = t;
+            this.step = 0;
+            this.glideRem = 0;
+            this.glideOn = false;
+        }
+    }
+
+    /// Copies what unison slots share with slot 0 (not phase, amp, offset, pulse position, ring, FM state).
+    void copyShared (Osc& this, const Osc& src)
+    {
+        this.waveform = src.waveform;
+        this.ampTarget = src.ampTarget;
+        this.base = src.base;
+        this.glideTarget = src.glideTarget;
+        this.glideRem = src.glideRem;
+        this.step = src.step;
+        this.glideOn = src.glideOn;
+        this.pw = src.pw;
+        this.pwmDepth = src.pwmDepth;
+        this.pwmInc = src.pwmInc;
+    }
+
+    struct OscBlock
+    {
+        int tableOffset, shift;
+        int64 mask;
+        float64 fracScale;
+        int64 slope;
+        float astep;
+        bool glideOn, glideUp, pulse, pwmActive;
+        int64 pwStep;
+    }
+
+    OscBlock beginBlock (Osc& this, const WaveTables& tables, int userSet, float mult, int64 extra, float64 sineMarker)
+    {
+        OscBlock b;
+        let n = blockSize;
+
+        if (this.step == 0)
+        {
+            this.glideRem = 0;
+            if (this.glideOn) this.base = this.glideTarget;
+            this.glideOn = false;
+        }
+
+        let tgtOff = int64 ((float64 (mult) - 1.0) * float64 (toS32 (this.base)) + 0.5) & u32;
+        let q = toS32 (tgtOff - this.offset) / int64 (n);
+        b.slope = (q < 0 ? q + 1 : q) & u32;
+
+        if (this.first)
+        {
+            this.amp = this.ampTarget;
+            this.first = false;
+        }
+
+        b.astep = (this.ampTarget - this.amp) / float (n);
+
+        let inc = ((this.offset + this.base) & u32) + extra;
+
+        if (this.waveform == 0)
+        {
+            b.tableOffset = -1;
+            b.shift = 17;
+        }
+        else
+        {
+            let set = (this.waveform == 1 || this.waveform == 2) ? setSaw : (this.waveform == 3 ? setTri : userSet);
+            let c = chooseTable (set, min (inc, 0x7fffffffffffi64));
+            b.tableOffset = c.offset;
+            b.shift = c.shift;
+        }
+
+        b.mask = (1i64 << b.shift) - 1;
+        b.fracScale = 1.0 / float64 (1i64 << b.shift);
+
+        if (this.glideOn)
+        {
+            if (this.glideRem <= n)
+            {
+                this.glideRem = 0;
+                this.step = 0;
+                this.base = this.glideTarget;
+                this.glideOn = false;
+            }
+            else
+            {
+                this.glideRem -= n;
+            }
+        }
+
+        b.glideOn = this.glideOn;
+        b.glideUp = this.glideTarget > this.base;
+        b.pulse = this.waveform == 2 || this.waveform == 5;
+
+        if (b.pulse)
+        {
+            if (abs (this.pwmDepth) > 1e-4f)
+            {
+                b.pwmActive = true;
+                this.pwmPhase = (this.pwmPhase + this.pwmInc * n) & u32;
+                let s = float64 (tables.sine.at (int (this.pwmPhase >> 17)));
+                let tgt = (float64 (this.pw) / two32 + (s + 1.0) * float64 (this.pwmDepth)) * two32;
+                var d = tgt - float64 (this.pwCur);
+                if (d > 2147483648.0) d -= two32;
+                else if (d < -2147483648.0) d += two32;
+                d /= float64 (n);
+                if (d < 0) d += two32;
+                b.pwStep = int64 (d + 0.5) & u32;
+            }
+            else
+            {
+                b.pwmActive = false;
+                this.pwCur = this.pw;
+            }
+        }
+
+        return b;
+    }
+
+    float lookup (const WaveTables& tables, const OscBlock& b, int64 ph)
+    {
+        let p = ph & u32;
+        let i = int (p >> b.shift);
+        let fr = float64 (p & b.mask) * b.fracScale;
+
+        if (b.tableOffset < 0)
+            return float ((1.0 - fr) * float64 (tables.sine.at (i)) + fr * float64 (tables.sine.at (i + 1)));
+
+        return float ((1.0 - fr) * float64 (tables.sets.at (b.tableOffset + i)) + fr * float64 (tables.sets.at (b.tableOffset + i + 1)));
+    }
+
+    /// Per-sample updates shared by all oscillator variants: amp ramp, pulse width ramp, glide.
+    float tickShared (Osc& this, const OscBlock& b)
+    {
+        let a = float64 (this.amp) + float64 (b.astep);
+        this.amp = float (a);
+
+        if (b.pulse && b.pwmActive)
+            this.pwCur = (this.pwCur + b.pwStep) & u32;
+
+        if (b.glideOn)
+        {
+            var b2 = (this.base + this.step) & u32;
+
+            if (b.glideUp ? b2 > this.glideTarget : b2 < this.glideTarget)
+            {
+                b2 = this.glideTarget;
+                this.step = 0;
+                this.glideRem = 0;
+                this.glideOn = false;
+            }
+
+            this.base = b2;
+        }
+
+        return float (a);
+    }
+
+    float waveValue (const Osc& this, const WaveTables& tables, const OscBlock& b, int64 ph)
+    {
+        if (b.pulse)
+            return lookup (tables, b, ph) - lookup (tables, b, ph + this.pwCur);
+
+        return lookup (tables, b, ph);
+    }
+
+    /// Plain oscillator: adds into out.
+    void renderPlain (Osc& this, const WaveTables& tables, int userSet, float mult, float[blockSize]& out)
+    {
+        let b = this.beginBlock (tables, userSet, mult, 0, 0);
+
+        for (wrap<blockSize> i)
+        {
+            let amp = this.tickShared (b);
+
+            if (b.pulse)
+            {
+                out[i] = float (float64 (out[i]) + float64 (amp) * float64 (lookup (tables, b, this.phase)));
+                out[i] = float (float64 (out[i]) - float64 (amp) * float64 (lookup (tables, b, this.phase + this.pwCur)));
+            }
+            else
+            {
+                out[i] = float (float64 (out[i]) + float64 (amp) * float64 (lookup (tables, b, this.phase)));
+            }
+
+            this.phase = (this.phase + this.base + this.offset) & u32;
+            this.offset = (this.offset + b.slope) & u32;
+        }
+    }
+
+    let syncBlep = float[512] (
+            -1.00000131f, -0.797625899f, 0.162344158f, 0.0835762769f, 0.0348598212f, 0.0134246498f, 0.00413165009f, 0.000313530007f, -0.000925310014f, -0.000953499984f, -0.000371920003f, 8.51099976e-05f, 0.000240459995f, 0.000201710005f, 8.99000006e-05f, 6.57999999e-06f,
+            -1.00000203f, -0.767548501f, 0.142429069f, 0.0872830227f, 0.0419460982f, 0.0196556896f, 0.00884865969f, 0.00362216006f, 0.00123604003f, 0.000336950005f, 0.000313800003f, 0.000414400012f, 0.000372170005f, 0.000234189996f, 8.51700024e-05f, 1.32000002e-06f,
+            -1.0000006f, -0.73475647f, 0.120089322f, 0.0881942585f, 0.0474390797f, 0.0250482205f, 0.0131338798f, 0.00671199011f, 0.00328656007f, 0.00156722998f, 0.000958350021f, 0.000711350003f, 0.00048083f, 0.000253670005f, 7.60399998e-05f, -3.90000014e-06f,
+            -0.999994695f, -0.699272454f, 0.0959213376f, 0.0863583684f, 0.051190991f, 0.0294305105f, 0.0168418996f, 0.00947466027f, 0.00515284017f, 0.00269262004f, 0.00153790996f, 0.000965219981f, 0.000562959991f, 0.000260030007f, 6.32899973e-05f, -8.8099996e-06f,
+            -0.999980688f, -0.661162674f, 0.0705491304f, 0.0819056034f, 0.0531156696f, 0.0326700583f, 0.0198514909f, 0.01181655f, 0.00677049998f, 0.00367394998f, 0.00203220011f, 0.00116753997f, 0.000616390025f, 0.000253720005f, 4.78200018e-05f, -1.32200003e-05f,
+            -0.999953032f, -0.620539248f, 0.0446102284f, 0.0750426576f, 0.0531902388f, 0.0346775614f, 0.0220694896f, 0.0136619499f, 0.00808632001f, 0.00447890023f, 0.00242507993f, 0.00131230999f, 0.000640270009f, 0.000235789994f, 3.05899994e-05f, -1.69899995e-05f,
+            -0.999903798f, -0.577562809f, 0.0187412705f, 0.0660451278f, 0.0514546894f, 0.03540916f, 0.0234335791f, 0.0149553604f, 0.00905994978f, 0.00508305989f, 0.00270512002f, 0.00139619003f, 0.000635079981f, 0.000207730001f, 1.26100003e-05f, -2.00300001e-05f,
+            -0.999821723f, -0.532443404f, -0.00643670978f, 0.0552477911f, 0.0480093583f, 0.0348671116f, 0.0239138808f, 0.0156631302f, 0.00966511015f, 0.00547057018f, 0.00286579994f, 0.00141847995f, 0.000602530024f, 0.000171449996f, -5.14000021e-06f, -2.23200004e-05f,
+            -0.999691665f, -0.485440522f, -0.0303326994f, 0.0430333205f, 0.0430103093f, 0.0330987498f, 0.0235133395f, 0.0157741196f, 0.00989009999f, 0.00563444989f, 0.00290564005f, 0.00138104998f, 0.000545440009f, 0.000129099994f, -2.17600009e-05f, -2.38699995e-05f,
+            -0.999493659f, -0.43686229f, -0.052399531f, 0.0298196804f, 0.0366630517f, 0.0301939491f, 0.0222669002f, 0.0152995698f, 0.00973790046f, 0.00557659008f, 0.00282802992f, 0.00128818001f, 0.000467529986f, 8.30200006e-05f, -3.64799998e-05f, -2.47299995e-05f,
+            -0.999201655f, -0.387062937f, -0.0721466765f, 0.0160465203f, 0.0292145703f, 0.0262810402f, 0.0202395506f, 0.0142721599f, 0.00922556967f, 0.00530734006f, 0.00264090998f, 0.00114623003f, 0.00037324999f, 3.55599987e-05f, -4.8670001e-05f, -2.49700006e-05f,
+            -0.998782992f, -0.336439341f, -0.0891517401f, 0.00216116011f, 0.0209441595f, 0.0215214603f, 0.0175232608f, 0.01274422f, 0.00838324986f, 0.00484484015f, 0.0023562701f, 0.000963350001f, 0.00026755f, -1.09599996e-05f, -5.78799991e-05f, -2.46700001e-05f,
+            -0.9981969f, -0.285426259f, -0.10307017f, -0.01139546f, 0.01215328f, 0.0161033794f, 0.0142330397f, 0.0107853096f, 0.00725260004f, 0.00421404978f, 0.00198952993f, 0.000748979975f, 0.000155610003f, -5.44299983e-05f, -6.38499987e-05f, -2.39199999e-05f,
+            -0.997393608f, -0.23449026f, -0.11364311f, -0.0242025107f, 0.00315482006f, 0.0102344304f, 0.0105022397f, 0.00847923011f, 0.00588491f, 0.00344553008f, 0.00155876996f, 0.000513469975f, 4.26299994e-05f, -9.29899979e-05f, -6.65100015e-05f, -2.27599994e-05f,
+            -0.996313334f, -0.184122652f, -0.120702982f, -0.0358720608f, -0.0057377601f, 0.00413388992f, 0.00647724979f, 0.00592048001f, 0.00433886983f, 0.0025740501f, 0.00108391f, 0.000267580006f, -6.64100007e-05f, -0.000125129998f, -6.59700017e-05f, -2.12499999e-05f,
+            -0.994885623f, -0.134831175f, -0.124176651f, -0.0460607484f, -0.0142212203f, -0.00197534007f, 0.00231183995f, 0.00321052992f, 0.00267811003f, 0.00163714995f, 0.00058580999f, 2.20300008e-05f, -0.000166960002f, -0.000149719999f, -6.24899985e-05f, -1.94299992e-05f,
+            -0.993028164f, -0.0871310309f, -0.124086224f, -0.0544798002f, -0.0220127292f, -0.00787482038f, -0.00183859002f, 0.000453810004f, 0.000968649983f, 0.000673489994f, 8.54399987e-05f, -0.000212989995f, -0.000255060004f, -0.000166049998f, -5.64900001e-05f, -1.73200006e-05f,
+            -0.990646482f, -0.0415349491f, -0.120547168f, -0.0609031804f, -0.0288591906f, -0.0133582801f, -0.0058228001f, -0.00224620011f, -0.000723659992f, -0.000278599997f, -0.000397030002f, -0.000428169995f, -0.000327520014f, -0.000173869994f, -4.84800003e-05f, -1.49300004e-05f,
+            -0.987633824f, 0.00145701994f, -0.113764092f, -0.0651736483f, -0.0345453806f, -0.0182387196f, -0.00949910004f, -0.00479087979f, -0.00233565993f, -0.00118268002f, -0.000842950016f, -0.000615459983f, -0.000381999998f, -0.000173330001f, -3.9049999e-05f, -1.23099999e-05f,
+            -0.983870685f, 0.0413681306f, -0.104024f, -0.067206502f, -0.0389005989f, -0.0223547798f, -0.0127403904f, -0.00708995992f, -0.00380918011f, -0.00200552004f, -0.00123594003f, -0.000768369995f, -0.000417050003f, -0.000164979996f, -2.881e-05f, -9.49999958e-06f,
+            -0.979225814f, 0.0777555034f, -0.0916874334f, -0.066990912f, -0.0418037586f, -0.0255759396f, -0.0154384598f, -0.00906470977f, -0.00509310979f, -0.00271826005f, -0.00156241003f, -0.000882109976f, -0.000432200002f, -0.000149710002f, -1.83699995e-05f, -6.57999999e-06f,
+            -0.973556459f, 0.110220447f, -0.0771775991f, -0.0645889416f, -0.0431865416f, -0.0278066099f, -0.0175075606f, -0.0106505798f, -0.00614512991f, -0.00329744001f, -0.00181205f, -0.000953789975f, -0.000427839987f, -0.000128689993f, -8.31000034e-06f, -3.67000007e-06f,
+            -0.966709971f, 0.138418242f, -0.0609678812f, -0.060132131f, -0.0430347808f, -0.0289888307f, -0.0188869908f, -0.01179922f, -0.00693303999f, -0.00372567005f, -0.00197806f, -0.000982410042f, -0.000405239989f, -0.000103300001f, 8.80000016e-07f, -9.09999983e-07f,
+            -0.95852524f, 0.1620671f, -0.0435679592f, -0.0538159683f, -0.0413878784f, -0.0291035492f, -0.0195428301f, -0.0124799004f, -0.00743567012f, -0.0039921198f, -0.00205732998f, -0.000968839973f, -0.000366399996f, -7.50600011e-05f, 8.76000013e-06f, 1.54999998e-06f,
+            -0.948835254f, 0.180956021f, -0.0255091302f, -0.0458923094f, -0.0383364111f, -0.0281705502f, -0.0194685105f, -0.0126801701f, -0.00764336018f, -0.00409269007f, -0.00205039f, -0.000915670011f, -0.000313939992f, -4.55199988e-05f, 1.50400001e-05f, 3.56999999e-06f,
+            -0.937469542f, 0.194951296f, -0.00732900016f, -0.0366601087f, -0.0340179205f, -0.0262468904f, -0.0186844599f, -0.0124058397f, -0.00755797001f, -0.0040299301f, -0.00196124008f, -0.000827069976f, -0.00025094999f, -1.61999997e-05f, 1.95299999e-05f, 5.02000012e-06f,
+            -0.924257338f, 0.204001576f, 0.01044372f, -0.0264548101f, -0.0286112707f, -0.0234241001f, -0.0172367208f, -0.0116803003f, -0.00719243009f, -0.00381271006f, -0.00179708004f, -0.000708490028f, -0.00018083f, 1.14699997e-05f, 2.21499995e-05f, 5.80999995e-06f,
+            -0.909031451f, 0.208140895f, 0.0273041707f, -0.0156366006f, -0.0223295707f, -0.0198240895f, -0.0151946303f, -0.0105431397f, -0.00656988984f, -0.00345562003f, -0.00156782998f, -0.000566410017f, -0.000107129999f, 3.62399987e-05f, 2.29399993e-05f, 5.92000015e-06f,
+            -0.891632318f, 0.207490161f, 0.0427853987f, -0.00457814988f, -0.0154120298f, -0.0155942095f, -0.0126477601f, -0.00904827006f, -0.00572255021f, -0.00297818007f, -0.00128564995f, -0.000407979998f, -3.33399985e-05f, 5.70699995e-05f, 2.20399997e-05f, 5.33999992e-06f,
+            -0.871912122f, 0.202256307f, 0.0564711615f, 0.00634791004f, -0.00811512955f, -0.0109013095f, -0.00970210973f, -0.00726146018f, -0.00469009997f, -0.00240391004f, -0.000964339997f, -0.000240730005f, 3.71999995e-05f, 7.31999971e-05f, 1.96599995e-05f, 4.12000009e-06f,
+            -0.84973973f, 0.192729607f, 0.0680071935f, 0.0167812891f, -0.00070325f, -0.00592532009f, -0.00647582021f, -0.00525762001f, -0.00351796998f, -0.00175923004f, -0.000618710008f, -7.21899996e-05f, 0.000101500002f, 8.41299989e-05f, 1.60799991e-05f, 2.3099999e-06f,
+            -0.825005472f, 0.179278776f, 0.077110447f, 0.0263857599f, 0.00656072982f, -0.000852449972f, -0.00309450994f, -0.00311765005f, -0.00225541997f, -0.00107232004f, -0.000263930007f, 9.04199987e-05f, 0.000157009999f, 8.96700003e-05f, 1.161e-05f, 0.0f
+    );
+
+    /// Hard-sync oscillator. The master writes sub-sample wrap positions to syncOut (1..32, 0 = none);
+    /// the slave resets its phase there and smooths the jump with a 16-tap BLEP residual.
+    void renderSync (Osc& this, const WaveTables& tables, int userSet, float mult, float[blockSize]& out,
+                     bool isSlave, int[blockSize]& sync)
+    {
+        let b = this.beginBlock (tables, userSet, mult, 0, 0);
+        var prevPhase = this.phase;
+
+        for (wrap<blockSize> i)
+        {
+            let amp = this.tickShared (b);
+            let y = this.waveValue (tables, b, this.phase);
+            out[i] = float (float64 (out[i]) + float64 (y + this.ring.at (this.ringIdx)) * float64 (amp));
+            this.ring.at (this.ringIdx) = 0;
+            this.ringIdx = (this.ringIdx + 1) & 31;
+
+            let inc = (this.base + this.offset) & u32;
+            this.phase = (this.phase + inc) & u32;
+
+            if (isSlave)
+            {
+                let v = sync[i];
+
+                if (v != 0)
+                {
+                    this.phase = (int64 (v - 1) * (inc >> 5)) & u32;
+                    let d = this.waveValue (tables, b, this.phase) - y;
+                    let row = ((v - 1) & 31) * 16;
+
+                    for (int k = 0; k < 16; ++k)
+                    {
+                        let idx = (this.ringIdx + k) & 31;
+                        this.ring.at (idx) = this.ring.at (idx) + d * syncBlep.at (row + k);
+                    }
+                }
+            }
+            else
+            {
+                if (this.phase < prevPhase)
+                {
+                    let st = inc >> 5;
+                    var v = 1;
+                    var t = this.phase;
+
+                    loop
+                    {
+                        t = (t - st) & u32;
+                        if (t >= this.phase) break;
+                        if (++v >= 32) break;
+                    }
+
+                    sync[i] = v;
+                }
+                else
+                {
+                    sync[i] = 0;
+                }
+            }
+
+            this.offset = (this.offset + b.slope) & u32;
+            prevPhase = this.phase;
+        }
+    }
+
+    /// FM: the modulator (osc 1) is silent and writes its band-passed output to fm[0..63]
+    /// (fm[64] = block maximum); the carrier (osc 2) advances by inc * (1 + fm[i]).
+    void renderFM (Osc& this, const WaveTables& tables, int userSet, float mult, float[blockSize]& out,
+                   bool isCarrier, float[65]& fm, float64 sr)
+    {
+        float c1, c2;
+
+        if (! isCarrier)
+        {
+            c1 = float (1.0 - pow (10.0, -3.0 / float64 (float (sr) * 0.002f)));
+            c2 = float (pow (10.0, -2.0 / float64 (float (sr) * 0.01f)));
+        }
+        else
+        {
+            c1 = 1.0f;
+            c2 = 0.5f;
+        }
+
+        let c3 = 2.0f * c2 - 1.0f;
+        let extra = isCarrier ? int64 (float64 ((this.base + this.offset) & u32) * float64 (fm[64])) : 0;
+        let b = this.beginBlock (tables, userSet, mult, max (extra, 0i64), 0);
+        var mx = 0.0f;
+
+        for (wrap<blockSize> i)
+        {
+            let amp = this.tickShared (b);
+
+            if (isCarrier)
+                this.phase = (this.phase + (int64 (float64 ((this.base + this.offset) & u32) * float64 (fm[i])) & u32)) & u32;
+
+            let y = this.waveValue (tables, b, this.phase) * amp;
+
+            if (isCarrier)
+            {
+                out[i] = out[i] + y;
+            }
+            else
+            {
+                let h = c2 * (y - this.fx1) + c3 * this.fy1;
+                this.fy1 = h;
+                this.fx1 = y;
+                this.s1 = this.s1 + (this.fy1 - this.s1) * c1;
+                this.s2 = this.s2 + (this.s1 - this.s2) * c1;
+                fm[i] = this.s2;
+                mx = max (mx, this.s2);
+            }
+
+            this.phase = (this.phase + this.base + this.offset) & u32;
+            this.offset = (this.offset + b.slope) & u32;
+        }
+
+        if (! isCarrier)
+            fm[64] = mx;
+    }
+
+    //==============================================================================
+    struct Noise
+    {
+        bool first;
+        float freq, glideTarget;
+        bool glideOn;
+        int glideRem;
+        float glideStep;
+        float l1, l2, b1, b2, F, q, g;
+    }
+
+    void resetNoise (Noise& this)
+    {
+        this.first = true;
+        this.l1 = 0; this.l2 = 0; this.b1 = 0; this.b2 = 0; this.g = 0;
+    }
+
+    void glideTo (Noise& this, float t, int m)
+    {
+        this.glideTarget = t;
+
+        if (m > 64)
+        {
+            this.glideOn = true;
+            this.glideRem = m;
+            this.glideStep = (t - this.freq) / float (m);
+        }
+        else
+        {
+            this.glideOn = false;
+            this.glideStep = 0;
+            this.freq = t;
+            this.glideRem = 0;
+        }
+    }
+
+    float noiseSvf (Noise& this, float x, float Fs, float qs)
+    {
+        this.l1 = this.l1 + Fs * this.b1;
+        let h1 = qs * x - this.l1 - qs * this.b1;
+        this.b1 = float (float64 (this.b1) + float64 (Fs) * float64 (h1));
+        this.l2 = this.l2 + Fs * this.b2;
+        let h2 = qs * this.l1 - this.l2 - qs * this.b2;
+        this.b2 = float (float64 (this.b2) + float64 (Fs) * float64 (h2));
+        return h2;
+    }
+
+    /// Writes one block of noise into buf (white, or resonant band-pass when N resonance > 0).
+    void renderNoise (Noise& this, Rand& rng, const float[numSlots]& P, float Rg, float at, float ampMod, float resMod,
+                      float64 sr, float[blockSize]& buf)
+    {
+        var amp = ampMod * P[slot::N_Amp];
+        let nat = P[slot::N_Aftertouch];
+
+        if (nat > 0.01f)       amp *= float (pow (10.0, float64 ((at - 1.0f) * nat * 0.05f)));
+        else if (nat < -0.01f) amp *= float (pow (10.0, float64 (at * nat * 0.05f)));
+
+        if (this.glideOn)
+        {
+            if (this.glideRem > blockSize)
+            {
+                this.glideRem -= blockSize;
+                this.freq += float (blockSize) * this.glideStep;
+            }
+            else
+            {
+                this.glideOn = false;
+                this.glideStep = 0;
+                this.glideRem = 0;
+                this.freq = this.glideTarget;
+            }
+        }
+
+        let reso = P[slot::N_Resonance];
+
+        if (reso <= 0)
+        {
+            for (wrap<blockSize> i)
+                buf[i] = (float (rng.next()) * (1.0f / 16384.0f) - 1.0f) * amp;
+
+            return;
+        }
+
+        for (wrap<blockSize> i)
+            buf[i] = float (rng.next()) * (1.0f / 16384.0f) - 1.0f;
+
+        let w = min (float64 (Rg) * float64 (this.freq) * 0.5 / sr * float64 (piF) * 2.0, float64 (piF * 0.98f));
+        var F = float (2.0 * sin (w * 0.5));
+        if (F > 1.2f) F = 1.2f;
+        let m = clamp (resMod, -1.0f, 1.0f);
+        let r2 = m > 0 ? reso + (1.0f - reso) * m : reso * (1.0f + m);
+        let q = 1.0f - clamp (1.0f - (1.0f - r2) * (1.0f - r2), 0.0f, 1.0f) * 0.995f;
+        let g = amp * 0.05f / (q * F);
+
+        if (this.first)
+        {
+            this.first = false;
+            this.F = F;
+            this.q = q;
+            this.g = g;
+            let warm = int ((sr + 1.0) * 0.5);
+
+            for (int k = 0; k < warm; ++k)
+            {
+                let x = float (rng.next()) * (1.0f / 16384.0f) - 1.0f;
+                this.noiseSvf (x, this.F, this.q);
+                this.noiseSvf (x, this.F, this.q);
+            }
+        }
+
+        let dF = (F - this.F) / float (blockSize);
+        let dq = (q - this.q) / float (blockSize);
+        let dg = (g - this.g) / float (blockSize);
+
+        for (wrap<blockSize> i)
+        {
+            this.F += dF;
+            this.q += dq;
+            this.g += dg;
+            let a = this.noiseSvf (buf[i], this.F, this.q);
+            let b = this.noiseSvf (buf[i], this.F, this.q);
+            buf[i] = (a + b) * this.g;
+        }
+    }
+}
