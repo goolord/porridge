@@ -5,7 +5,7 @@
 // MIDI lands on its own sample rather than at the next 64-sample block.
 
 type kind =
-  | Float({min: float, max: float, init: float, text: float => string, unit?: string})
+  | Float({min: float, max: float, init: float, text: float => string})
   | Choice({names: array<string>, init: int})
 
 type spec = {id: string, name: string, kind: kind}
@@ -146,18 +146,33 @@ let unisonSpecs = [
   {id: "U_Width", name: "Unison width", kind: Float({min: 0., max: 2., init: 1., text: percent})},
 ]
 
-let all = [
-  ...macroSpecs,
-  ...slotSpecs,
-  ...mpeSpecs,
-  ...oatSpecs,
-  ...driftSpecs,
-  ...fxOrderSpecs,
-  ...pmSpecs,
-  ...filterSpecs,
-  ...curveSpecs,
-  ...lfoSpecs,
-  ...unisonSpecs,
+type feature =
+  | Macros
+  | Modulations
+  | Mpe
+  | OatMode
+  | Drift
+  | FxOrder
+  | PmFeedback
+  | FilterMorph
+  | Curves
+  | LfoExtras
+  | UnisonExtras
+
+let groups = [
+  (Macros, macroSpecs),
+  (Modulations, slotSpecs),
+  (Mpe, mpeSpecs),
+  (OatMode, oatSpecs),
+  (Drift, driftSpecs),
+  (FxOrder, fxOrderSpecs),
+  (PmFeedback, pmSpecs),
+  (FilterMorph, filterSpecs),
+  (Curves, curveSpecs),
+  (LfoExtras, lfoSpecs),
+  (UnisonExtras, unisonSpecs),
 ]
+
+let all = groups->Array.flatMap(((_, specs)) => specs)
 
 let slotOf = i => firstSlot + i

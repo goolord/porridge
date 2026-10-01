@@ -114,34 +114,35 @@ let fromOatmeal = (bytes: Uint8Array.t) => {
 
 // What an Oatmeal export of this preset loses.
 let porridgeOnly = p => {
-  let changed = PorridgeParams.all->Array.filter(spec =>
-    switch (p.values->Map.get(spec.id), Lazy.get(defsById)->Map.get(spec.id)) {
-    | (Some(x), Some(d)) => x != d.init
-    | _ => false
-    }
-  )
-  let modulated = changed->Array.some(spec => ModMatrix.isSlotParam(spec.id))
-  let macros = changed->Array.some(spec => String.startsWith(spec.id, "Macro"))
-  let mpe = changed->Array.some(spec => String.startsWith(spec.id, "MPE"))
-  let some = prefixes =>
-    changed->Array.some(spec => prefixes->Array.some(prefix => String.startsWith(spec.id, prefix)))
+  // a feature's parameters are changed from their defaults
+  let changed = feature =>
+    PorridgeParams.groups->Array.some(((f, specs)) =>
+      f == feature &&
+        specs->Array.some(spec =>
+          switch (p.values->Map.get(spec.id), Lazy.get(defsById)->Map.get(spec.id)) {
+          | (Some(x), Some(d)) => x != d.init
+          | _ => false
+          }
+        )
+    )
   // values Porridge added to Oatmeal's lists (HQ waveforms, osc mix modes, filter types)
   let extended = ids =>
     ids->Array.some(id =>
       p.values->Map.get(id)->Option.mapOr(false, x => ParamDefs.oatmealValue(id, x) != x)
     )
+  // (Oatmeal always plays like Oat mode)
   [
-    modulated ? Some("modulations") : None,
-    macros ? Some("macros") : None,
-    mpe ? Some("MPE settings") : None,
-    some(["Drift"]) ? Some("the analog drift") : None,
-    some(["FX_Order"]) ? Some("the effects order") : None,
-    some(["Curve_"]) ? Some("the envelope curves") : None,
-    some(["LFO_1_", "LFO_2_"]) ? Some("the LFO delay, slew, steps and one-shot") : None,
-    some(["U_DetuneCurve", "U_RandomPhase", "U_Width"]) ? Some("the unison extras") : None,
+    changed(Modulations) ? Some("modulations") : None,
+    changed(Macros) ? Some("macros") : None,
+    changed(Mpe) ? Some("MPE settings") : None,
+    changed(Drift) ? Some("the analog drift") : None,
+    changed(FxOrder) ? Some("the effects order") : None,
+    changed(Curves) ? Some("the envelope curves") : None,
+    changed(LfoExtras) ? Some("the LFO delay, slew, steps and one-shot") : None,
+    changed(UnisonExtras) ? Some("the unison extras") : None,
     extended(["O1_Waveform", "O2_Waveform"]) ? Some("the HQ waveforms (exported as the plain ones)") : None,
-    extended(["OscMix"]) || some(["PM_Feedback"]) ? Some("the PM, ring and AM osc mix (exported as normal)") : None,
-    extended(["Filter", "Filter2"]) || some(["F_Morph"])
+    extended(["OscMix"]) || changed(PmFeedback) ? Some("the PM, ring and AM osc mix (exported as normal)") : None,
+    extended(["Filter", "Filter2"]) || changed(FilterMorph)
       ? Some("the zero-delay-feedback filters (exported as the nearest Oatmeal type)")
       : None,
     p.tuning != None ? Some("the microtuning") : None,
