@@ -75,6 +75,29 @@ let trace = (points, at: float => (float, float), ~steps=16) => {
 let userAt = (user, phase) =>
   user->ByteView.getUnsafe(Float.toInt(Math.floor(phase * 512.)) &&& 511)
 
+// The HQ waves drawn band-limited like the oscillator's, though with fewer harmonics than
+// it keeps, so that the ripple of the band limit shows at this size.
+let hqHarmonics = 24
+let hqHint = "HQ: anti-aliased, so high notes stay clean"
+
+let hqSaw = phase => {
+  let sum = ref(0.)
+  for k in 1 to hqHarmonics {
+    let k = Int.toFloat(k)
+    sum := sum.contents + Math.sin(2. * Math.Constants.pi * k * phase) / k
+  }
+  2. / Math.Constants.pi * sum.contents
+}
+
+let hqTriangle = phase => {
+  let sum = ref(0.)
+  for k in 0 to (hqHarmonics - 1) / 2 {
+    let k = Int.toFloat(2 * k + 1)
+    sum := sum.contents + Math.cos(2. * Math.Constants.pi * k * phase) / (k * k)
+  }
+  -8. / (Math.Constants.pi * Math.Constants.pi) * sum.contents
+}
+
 // One oscillator waveform sample at phase 0..1.
 let waveSample = (wave, pw, user, phase) =>
   switch wave {
@@ -84,30 +107,42 @@ let waveSample = (wave, pw, user, phase) =>
   | 3 => phase < 0.5 ? 4. * phase - 1. : 3. - 4. * phase
   | 4 => userAt(user, phase)
   | 5 => 0.5 * (userAt(user, phase) - userAt(user, phase + pw))
+  | 6 => hqSaw(phase)
+  | 7 => hqSaw(phase) - hqSaw(phase - pw) + 2. * pw - 1.
+  | 8 => hqTriangle(phase)
   | _ => 0.
   }
 
+// Whether a waveform is one of the HQ (anti-aliased) ones.
+let isHQ = wave => wave >= 6 && wave <= 8
+
 // Oscillator waveform: built-in shapes are drawn analytically, user shapes come from
-// the program store (512 points).
+// the program store (512 points). The HQ shapes carry a badge, and their ripple can rise
+// past ±1, so every shape is drawn a little smaller to leave it room.
 let wave = (ctx: Ctx.t, parent, osc, box) => {
   let s = svg(parent, box)
   background(s, box)
   s->line(2., box.h / 2., box.w - 2., box.h / 2.)->ignore
   let curve = s->svgEl("path", [("class", Str("curve"))])
   let prefix = osc == 0 ? "O1_" : "O2_"
+  let badge = el("span", ~cls="hq plotbadge", ~text="HQ", ~parent)->place(box.x + box.w - 24., box.y + 5.)
+  badge->setAttribute("title", Str(hqHint))
+  ctx.status->Status.hover(badge, () => hqHint)
 
   let draw = () => {
     let wave = Float.toInt(ctx.model->ParamModel.get(prefix ++ "Waveform"))
     let pw = ctx.model->ParamModel.get(prefix ++ "PWM_W")
     let user = ctx.programs->ProgramStore.shape(osc == 0 ? Wave1 : Wave2)
     let (w, h) = (box.w - 6., box.h - 8.)
-    let n = 96
+    let scale = 0.5 / 1.2
+    let n = Float.toInt(w)
     let points = Array.fromInitializer(~length=n + 1, k => {
       let f = Int.toFloat(k) / Int.toFloat(n)
       let v = waveSample(wave, pw, user, k == n ? 0.99999 : f)
-      (3. + f * w, 4. + (0.5 - 0.5 * Float.clamp(v, ~min=-1., ~max=1.)) * h)
+      (3. + f * w, 4. + (0.5 - scale * Float.clamp(v, ~min=-1.2, ~max=1.2)) * h)
     })
     curve->setAttribute("d", Str(pathFrom(points)))
+    badge->toggleClass("hidden", !isHQ(wave))
   }
 
   ctx.model->ParamModel.listenEach([prefix ++ "Waveform", prefix ++ "PWM_W"], draw)
