@@ -31,21 +31,17 @@ type rec t = {
   amp: array<float>,
   phase: array<float>,
   mutable hover: option<int>,
+  // a measurement is due in the next frame
+  mutable pending: bool,
   onEdit: unit => unit,
   onCommit: unit => unit,
 }
-
-let ink = canvas =>
-  switch canvas->getComputedStyle->getPropertyValue("--signal")->String.trim {
-  | "" => "#1c3c73"
-  | ink => ink
-  }
 
 // amplitude -> bar height fraction, and back
 let toFraction = (t, a) =>
   switch t.scale {
   | Linear => Math.min(1., a)
-  | Decibels => a <= 0. ? 0. : Math.max(0., Math.min(1., 1. - 20. * Math.log10(a) / floorDb))
+  | Decibels => a <= 0. ? 0. : Float.clamp(1. - 20. * Math.log10(a) / floorDb, ~min=0., ~max=1.)
   }
 
 let fromFraction = (t, f) =>
@@ -82,37 +78,18 @@ let analyse = t => {
 
 let draw = t => {
   open Context2d
-  let signal = ink(t.levels)
-  let frame = (canvas, g) => {
-    let (w, h) = (canvas->canvasWidth, canvas->canvasHeight)
-    g->clearRect(0., 0., w, h)
-    g->setFillStyle("rgba(236,227,196,0.45)")
-    g->fillRect(0., 0., w, h)
-    (w, h)
-  }
-  let gridLine = (g, w, y, ~strong=false) => {
-    g->setStrokeStyle(strong ? "rgba(31,26,14,0.35)" : "rgba(31,26,14,0.14)")
-    g->setLineWidth(1.)
-    g->beginPath
-    g->moveTo(0., Math.round(y) + 0.5)
-    g->lineTo(w, Math.round(y) + 0.5)
-    g->stroke
-  }
-  let border = (g, w, h) => {
-    g->setStrokeStyle("#6f5f36")
-    g->setLineWidth(2.)
-    g->strokeRect(1., 1., w - 2., h - 2.)
-  }
+  let gridLine = (g, w, y, ~strong=false) =>
+    g->CanvasStyle.hline(w, y, CanvasStyle.shade(strong ? 0.35 : 0.14))
   let barWidth = w => w / Int.toFloat(count)
   let hoverBand = (g, w, h) =>
     t.hover->Option.forEach(k => {
-      g->setFillStyle("rgba(28,60,115,0.12)")
+      g->setFillStyle(CanvasStyle.tint(0.12))
       g->fillRect(Int.toFloat(k - 1) * barWidth(w), 0., barWidth(w), h)
     })
 
   // levels: bars up from the bottom; a cap marks a level above the top
   let g = t.levels->getContext2d
-  let (w, h) = frame(t.levels, g)
+  let (w, h) = CanvasStyle.paper(t.levels, g)
   let inner = h - 8.
   switch t.scale {
   | Decibels =>
@@ -120,7 +97,7 @@ let draw = t => {
   | Linear => [0.25, 0.5, 0.75]->Array.forEach(a => gridLine(g, w, 4. + (1. - a) * inner))
   }
   hoverBand(g, w, h)
-  g->setFillStyle(signal)
+  g->setFillStyle(CanvasStyle.ink)
   t.amp->Array.forEachWithIndex((a, i) => {
     let f = toFraction(t, a)
     let x = Int.toFloat(i) * barWidth(w)
@@ -129,11 +106,11 @@ let draw = t => {
       g->fillRect(x + 1., 1., barWidth(w) - 2., 4.)
     }
   })
-  border(g, w, h)
+  CanvasStyle.border(g, w, h)
 
   // phases: bars from the centre line, faint where the harmonic is silent
   let g = t.phases->getContext2d
-  let (w, h) = frame(t.phases, g)
+  let (w, h) = CanvasStyle.paper(t.phases, g)
   let mid = h / 2.
   gridLine(g, w, 4. + (h - 8.) / 4.)
   gridLine(g, w, h - 4. - (h - 8.) / 4.)
@@ -141,18 +118,29 @@ let draw = t => {
   gridLine(g, w, mid, ~strong=true)
   t.phase->Array.forEachWithIndex((p, i) => {
     let audible = t.amp->Array.getUnsafe(i) > 1e-4
-    g->setFillStyle(audible ? signal : "rgba(31,26,14,0.22)")
+    g->setFillStyle(audible ? CanvasStyle.ink : CanvasStyle.shade(0.22))
     let y = mid - p / Math.Constants.pi * (h / 2. - 4.)
     let x = Int.toFloat(i) * barWidth(w)
     g->fillRect(x + 2., Math.min(y, mid), barWidth(w) - 4., Math.max(1.5, Math.abs(y - mid)))
   })
-  border(g, w, h)
+  CanvasStyle.border(g, w, h)
 }
 
 let refresh = t => {
   analyse(t)
   draw(t)
 }
+
+// Measures and redraws in the next frame, however often it's asked to before then (while the
+// waveform is being drawn).
+let refreshSoon = t =>
+  if !t.pending {
+    t.pending = true
+    requestAnimationFrame(_ => {
+      t.pending = false
+      refresh(t)
+    })
+  }
 
 // Sets harmonic k's amplitude and phase, adding the difference to the waveform.
 let setHarmonic = (t, k, amp, phase) => {
@@ -186,12 +174,10 @@ let statusText = (t, k) => {
 // The harmonic under the pointer, and the pointer's height in the bars' range (0 at the
 // bottom). The bars leave 4 canvas pixels free at the top and the bottom.
 let pointerAt = (canvas, ev) => {
-  let r = canvas->getBoundingClientRect
-  let fx = (ev->clientX - r.left) / r.width
-  let fy = 1. - (ev->clientY - r.top) / r.height
-  let k = Math.Int.max(1, Math.Int.min(count, Float.toInt(Math.floor(fx * Int.toFloat(count))) + 1))
+  let (fx, fy) = canvas->pointerFraction(ev)
+  let k = Int.clamp(Float.toInt(Math.floor(fx * Int.toFloat(count))) + 1, ~min=1, ~max=count)
   let margin = 4. / canvas->canvasHeight
-  (k, Math.max(0., Math.min(1., (fy - margin) / (1. - 2. * margin))))
+  (k, Float.clamp((1. - fy - margin) / (1. - 2. * margin), ~min=0., ~max=1.))
 }
 
 // Dragging sets every harmonic the pointer passes; clear sets them to their reset value.
@@ -259,15 +245,9 @@ let make = (
   ~onEdit,
   ~onCommit,
 ) => {
-  let canvas = (b: box) => {
-    let c = el("canvas", ~cls="draw", ~parent)->placeBox(b)
-    c->setCanvasWidth(b.w * 2.)
-    c->setCanvasHeight(b.h * 2.)
-    c
-  }
   let label = (b: box, text) => el("div", ~cls="hlabel", ~text, ~parent)->place(b.x + 4., b.y + 3.)
-  let levelsCanvas = canvas(levels)
-  let phasesCanvas = canvas(phases)
+  let levelsCanvas = CanvasStyle.make(parent, levels)
+  let phasesCanvas = CanvasStyle.make(parent, phases)
   let labels = [label(levels, "harmonics 1-64: level"), label(phases, "phase")]
   let scaleButton = Controls.button(
     ctx,
@@ -291,6 +271,7 @@ let make = (
     amp: Array.make(~length=count, 0.),
     phase: Array.make(~length=count, 0.),
     hover: None,
+    pending: false,
     onEdit,
     onCommit,
   }

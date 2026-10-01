@@ -10,7 +10,6 @@ open! Web
 
 let margin = 7. // keeps points at the edges grabbable
 let segmentGap = 12. // minimum segment width, so that points never sit on top of each other
-let fine = 0.1 // shift-drag factor
 
 let hintFor = name =>
   name ++ ": drag the points to shape it, and the small middle points up or down to bend a stage; shift for fine steps. Scroll over a point to change it, right-click to reset it."
@@ -24,8 +23,6 @@ let niceSpan = total =>
   [1.5, 2., 3., 4., 6., 8., 12., 16., 24., 32.]
   ->Array.find(s => s >= total * 1.15)
   ->Option.getOr(32.)
-
-let clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x))
 
 // A draggable point. Dragging it sideways sets `time` from the width of its segment (which
 // starts at x0); dragging it up and down sets `level`, or for a bend point, `curve`.
@@ -100,7 +97,12 @@ let envCubic = (l: float, lo: float, hi: float) =>
 let bend = (level: float, from: float, to: float, curve: float) =>
   curve == 0. || from == to
     ? level
-    : to + (from - to) * Math.pow(clamp((level - to) / (from - to), 0., 1.), ~exp=Math.pow(8., ~exp=curve))
+    : to +
+      (from - to) *
+        Math.pow(
+          Float.clamp((level - to) / (from - to), ~min=0., ~max=1.),
+          ~exp=Math.pow(8., ~exp=curve),
+        )
 
 // The envelope a parameter prefix belongs to, as PorridgeParams names it.
 let envName = prefix =>
@@ -130,9 +132,9 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
   let (top, bottom) = (margin, h - margin)
   let yOf = v => {
     let f = decibels ? levelDef.toNorm(v) : v
-    bottom - clamp(f, 0., 1.) * (bottom - top)
+    bottom - Float.clamp(f, ~min=0., ~max=1.) * (bottom - top)
   }
-  let fractionAt = y => clamp((bottom - y) / (bottom - top), 0., 1.)
+  let fractionAt = y => Float.clamp((bottom - y) / (bottom - top), ~min=0., ~max=1.)
   let levelAt = y => decibels ? levelDef.fromNorm(fractionAt(y)) : fractionAt(y)
   let sustainPx = 0.13 * (w - 2. * margin)
   // the DSP treats a breakpoint above 0.998 as "skip decay 1"
@@ -249,8 +251,8 @@ let pitch = (ctx: Ctx.t, ~w, ~h): shape => {
   let holdPx = 0.12 * (w - 2. * margin)
   let releasePx = 0.16 * (w - 2. * margin)
   let mid = h / 2.
-  let yOf = (st, f) => mid - clamp(st / f.limit, -1., 1.) * (mid - margin)
-  let semitonesAt = (y, f) => clamp((mid - y) / (mid - margin), -1., 1.) * f.limit
+  let yOf = (st, f) => mid - Float.clamp(st / f.limit, ~min=-1., ~max=1.) * (mid - margin)
+  let semitonesAt = (y, f) => Float.clamp((mid - y) / (mid - margin), ~min=-1., ~max=1.) * f.limit
 
   let fit = () => {
     let o = octave()
@@ -345,41 +347,21 @@ let pitch = (ctx: Ctx.t, ~w, ~h): shape => {
 // fields: the raw parameters shown by the "values" switch, four to a row
 let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, string)>, ~name) => {
   let model = ctx.model
-  let hint = hintFor(name)
-  let root = el("div", ~cls="ed", ~parent)->placeBox(box)
-  let area = {x: 0., y: 0., w: box.w, h: box.h}
-  let s = Plots.svg(root, area)
-  Plots.background(s, area)
-  let svgEl = Plots.svgEl(s, ...)
-  let zero = svgEl("line", [("class", Str("axis")), ("x1", Num(2.)), ("x2", Num(box.w - 2.))])
+  let ed = NodeEditor.make(ctx, parent, box, ~hint=hintFor(name), ~columns=4)
+  let svgEl = svgEl(ed.svg, ...)
+  let zero = ed.svg->Plots.line(2., 0., box.w - 2., 0.)
   let fill = svgEl("path", [("class", Str("fill"))])
   let curve = svgEl("path", [("class", Str("curve"))])
   let layer = svgEl("g", [])
   let readout = svgEl("text", [("class", Str("readout"))])
-
-  let vals = el("div", ~cls="vals", ~parent=root)
-  let g = Grid.make(ctx, vals, ~x=0., ~y=22., ~cw=box.w / 4.)
-  fields->Array.forEachWithIndex(((id, label), i) => g->Grid.param(id, mod(i, 4), i / 4, label))
-
-  Controls.expandSwitch(ctx, root)
+  fields->Array.forEachWithIndex(((id, label), i) => ed.values->Grid.param(id, mod(i, 4), i / 4, label))
 
   let frame = ref(shape.fit())
   let handles = ref([])
   let nodes = ref([])
-  let hover = ref(None)
-  let dragging = ref(None)
 
-  let statusFor = h =>
-    h
-    ->handleIds
-    ->Array.map(id => (model->ParamModel.def(id)).longText(model->ParamModel.get(id)))
-    ->Array.join("    ")
-
-  let readoutFor = h =>
-    h
-    ->handleIds
-    ->Array.map(id => (model->ParamModel.def(id)).shortText(model->ParamModel.get(id)))
-    ->Array.join("  ·  ")
+  let statusFor = h => h->handleIds->Array.map(id => model->ParamModel.longText(id))->Array.join("    ")
+  let readoutFor = h => h->handleIds->Array.map(id => model->ParamModel.shortText(id))->Array.join("  ·  ")
 
   let draw = () => {
     let (points, hs) = shape.layout(frame.contents)
@@ -402,7 +384,7 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
       zero->setAttribute("y2", Num(y))
     | None => zero->setAttribute("opacity", Num(0.))
     }
-    s->toggleClass("off", shape.dimmed())
+    ed.svg->toggleClass("off", shape.dimmed())
 
     nodes.contents->Array.forEachWithIndex(((dot, hit), i) =>
       hs[i]->Option.forEach(h => {
@@ -410,7 +392,7 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
           e->setAttribute("cx", Num(h.x))
           e->setAttribute("cy", Num(h.y))
         })
-        let hot = hover.contents == Some(i) || dragging.contents == Some(i)
+        let hot = ed.hover == Some(i) || ed.dragging == Some(i)
         let isBend = h.curve != None
         dot->setAttribute(
           "class",
@@ -420,71 +402,55 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
       })
     )
 
-    switch dragging.contents->Option.orElse(hover.contents)->Option.flatMap(i => hs[i]) {
+    switch NodeEditor.focus(ed)->Option.flatMap(i => hs[i]) {
     | Some(h) =>
       ctx.status->Status.show(statusFor(h))
-      if dragging.contents != None {
-        let leftHalf = h.x < box.w * 0.6
-        readout->setTextContent(readoutFor(h))
-        readout->setAttribute("x", Num(leftHalf ? h.x + 10. : h.x - 10.))
-        readout->setAttribute("y", Num(h.y < 24. ? h.y + 18. : h.y - 9.))
-        readout->setAttribute("text-anchor", Str(leftHalf ? "start" : "end"))
+      if ed.dragging != None {
+        ed->NodeEditor.showReadout(
+          readout,
+          readoutFor(h),
+          (h.x, h.y),
+          ~dx=10.,
+          ~above=9.,
+          ~below=18.,
+          ~nearTop=24.,
+        )
       }
     | None => ()
     }
-    if dragging.contents == None {
+    if ed.dragging == None {
       readout->setTextContent("")
     }
   }
 
+  // the axis is refitted when a drag ends, never during one
   let refresh = () => {
-    if dragging.contents == None {
+    if ed.dragging == None {
       frame := shape.fit()
     }
     draw()
   }
 
-  let startDrag = (i, hit, ev) => {
+  let startDrag = (i, hit, ev) =>
     handles.contents[i]->Option.forEach(h => {
-      dragging := Some(i)
-      let ids = handleIds(h)
-      ids->Array.forEach(id => model->ParamModel.beginGesture(id))
-      // svg pixels per screen pixel
-      let k = box.w / (s->getBoundingClientRect).width
       let x = ref(h.x)
       let y = ref(h.y)
       let curve0 = h.curve->Option.map(c => model->ParamModel.get(c))->Option.getOr(0.)
-      let last = ref((ev->clientX, ev->clientY))
-      hit->Controls.capturePointer(
-        ev,
-        ~onMove=mv => {
-          let (lastX, lastY) = last.contents
-          last := (mv->clientX, mv->clientY)
-          let f = mv->shiftKey ? fine * k : k
-          x := clamp(x.contents + (mv->clientX - lastX) * f, h.x0 + segmentGap, box.w * 4.)
-          y := clamp(y.contents + (mv->clientY - lastY) * f, margin, box.h - margin)
-          // the level first: it decides whether decay 1 is skipped
-          shape.setLevel(h, y.contents, frame.contents)
-          shape.setTime(h, x.contents - h.x0 - segmentGap, frame.contents)
-          // a bend point: up or down bends its stage, a full bend per 60 pixels
-          h.curve->Option.forEach(c =>
-            model->ParamModel.set(c, clamp(curve0 + h.bendSign * (h.y - y.contents) / 60., -1., 1.))
+      ed->NodeEditor.drag(i, hit, ev, ~ids=handleIds(h), ~onMove=(dx, dy) => {
+        x := Float.clamp(x.contents + dx, ~min=h.x0 + segmentGap, ~max=box.w * 4.)
+        y := Float.clamp(y.contents + dy, ~min=margin, ~max=box.h - margin)
+        // the level first: it decides whether decay 1 is skipped
+        shape.setLevel(h, y.contents, frame.contents)
+        shape.setTime(h, x.contents - h.x0 - segmentGap, frame.contents)
+        // a bend point: up or down bends its stage, a full bend per 60 pixels
+        h.curve->Option.forEach(c =>
+          model->ParamModel.set(
+            c,
+            Float.clamp(curve0 + h.bendSign * (h.y - y.contents) / 60., ~min=-1., ~max=1.),
           )
-          draw()
-        },
-        ~onUp=() => {
-          ids->Array.forEach(id => model->ParamModel.endGesture(id))
-          dragging := None
-          frame := shape.fit()
-          draw()
-          if hover.contents == None {
-            ctx.status->Status.show(hint)
-          }
-        },
-      )
-      draw()
+        )
+      })
     })
-  }
 
   let makeNode = i => {
     let dot = svgEl("circle", [("class", Str("node")), ("r", Num(4.))])
@@ -502,30 +468,14 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
       | _ => ()
       }
     })
-    hit->onMouse(#mouseenter, _ => {
-      hover := Some(i)
-      draw()
-    })
-    hit->onMouse(#mouseleave, _ => {
-      hover := None
-      draw()
-      if dragging.contents == None {
-        ctx.status->Status.show(hint)
-      }
-    })
+    ed->NodeEditor.hookNode(hit, i)
     hit->onWheel(ev => {
       ev->preventDefault
       handles.contents[i]->Option.forEach(h =>
         h.time
         ->Option.orElse(h.level)
         ->Option.orElse(h.curve)
-        ->Option.forEach(id => {
-          let def = model->ParamModel.def(id)
-          let d = (ev->deltaY < 0. ? 1. : -1.) / 100.
-          let d = ev->shiftKey ? d * fine : d
-          let n = def.toNorm(model->ParamModel.get(id))
-          model->ParamModel.gestureSet(id, def.fromNorm(clamp(n + d, 0., 1.)))
-        })
+        ->Option.forEach(id => Controls.wheelParam(model, id, ev))
       )
     })
     (dot, hit)
@@ -549,14 +499,5 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
   nodes.contents->Array.forEach(((_, hit)) => layer->appendChild(hit))
   layer->appendChild(readout)
 
-  s->suppressContextMenu
-  s->onMouse(#mouseenter, _ => ctx.status->Status.show(hint))
-  s->onMouse(#mouseleave, _ =>
-    if dragging.contents == None {
-      ctx.status->Status.clear
-    }
-  )
-
-  shape.ids->Array.forEach(id => model->ParamModel.listen(id, refresh))
-  refresh()
+  ed->NodeEditor.start(shape.ids, refresh)
 }

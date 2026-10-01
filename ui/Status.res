@@ -20,3 +20,9 @@ let setIdle = (t, text) => {
   t.idle = text
   clear(t)
 }
+
+// Shows text() while the pointer is over e.
+let hover = (t, e, text) => {
+  e->onMouse(#mouseenter, _ => show(t, text()))
+  e->onMouse(#mouseleave, _ => clear(t))
+}

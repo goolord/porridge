@@ -9,11 +9,8 @@ open! Web
 let sampleRate = 48000.
 let (fMin, fMax) = (15., 20000.)
 let margin = 8.
-let fine = 0.1
 
 let hint = "Drag a band's point to set its frequency and gain, shift for fine steps. Scroll over it for the slope, right-click for its type. Grey points are bands that are off: drag one to use it."
-
-let clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x))
 
 // where bands that are off wait to be picked up, spread out so that each can be grabbed
 let restingFreqs = [80., 300., 1000., 3500., 10000.]
@@ -71,38 +68,35 @@ let gainDb = (q, freq) => {
 let make = (ctx: Ctx.t, parent, box: box) => {
   let model = ctx.model
   let get = id => model->ParamModel.get(id)
-  let root = el("div", ~cls="ed", ~parent)->placeBox(box)
-  let area = {x: 0., y: 0., w: box.w, h: box.h}
-  let s = Plots.svg(root, area)
-  Plots.background(s, area)
-  let svgEl = (tag, attrs) => Plots.svgEl(s, tag, attrs)
+  let ed = NodeEditor.make(ctx, parent, box, ~hint, ~columns=5)
+  let svgEl = svgEl(ed.svg, ...)
 
   let (left, right) = (margin, box.w - margin)
   let mid = box.h / 2.
   let xOf = f => left + Math.log(f / fMin) / Math.log(fMax / fMin) * (right - left)
-  let freqAt = x => fMin * Math.pow(fMax / fMin, ~exp=clamp((x - left) / (right - left), 0., 1.))
+  let freqAt = x =>
+    fMin * Math.pow(fMax / fMin, ~exp=Float.clamp((x - left) / (right - left), ~min=0., ~max=1.))
   // dB at the top edge, held for the length of a drag
   let limit = ref(24.)
-  let yOf = db => mid - clamp(db / limit.contents, -1., 1.) * (mid - margin)
-  let dbAt = y => clamp((mid - y) / (mid - margin), -1., 1.) * limit.contents
+  let yOf = db => mid - Float.clamp(db / limit.contents, ~min=-1., ~max=1.) * (mid - margin)
+  let dbAt = y => Float.clamp((mid - y) / (mid - margin), ~min=-1., ~max=1.) * limit.contents
 
   // frequency and gain grid
   let gridLayer = svgEl("g", [])
-  let gridLine = (x1, y1, x2, y2) =>
-    Plots.svgEl(
-      gridLayer,
-      "line",
-      [("class", Str("axis")), ("x1", Num(x1)), ("y1", Num(y1)), ("x2", Num(x2)), ("y2", Num(y2))],
-    )->ignore
-  let gridLabel = (x, y, text) =>
-    Plots.svgEl(gridLayer, "text", [("class", Str("tick")), ("x", Num(x)), ("y", Num(y))])
-    ->setTextContent(text)
+  let gridLabel = (layer, x, y, text) =>
+    layer->Web.svgEl("text", [("class", Str("tick")), ("x", Num(x)), ("y", Num(y))])->setTextContent(text)
   [20., 50., 100., 200., 500., 1000., 2000., 5000., 10000.]->Array.forEach(f => {
     let x = xOf(f)
-    gridLine(x, 1., x, box.h - 1.)
-    gridLabel(x + 3., box.h - 4., f >= 1000. ? Float.toString(f / 1000.) ++ "k" : Float.toString(f))
+    gridLayer->Plots.line(x, 1., x, box.h - 1.)->ignore
+    gridLayer->gridLabel(
+      x + 3.,
+      box.h - 4.,
+      f >= 1000. ? Float.toString(f / 1000.) ++ "k" : Float.toString(f),
+    )
   })
   let gainLayer = svgEl("g", [])
+  // the limit the gain grid is drawn for
+  let gainLimit = ref(0.)
 
   let bandCurve = svgEl("path", [("class", Str("curve faint"))])
   let fill = svgEl("path", [("class", Str("fill"))])
@@ -110,19 +104,13 @@ let make = (ctx: Ctx.t, parent, box: box) => {
   let layer = svgEl("g", [])
   let readout = svgEl("text", [("class", Str("readout"))])
 
-  let vals = el("div", ~cls="vals", ~parent=root)
-  let g = Grid.make(ctx, vals, ~x=0., ~y=22., ~cw=box.w / 5.)
   for b in 0 to 4 {
     let (kind, freq, amp, slope) = ids(b)
-    g->Grid.choice(kind, b, 0, "band " ++ Int.toString(b + 1))
-    g->Grid.param(freq, b, 1, "freq")
-    g->Grid.param(amp, b, 2, "gain")
-    g->Grid.param(slope, b, 3, "slope")
+    ed.values->Grid.choice(kind, b, 0, "band " ++ Int.toString(b + 1))
+    ed.values->Grid.param(freq, b, 1, "freq")
+    ed.values->Grid.param(amp, b, 2, "gain")
+    ed.values->Grid.param(slope, b, 3, "slope")
   }
-  Controls.expandSwitch(ctx, root)
-
-  let hover = ref(None)
-  let dragging = ref(None)
 
   let bandOn = b => {
     let (kind, _, _, _) = ids(b)
@@ -138,28 +126,23 @@ let make = (ctx: Ctx.t, parent, box: box) => {
       let (_, _, amp, _) = ids(b)
       bandOn(b) ? Math.abs(get(amp)) : 0.
     })->Math.maxMany
-    limit := Math.min(60., Math.max(24., 12. * Math.ceil((biggest + 3.) / 12.)))
-    gainLayer->setTextContent("")
-    [-1., -0.5, 0.5, 1.]->Array.forEach(k => {
-      let db = k * limit.contents
-      let y = yOf(db)
-      Plots.svgEl(
-        gainLayer,
-        "line",
-        [("class", Str("axis faint")), ("x1", Num(1.)), ("x2", Num(box.w - 1.)), ("y1", Num(y)), ("y2", Num(y))],
-      )->ignore
-      Plots.svgEl(
-        gainLayer,
-        "text",
-        [("class", Str("tick")), ("x", Num(4.)), ("y", Num(k > 0. ? y + 11. : y - 3.))],
-      )->setTextContent((db > 0. ? "+" : "") ++ Float.toString(db) ++ " dB")
-    })
-    let y0 = yOf(0.)
-    Plots.svgEl(
-      gainLayer,
-      "line",
-      [("class", Str("axis")), ("x1", Num(1.)), ("x2", Num(box.w - 1.)), ("y1", Num(y0)), ("y2", Num(y0))],
-    )->ignore
+    limit := Float.clamp(12. * Math.ceil((biggest + 3.) / 12.), ~min=24., ~max=60.)
+    if limit.contents != gainLimit.contents {
+      gainLimit := limit.contents
+      gainLayer->setTextContent("")
+      [-1., -0.5, 0.5, 1.]->Array.forEach(k => {
+        let db = k * limit.contents
+        let y = yOf(db)
+        gainLayer->Plots.line(~cls="axis faint", 1., y, box.w - 1., y)->ignore
+        gainLayer->gridLabel(
+          4.,
+          k > 0. ? y + 11. : y - 3.,
+          (db > 0. ? "+" : "") ++ Float.toString(db) ++ " dB",
+        )
+      })
+      let y0 = yOf(0.)
+      gainLayer->Plots.line(1., y0, box.w - 1., y0)->ignore
+    }
   }
 
   let points = 160
@@ -172,13 +155,13 @@ let make = (ctx: Ctx.t, parent, box: box) => {
 
   let statusFor = b => {
     let (kind, freq, amp, slope) = ids(b)
-    let text = id => (model->ParamModel.def(id)).longText(get(id))
+    let text = id => model->ParamModel.longText(id)
     bandOn(b) ? [kind, freq, amp, slope]->Array.map(text)->Array.join("    ") : text(kind)
   }
 
   let readoutFor = b => {
     let (kind, freq, amp, slope) = ids(b)
-    let short = id => (model->ParamModel.def(id)).shortText(get(id))
+    let short = id => model->ParamModel.shortText(id)
     let names = Controls.namesOf(model->ParamModel.def(kind))
     bandOn(b)
       ? `${Int.toString(b + 1)} ${names[Float.toInt(get(kind))]->Option.getOr("")}  ·  ${short(
@@ -217,7 +200,7 @@ let make = (ctx: Ctx.t, parent, box: box) => {
       "d",
       Str(`${d}L${Float.toString(right)} ${y0}L${Float.toString(left)} ${y0}Z`),
     )
-    let focus = dragging.contents->Option.orElse(hover.contents)
+    let focus = NodeEditor.focus(ed)
     bandCurve->setAttribute(
       "d",
       Str(
@@ -247,18 +230,22 @@ let make = (ctx: Ctx.t, parent, box: box) => {
     switch focus {
     | Some(b) =>
       ctx.status->Status.show(statusFor(b))
-      let (x, y) = position(b)
-      let leftHalf = x < box.w * 0.6
-      readout->setTextContent(readoutFor(b))
-      readout->setAttribute("x", Num(leftHalf ? x + 13. : x - 13.))
-      readout->setAttribute("y", Num(y < 30. ? y + 22. : y - 12.))
-      readout->setAttribute("text-anchor", Str(leftHalf ? "start" : "end"))
+      ed->NodeEditor.showReadout(
+        readout,
+        readoutFor(b),
+        position(b),
+        ~dx=13.,
+        ~above=12.,
+        ~below=22.,
+        ~nearTop=30.,
+      )
     | None => readout->setTextContent("")
     }
   }
 
+  // the gain axis is refitted when a drag ends, never during one
   let refresh = () => {
-    if dragging.contents == None {
+    if ed.dragging == None {
       fit()
     }
     draw()
@@ -273,13 +260,13 @@ let make = (ctx: Ctx.t, parent, box: box) => {
     }
   }
 
-  let typeMenu = (b, ev) => {
+  let typeMenu = b => {
     let (kind, _, _, _) = ids(b)
     let (x, y) = position(b)
-    let anchor = el("div", ~parent=root)->place(x, y + 8., ~w=1., ~h=1.)
-    anchor->setStyle("position", "absolute")
-    ctx.menu->Menu.show(
-      anchor,
+    ctx.menu->Menu.showAt(
+      ed.root,
+      ~x,
+      ~y=y + 8.,
       Controls.namesOf(model->ParamModel.def(kind))->Array.mapWithIndex((label, value) => {
         Menu.label,
         value,
@@ -292,8 +279,6 @@ let make = (ctx: Ctx.t, parent, box: box) => {
         model->ParamModel.gestureSet(kind, Int.toFloat(v))
       },
     )
-    anchor->remove
-    ev->preventDefault
   }
 
   let startDrag = (b, hit, ev) => {
@@ -302,35 +287,15 @@ let make = (ctx: Ctx.t, parent, box: box) => {
       wake(b)
       model->ParamModel.gestureSet(kind, 1.)
     }
-    dragging := Some(b)
-    [freq, amp]->Array.forEach(id => model->ParamModel.beginGesture(id))
-    let k = box.w / (s->getBoundingClientRect).width
     let (x0, y0) = position(b)
     let x = ref(x0)
     let y = ref(y0)
-    let last = ref((ev->clientX, ev->clientY))
-    hit->Controls.capturePointer(
-      ev,
-      ~onMove=mv => {
-        let (lastX, lastY) = last.contents
-        last := (mv->clientX, mv->clientY)
-        let f = mv->shiftKey ? fine * k : k
-        x := clamp(x.contents + (mv->clientX - lastX) * f, left, right)
-        y := clamp(y.contents + (mv->clientY - lastY) * f, margin, box.h - margin)
-        model->ParamModel.set(freq, freqAt(x.contents))
-        model->ParamModel.set(amp, dbAt(y.contents))
-      },
-      ~onUp=() => {
-        [freq, amp]->Array.forEach(id => model->ParamModel.endGesture(id))
-        dragging := None
-        fit()
-        draw()
-        if hover.contents == None {
-          ctx.status->Status.show(hint)
-        }
-      },
-    )
-    draw()
+    ed->NodeEditor.drag(b, hit, ev, ~ids=[freq, amp], ~onMove=(dx, dy) => {
+      x := Float.clamp(x.contents + dx, ~min=left, ~max=right)
+      y := Float.clamp(y.contents + dy, ~min=margin, ~max=box.h - margin)
+      model->ParamModel.set(freq, freqAt(x.contents))
+      model->ParamModel.set(amp, dbAt(y.contents))
+    })
   }
 
   nodes->Array.forEachWithIndex(((_, _, hit), b) => {
@@ -338,42 +303,22 @@ let make = (ctx: Ctx.t, parent, box: box) => {
       ev->preventDefault
       switch ev->button {
       | 0 => startDrag(b, hit, ev)
-      | 2 => typeMenu(b, ev)
+      | 2 => typeMenu(b)
       | _ => ()
       }
     })
-    hit->onMouse(#mouseenter, _ => {
-      hover := Some(b)
-      draw()
-    })
-    hit->onMouse(#mouseleave, _ => {
-      hover := None
-      draw()
-      if dragging.contents == None {
-        ctx.status->Status.show(hint)
-      }
-    })
+    ed->NodeEditor.hookNode(hit, b)
     hit->onWheel(ev => {
-      ev->preventDefault
       let (_, _, _, slope) = ids(b)
-      let def = model->ParamModel.def(slope)
-      let d = (ev->deltaY < 0. ? 1. : -1.) / 100.
-      let d = ev->shiftKey ? d * fine : d
-      model->ParamModel.gestureSet(slope, def.fromNorm(clamp(def.toNorm(get(slope)) + d, 0., 1.)))
+      Controls.wheelParam(model, slope, ev)
     })
   })
 
-  s->suppressContextMenu
-  s->onMouse(#mouseenter, _ => ctx.status->Status.show(hint))
-  s->onMouse(#mouseleave, _ =>
-    if dragging.contents == None {
-      ctx.status->Status.clear
-    }
+  ed->NodeEditor.start(
+    Array.fromInitializer(~length=5, b => {
+      let (kind, freq, amp, slope) = ids(b)
+      [kind, freq, amp, slope]
+    })->Array.flat,
+    refresh,
   )
-
-  for b in 0 to 4 {
-    let (kind, freq, amp, slope) = ids(b)
-    [kind, freq, amp, slope]->Array.forEach(id => model->ParamModel.listen(id, refresh))
-  }
-  refresh()
 }

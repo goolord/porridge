@@ -9,7 +9,7 @@ let dragPixels = 220. // pixels of vertical travel for the full range
 let fineShift = 0.1
 let fineCtrl = 0.25
 
-let clamp01 = x => Math.max(0., Math.min(1., x))
+let clamp01 = x => Float.clamp(x, ~min=0., ~max=1.)
 
 let block = (parent, title, ~x, ~y, ~w, ~h, ~titleLeft=false) => {
   let e = el("div", ~cls="blk", ~parent)->place(x, y, ~w, ~h)
@@ -72,6 +72,31 @@ let capturePointer = (e, ev, ~onMove, ~onUp) => {
   e->onPointer(#pointercancel, up)
 }
 
+// Captures the pointer, and calls onMove with how far each move went (right and down, in
+// design pixels), and onUp once it is released.
+let dragBy = (ctx: Ctx.t, e, ev, ~onMove, ~onUp) => {
+  let scale = ctx.scale()
+  let last = ref((ev->clientX, ev->clientY))
+  e->capturePointer(
+    ev,
+    ~onMove=mv => {
+      let (lastX, lastY) = last.contents
+      last := (mv->clientX, mv->clientY)
+      onMove((mv->clientX - lastX) / scale, (mv->clientY - lastY) / scale, mv)
+    },
+    ~onUp,
+  )
+}
+
+// Scrolling over a parameter: a hundredth of its knob a notch, shift for a tenth of that.
+let wheelParam = (model, id, ev) => {
+  ev->preventDefault
+  let def = model->ParamModel.def(id)
+  let d = (ev->deltaY < 0. ? 1. : -1.) / 100.
+  let d = ev->shiftKey ? d * fineShift : d
+  model->ParamModel.gestureSet(id, def.fromNorm(clamp01(def.toNorm(model->ParamModel.get(id)) + d)))
+}
+
 // Replaces e with a text field until Enter, Escape or blur; commit gets the text on Enter or blur.
 let editInPlace = (e, text, ~commit) => {
   let input = el("input", ~cls="entry", ~parent=?e->parentElement)
@@ -101,32 +126,42 @@ let editInPlace = (e, text, ~commit) => {
   input->onEvent(#blur, _ => finish(true))
 }
 
-// The knob range a parameter's modulation connections sweep, relative to its knob position
+// The knob range the modulation connections to a target sweep, relative to its knob position
 // (bipolar sources swing both ways), or None if nothing modulates it.
-let modulationRange = (model, id) => {
-  let target = ModMatrix.targetOfParam(id)
-  if target < 0 {
-    None
-  } else {
-    let get = id => model->ParamModel.get(id)
-    let (lo, hi, any) = Array.fromInitializer(~length=ModMatrix.slots, i => i + 1)->Array.reduce(
-      (0., 0., false),
-      ((lo, hi, any), k) => {
-        let source = ModMatrix.sources[Float.toInt(get(ModMatrix.sourceId(k)))]
-        let amount = get(ModMatrix.amountId(k))
-        switch source {
-        | Some(source)
-          if source.key != "none" && Float.toInt(get(ModMatrix.targetId(k))) == target && amount != 0. =>
-          source.bipolar
-            ? (lo - Math.abs(amount), hi + Math.abs(amount), true)
-            : (lo + Math.min(amount, 0.), hi + Math.max(amount, 0.), true)
-        | _ => (lo, hi, any)
-        }
-      },
-    )
-    any ? Some((lo, hi)) : None
-  }
+let modulationRange = (model, target) => {
+  let get = id => model->ParamModel.get(id)
+  let (lo, hi, any) = ModMatrix.slotNumbers->Array.reduce((0., 0., false), ((lo, hi, any), k) => {
+    let source = ModMatrix.sources[Float.toInt(get(ModMatrix.sourceId(k)))]
+    let amount = get(ModMatrix.amountId(k))
+    switch source {
+    | Some(source)
+      if source.key != "none" && Float.toInt(get(ModMatrix.targetId(k))) == target && amount != 0. =>
+      source.bipolar
+        ? (lo - Math.abs(amount), hi + Math.abs(amount), true)
+        : (lo + Math.min(amount, 0.), hi + Math.max(amount, 0.), true)
+    | _ => (lo, hi, any)
+    }
+  })
+  any ? Some((lo, hi)) : None
 }
+
+// The modulation bars of a model's parameter rows, redrawn together (once a frame) when a
+// slot changes: one listener per slot parameter rather than one per row.
+let modBars: WeakMap.t<ParamModel.t, array<unit => unit>> = WeakMap.make()
+
+let onSlotChange = (model, refresh) =>
+  switch modBars->WeakMap.get(model) {
+  | Some(refreshers) => refreshers->Array.push(refresh)
+  | None =>
+    let refreshers = [refresh]
+    modBars->WeakMap.set(model, refreshers)->ignore
+    let refreshAll = perFrame(() => refreshers->Array.forEach(f => f()))
+    ModMatrix.slotNumbers->Array.forEach(k =>
+      [ModMatrix.sourceId(k), ModMatrix.targetId(k), ModMatrix.amountId(k)]->Array.forEach(id =>
+        model->ParamModel.listen(id, refreshAll)
+      )
+    )
+  }
 
 // A parameter row: label above-left, value right, position track underneath.
 let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
@@ -138,8 +173,25 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
   let track = el("span", ~cls="t", ~parent=e)
   let fill = el("i", ~parent=track)
   // the range modulation connections sweep, for parameters the matrix can reach
-  let modBar = ModMatrix.targetOfParam(id) >= 0 ? Some(el("em", ~parent=track)) : None
+  let target = ModMatrix.targetOfParam(id)
+  let modBar = target >= 0 ? Some(el("em", ~parent=track)) : None
   hookStatus(c, e)
+
+  let norm = () => c.def.toNorm(current(c))
+  let setNorm = n => ctx.model->ParamModel.set(id, c.def.fromNorm(clamp01(n)))
+
+  let updateModBar = () =>
+    modBar->Option.forEach(bar =>
+      switch modulationRange(ctx.model, target) {
+      | Some((lo, hi)) =>
+        let n = clamp01(norm())
+        let (a, b) = (clamp01(n + lo), clamp01(n + hi))
+        bar->setStyle("display", "block")
+        bar->setStyle("left", Float.toString(a * 100.) ++ "%")
+        bar->setStyle("width", Float.toString(Math.max(0.5, (b - a) * 100.)) ++ "%")
+      | None => bar->setStyle("display", "none")
+      }
+    )
 
   let update = () => {
     let x = current(c)
@@ -156,21 +208,9 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
       fill->setStyle("left", "0")
       fill->setStyle("width", Float.toString(n * 100.) ++ "%")
     }
-    modBar->Option.forEach(bar =>
-      switch modulationRange(ctx.model, id) {
-      | Some((lo, hi)) =>
-        let (a, b) = (clamp01(n + lo), clamp01(n + hi))
-        bar->setStyle("display", "block")
-        bar->setStyle("left", Float.toString(a * 100.) ++ "%")
-        bar->setStyle("width", Float.toString(Math.max(0.5, (b - a) * 100.)) ++ "%")
-      | None => bar->setStyle("display", "none")
-      }
-    )
+    updateModBar()
     refreshStatus(c)
   }
-
-  let norm = () => c.def.toNorm(current(c))
-  let setNorm = n => ctx.model->ParamModel.set(id, c.def.fromNorm(clamp01(n)))
 
   let edit = () =>
     editInPlace(e, c.def.shortText(current(c)), ~commit=text =>
@@ -194,17 +234,13 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
       e->addClass("drag")
       ctx.model->ParamModel.beginGesture(id)
 
-      let last = ref((ev->clientX, ev->clientY))
       let n = ref(norm())
-      let scale = ctx.scale()
-      e->capturePointer(
+      dragBy(
+        ctx,
+        e,
         ev,
-        ~onMove=mv => {
-          let (lastX, lastY) = last.contents
-          let dy = (lastY - mv->clientY) / scale
-          let dx = (mv->clientX - lastX) / scale
-          last := (mv->clientX, mv->clientY)
-          let d = (dy + dx * 0.35) / dragPixels
+        ~onMove=(dx, dy, mv) => {
+          let d = (dx * 0.35 - dy) / dragPixels
           let d = mv->shiftKey ? d * fineShift : d
           let d = mv->commandKey ? d * fineCtrl : d
           n := clamp01(n.contents + d)
@@ -223,15 +259,7 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
     | _ => ()
     }
   )
-  e->onWheel(ev => {
-    ev->preventDefault
-    let d = (ev->deltaY < 0. ? 1. : -1.) / 100.
-    let d = ev->shiftKey ? d * fineShift : d
-    let n = norm()
-    ctx.model->ParamModel.beginGesture(id)
-    setNorm(n + d)
-    ctx.model->ParamModel.endGesture(id)
-  })
+  e->onWheel(ev => wheelParam(ctx.model, id, ev))
   e->onMouse(#dblclick, ev => {
     ev->preventDefault
     edit()
@@ -256,11 +284,7 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
 
   ctx.model->ParamModel.listen(id, update)
   if modBar != None {
-    Array.fromInitializer(~length=ModMatrix.slots, i => i + 1)->Array.forEach(k =>
-      [ModMatrix.sourceId(k), ModMatrix.targetId(k), ModMatrix.amountId(k)]->Array.forEach(slotId =>
-        ctx.model->ParamModel.listen(slotId, update)
-      )
-    )
+    onSlotChange(ctx.model, updateModBar)
   }
   update()
   e
@@ -275,13 +299,55 @@ let namesOf = (def: ParamDefs.t) =>
   | None => JsError.panic(def.id ++ " has no value names")
   }
 
+// What the element of a list parameter does: a click opens the menu of items(), a right
+// click steps through the values (shift goes back), a middle or ctrl click picks the first.
+// Space and the arrow keys step (up goes back, unless upIsNext), Enter opens the menu.
+// Returns the step function.
+let listInput = (ctx: Ctx.t, e, id, ~items, ~upIsNext=false) => {
+  let model = ctx.model
+  let count = Int.toFloat(Array.length(namesOf(model->ParamModel.def(id))))
+  let current = () => model->ParamModel.get(id)
+  let set = x => model->ParamModel.gestureSet(id, x)
+  let step = d => set(Float.mod(Float.mod(current() + d, count) + count, count))
+  let openMenu = () =>
+    ctx.menu->Menu.show(e, items(), Float.toInt(current()), i => set(Int.toFloat(i)))
+
+  e->onPointer(#pointerdown, ev => {
+    ev->preventDefault
+    switch ev->button {
+    | 1 => set(0.)
+    | 0 if ev->commandKey => set(0.)
+    | 0 => openMenu()
+    | 2 => step(ev->shiftKey ? -1. : 1.)
+    | _ => ()
+    }
+  })
+  e->suppressContextMenu
+  let up = upIsNext ? 1. : -1.
+  e->onKeyDown(ev => {
+    let move = d => {
+      step(d)
+      ev->preventDefault
+    }
+    switch ev->key {
+    | "ArrowUp" => move(up)
+    | "ArrowDown" => move(-.up)
+    | "ArrowLeft" if !upIsNext => move(-1.)
+    | "ArrowRight" if !upIsNext => move(1.)
+    | " " => move(1.)
+    | "Enter" => openMenu()
+    | _ => ()
+    }
+  })
+  step
+}
+
 // A choice: same footprint as a parameter row; click opens the menu, right click steps
 // through the values (shift goes back).
 let choice = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=76., ~label=?, ~names=?) => {
   let c = control(ctx, id)
   let menuNames = namesOf(c.def)
   let names = names->Option.orElse(c.def.shortNames)->Option.getOr(menuNames)
-  let count = Int.toFloat(Array.length(menuNames))
   let e = el("div", ~cls="p ch", ~parent)->place(x, y, ~w)
   e->setTabIndex(0)
   el("span", ~cls="l", ~text=label->Option.getOr(c.def.name), ~parent=e)->ignore
@@ -306,48 +372,18 @@ let choice = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=76., ~label=?, ~names=?) => {
     refreshStatus(c)
   }
 
-  let step = d => gestureSet(c, Float.mod(Float.mod(current(c) + d, count) + count, count))
-
-  let openMenu = () =>
-    ctx.menu->Menu.show(
-      e,
-      menuNames->Array.mapWithIndex((label, value) =>
-        switch withIcons ? icon(value) : None {
-        | Some((icon, label)) => {Menu.label, value, icon}
-        | None => {Menu.label, value}
-        }
-      ),
-      Float.toInt(current(c)),
-      i => gestureSet(c, Int.toFloat(i)),
+  let step = listInput(ctx, e, id, ~items=() =>
+    menuNames->Array.mapWithIndex((label, value) =>
+      switch withIcons ? icon(value) : None {
+      | Some((icon, label)) => {Menu.label, value, icon}
+      | None => {Menu.label, value}
+      }
     )
-
-  e->onPointer(#pointerdown, ev => {
-    ev->preventDefault
-    switch ev->button {
-    | 1 => gestureSet(c, 0.)
-    | 0 if ev->commandKey => gestureSet(c, 0.)
-    | 0 => openMenu()
-    | 2 => step(ev->shiftKey ? -1. : 1.)
-    | _ => ()
-    }
-  })
-  e->suppressContextMenu
+  )
   e->onWheel(ev => {
     ev->preventDefault
     step(ev->deltaY < 0. ? -1. : 1.)
   })
-  e->onKeyDown(ev =>
-    switch ev->key {
-    | "ArrowUp" | "ArrowLeft" =>
-      step(-1.)
-      ev->preventDefault
-    | "ArrowDown" | "ArrowRight" | " " =>
-      step(1.)
-      ev->preventDefault
-    | "Enter" => openMenu()
-    | _ => ()
-    }
-  )
 
   ctx.model->ParamModel.listen(id, update)
   update()
@@ -378,14 +414,7 @@ let toggle = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=?, ~label=?) => {
     }
   })
   e->suppressContextMenu
-  e->onKeyDown(ev =>
-    switch ev->key {
-    | " " | "Enter" =>
-      flip()
-      ev->preventDefault
-    | _ => ()
-    }
-  )
+  e->onActivate(flip)
 
   ctx.model->ParamModel.listen(id, update)
   update()
@@ -394,10 +423,7 @@ let toggle = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=?, ~label=?) => {
 let button = (ctx: Ctx.t, parent, text, ~x, ~y, ~w, ~h=?, ~cls="", ~status=?, onClick) => {
   let e = el("button", ~cls=cls == "" ? "btn" : "btn " ++ cls, ~text, ~parent)->place(x, y, ~w, ~h?)
   e->onMouse(#click, _ => onClick())
-  status->Option.forEach(status => {
-    e->onMouse(#mouseenter, _ => ctx.status->Status.show(status))
-    e->onMouse(#mouseleave, _ => ctx.status->Status.clear)
-  })
+  status->Option.forEach(status => ctx.status->Status.hover(e, () => status))
   e
 }
 
@@ -411,6 +437,5 @@ let expandSwitch = (ctx: Ctx.t, editor) => {
     editor->toggleClass("expanded", expanded.contents)
     e->setTextContent(expanded.contents ? "graph" : "values")
   })
-  e->onMouse(#mouseenter, _ => ctx.status->Status.show("Switch between the graph and the raw values"))
-  e->onMouse(#mouseleave, _ => ctx.status->Status.clear)
+  ctx.status->Status.hover(e, () => "Switch between the graph and the raw values")
 }

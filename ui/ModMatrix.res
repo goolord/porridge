@@ -8,35 +8,67 @@
 
 let slots = 16
 
-type source = {key: string, label: string, bipolar: bool}
+// help: what the source is, for the mod page's status line
+type source = {key: string, label: string, bipolar: bool, help: string}
+
+let lfoHelp = "the LFO's shape, -1..1 (without its depth modulation)"
+let modEnvHelp = "the mod envelope, with its velocity sensitivity"
+let xyHelp = "the XY pad, including its random walk"
+let macroHelp = "a macro knob on this page"
+let ccHelp = "an assignable controller from the MIDI page"
 
 let sources = [
-  {key: "none", label: "none", bipolar: false},
-  {key: "lfo1", label: "LFO 1", bipolar: true},
-  {key: "lfo2", label: "LFO 2", bipolar: true},
-  {key: "modEnv1", label: "mod env 1", bipolar: false},
-  {key: "modEnv2", label: "mod env 2", bipolar: false},
-  {key: "ampEnv", label: "amp env", bipolar: false},
-  {key: "filterEnv", label: "filter env", bipolar: false},
-  {key: "velocity", label: "velocity", bipolar: false},
-  {key: "key", label: "key", bipolar: true},
-  {key: "aftertouch", label: "aftertouch", bipolar: false},
-  {key: "modWheel", label: "mod wheel", bipolar: false},
-  {key: "bend", label: "pitch bend", bipolar: true},
-  {key: "x", label: "X", bipolar: true},
-  {key: "y", label: "Y", bipolar: true},
-  {key: "random", label: "random", bipolar: true},
-  {key: "macro1", label: "macro 1", bipolar: false},
-  {key: "macro2", label: "macro 2", bipolar: false},
-  {key: "macro3", label: "macro 3", bipolar: false},
-  {key: "macro4", label: "macro 4", bipolar: false},
-  {key: "cc1", label: "controller 1", bipolar: false},
-  {key: "cc2", label: "controller 2", bipolar: false},
-  {key: "cc3", label: "controller 3", bipolar: false},
-  {key: "cc4", label: "controller 4", bipolar: false},
-  {key: "cc5", label: "controller 5", bipolar: false},
-  {key: "cc6", label: "controller 6", bipolar: false},
-  {key: "slide", label: "slide (CC 74)", bipolar: false},
+  {key: "none", label: "none", bipolar: false, help: ""},
+  {key: "lfo1", label: "LFO 1", bipolar: true, help: lfoHelp},
+  {key: "lfo2", label: "LFO 2", bipolar: true, help: lfoHelp},
+  {key: "modEnv1", label: "mod env 1", bipolar: false, help: modEnvHelp},
+  {key: "modEnv2", label: "mod env 2", bipolar: false, help: modEnvHelp},
+  {key: "ampEnv", label: "amp env", bipolar: false, help: "the amp envelope level"},
+  {key: "filterEnv", label: "filter env", bipolar: false, help: "the filter envelope level"},
+  {
+    key: "velocity",
+    label: "velocity",
+    bipolar: false,
+    help: "note-on velocity, through the velocity curve",
+  },
+  {
+    key: "key",
+    label: "key",
+    bipolar: true,
+    help: "the note: -1 at note 0, 0 at middle C (60), 1 at note 120 and above",
+  },
+  {
+    key: "aftertouch",
+    label: "aftertouch",
+    bipolar: false,
+    help: "poly aftertouch in poly touch mode, channel pressure otherwise; with MPE, the note's pressure",
+  },
+  {key: "modWheel", label: "mod wheel", bipolar: false, help: "controller 1"},
+  {
+    key: "bend",
+    label: "pitch bend",
+    bipolar: true,
+    help: "the pitch bend wheel, -1..1; with MPE, the note's own bend",
+  },
+  {key: "x", label: "X", bipolar: true, help: xyHelp},
+  {key: "y", label: "Y", bipolar: true, help: xyHelp},
+  {key: "random", label: "random", bipolar: true, help: "a random value for every note, -1..1"},
+  {key: "macro1", label: "macro 1", bipolar: false, help: macroHelp},
+  {key: "macro2", label: "macro 2", bipolar: false, help: macroHelp},
+  {key: "macro3", label: "macro 3", bipolar: false, help: macroHelp},
+  {key: "macro4", label: "macro 4", bipolar: false, help: macroHelp},
+  {key: "cc1", label: "controller 1", bipolar: false, help: ccHelp},
+  {key: "cc2", label: "controller 2", bipolar: false, help: ccHelp},
+  {key: "cc3", label: "controller 3", bipolar: false, help: ccHelp},
+  {key: "cc4", label: "controller 4", bipolar: false, help: ccHelp},
+  {key: "cc5", label: "controller 5", bipolar: false, help: ccHelp},
+  {key: "cc6", label: "controller 6", bipolar: false, help: ccHelp},
+  {
+    key: "slide",
+    label: "slide (CC 74)",
+    bipolar: false,
+    help: "MPE: the note's slide (controller 74), 0..1",
+  },
 ]
 
 // The sources, grouped for the mod page, by key (a source left out here is shown in a last
@@ -50,24 +82,6 @@ let sourceGroups = [
   ("macros", ["macro1", "macro2", "macro3", "macro4"]),
   ("controllers", ["cc1", "cc2", "cc3", "cc4", "cc5", "cc6"]),
 ]
-
-let sourceHelp = key =>
-  switch key {
-  | "lfo1" | "lfo2" => "the LFO's shape, -1..1 (without its depth modulation)"
-  | "modEnv1" | "modEnv2" => "the mod envelope, with its velocity sensitivity"
-  | "ampEnv" => "the amp envelope level"
-  | "filterEnv" => "the filter envelope level"
-  | "velocity" => "note-on velocity, through the velocity curve"
-  | "key" => "the note: -1 at note 0, 0 at middle C (60), 1 at note 120 and above"
-  | "aftertouch" => "poly aftertouch in poly touch mode, channel pressure otherwise; with MPE, the note's pressure"
-  | "modWheel" => "controller 1"
-  | "bend" => "the pitch bend wheel, -1..1; with MPE, the note's own bend"
-  | "slide" => "MPE: the note's slide (controller 74), 0..1"
-  | "x" | "y" => "the XY pad, including its random walk"
-  | "random" => "a random value for every note, -1..1"
-  | "macro1" | "macro2" | "macro3" | "macro4" => "a macro knob on this page"
-  | _ => "an assignable controller from the MIDI page"
-  }
 
 type law =
   // the parameter's knob, in knob space
@@ -164,6 +178,9 @@ let targetIndex = key => targets->Array.findIndex(t => t.key == key)
 
 // the target that moves this parameter's knob, if any
 let targetOfParam = id => targets->Array.findIndex(t => t.law == Knob(id))
+
+// The slots' numbers, 1-based like their parameters.
+let slotNumbers = Array.fromInitializer(~length=slots, i => i + 1)
 
 // The parameters of slot k (1-based).
 let sourceId = k => `Mod${Int.toString(k)}_Source`

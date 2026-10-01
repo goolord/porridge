@@ -44,10 +44,11 @@ let build = (ctx: Ctx.t, page) => {
   let lfoHeight = 446.
 
   let harmonicsRef = ref(None)
-  let refreshHarmonics = () =>
+  let withHarmonics = f =>
     if shape().bipolar {
-      harmonicsRef.contents->Option.forEach(HarmonicEditor.refresh)
+      harmonicsRef.contents->Option.forEach(f)
     }
+  let refreshHarmonics = () => withHarmonics(HarmonicEditor.refresh)
 
   let editor = ShapeEditor.make(
     ctx,
@@ -58,7 +59,8 @@ let build = (ctx: Ctx.t, page) => {
     ~grid=16,
     ~onEdit=d => {
       ctx.programs->ProgramStore.setShape(shape().table, d, ~commit=false)
-      refreshHarmonics()
+      // (measured once a frame while drawing)
+      withHarmonics(HarmonicEditor.refreshSoon)
     },
     ~onCommit=d => {
       ctx.programs->ProgramStore.setShape(shape().table, d, ~commit=true)
@@ -76,13 +78,7 @@ let build = (ctx: Ctx.t, page) => {
   )
   harmonicsRef := Some(harmonics)
 
-  let apply = f => {
-    editor->ShapeEditor.pushUndo
-    f(editor.data)
-    editor->ShapeEditor.draw
-    ctx.programs->ProgramStore.setShape(shape().table, editor.data, ~commit=true)
-    refreshHarmonics()
-  }
+  let apply = f => editor->ShapeEditor.apply(f)
   let generate = kind =>
     apply(d =>
       d->ShapeEditor.blit(shape().bipolar ? ShapeEditor.genWave(kind) : ShapeEditor.genLfo(kind))
@@ -106,14 +102,7 @@ let build = (ctx: Ctx.t, page) => {
       },
     ),
     ("paste", () => clipboard.contents->Option.forEach(c => apply(d => d->ShapeEditor.blit(c)))),
-    (
-      "undo",
-      () => {
-        editor->ShapeEditor.undo
-        ctx.programs->ProgramStore.setShape(shape().table, editor.data, ~commit=true)
-        refreshHarmonics()
-      },
-    ),
+    ("undo", () => editor->ShapeEditor.undo),
   ]
   editor.menu = tools->Array.map(((label, f)) => {ShapeEditor.label, run: _ => f()})
 

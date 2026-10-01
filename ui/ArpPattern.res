@@ -14,21 +14,14 @@ let make = (ctx: Ctx.t, parent, box) => {
   let hoverId = ref(None)
   let railHover = ref(false)
 
-  let status = id => ctx.status->Status.show((model->ParamModel.def(id)).longText(get(id)))
+  let status = id => ctx.status->Status.show(model->ParamModel.longText(id))
 
-  let step = (id, d) => model->ParamModel.gestureSet(id, Float.mod(get(id) + d + 16., 16.))
-
-  let menu = (anchor, id) =>
-    ctx.menu->Menu.show(
-      anchor,
-      Controls.namesOf(model->ParamModel.def(id))->Array.mapWithIndex((name, value) =>
-        switch Icons.arpStep(value) {
-        | Some(icon) => {Menu.label: name, value, icon}
-        | None => {Menu.label: name, value}
-        }
-      ),
-      Float.toInt(get(id)),
-      v => model->ParamModel.gestureSet(id, Int.toFloat(v)),
+  let menuItems = id => () =>
+    Controls.namesOf(model->ParamModel.def(id))->Array.mapWithIndex((name, value) =>
+      switch Icons.arpStep(value) {
+      | Some(icon) => {Menu.label: name, value, icon}
+      | None => {Menu.label: name, value}
+      }
     )
 
   let cells = Array.fromInitializer(~length=16, i => {
@@ -36,17 +29,7 @@ let make = (ctx: Ctx.t, parent, box) => {
     let c =
       el("div", ~cls="cell", ~parent)->place(box.x + Int.toFloat(i) * cw, box.y, ~w=cw - 2., ~h=24.)
     c->setTabIndex(0)
-    c->onPointer(#pointerdown, ev => {
-      ev->preventDefault
-      switch ev->button {
-      | 1 => model->ParamModel.gestureSet(id, 0.)
-      | 0 if ev->commandKey => model->ParamModel.gestureSet(id, 0.)
-      | 0 => menu(c, id)
-      | 2 => step(id, ev->shiftKey ? -1. : 1.)
-      | _ => ()
-      }
-    })
-    c->suppressContextMenu
+    Controls.listInput(ctx, c, id, ~items=menuItems(id), ~upIsNext=true)->ignore
     c->onMouse(#mouseenter, _ => {
       hoverId := Some(id)
       status(id)
@@ -55,18 +38,6 @@ let make = (ctx: Ctx.t, parent, box) => {
       hoverId := None
       ctx.status->Status.clear
     })
-    c->onKeyDown(ev =>
-      switch ev->key {
-      | "ArrowUp" | " " =>
-        step(id, 1.)
-        ev->preventDefault
-      | "ArrowDown" =>
-        step(id, -1.)
-        ev->preventDefault
-      | "Enter" => menu(c, id)
-      | _ => ()
-      }
-    )
     c
   })
 
@@ -102,16 +73,15 @@ let make = (ctx: Ctx.t, parent, box) => {
   rail->onPointer(#pointerdown, ev => {
     ev->preventDefault
     model->ParamModel.beginGesture("Arp_End")
-    let set = cx => {
-      let r = rail->getBoundingClientRect
-      let n = Math.max(0., Math.min(15., Math.floor((cx - r.left) / r.width * 16.)))
-      model->ParamModel.set("Arp_End", n)
+    let set = ev => {
+      let (fx, _) = rail->pointerFraction(ev)
+      model->ParamModel.set("Arp_End", Float.clamp(Math.floor(fx * 16.), ~min=0., ~max=15.))
       status("Arp_End")
     }
-    set(ev->clientX)
+    set(ev)
     rail->Controls.capturePointer(
       ev,
-      ~onMove=mv => set(mv->clientX),
+      ~onMove=set,
       ~onUp=() => model->ParamModel.endGesture("Arp_End"),
     )
   })
