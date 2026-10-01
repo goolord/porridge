@@ -3,23 +3,28 @@
 
 open! Web
 
-// An item may have an icon in front of its label (see Icons), and a heading above it that
-// starts a group. Long menus run in columns.
-type item = {label: string, value: int, icon?: element, heading?: string}
+// An item may have an icon in front of its label (see Icons), a heading above it that starts
+// a group, and a hint the status bar shows while the pointer is over it. Long menus run in
+// columns.
+type item = {label: string, value: int, icon?: element, heading?: string, hint?: string}
 
 let rowsPerColumn = 24
 
 type t = {
   root: element,
+  status: Status.t,
   mutable menu: option<element>,
   mutable anchor: option<element>,
   // stops closing the menu on a press outside it
   mutable closer: option<unit => unit>,
 }
 
-let make = root => {root, menu: None, anchor: None, closer: None}
+let make = (root, ~status) => {root, status, menu: None, anchor: None, closer: None}
 
 let close = t => {
+  if Option.isSome(t.menu) {
+    t.status->Status.clear
+  }
   t.closer->Option.forEach(stop => stop())
   t.closer = None
   t.menu->Option.forEach(remove)
@@ -46,7 +51,7 @@ let show = (t, anchor, items, current, onPick) =>
       m->addClass("cols")
       m->setStyle("column-count", Int.toString((count + rowsPerColumn - 1) / rowsPerColumn))
     }
-    items->Array.forEach(({label, value, ?icon, ?heading}) => {
+    items->Array.forEach(({label, value, ?icon, ?heading, ?hint}) => {
       heading->Option.forEach(text => el("div", ~cls="mh", ~text, ~parent=m)->ignore)
       let row = el("div", ~cls=value == current ? "cur" : "", ~parent=m)
       switch icon {
@@ -55,6 +60,7 @@ let show = (t, anchor, items, current, onPick) =>
       | None => ()
       }
       el("span", ~text=label, ~parent=row)->ignore
+      hint->Option.forEach(text => t.status->Status.hover(row, () => text))
       row->onPointer(#pointerdown, ev => {
         ev->stopPropagation
         ev->preventDefault

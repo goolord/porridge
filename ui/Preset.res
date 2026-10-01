@@ -183,7 +183,8 @@ let porridgeOnly = p => {
     changed(OscEnvs) ? Some("the oscillator envelopes") : None,
     changed(LfoExtras) ? Some("the LFO delay, slew, steps and one-shot") : None,
     changed(UnisonExtras) ? Some("the unison extras") : None,
-    extended(["Sat_Type"]) ? Some("the custom distortion shape (exported as soft clipping)") : None,
+    extended(["Sat_Type"]) ? Some("Porridge's distortion types (exported as soft clipping)") : None,
+    p.values->Map.get("Sat_Mix")->Option.mapOr(false, x => x != 1.) ? Some("the distortion mix") : None,
     extended(["O1_Waveform", "O2_Waveform"]) ? Some("the HQ waveforms (exported as the plain ones)") : None,
     extended(["OscMix"]) || changed(PmFeedback) ? Some("the PM, ring and AM osc mix (exported as normal)") : None,
     extended(["Filter", "Filter2"]) || changed(FilterMorph)

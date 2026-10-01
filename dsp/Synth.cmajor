@@ -85,6 +85,7 @@ namespace porridge
         FilterFx[rack::filterCount] filterFxs;
         Utility[rack::utilityCount] utilities;
         Ambience[rack::ambienceCount] ambiences;
+        Air[rack::airCount] airs;
         float noteHz;                               // the newest note's frequency (phaser tracking)
         int meterCount;                             // blocks until the compressors' meters go out
         int blockCount;                             // blocks rendered
@@ -352,6 +353,7 @@ namespace porridge
             for (wrap<rack::filterCount> k)      filterFxs[k].clearState();
             for (wrap<rack::utilityCount> k)     utilities[k].clearState();
             for (wrap<rack::ambienceCount> k)    ambiences[k].clearState();
+            for (wrap<rack::airCount> k)         airs[k].clearState();
         }
 
         /// Swaps copy k of a rack kind's parameters with its first's, so that the first's code
@@ -442,6 +444,7 @@ namespace porridge
             if (kind == rack::filterKind)   return filterFxs.at (k).process (fxTables, mix, active, P, sampleRate);
             if (kind == rack::utilityKind)  return utilities.at (k).process (mix, active, P, sampleRate);
             if (kind == rack::ambienceKind) return ambiences.at (k).process (mix, active, P, sampleRate);
+            if (kind == rack::airKind)      return airs.at (k).process (mix, active, P, sampleRate);
 
             if (kind == rack::distortionKind)
             {
@@ -637,10 +640,12 @@ namespace porridge
             for (wrap<4> k) v.filt[k].initDefaults();
         }
 
-        /// A stolen voice: its filters are cleared, then it starts over as a new one does.
+        /// A stolen voice: its filters and distortion models are cleared, then it starts over as a
+        /// new one does.
         void resetVoice (Voice& v)
         {
             for (wrap<4> k) v.filt[k].clearState();
+            for (wrap<2> k) v.dist[k].clearModels();
             prepareVoice (v);
         }
 

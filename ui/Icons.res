@@ -242,7 +242,13 @@ let oscMix = [
 ]
 
 //==============================================================================
-// distortion: transfer curves, input across, output up
+// distortion: Oatmeal's types as transfer curves, input across, output up; the models
+// (DistTypes) as pictures of what they are
+
+let circle = (x, y, r) => {
+  let f = Float.toString
+  `M${f(x -. r)} ${f(y)} a${f(r)} ${f(r)} 0 1 0 ${f(2. *. r)} 0 a${f(r)} ${f(r)} 0 1 0 ${f(-2. *. r)} 0`
+}
 
 let distortion = [
   wide([Line("M3 14 L19 2")]),
@@ -250,7 +256,55 @@ let distortion = [
   wide([Line("M2 13 C6.5 13 8 11 11 8 S15.5 3 20 3")]),
   wide([Line("M1 10 C3 15 5.5 15 8 8 S13 1 15 6 S18.5 13 21 7")]),
   wide([Line("M2 13 C6.5 13 8 11 11 8 L19 2")]),
+  // custom shape: a drawn curve and its points
+  wide([Line("M2 13 C5 13 6 7 10 8 S15 3 20 3"), Dot(2., 13., 1.3), Dot(10., 8., 1.3), Dot(20., 3., 1.3)]),
+  // tube: the glass, the filament and the pins
+  wide([Line("M7.5 13.5 V6 A3.5 3.5 0 0 1 14.5 6 V13.5 Z"), Line("M9.5 11.5 V8.5 L11 7 L12.5 8.5 V11.5"), Line("M9 13.5 V15.5 M13 13.5 V15.5")]),
+  // tape: two reels and the tape between them
+  wide([Line(circle(6., 6.5, 3.5)), Line(circle(16., 6.5, 3.5)), Dot(6., 6.5, 1.), Dot(16., 6.5, 1.), Line("M2.5 6.5 V13.5 H19.5 V6.5")]),
+  // saturate: a sine pushed square
+  wide([Line("M1 8 C1.5 3.5 3.5 3 6 3 S10.5 3.5 11 8 S12.5 13 16 13 S20.5 12.5 21 8")]),
+  // mixer drive: two faders, one pushed up
+  wide([Line("M6 1.5 V14.5 M16 1.5 V14.5"), Fill("M3.5 9 h5 v3 h-5 Z"), Fill("M13.5 2.5 h5 v3 h-5 Z")]),
+  // 7-stage clip: clips in a row
+  wide([Line("M1 12.5 H2.5 L4.5 3.5 H6 M8 12.5 H9.5 L11.5 3.5 H13 M15 12.5 H16.5 L18.5 3.5 H20")]),
+  // multiband: the lows and the highs distorted apart
+  wide([Line("M1 12 C3 4 6 4 8.5 12"), Dash("M11 1.5 V14.5"), Line("M13 12 L15 4 L17 12 L19 4 L21 12")]),
+  // wavefold: a wave folding back at its peaks
+  wide([Line("M1 3 L2.5 5.5 L4 3 L8 13 L9.5 10.5 L11 13 L15 3 L16.5 5.5 L18 3 L21 10.5")]),
+  // bass amp: a cabinet with one big speaker
+  wide([Line("M2.5 1.5 H19.5 V14.5 H2.5 Z"), Line(circle(11., 8., 4.3)), Dot(11., 8., 1.3)]),
+  // guitar amp: the head's knobs over a 4x12
+  wide([Line("M2.5 1.5 H19.5 V14.5 H2.5 Z M2.5 5 H19.5"), Dot(6., 3.3, 0.8), Dot(9., 3.3, 0.8), Dot(12., 3.3, 0.8), Line(circle(7.5, 9.8, 2.6)), Line(circle(14.5, 9.8, 2.6))]),
+  // bitcrush: a wave in coarse steps
+  wide([Line("M1 13 H4 V10 H7 V7 H10 V4 H13 V7 H16 V10 H19 V13 H21")]),
+  // lo-fi sampler: held samples
+  wide([Line("M2 11 H6 V5 H10 V3.5 H14 V9 H18 V12 H21"), Dot(2., 11., 1.2), Dot(6., 5., 1.2), Dot(10., 3.5, 1.2), Dot(14., 9., 1.2), Dot(18., 12., 1.2)]),
 ]
+
+//==============================================================================
+// the rack's effects, by FxRack.key, for the add menu
+
+let rackKind = key =>
+  switch key {
+  | "distortion" => Some(wide([Line("M1 8 C2 5 3 3 5 3 H7.5 C9 3 10 5 11 8 S13 13 14.5 13 H17 C19 13 20 11 21 8")]))
+  | "chorus" =>
+    Some(wide([Line("M1 8 C4.3 1.3 7.7 1.3 11 8 S17.7 14.7 21 8"), Dash("M3 8 C6.3 3.3 9.7 3.3 13 8 S19 12 21 10")]))
+  | "flanger" => Some(wide([Line("M1 5 L2.5 13 L4 5 L6 13 L8.5 5 L11.5 13 L15.5 5 L21 5")]))
+  | "phaser" => Some(phaser(4))
+  | "bode" => Some(wide([Line("M2 14 V5 M5.5 14 V8 M9 14 V10"), Line("M12 7 H20 M17.5 4.5 L20 7 L17.5 9.5")]))
+  | "delay" => Some(wide([Line("M1 13.5 H21 M3 13.5 V3 M8.5 13.5 V6.5 M14 13.5 V9 M19.5 13.5 V11")]))
+  | "reverb" => Some(wide([Line("M1 13 H21 M3 13 V3 M6 13 V6 M8.5 13 V7.5 M11 13 V9 M13.5 13 V10 M16 13 V11 M18.5 13 V12")]))
+  | "space" => Some(wide([Line("M2 14.5 V6 L11 2 L20 6 V14.5"), Line("M7 14.5 A4 4 0 0 1 15 14.5 M4.5 14.5 A6.5 6.5 0 0 1 17.5 14.5")]))
+  | "ambience" => Some(wide([Line("M4 3.5 H18 V13.5 H4 Z"), Dot(8.5, 9.5, 1.3), Line("M8.5 9.5 L13 6 L16 9 M8.5 9.5 L14 11.5")]))
+  | "convolve" => Some(wide([Line("M1 13 H21 M4 13 V2.5"), Line("M6 13 C7.5 13 7.5 8 9 9.5 S11.5 12 13 11 S16.5 12.5 20 12.5")]))
+  | "eq" => Some(wide([Line("M1 10 H4.5 C6.5 10 7 3.5 8.5 3.5 S10.5 10 12.5 10 C15.5 10 15.5 5.5 21 5.5")]))
+  | "filter" => Some(wide([Line(lp2)]))
+  | "air" => Some(wide([Line("M1 11.5 H9 C12.5 11.5 12.5 6 16 6 H21"), Line("M17.5 0.5 V4 M15.75 2.25 H19.25"), Dot(13., 2.5, 0.8), Dot(20.5, 2., 0.8)]))
+  | "compressor" => Some(wide([Line("M2 14.5 L10.5 6 C13 3.5 16 3 20 2.6"), Dash("M10.5 6 L15 1.5")]))
+  | "utility" => Some(wide([Line("M2 3.5 H20 M2 8 H20 M2 12.5 H20"), Fill("M12.5 1.5 h3 v4 h-3 Z"), Fill("M5 6 h3 v4 h-3 Z"), Fill("M9.5 10.5 h3 v4 h-3 Z")]))
+  | _ => None
+  }
 
 //==============================================================================
 // arpeggiator modes
@@ -298,7 +352,7 @@ let lookup = id =>
   | "Filter2" => Some((index, _) => index == 0 ? Some(sameAsFilter1) : filterTypes[index])
   | "PolyMode" => Some(voiceModes->byIndex)
   | "OscMix" => Some(oscMix->byIndex)
-  | "Sat_Type" => Some(distortion->byIndex)
+  | id if DistTypes.isTypeId(id) => Some(distortion->byIndex)
   | "Arp_Mode" => Some(arpModes->byIndex)
   | "F_Double" => Some(filterDouble->byIndex)
   | "C_Mode" =>

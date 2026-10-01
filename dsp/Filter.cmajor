@@ -1642,6 +1642,19 @@ namespace porridge
         float preS, postS;
         float[32] hL, hR, uL, uR;
         int idx;
+        // the mix: its ramp, and the dry, delayed as the oversampling delays the sound
+        float mixS;
+        float[16] dryL, dryR;
+        int dryIdx;
+        // the model types' controls for this block and each side's model (Airwindows.cmajor),
+        // and the type their state is from; the knobs (drive, tone, character) the controls
+        // were last worked out from, where they are going this block, and the model's rate
+        DistCoefs coefs;
+        DistModel mL, mR;
+        int modelType;
+        float driveS, toneS, characterS, driveTo, toneTo, characterTo;
+        bool gliding;
+        float64 modelRate;
     }
 
     void clearState (Distortion& this)
@@ -1656,6 +1669,20 @@ namespace porridge
         this.needsReset = true;
         this.preS = 1.0f;
         this.postS = 1.0f;
+        this.mixS = 1.0f;
+    }
+
+    /// Forgets the models' state (a stolen voice's).
+    void clearModels (Distortion& this)
+    {
+        this.mL = DistModel();
+        this.mR = DistModel();
+    }
+
+    /// The samples the oversampling delays the sound by, at 2x, 4x and 8x.
+    int distLatency (int os)
+    {
+        return os == 2 ? 15 : (os == 4 ? 7 : (os == 8 ? 3 : 0));
     }
 
     int distFirSet (float64 sr)
@@ -1667,8 +1694,10 @@ namespace porridge
         return 3;
     }
 
-    /// Sets up the block's gain ramps. Returns false when the distortion is off.
-    bool beginBlock (Distortion& this, const float[numSlots]& P, float modDb, bool isGlobal, float& dpre, float& dpost, int n)
+    /// Sets up the block's gain and mix ramps, and a model type's controls (at the rate it runs
+    /// at, os times sr). Returns false when the distortion is off.
+    bool beginBlock (Distortion& this, const float[numSlots]& P, float modDb, bool isGlobal, float64 sr, int os,
+                     float& dpre, float& dpost, float& dmix, int n)
     {
         let type = int (P[slot::Sat_Type]);
 
@@ -1679,6 +1708,7 @@ namespace porridge
         let lim = P[slot::Sat_Limit] - dm;
         let pre = float (pow (10.0, float64 ((P[slot::Sat_Pregain] - lim) * 0.05f)));
         var post = float (pow (10.0, float64 ((lim + P[slot::Sat_Postgain] + dm) * 0.05f)));
+        let mix = clamp (P[slot::Sat_Mix], 0.0f, 1.0f);
 
         if (int (P[slot::Sat_Mode]) == satMode::both && ! isGlobal)
             post = 1.0f;
@@ -1688,18 +1718,77 @@ namespace porridge
             this.needsReset = false;
             this.preS = pre;
             this.postS = post;
+            this.mixS = mix;
         }
 
         dpre = (pre - this.preS) / float (n);
         dpost = (post - this.postS) / float (n);
+        dmix = (mix - this.mixS) / float (n);
+
+        if (type >= satType::tube)
+        {
+            this.driveTo = clamp (P[slot::Sat_Drive], 0.0f, 1.0f);
+            this.toneTo = clamp (P[slot::Sat_Tone], 0.0f, 1.0f);
+            this.characterTo = clamp (P[slot::Sat_Character], 0.0f, 1.0f);
+
+            // a model starts from silence when the type changes to it, at its knobs
+            if (type != this.modelType)
+            {
+                this.clearModels();
+                this.modelType = type;
+                this.driveS = this.driveTo;
+                this.toneS = this.toneTo;
+                this.characterS = this.characterTo;
+            }
+
+            // (the controls are worked out again for a new type or rate, or while the knobs glide)
+            let rate = sr * float64 (os);
+            let stale = type != this.coefs.type || rate != this.modelRate;
+            this.modelRate = rate;
+            this.gliding = this.driveS != this.driveTo || this.toneS != this.toneTo || this.characterS != this.characterTo;
+
+            if (stale && ! this.gliding)
+                this.coefs.setupModel (type, float64 (this.driveS), float64 (this.toneS), float64 (this.characterS), rate);
+        }
+
         return true;
     }
 
-    float distSample (const DistTables& t, const float[1026]& custom, int type, int os, int firSet, float x, float preS, float postS,
-                      float[32]& h, float[32]& u, int idx)
+    /// While the model's knobs move, its controls follow them every 16 samples (call at sample
+    /// i of n), and end the block where the knobs are.
+    void glideModel (Distortion& this, int i, int n)
+    {
+        if (! this.gliding || (i & 15) != 0)
+            return;
+
+        let f = min (1.0f, float (i + 16) / float (n));
+        this.coefs.setupModel (this.modelType, float64 (this.driveS + (this.driveTo - this.driveS) * f),
+                               float64 (this.toneS + (this.toneTo - this.toneS) * f),
+                               float64 (this.characterS + (this.characterTo - this.characterS) * f), this.modelRate);
+    }
+
+    void endModelGlide (Distortion& this)
+    {
+        this.driveS = this.driveTo;
+        this.toneS = this.toneTo;
+        this.characterS = this.characterTo;
+        this.gliding = false;
+    }
+
+    /// The shaper at v: one of Oatmeal's curves or the custom shape, or a model (with its state).
+    float shapeAt (const DistTables& t, const float[1026]& custom, int type, const DistCoefs& c, DistModel& m, float v)
+    {
+        if (type < satType::tube)
+            return distShape (t, custom, type, v);
+
+        return float (m.runModel (c, float64 (v)));
+    }
+
+    float distSample (const DistTables& t, const float[1026]& custom, int type, const DistCoefs& c, DistModel& m, int os, int firSet,
+                      float x, float preS, float postS, float[32]& h, float[32]& u, int idx)
     {
         if (os <= 1)
-            return distShape (t, custom, type, x * preS) * postS;
+            return shapeAt (t, custom, type, c, m, x * preS) * postS;
 
         let base = (firSet * 3 + (os == 2 ? 0 : (os == 4 ? 1 : 2))) * 32;
         h.at (idx) = x * preS * float (os);
@@ -1712,7 +1801,7 @@ namespace porridge
             for (int k = 0; k < taps; ++k)
                 s += float64 (h.at ((idx - os * k) & 31)) * float64 (t.fir.at (base + p + os * k));
 
-            u.at ((idx + p) & 31) = distShape (t, custom, type, float (s));
+            u.at ((idx + p) & 31) = shapeAt (t, custom, type, c, m, float (s));
         }
 
         float64 y = 0;
@@ -1729,49 +1818,76 @@ namespace porridge
         return o == 1 ? 2 : (o == 2 ? 4 : (o == 3 ? 8 : 1));
     }
 
+    /// The mix of the distorted y with the dry x, which waits `latency` samples in `dry`.
+    float mixDry (float y, float x, float mixS, bool mixing, float[16]& dry, int dryIdx, int latency)
+    {
+        dry.at (dryIdx) = x;
+        return mixing ? y * mixS + dry.at ((dryIdx - latency) & 15) * (1.0f - mixS) : y;
+    }
+
     /// Per-voice (mono) distortion of one block.
     void processMono (Distortion& this, const DistTables& t, const float[1026]& custom, const float[numSlots]& P, float modDb, float64 sr,
                       float[blockSize]& buf, int n)
     {
-        float dpre, dpost;
+        let os = distOversampling (P);
+        float dpre, dpost, dmix;
 
-        if (! this.beginBlock (P, modDb, false, dpre, dpost, n))
+        if (! this.beginBlock (P, modDb, false, sr, os, dpre, dpost, dmix, n))
             return;
 
         let type = int (P[slot::Sat_Type]);
-        let os = distOversampling (P);
         let set = distFirSet (sr);
+        let mixing = this.mixS < 1.0f || dmix != 0.0f;
+        let latency = distLatency (os);
 
         for (int i = 0; i < n; ++i)
         {
+            this.glideModel (i, n);
             this.preS = this.preS + dpre;
             this.postS = this.postS + dpost;
-            buf.at (i) = distSample (t, custom, type, os, set, buf.at (i), this.preS, this.postS, this.hL, this.uL, this.idx);
+            this.mixS = this.mixS + dmix;
+            let x = buf.at (i);
+            let y = distSample (t, custom, type, this.coefs, this.mL, os, set, x, this.preS, this.postS, this.hL, this.uL, this.idx);
+            buf.at (i) = mixDry (y, x, this.mixS, mixing, this.dryL, this.dryIdx, latency);
+            this.dryIdx = (this.dryIdx + 1) & 15;
             if (os > 1) this.idx = (this.idx + os) & 31;
         }
+
+        this.mixS = clamp (P[slot::Sat_Mix], 0.0f, 1.0f);
+        this.endModelGlide();
     }
 
     /// Global (stereo) distortion of one block.
     void processStereo (Distortion& this, const DistTables& t, const float[1026]& custom, const float[numSlots]& P, float modDb, float64 sr,
                         float<2>[blockSize]& buf)
     {
-        float dpre, dpost;
+        let os = distOversampling (P);
+        float dpre, dpost, dmix;
 
-        if (! this.beginBlock (P, modDb, true, dpre, dpost, blockSize))
+        if (! this.beginBlock (P, modDb, true, sr, os, dpre, dpost, dmix, blockSize))
             return;
 
         let type = int (P[slot::Sat_Type]);
-        let os = distOversampling (P);
         let set = distFirSet (sr);
+        let mixing = this.mixS < 1.0f || dmix != 0.0f;
+        let latency = distLatency (os);
 
         for (wrap<blockSize> i)
         {
+            this.glideModel (i, blockSize);
             this.preS = this.preS + dpre;
             this.postS = this.postS + dpost;
-            let l = distSample (t, custom, type, os, set, buf[i][0], this.preS, this.postS, this.hL, this.uL, this.idx);
-            let r = distSample (t, custom, type, os, set, buf[i][1], this.preS, this.postS, this.hR, this.uR, this.idx);
-            buf[i] = float<2> (l, r);
+            this.mixS = this.mixS + dmix;
+            let x = buf[i];
+            let l = distSample (t, custom, type, this.coefs, this.mL, os, set, x[0], this.preS, this.postS, this.hL, this.uL, this.idx);
+            let r = distSample (t, custom, type, this.coefs, this.mR, os, set, x[1], this.preS, this.postS, this.hR, this.uR, this.idx);
+            buf[i] = float<2> (mixDry (l, x[0], this.mixS, mixing, this.dryL, this.dryIdx, latency),
+                               mixDry (r, x[1], this.mixS, mixing, this.dryR, this.dryIdx, latency));
+            this.dryIdx = (this.dryIdx + 1) & 15;
             if (os > 1) this.idx = (this.idx + os) & 31;
         }
+
+        this.mixS = clamp (P[slot::Sat_Mix], 0.0f, 1.0f);
+        this.endModelGlide();
     }
 }

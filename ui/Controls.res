@@ -358,16 +358,21 @@ let choice = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=76., ~label=?, ~names=?) => {
     refreshStatus(c)
   }
 
-  // the filter types' menus show their groups
+  // the filter types' and distortion types' menus show their groups (the distortion's in an
+  // order of their own)
   let isFilterType = id == "Filter" || id == "Filter2" || FilterTypes.isFxType(id)
-  let heading = value => isFilterType && value > 0 ? FilterTypes.heading(value) : None
+  let order: array<(int, option<string>)> =
+    DistTypes.isTypeId(id)
+      ? DistTypes.order->Array.filter(((value, _)) => value < Array.length(menuNames))
+      : menuNames->Array.mapWithIndex((_, value) => (value, isFilterType && value > 0 ? FilterTypes.heading(value) : None))
   let step = listInput(ctx, e, id, ~items=() =>
-    menuNames->Array.mapWithIndex((label, value) =>
+    order->Array.map(((value, heading)) => {
+      let label = menuNames[value]->Option.getOr("")
       switch withIcons ? icon(value) : None {
-      | Some((icon, label)) => {Menu.label, value, icon, heading: ?heading(value)}
-      | None => {Menu.label, value, heading: ?heading(value)}
+      | Some((icon, label)) => {Menu.label, value, icon, ?heading}
+      | None => {Menu.label, value, ?heading}
       }
-    )
+    })
   )
   e->onWheel(ev => {
     ev->preventDefault

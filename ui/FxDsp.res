@@ -392,10 +392,11 @@ let oversampleGain = os =>
   | _ => 1.
   }
 
-// The distortion of input x: drive, shaper, output gain.
-let distort = (~kind, ~oversample, ~pregain: float, ~limit: float, ~postgain: float, ~custom=[], x: float) => {
+// The distortion of input x: drive, shaper, output gain, and the mix with the dry input (for
+// Oatmeal's types and the custom shape: the models keep state, see AirwindowsSim).
+let distort = (~kind, ~oversample, ~pregain: float, ~limit: float, ~postgain: float, ~mix=1., ~custom=[], x: float) => {
   let pre = Math.pow(10., ~exp=(pregain - limit) / 20.)
   let post = Math.pow(10., ~exp=(limit + postgain) / 20.)
   let os = oversampleGain(oversample)
-  kind == 0 ? x : os * shape(~custom, kind, x * pre * os) * post
+  kind == 0 ? x : mix * os * shape(~custom, kind, x * pre * os) * post + (1. - mix) * x
 }

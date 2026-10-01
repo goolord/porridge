@@ -201,6 +201,10 @@ let targets = [
   knob("Am_Size", "ambience size", "ambience"),
   knob("Am_Time", "ambience time", "ambience"),
   knob("Am_Mix", "ambience mix", "ambience"),
+  knob("Sat_Drive", "dist drive", "filter"),
+  knob("Sat_Tone", "dist tone", "filter"),
+  knob("Sat_Mix", "dist mix", "filter"),
+  knob("Ai_Air", "air amount", "air"),
 ]
 
 // copy n's parameter (as PorridgeParams.copyId: D_Wet, 3 is D3_Wet)
@@ -418,6 +422,7 @@ let groups = [
   ("fxfilter", "FX filter"),
   ("utility", "utility"),
   ("ambience", "ambience"),
+  ("air", "air"),
 ]
 
 let sourceIndex = key => sources->Array.findIndex(s => s.key == key)

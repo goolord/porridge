@@ -2,7 +2,7 @@
 // order they run, each kind up to four times. The first chorus, delay, reverb and EQ are
 // Oatmeal's; the others are numbered copies with parameters of their own (D_Wet: D2_Wet ...).
 // Porridge's own effects (flanger, phaser, compressor, algo reverb, convolve, bode, filter,
-// utility, ambience) are numbered the same way from their first (Fl_Rate, Fl2_Rate ...).
+// utility, ambience, air) are numbered the same way from their first (Fl_Rate, Fl2_Rate ...).
 //
 // The rack is FX_Rack_1..8 together with FX_Order: slots holding one of Oatmeal's four take them
 // in FX_Order's order, as the DSP does, so writing the rack writes both.
@@ -22,6 +22,7 @@ type kind = [
   | #filter
   | #utility
   | #ambience
+  | #air
 ]
 
 // copy 1 is Oatmeal's for its four, or the first of Porridge's own (the rack's distortions start
@@ -43,6 +44,7 @@ let kinds: array<kind> = [
   #filter,
   #utility,
   #ambience,
+  #air,
 ]
 
 let key = (k: kind) =>
@@ -61,14 +63,45 @@ let key = (k: kind) =>
   | #filter => "filter"
   | #utility => "utility"
   | #ambience => "ambience"
+  | #air => "air"
   }
 
 let kindName = (k: kind) =>
   switch k {
   | #eq => "EQ"
   | #space => "algo reverb"
+  | #bode => "freq shifter"
+  | #convolve => "convolution"
   | k => key(k)
   }
+
+// What it does, for the add menu's hover texts.
+let about = (k: kind) =>
+  switch k {
+  | #chorus => "Oatmeal's chorus: detuned copies of the sound"
+  | #delay => "Oatmeal's delay: echoes, left and right"
+  | #reverb => "Oatmeal's reverb"
+  | #eq => "Oatmeal's EQ: five bands"
+  | #distortion => "a distortion: Oatmeal's curves, a shape of your own, or the Airwindows models"
+  | #flanger => "a flanger: a short swept delay"
+  | #phaser => "a phaser: swept notches"
+  | #compressor => "a compressor, one band or three (like OTT)"
+  | #space => "an algorithmic reverb: hall, plate, nitrous, basin, vintage"
+  | #convolve => "a convolver: rooms, cabinets and odd spaces from impulses, or a file of your own"
+  | #bode => "a frequency shifter (Bode), and a shifted delay"
+  | #filter => "a filter of any of the synth's types"
+  | #utility => "gain, pan, width, phase and bass mono"
+  | #ambience => "a very small space: a little stereo and tone"
+  | #air => "air: lifts or tames the very top (Airwindows Air4)"
+  }
+
+// The add menu's groups, in order.
+let menuGroups: array<(string, array<kind>)> = [
+  ("drive", [#distortion]),
+  ("modulation", [#chorus, #flanger, #phaser, #bode]),
+  ("echo & space", [#delay, #reverb, #space, #ambience, #convolve]),
+  ("tone & dynamics", [#eq, #filter, #air, #compressor, #utility]),
+]
 
 // Oatmeal's chorus, delay, reverb and EQ (and its distortion, before the rack)
 let isOatmeal = (k: kind) =>
@@ -119,6 +152,7 @@ let switchId = e =>
   | #filter => id(e, "Ff_On")
   | #utility => id(e, "Ut_On")
   | #ambience => id(e, "Am_On")
+  | #air => id(e, "Ai_On")
   }
 
 let eqBandTypes = e => [1, 2, 3, 4, 5]->Array.map(b => id(e, `EQ_${Int.toString(b)}_Type`))

@@ -443,6 +443,24 @@ let ambienceSpecs = [
   {id: "Am_Mix", name: "Ambience mix", kind: unit(0., 1., 0.3)},
 ]
 
+// The air: Airwindows Air4 (dsp/Airwindows.cmajor). Air turns the highs up or down against the
+// rest, body the rest; dark freq and darken are Sinew, a slew limit that's tighter near full
+// scale, and how much of it is mixed in. Half air and half body leave the sound as it was.
+let airGain = (v: float) => {
+  let g = v * 2.
+  // (at 48 kHz: the top of the knob goes further at higher rates)
+  g > 1. ? Math.pow(g, ~exp=3. + Math.sqrt(48000. / 44100.)) : g
+}
+let gainDbText = (g: float) => g <= 0. ? "-inf dB" : dbText(20. * Math.log10(g))
+
+let airSpecs = [
+  onSpec("Ai_On", "Air on"),
+  {id: "Ai_Air", name: "Air amount", kind: Float({min: 0., max: 1., init: 0.5, text: v => gainDbText(airGain(v))})},
+  {id: "Ai_Body", name: "Air body", kind: Float({min: 0., max: 1., init: 0.5, text: v => gainDbText(v * 2.)})},
+  {id: "Ai_DarkFreq", name: "Air dark freq", kind: unit(0., 1., 0.52)},
+  {id: "Ai_Darken", name: "Air darken", kind: unit(0., 1., 0.)},
+]
+
 let newKindSpecs = [flangerSpecs, phaserSpecs, compressorSpecs, spaceSpecs, convolveSpecs, bodeSpecs, filterFxSpecs, utilitySpecs]
 
 let rackParams = specs => specs->Array.map(s => (s.id, s.name))
@@ -458,7 +476,20 @@ let newKinds = [
   {key: "utility", name: "Utility", params: rackParams(utilitySpecs), copies: [2, 3, 4], firstInRack: true},
   // (after the others: rack values and parameters added later go at the end)
   {key: "ambience", name: "Ambience", params: rackParams(ambienceSpecs), copies: [2, 3, 4], firstInRack: true},
+  {key: "air", name: "Air", params: rackParams(airSpecs), copies: [2, 3, 4], firstInRack: true},
 ]
+
+// The distortion's knobs for its model types (dsp/Airwindows.cmajor), whose meaning each
+// model sets (DistTypes), and the mix with the dry sound, which every type has. They came after
+// the rack's copies, so their copies are in a group of their own.
+let distModelSpecs = [
+  {id: "Sat_Drive", name: "Dist drive", kind: unit(0., 1., 0.5)},
+  {id: "Sat_Tone", name: "Dist tone", kind: unit(0., 1., 0.5)},
+  {id: "Sat_Character", name: "Dist character", kind: unit(0., 1., 0.)},
+  {id: "Sat_Mix", name: "Dist mix", kind: unit(0., 1., 1.)},
+]
+let distModelParams = [("Sat_Drive", "drive"), ("Sat_Tone", "tone"), ("Sat_Character", "character"), ("Sat_Mix", "mix")]
+let isDistModelParam = id => distModelParams->Array.some(((first, _)) => first == id)
 
 let rackKinds = [
   {
@@ -546,6 +577,7 @@ let rackKinds = [
       ("Sat_Limit", "limit"),
       ("Sat_Postgain", "postgain"),
       ...shaperParams,
+      ...distModelParams,
     ],
     copies: [2, 3, 4, 5],
     firstInRack: false,
@@ -593,9 +625,12 @@ let rackSpecs = Array.fromInitializer(~length=rackSlots, i => {
 // Oatmeal's EQ has no switch; Porridge's switches it (and its copies) off without losing its bands.
 let eqOnSpecs = [{id: "EQ_On", name: "EQ on", kind: Choice({names: onOff, init: 1})}]
 
-let copySpecsOf = kinds => kinds->Array.flatMap(k =>
+// (only: the parameters to copy)
+let copySpecsOf = (kinds, ~only=_ => true) => kinds->Array.flatMap(k =>
   k.copies->Array.flatMap(n =>
-    k.params->Array.map(((id, label)) => {
+    k.params
+    ->Array.filter(((id, _)) => only(id))
+    ->Array.map(((id, label)) => {
       id: copyId(id, n),
       name: `${k.name} ${Int.toString(n)} ${label}`,
       kind: Like(id),
@@ -604,10 +639,13 @@ let copySpecsOf = kinds => kinds->Array.flatMap(k =>
 )
 
 // Oatmeal's effects' copies, and Porridge's own effects' copies (which come after them; the
-// ambience's are in its own group)
-let copySpecs = copySpecsOf(rackKinds->Array.filter(k => !k.firstInRack))
-let newCopySpecs = copySpecsOf(rackKinds->Array.filter(k => k.firstInRack && k.key != "ambience"))
+// ambience's, the distortion's model knobs' and the air's are in groups of their own)
+let laterKinds = ["ambience", "air"]
+let copySpecs = copySpecsOf(rackKinds->Array.filter(k => !k.firstInRack), ~only=id => !isDistModelParam(id))
+let newCopySpecs = copySpecsOf(rackKinds->Array.filter(k => k.firstInRack && !(laterKinds->Array.includes(k.key))))
 let ambienceCopySpecs = copySpecsOf(rackKinds->Array.filter(k => k.key == "ambience"))
+let distModelCopySpecs = copySpecsOf(rackKinds->Array.filter(k => k.key == "distortion"), ~only=isDistModelParam)
+let airCopySpecs = copySpecsOf(rackKinds->Array.filter(k => k.key == "air"))
 
 // Each oscillator's own envelope: while it's on, the oscillator's level follows it (under the
 // amp envelope, which still ends the note). Its stages are like the amp envelope's, with curves
@@ -661,6 +699,8 @@ type feature =
   | Decay1Curves
   | OscEnvs
   | Ambience
+  | DistModels
+  | AirEffect
 
 let groups = [
   (Macros, macroSpecs),
@@ -684,6 +724,8 @@ let groups = [
   (Decay1Curves, decay1CurveSpecs),
   (OscEnvs, oscEnvSpecs),
   (Ambience, Array.concat(ambienceSpecs, ambienceCopySpecs)),
+  (DistModels, Array.concat(distModelSpecs, distModelCopySpecs)),
+  (AirEffect, Array.concat(airSpecs, airCopySpecs)),
 ]
 
 let all = groups->Array.flatMap(((_, specs)) => specs)

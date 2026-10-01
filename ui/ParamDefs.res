@@ -38,7 +38,7 @@ let porridgeValuesFor = id =>
     Some((["PM 2 > 1", "PM 1 feedback", "ring 1 × 2", "AM 2 > 1"], ["PM 2 > 1", "PM 1 fb", "ring 1×2", "AM 2 > 1"]))
   | "Filter" | "Filter2" =>
     Some((FilterTypes.porridgeNames, FilterTypes.porridgeShort))
-  | "Sat_Type" => Some((["custom shape"], ["custom"]))
+  | "Sat_Type" => Some((DistTypes.porridgeNames, DistTypes.porridgeShort))
   | _ => None
   }
 

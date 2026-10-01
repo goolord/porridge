@@ -1,11 +1,12 @@
 // The tabs of Porridge's own rack effects (flanger, phaser, algo reverb, convolve, bode,
-// filter, utility, ambience; the compressor has CompEditor): their controls in panels across the top, and below them a graph of
+// filter, utility, ambience, air; the compressor has CompEditor): their controls in panels across the top, and below them a graph of
 // what the effect does with these settings. Also each one's controls and summary on the
 // routing tab's card.
 //
 // The graphs follow dsp/FxExtra.cmajor, dsp/Space.cmajor, dsp/Convolve.cmajor and
 // dsp/Filter.cmajor closely enough to show what the knobs do; they are not measurements. The
-// ambience's are its models run on an impulse (AmbienceSim).
+// ambience's are its models run on an impulse (AmbienceSim), the air's its model run on sines
+// (AirwindowsSim).
 
 open! Web
 
@@ -652,6 +653,45 @@ let drawAmbienceImpulse = (p: FxGraph.plot, get: string => float) => {
 }
 
 //==============================================================================
+// air: the tone it leaves at two levels, from Air4 run on sines; its darkening (Sinew) slows
+// down loud, fast sounds more than quiet ones
+
+let airHz = Array.fromInitializer(~length=49, k => 20. * Math.pow(1000., ~exp=Int.toFloat(k) / 48.))
+
+// the last curves, by their settings
+let airCache: ref<option<((float, float, float, float), (array<float>, array<float>))>> = ref(None)
+
+let airCurves = (get: string => float) => {
+  let key = (get("Ai_Air"), get("Ai_Body"), get("Ai_DarkFreq"), get("Ai_Darken"))
+  switch airCache.contents {
+  | Some((k, v)) if k == key => v
+  | _ =>
+    let (air, body, darkFreq, darken) = key
+    let make = () => AirwindowsSim.air(~air, ~body, ~darkFreq, ~darken, ~sr=48000.)
+    let v = (
+      AirwindowsSim.response(make, ~sr=48000., ~amp=0.03, airHz),
+      AirwindowsSim.response(make, ~sr=48000., ~amp=0.7, airHz),
+    )
+    airCache := Some((key, v))
+    v
+  }
+}
+
+let drawAir = (p: FxGraph.plot, get: string => float) => {
+  let (lo, hi) = (-24., 24.)
+  FxGraph.frequencyGrid(p, ~lo, ~hi, ~step=6.)
+  let (quiet, loud) = airCurves(get)
+  [(loud, "curve dim"), (quiet, "curve")]->Array.forEach(((gains, cls)) => {
+    let points = gains->Array.mapWithIndex((g, k) => (
+      FxGraph.xOfHz(p, airHz->Array.getUnsafe(k)),
+      FxGraph.yOf(p, db(Math.max(g, 1e-4)), lo, hi),
+    ))
+    FxGraph.path(p.layer, ~cls)->FxGraph.setPath(Plots.pathFrom(points))
+  })
+  FxGraph.note(p, "the tone of a quiet sound, and of one near full scale (dim), which the darkening slows down more")
+}
+
+//==============================================================================
 // the kinds
 
 let loadImpulse = ref((_: FxRack.effect) => ())
@@ -688,6 +728,10 @@ let sections = (k: FxRack.kind) =>
       {title: "ambience", rows: [[List("Am_Model", "model"), Knob("Am_Size", "size"), Knob("Am_Time", "time"), Knob("Am_Density", "density")], [Knob("Am_Predelay", "predelay"), Knob("Am_HighCut", "high cut"), Knob("Am_Width", "width"), Knob("Am_Mix", "mix")]]},
       {title: "room's loops", rows: [[Knob("Am_HighTime", "high time"), Knob("Am_HighFreq", "high freq")], [Knob("Am_LowTime", "low time"), Knob("Am_LowFreq", "low freq")]]},
     ]
+  | #air => [
+      {title: "air", rows: [[Knob("Ai_Air", "air"), Knob("Ai_Body", "body")]]},
+      {title: "darken", rows: [[Knob("Ai_Darken", "darken"), Knob("Ai_DarkFreq", "dark freq")]]},
+    ]
   | _ => []
   }
 
@@ -699,7 +743,7 @@ let graphTitle = (k: FxRack.kind) =>
   | #convolve => "impulse"
   | #bode => "partials"
   | #utility => "stereo"
-  | #ambience => "tone"
+  | #ambience | #air => "tone"
   | _ => ""
   }
 
@@ -786,6 +830,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
     | #bode => drawBode(p, get)
     | #utility => drawUtility(p, get)
     | #ambience => drawAmbience(p, get)
+    | #air => drawAir(p, get)
     | _ => ()
     }
   }
@@ -869,6 +914,7 @@ let cardControls = (k: FxRack.kind) =>
   | #filter => ("on", Some(("Ff_Cutoff", "cutoff")))
   | #utility => ("on", Some(("Ut_Gain", "gain")))
   | #ambience => ("on", Some(("Am_Mix", "mix")))
+  | #air => ("on", Some(("Ai_Air", "air")))
   }
 
 let summary = (model, e: FxRack.effect) => {
@@ -888,7 +934,10 @@ let summary = (model, e: FxRack.effect) => {
     | 1 => "1 band on"
     | n => `${Int.toString(n)} bands on`
     }
-  | #distortion => `pregain ${s("Sat_Pregain")}\nlimit ${s("Sat_Limit")}`
+  | #distortion =>
+    DistTypes.isModel(Float.toInt(model->ParamModel.get(id("Sat_Type"))))
+      ? `drive ${s("Sat_Drive")}, mix ${s("Sat_Mix")}\npregain ${s("Sat_Pregain")}`
+      : `pregain ${s("Sat_Pregain")}\nlimit ${s("Sat_Limit")}`
   | #flanger => `${s("Fl_Rate")}, ${s("Fl_Delay")}\nfeedback ${s("Fl_Feedback")}`
   | #phaser => `${s("Ph_Stages")} stages, ${s("Ph_Rate")}\n${s("Ph_Freq")}, fb ${s("Ph_Feedback")}`
   | #compressor => `${s("Cp_Bands")}\namount ${s("Cp_Depth")}, mix ${s("Cp_Mix")}`
@@ -898,5 +947,6 @@ let summary = (model, e: FxRack.effect) => {
   | #filter => `${s("Ff_Type")}\nres ${s("Ff_Resonance")}`
   | #utility => `width ${s("Ut_Width")}, pan ${s("Ut_Pan")}\n${s("Ut_Gain")}`
   | #ambience => `${s("Am_Model")}, size ${s("Am_Size")}\ntime ${s("Am_Time")}`
+  | #air => `air ${s("Ai_Air")}, body ${s("Ai_Body")}\ndarken ${s("Ai_Darken")}`
   }
 }

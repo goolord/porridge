@@ -137,13 +137,31 @@ let build = (ctx: Ctx.t, page) => {
     }
   }
 
-  let addMenu = (anchor, ~show) =>
+  // the kinds that can still be added, in their groups, each with its icon
+  let addMenu = (anchor, ~show) => {
+    let addable = FxRack.addable(rack())
+    let kinds = FxRack.menuGroups->Array.flatMap(((title, kinds)) =>
+      kinds
+      ->Array.filter(k => addable->Array.includes(k))
+      ->Array.mapWithIndex((k, i) => (k, i == 0 ? Some(title) : None))
+    )
     ctx.menu->Menu.show(
       anchor,
-      FxRack.addable(rack())->Array.mapWithIndex((k, i) => {Menu.label: FxRack.kindName(k), value: i}),
+      kinds->Array.mapWithIndex(((k, heading), i) => {
+        Menu.label: FxRack.kindName(k),
+        value: i,
+        icon: ?Icons.rackKind(FxRack.key(k))->Option.map(icon => {
+          let wrap = el("span", ~cls="icw")
+          wrap->appendChild(Icons.render(icon))
+          wrap
+        }),
+        ?heading,
+        hint: FxRack.about(k),
+      }),
       -1,
-      i => FxRack.addable(rack())[i]->Option.forEach(add(_, ~show)),
+      i => kinds[i]->Option.forEach(((k, _)) => add(k, ~show)),
     )
+  }
 
   let effectMenu = (e: FxRack.effect, anchor, ~show) => {
     let canCopy = FxRack.free(rack(), e.kind) != None
