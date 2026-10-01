@@ -46,9 +46,25 @@ class MockPatchConnection
         {
             this.stateListeners.forEach (f => f ({ key, value: this.state.get (key) }));
 
-            if (key.startsWith ("porridge:settings?") && new URLSearchParams (location.search).get ("plugin") !== "0")
+            if (new URLSearchParams (location.search).get ("plugin") === "0")
+                return;
+
+            if (key.startsWith ("porridge:settings?"))
                 this.answerSettings (key.slice ("porridge:settings?".length));
+
+            if (key.startsWith ("porridge:host?"))
+                this.answerHost (key.slice ("porridge:host?".length));
         }, 0);
+    }
+    // Stands in for the host's parameter menu: the requests are kept in hostMenus.
+    answerHost (request)
+    {
+        this.hostMenus ??= [];
+
+        if (request.startsWith ("menu="))
+            this.hostMenus.push (JSON.parse (request.slice (5)));
+        else
+            this.stateListeners.forEach (f => f ({ key: "porridge:host", value: { menu: true } }));
     }
     // Stands in for the CLAP plugin's settings bridge (tools/clap-patch.mjs): the "window"
     // is the #host element. ?plugin=0 leaves it out, as in cmaj play.

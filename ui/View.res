@@ -41,6 +41,7 @@ let make = (host, pc) => {
   // the page around the view (Cmajor's is black) shows while a host resizes the window
   document->documentElement->setStyle("background", Style.groundColour)
   let settings = Settings.make(pc)
+  let hostMenu = HostMenu.make(pc)
 
   let shadow = host->attachShadow({mode: "open"})
   el("style", ~text=Style.css, ~parent=shadow)->ignore
@@ -77,8 +78,10 @@ let make = (host, pc) => {
   ]
   let pageButtons: array<(page, element)> = []
   let shapesPage = ref(None)
+  let shownPage = ref((#main: page))
 
   let showPage = page => {
+    shownPage := page
     pages->Array.forEach(((p, e)) => e->toggleClass("on", p == page))
     pageButtons->Array.forEach(((p, b)) => b->toggleClass("on", p == page))
     menu->Menu.close
@@ -94,6 +97,7 @@ let make = (host, pc) => {
     status,
     menu,
     programs,
+    hostMenu,
     scale: () => scale.contents,
     openShape: table => {
       showPage(#shapes)
@@ -193,13 +197,43 @@ let make = (host, pc) => {
     programs->ProgramStore.select(programs.current + 1)
   )->ignore
 
+  let browser = PresetBrowser.make(ctx, stage, settings)
+  let browse = () =>
+    if !(browser->PresetBrowser.isOpen) {
+      PresetBrowser.show(browser)
+    }
+  button(
+    head,
+    "Browse",
+    "Search the bank, the bundled banks and files you open by name, category, tags and author (ctrl+F)",
+    browse,
+  )->ignore
+  let onShortcut = k =>
+    if k->commandKey && k->key->String.toLowerCase == "f" {
+      k->preventDefault
+      browse()
+    }
+  document->onDocumentKeyDown(onShortcut)
+
   let fileInput = el("input")
+  // a sample becomes a shape on the Shapes page (showing the page again would clear its undo)
+  let importSample = file => {
+    let here = shownPage.contents == #shapes
+    if !here {
+      showPage(#shapes)
+    }
+    shapesPage.contents->Option.forEach((s: PageShapes.t) => s.importSample(file, ~here))
+  }
   let loadFile = async file =>
-    try {
-      let buffer = await file->arrayBuffer
-      programs->ProgramStore.loadFile(Uint8Array.fromBuffer(buffer), file->fileName)
-    } catch {
-    | JsExn(e) => toast(`Couldn't read ${file->fileName}: ${e->JsExn.message->Option.getOr("")}`)
+    if AudioFile.isAudio(file->fileName) {
+      importSample(file)
+    } else {
+      try {
+        let buffer = await file->arrayBuffer
+        programs->ProgramStore.loadFile(Uint8Array.fromBuffer(buffer), file->fileName)
+      } catch {
+      | JsExn(e) => toast(`Couldn't read ${file->fileName}: ${e->JsExn.message->Option.getOr("")}`)
+      }
     }
 
   button(
@@ -265,6 +299,15 @@ let make = (host, pc) => {
   host->onDrag(#dragenter, e => {
     e->preventDefault
     depth := depth.contents + 1
+    drop->setTextContent(
+      switch shapesPage.contents {
+      | Some(s) if PageShapes.dragHasSample(e) => s.sampleDropText(~here=shownPage.contents == #shapes)
+      | _ =>
+        browser->PresetBrowser.isOpen
+          ? "Drop Porridge or Oatmeal banks to browse them"
+          : "Drop a Porridge or Oatmeal program or bank"
+      },
+    )
     drop->addClass("on")
   })
   host->onDrag(#dragleave, e => {
@@ -282,8 +325,20 @@ let make = (host, pc) => {
     drop->removeClass("on")
     e
     ->dataTransfer
-    ->Option.flatMap(d => d->transferredFiles->item(0))
-    ->Option.forEach(f => loadFile(f)->Promise.ignore)
+    ->Option.forEach(d => {
+      let list = d->transferredFiles
+      let files = Array.fromInitializer(~length=list->fileCount, i => list->item(i))->Array.filterMap(f => f)
+      let sample = files->Array.find(f => AudioFile.isAudio(f->fileName))
+      // a sample goes to the Shapes page; with the browser open, other files are added to it
+      // instead of replacing the bank
+      if sample->Option.isSome {
+        sample->Option.forEach(f => loadFile(f)->Promise.ignore)
+      } else if browser->PresetBrowser.isOpen {
+        browser->PresetBrowser.addFiles(files)
+      } else {
+        files[0]->Option.forEach(f => loadFile(f)->Promise.ignore)
+      }
+    })
   })
 
   //==============================================================================
@@ -311,8 +366,10 @@ let make = (host, pc) => {
     showPage,
     dispose: () => {
       resizeObserver->disconnect
+      document->offDocumentKeyDown(onShortcut)
       restoreBrowserChrome()
       settings->Settings.dispose
+      hostMenu->HostMenu.dispose
       model->ParamModel.dispose
       programs->ProgramStore.dispose
     },

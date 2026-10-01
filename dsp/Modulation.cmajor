@@ -411,9 +411,10 @@ namespace porridge
 
         let inc = int64 (4294967296.0 / max (period, 1e-9) + 0.5) & 0xffffffffi64;
         let old = this.phase;
+        let oneShot = P.at (isLFO2 ? slot::LFO_2_OneShot : slot::LFO_1_OneShot) != 0;
 
         // one-shot (Porridge): one cycle from the phase it was reset to, then hold the end
-        if (P.at (isLFO2 ? slot::LFO_2_OneShot : slot::LFO_1_OneShot) != 0)
+        if (oneShot)
         {
             if (this.done || this.phase + inc * int64 (nAdv) > 0xffffffffi64)
             {
@@ -451,17 +452,22 @@ namespace porridge
             return float (float64 (this.prevR) + float64 (this.curR - this.prevR) * float64 (ph) * (1.0 / 4294967296.0));
         }
 
+        // A table's last interval interpolates towards the wrap guard (T[32768] = T[0], or the
+        // user shape's (i+1)&511), i.e. back to the start of the cycle. A one-shot never wraps,
+        // so it reads no further than the start of that interval: it ends on the last real value.
         if (shape == 6)
         {
-            let i = int (ph >> 23);
-            let f = float64 (ph & 0x7fffff) * (1.0 / 8388608.0);
+            let p6 = oneShot ? min (ph, 0xff800000i64) : ph;
+            let i = int (p6 >> 23);
+            let f = float64 (p6 & 0x7fffff) * (1.0 / 8388608.0);
             let a = float64 (userShape.at (i & 511));
             return float (a + (float64 (userShape.at ((i + 1) & 511)) - a) * f);
         }
 
+        let pt = oneShot ? min (ph, 0xfffe0000i64) : ph;
         let t = clamp (shape, 0, 3) * 32769;
-        let i = int (ph >> 17);
-        let f = float64 (ph & 0x1ffff) * (1.0 / 131072.0);
+        let i = int (pt >> 17);
+        let f = float64 (pt & 0x1ffff) * (1.0 / 131072.0);
         let a = float64 (tables.lfo.at (t + i));
         return float (a + (float64 (tables.lfo.at (t + i + 1)) - a) * f);
     }

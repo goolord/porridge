@@ -298,6 +298,16 @@ let css = `
 .hlabel { position: absolute; font-size: 11px; color: var(--ink-soft); pointer-events: none;
     background: rgba(236, 227, 196, 0.75); padding: 0 4px; border-radius: 2px; }
 
+/* the sample a shape was made from: its name, what came of it, and its overview to drag along */
+.sstrip { position: absolute; box-sizing: border-box; display: none; border-radius: 2px;
+    background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge); }
+.sstrip.on { display: block; }
+.sstrip .n, .sstrip .d { position: absolute; left: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sstrip .n { top: 1px; font-size: 11px; color: var(--ink-soft); }
+.sstrip .d { top: 10px; font-size: 12.5px; }
+.sstrip canvas { position: absolute; cursor: ew-resize; }
+.sstrip .x { right: 3px; top: 3px; width: 20px; padding: 0; font-size: 14px; line-height: 17px; }
+
 .drop {
     position: absolute; inset: 0; z-index: 100; display: none; align-items: center; justify-content: center;
     background: rgba(28, 60, 115, 0.55); color: var(--paper); font-size: 22px; font-weight: 700;
@@ -386,6 +396,105 @@ let css = `
 .dlg .seg .btn.off { opacity: 0.45; pointer-events: none; }
 .dlg .dnote { margin: 6px 0 6px 82px; font-size: 11.5px; line-height: 1.35; color: var(--ink-faint); }
 .dlg .dnote + .btn { margin-left: 82px; }
+
+/* the preset browser (PresetBrowser.res): sources and facets, the list, the details */
+.brw {
+    width: 1060px; height: 546px; box-sizing: border-box; display: flex; flex-direction: column;
+    background: var(--panel); border: 1px solid var(--ink); border-radius: 3px; box-shadow: 3px 3px 0 rgba(31,26,14,0.35);
+}
+.brw ::-webkit-scrollbar { width: 9px; }
+.brw ::-webkit-scrollbar-thumb { background: rgba(111,95,54,0.45); border-radius: 4px; border: 2px solid transparent; background-clip: padding-box; }
+.brw ::-webkit-scrollbar-track { background: transparent; }
+.brw-head { display: flex; align-items: center; gap: 10px; padding: 8px 10px 7px 12px; }
+.brw-title { font-weight: 700; font-size: 16px; }
+.brw-search { flex: 1; position: relative; }
+.brw-search input {
+    display: block; width: 100%; height: 26px; box-sizing: border-box; padding: 0 26px 0 8px;
+    font: inherit; font-size: 13.5px; color: var(--ink); background: var(--paper); border: 1px solid var(--edge); outline: none;
+}
+.brw-search input:focus { border-color: var(--signal); }
+.brw-search input::placeholder { color: var(--ink-faint); }
+.brw-x {
+    position: absolute; right: 3px; top: 3px; width: 20px; height: 20px; display: none; padding: 0;
+    border: none; background: transparent; font: inherit; font-size: 12px; color: var(--ink-faint); cursor: pointer;
+}
+.brw-x.on { display: block; }
+.brw-x:hover { color: var(--ink); }
+.brw-count { width: 84px; text-align: right; font-size: 12px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.brw-body { flex: 1; min-height: 0; display: flex; gap: 8px; padding: 0 10px; }
+
+.brw-side {
+    width: 188px; flex: none; overflow-y: auto; padding: 2px 0 8px; border-radius: 2px;
+    background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge);
+}
+.brw-shead { padding: 7px 8px 2px; font-size: 11.5px; font-weight: 700; color: var(--ink-faint); }
+.brw-srow { display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.brw-srow:hover { background: var(--panel-hi); }
+.brw-srow.on { background: var(--signal); color: var(--paper); }
+.brw-slabel { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.brw-srow.bad .brw-slabel { text-decoration: line-through; opacity: 0.6; }
+.brw-srm { display: none; font-size: 11px; padding: 0 2px; }
+.brw-srow:hover .brw-srm { display: inline; }
+.brw-open { font-size: 12.5px; color: var(--ink-soft); }
+.brw-n { font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.on > .brw-n { color: inherit; opacity: 0.75; }
+.brw-facet { display: flex; flex-direction: column; }
+.brw-facet .brw-fv {
+    display: flex; justify-content: space-between; gap: 6px; height: 21px; line-height: 21px; padding: 0 8px 0 14px;
+    font-size: 12.5px; cursor: pointer; white-space: nowrap;
+}
+.brw-facet .brw-fv > span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.brw-chips { display: flex; flex-wrap: wrap; gap: 3px; padding: 3px 8px; }
+.brw-chips .brw-fv {
+    display: inline-flex; gap: 4px; height: 18px; line-height: 18px; padding: 0 6px; border-radius: 9px;
+    font-size: 11.5px; cursor: pointer; white-space: nowrap; background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge);
+}
+.brw-fv:hover { background: var(--panel-hi); }
+.brw-fv.on { background: var(--signal); color: var(--paper); box-shadow: none; }
+
+.brw-list { flex: 1; min-width: 0; overflow-y: auto; position: relative; background: var(--paper); border: 1px solid var(--edge); }
+.brw-row {
+    display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 8px 0 4px; box-sizing: border-box;
+    font-size: 13px; cursor: pointer; white-space: nowrap; border-bottom: 1px solid rgba(31,26,14,0.07);
+}
+.brw-row:hover { background: rgba(28,60,115,0.08); }
+.brw-row.sel { background: var(--signal); color: var(--paper); }
+.brw-num { width: 18px; flex: none; text-align: right; font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.brw-name { flex: 1 1 160px; min-width: 80px; overflow: hidden; text-overflow: ellipsis; }
+.brw-row.cur .brw-name { font-weight: 700; }
+.brw-row.cur .brw-num { color: var(--signal); font-weight: 700; }
+.brw-cat { width: 64px; flex: none; font-size: 12px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; }
+.brw-tags { width: 200px; flex: none; display: flex; gap: 3px; overflow: hidden; }
+.brw-list.nosrc .brw-tags { width: 290px; }
+.brw-src { width: 96px; flex: none; text-align: right; font-size: 11.5px; color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; }
+.brw-row.sel .brw-num, .brw-row.sel .brw-cat, .brw-row.sel .brw-src { color: inherit; opacity: 0.8; }
+.brw-chip {
+    flex: none; height: 16px; line-height: 16px; padding: 0 6px; border-radius: 8px; font-size: 11px; cursor: pointer;
+    background: rgba(31,26,14,0.08); color: var(--ink-soft);
+}
+.brw-chip:hover { background: rgba(28,60,115,0.2); color: var(--ink); }
+.brw-chip.on { background: var(--signal); color: var(--paper); }
+.brw-row.sel .brw-chip { background: rgba(236,227,196,0.22); color: var(--paper); }
+.brw-row.sel .brw-chip.on { background: var(--paper); color: var(--signal); }
+.brw-more { padding: 10px; text-align: center; font-size: 12.5px; color: var(--ink-faint); }
+.brw-none { padding-top: 70px; display: flex; flex-direction: column; align-items: center; gap: 12px; font-size: 14px; color: var(--ink-soft); }
+.brw-none .btn { position: static; }
+
+.brw-info { width: 252px; flex: none; overflow-y: auto; padding: 0 2px 8px 4px; }
+.brw-iname { margin: 1px 0 3px; font-weight: 700; font-size: 17px; line-height: 1.2; overflow-wrap: anywhere; }
+.brw-isub { margin-bottom: 8px; font-size: 12px; color: var(--ink-soft); }
+.brw-itags { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 9px; }
+.brw-idesc { font-size: 12.5px; line-height: 1.42; white-space: pre-wrap; user-select: text; -webkit-user-select: text; }
+.brw-ihead { margin: 10px 0 2px; font-size: 11.5px; font-weight: 700; color: var(--ink-faint); }
+.brw-itext { font-size: 12px; line-height: 1.35; color: var(--ink-soft); }
+.brw-empty { padding-top: 20px; font-size: 12.5px; color: var(--ink-faint); }
+
+.brw-foot { display: flex; align-items: center; gap: 8px; padding: 7px 10px 8px; }
+.brw-foot .tg { position: static; height: 22px; padding: 0 8px 0 5px; }
+.brw-hint { flex: 1; font-size: 11.5px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brw-foot .btn { position: static; height: 22px; min-width: 72px; }
+.brw-load { font-weight: 700; }
+.brw-load.off { opacity: 0.45; pointer-events: none; }
 
 .p:focus-visible, .btn:focus-visible, .tg:focus-visible, .cell:focus-visible, .src:focus-visible, .tgt:focus-visible, .addrow:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
 `

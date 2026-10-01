@@ -11,6 +11,7 @@ let hint = "Effects order: drag an effect and drop it where it should go in the 
 let make = (ctx: Ctx.t, panel: Panel.t) => {
   let model = ctx.model
   let root = el("div", ~cls="fxorder", ~parent=panel.el)
+  ctx.hostMenu->HostMenu.attach(model, root, id)
   el("span", ~cls="lbl", ~text="order: dist", ~parent=root)->ignore
   let chips = PorridgeParams.fxNames->Array.map(name => el("span", ~cls="chip", ~text=name))
   let seps = PorridgeParams.fxNames->Array.map(_ => el("span", ~cls="arrow", ~text="›"))

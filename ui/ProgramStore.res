@@ -161,9 +161,13 @@ let apply = (t, preset: Preset.t) => {
   fireShapes(t)
 }
 
-let select = (t, i) => {
+// Switches to program i, first keeping the live edits in the current one (unless
+// ~keepEdits=false: the browser has already put the current program back).
+let select = (t, i, ~keepEdits=true) => {
   let i = mod(mod(i, bankPrograms) + bankPrograms, bankPrograms)
-  t.programs->Array.setUnsafe(t.current, captureCurrent(t))
+  if keepEdits {
+    t.programs->Array.setUnsafe(t.current, captureCurrent(t))
+  }
   t.current = i
   apply(t, t.programs->Array.getUnsafe(i))
   t.pc->PatchConnection.sendStoredStateValue("program", i)
@@ -226,6 +230,22 @@ let loadTuningFile = (t, text, filename) => {
   }
 }
 
+// Replaces the current program with a preset (a preset file, or one picked in the browser).
+let loadIntoCurrent = (t, p) => {
+  t.programs->Array.setUnsafe(t.current, p)
+  apply(t, p)
+  storeBank(t)
+  changed(t)
+}
+
+// The browser plays presets without storing them: it keeps the current program as it was
+// (captureCurrent) and plays others with preview. Then either restore puts the kept one back,
+// or the picked preset is loaded (loadIntoCurrent), or its program is selected (keep puts the
+// kept program back into its slot, then select with ~keepEdits=false).
+let preview = (t, p) => apply(t, p)
+let restore = (t, kept: Preset.t) => apply(t, kept)
+let keep = (t, kept: Preset.t) => t.programs->Array.setUnsafe(t.current, kept)
+
 let initCurrent = t => {
   let p = Preset.make("Init")
   t.programs->Array.setUnsafe(t.current, p)
@@ -247,11 +267,8 @@ let loadFile = (t, bytes, filename) =>
     | Error(e) => t.message(`${filename} isn't a Porridge or Oatmeal program or bank (${e})`)
     | Ok({presets: []}) => t.message(`${filename} has no programs in it`)
     | Ok({kind: Single, presets: [p]}) =>
-      t.programs->Array.setUnsafe(t.current, p)
-      apply(t, p)
+      loadIntoCurrent(t, p)
       t.message(`Loaded "${Preset.name(p)}" into program ${Int.toString(t.current + 1)}`)
-      storeBank(t)
-      changed(t)
     | Ok({presets: programs}) =>
       t.programs = Array.fromInitializer(~length=bankPrograms, i =>
         switch programs[i] {

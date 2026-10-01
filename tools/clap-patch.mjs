@@ -12,6 +12,14 @@
 //    replies to the editor with a "porridge:settings" state value
 //    { settings: <the file's object>, zoom: <this window's size> }. Nothing is stored in
 //    the plugin's state. See ui/Settings.res.
+//  - The host's menu for a parameter (CLAP's context-menu extension; in FL Studio it has
+//    Create automation clip, Link to controller and so on), which a double right-click on a
+//    control opens. The view asks through the same bridge, with keys that start with
+//    "porridge:host?": ?get is answered with a "porridge:host" state value
+//    { menu: <whether the host can show it> }; ?menu=<json> { id, x, y, scale } shows it for
+//    the parameter with that endpoint ID, at a point in the view (CSS pixels, and the view's
+//    device pixel ratio). The menu is shown from on_main_thread, once the view's message has
+//    been handled. See ui/HostMenu.res.
 //  - The latency is the synth's 64 samples (dsp/Synth.cmajor applies MIDI a block late, on
 //    its own sample). Cmajor's C++ generator reports 0 whatever the patch declares.
 //
@@ -79,12 +87,14 @@ replace(
   `namespace detail
 {
 
-${marker} user settings shared by every instance, and the bridge the view reaches them
-// through (added by tools/clap-patch.mjs).
+${marker} user settings shared by every instance, the host's parameter menu, and the bridge
+// the view reaches them through (added by tools/clap-patch.mjs).
 namespace porridge
 {
     inline const std::string requestPrefix = "porridge:settings?";
     inline const std::string replyKey = "porridge:settings";
+    inline const std::string hostRequestPrefix = "porridge:host?";
+    inline const std::string hostReplyKey = "porridge:host";
 
     constexpr double minZoom = 0.5, maxZoom = 3.0;
 
@@ -158,10 +168,25 @@ namespace porridge
         return clampZoom (settings.isObject() ? settings["zoom"].getWithDefault<double> (1.0) : 1.0);
     }
 
-    /// Listens to what the patch sends its views, and passes on the settings requests.
-    struct SettingsBridge  : public cmaj::PatchView
+    /// The host's context menu extension, if it can show its menu for the plugin.
+    inline const clap_host_context_menu_t* hostContextMenu (const clap_host_t& host)
     {
-        SettingsBridge (cmaj::Patch& p, std::function<void(std::string_view)> handleToUse)
+        for (auto id : { CLAP_EXT_CONTEXT_MENU, CLAP_EXT_CONTEXT_MENU_COMPAT })
+        {
+            auto menu = static_cast<const clap_host_context_menu_t*> (host.get_extension (std::addressof (host), id));
+
+            if (menu != nullptr && menu->can_popup != nullptr && menu->popup != nullptr)
+                return menu;
+        }
+
+        return nullptr;
+    }
+
+    /// Listens to what the patch sends its views, and passes on the settings and host requests
+    /// (the whole key).
+    struct RequestBridge  : public cmaj::PatchView
+    {
+        RequestBridge (cmaj::Patch& p, std::function<void(std::string_view)> handleToUse)
             : cmaj::PatchView (p), handle (std::move (handleToUse))
         {}
 
@@ -177,8 +202,8 @@ namespace porridge
 
             auto key = message["key"].toString();
 
-            if (choc::text::startsWith (key, requestPrefix))
-                handle (std::string_view (key).substr (requestPrefix.size()));
+            if (choc::text::startsWith (key, requestPrefix) || choc::text::startsWith (key, hostRequestPrefix))
+                handle (key);
         }
 
         std::function<void(std::string_view)> handle;
@@ -305,12 +330,27 @@ replaceRange(
     std::optional<ViewHolder> editor;
 
     ${marker} the size of this instance's editor, kept while it is closed, and the bridge that
-    // answers the view's settings requests
+    // answers the view's settings and host requests
     std::optional<double> editorZoom;
-    std::unique_ptr<porridge::SettingsBridge> settingsBridge;
+    std::unique_ptr<porridge::RequestBridge> requestBridge;
 
+    void handleViewRequest (std::string_view);
     void handleSettingsRequest (std::string_view);
     void sendSettingsToView();
+
+    ${marker} the host's menu for a parameter, which the view asks for and on_main_thread shows
+    struct HostMenuRequest
+    {
+        clap_id param;
+        int32_t x, y;
+    };
+
+    std::optional<HostMenuRequest> pendingHostMenu;
+
+    bool canShowHostMenu() const;
+    void handleHostRequest (std::string_view);
+    void sendHostInfoToView();
+    void showPendingHostMenu();
 `,
 );
 
@@ -331,9 +371,9 @@ inline void Plugin::Impl::clapGui_destroy()
     editor = ViewHolder (patch, cachedViewScaleFactor,
                          editorZoom.value_or (porridge::zoomSetting (porridge::loadSettings())));
 
-    settingsBridge = std::make_unique<porridge::SettingsBridge> (patch, [this] (std::string_view request)
+    requestBridge = std::make_unique<porridge::RequestBridge> (patch, [this] (std::string_view key)
     {
-        handleSettingsRequest (request);
+        handleViewRequest (key);
     });
 
     return true;
@@ -341,7 +381,8 @@ inline void Plugin::Impl::clapGui_destroy()
 
 inline void Plugin::Impl::clapGui_destroy()
 {
-    settingsBridge.reset();
+    requestBridge.reset();
+    pendingHostMenu = {};
 
     if (editor)
         editorZoom = editor->zoom();
@@ -389,7 +430,16 @@ inline bool Plugin::Impl::clapGui_adjustSize (uint32_t* width, uint32_t* height)
 replace(
   `inline void Plugin::Impl::resetIfRequestIsPending()
 {`,
-  `${marker} ?get answers with the settings; ?zoom=<factor> asks the host to resize the window;
+  `${marker} a stored-state request from the view (the whole key)
+inline void Plugin::Impl::handleViewRequest (std::string_view key)
+{
+    if (choc::text::startsWith (key, porridge::requestPrefix))
+        handleSettingsRequest (key.substr (porridge::requestPrefix.size()));
+    else if (choc::text::startsWith (key, porridge::hostRequestPrefix))
+        handleHostRequest (key.substr (porridge::hostRequestPrefix.size()));
+}
+
+${marker} ?get answers with the settings; ?zoom=<factor> asks the host to resize the window;
 // ?save=<json> replaces the settings file. Every request is answered.
 inline void Plugin::Impl::handleSettingsRequest (std::string_view request)
 {
@@ -437,8 +487,92 @@ inline void Plugin::Impl::sendSettingsToView()
                                                                                         "zoom", editor->zoom()))));
 }
 
+${marker} whether the host can show its menu for the plugin, which can change once the view
+// is in its window
+inline bool Plugin::Impl::canShowHostMenu() const
+{
+    auto menu = porridge::hostContextMenu (host);
+    return editor && menu != nullptr && menu->can_popup (std::addressof (host));
+}
+
+${marker} ?get answers with what the host offers; ?menu=<json> { id, x, y, scale } shows the
+// host's menu for the parameter with that endpoint ID, at a point in the view in CSS pixels,
+// scale being the view's device pixel ratio. The menu is left to on_main_thread rather than
+// shown here, inside the web view's message handler.
+inline void Plugin::Impl::handleHostRequest (std::string_view request)
+{
+    if (! editor)
+        return;
+
+    if (choc::text::startsWith (request, "menu="))
+    {
+        try
+        {
+            auto args = choc::json::parse (request.substr (5));
+            auto parameter = patch.findParameter (cmaj::EndpointID::create (args["id"].toString()));
+
+            if (parameter == nullptr || automatableParametersByHandle.count (parameter->endpointHandle) == 0)
+                return;
+
+           #if CHOC_OSX
+            const double scale = 1.0; // CLAP's coordinates are points on macOS, as are CSS pixels
+           #else
+            const double scale = args["scale"].getWithDefault<double> (1.0);
+           #endif
+
+            const auto toPixel = [scale] (const choc::value::ValueView& v)
+            {
+                const auto x = v.getWithDefault<double> (0.0) * scale;
+                return static_cast<int32_t> (std::isfinite (x) ? std::round (x) : 0.0);
+            };
+
+            pendingHostMenu = HostMenuRequest { static_cast<clap_id> (parameter->endpointHandle),
+                                                toPixel (args["x"]), toPixel (args["y"]) };
+            host.request_callback (std::addressof (host));
+        }
+        catch (...) {}
+
+        return;
+    }
+
+    sendHostInfoToView();
+}
+
+inline void Plugin::Impl::sendHostInfoToView()
+{
+    if (! editor)
+        return;
+
+    editor->getPatchWebView().sendMessage (
+        choc::json::create ("type", "state_key_value",
+                            "message", choc::json::create ("key", porridge::hostReplyKey,
+                                                           "value", choc::json::create ("menu", canShowHostMenu()))));
+}
+
+inline void Plugin::Impl::showPendingHostMenu()
+{
+    auto request = std::exchange (pendingHostMenu, std::nullopt);
+
+    if (! (request && canShowHostMenu()))
+        return;
+
+    const clap_context_menu_target_t target { CLAP_CONTEXT_MENU_TARGET_KIND_PARAM, request->param };
+    porridge::hostContextMenu (host)->popup (std::addressof (host), std::addressof (target), 0, request->x, request->y);
+}
+
 inline void Plugin::Impl::resetIfRequestIsPending()
 {`,
+);
+
+replace(
+  `inline void Plugin::Impl::clapPlugin_onMainThread()
+{
+}`,
+  `inline void Plugin::Impl::clapPlugin_onMainThread()
+{
+    ${marker} the host's menu that the view asked for
+    showPendingHostMenu();
+}`,
 );
 
 //==============================================================================

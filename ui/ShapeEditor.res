@@ -31,7 +31,10 @@ type rec t = {
   // status text for point index, pointer value
   statusText: (t, int, float) => string,
 }
-and menuItem = {label: string, run: t => unit}
+// A menu item changes the data in place; the menu then saves an undo step, redraws and
+// commits, if it changed anything. An item that 'managesUndo' does all of that itself
+// (or is an undo), and is just run.
+and menuItem = {label: string, run: t => unit, managesUndo?: bool}
 
 let lo = t => t.bipolar ? -1. : 0.
 
@@ -122,12 +125,14 @@ let set = (t, data) => {
   draw(t)
 }
 
-let pushUndo = t => {
-  t.undoStack->Array.push(TypedArray.copy(t.data))
+let saveUndo = (t, snapshot) => {
+  t.undoStack->Array.push(snapshot)
   if Array.length(t.undoStack) > 40 {
     t.undoStack->Array.shift->ignore
   }
 }
+
+let pushUndo = t => saveUndo(t, TypedArray.copy(t.data))
 
 let undo = t =>
   t.undoStack
@@ -231,12 +236,19 @@ let openMenu = (t, ev) => {
     )
   anchor->setStyle("position", "absolute")
   t.ctx.menu->Menu.show(anchor, items, -1, k =>
-    t.menu[k]->Option.forEach(item => {
-      pushUndo(t)
-      item.run(t)
-      draw(t)
-      t.onCommit(t.data)
-    })
+    t.menu[k]->Option.forEach(item =>
+      if item.managesUndo == Some(true) {
+        item.run(t)
+      } else {
+        let before = TypedArray.copy(t.data)
+        item.run(t)
+        if !(t.data->TypedArray.everyWithIndex((v, i) => v == before->at(i))) {
+          saveUndo(t, before)
+          draw(t)
+          t.onCommit(t.data)
+        }
+      }
+    )
   )
   anchor->remove
 }

@@ -97,6 +97,10 @@ type shadowInit = {mode: string}
 @send external composedPath: Dom.event_like<'a> => array<Dom.eventTarget> = "composedPath"
 @send external preventDefault: Dom.event_like<'a> => unit = "preventDefault"
 @send external stopPropagation: Dom.event_like<'a> => unit = "stopPropagation"
+@send external stopImmediatePropagation: Dom.event_like<'a> => unit = "stopImmediatePropagation"
+
+// device pixels per CSS pixel
+@val external devicePixelRatio: float = "devicePixelRatio"
 
 // The element an event started on, also seen from outside the view's shadow root (where
 // target is the shadow host).
@@ -115,6 +119,14 @@ external onPointer: (element, pointerEventName, Dom.pointerEvent => unit) => uni
 @send
 external offPointer: (element, pointerEventName, Dom.pointerEvent => unit) => unit =
   "removeEventListener"
+// in the capture phase: before the element's own listeners and its children's
+@send
+external onPointerCapture: (
+  element,
+  pointerEventName,
+  Dom.pointerEvent => unit,
+  @as(json`true`) _,
+) => unit = "addEventListener"
 @send
 external onMouse: (element, mouseEventName, Dom.mouseEvent => unit) => unit = "addEventListener"
 @send
@@ -128,7 +140,8 @@ external onWheel: (
 external onKeyDown: (element, @as("keydown") _, Dom.keyboardEvent => unit) => unit =
   "addEventListener"
 @send external onDrag: (element, dragEventName, Dom.dragEvent => unit) => unit = "addEventListener"
-@send external onEvent: (element, [#change | #blur], Dom.event => unit) => unit = "addEventListener"
+@send
+external onEvent: (element, [#change | #blur | #input], Dom.event => unit) => unit = "addEventListener"
 
 @send
 external onDocumentPointerDownCapture: (
@@ -183,6 +196,7 @@ type dataTransfer
 @get external fileName: file => string = "name"
 @send external arrayBuffer: file => promise<ArrayBuffer.t> = "arrayBuffer"
 @send @return(nullable) external item: (fileList, int) => option<file> = "item"
+@get external fileCount: fileList => int = "length"
 @get @return(nullable) external files: element => option<fileList> = "files"
 @get @return(nullable) external dataTransfer: Dom.dragEvent => option<dataTransfer> = "dataTransfer"
 @get external transferredFiles: dataTransfer => fileList = "files"

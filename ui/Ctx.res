@@ -6,6 +6,8 @@ type t = {
   status: Status.t,
   menu: Menu.t,
   programs: ProgramStore.t,
+  // the host's parameter menu, on a double right-click
+  hostMenu: HostMenu.t,
   // design-to-screen scale of the stage
   scale: unit => float,
   // switches to the shapes page and selects a shape

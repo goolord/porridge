@@ -39,7 +39,7 @@ let curveBlock = (ctx: Ctx.t, page, title, table, ~x, ~y, ~w, ~h) => {
       },
     },
     {label: "fit top and bottom", run: e => ShapeEditor.fix(e.data, ~bipolar=false)},
-    {label: "undo", run: ShapeEditor.undo},
+    {label: "undo", run: ShapeEditor.undo, managesUndo: true},
   ]
   editor->ShapeEditor.set(ctx.programs->ProgramStore.shape(table))
   ctx.programs->ProgramStore.onShapes(() =>

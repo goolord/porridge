@@ -9,6 +9,8 @@
 open! Web
 
 let margin = 7. // keeps points at the edges grabbable
+let axisHeight = 12. // the time axis labels, under the curve
+let bottomOf = h => h - margin - axisHeight
 let segmentGap = 12. // minimum segment width, so that points never sit on top of each other
 let fine = 0.1 // shift-drag factor
 
@@ -26,6 +28,12 @@ let niceSpan = total =>
   ->Option.getOr(32.)
 
 let clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x))
+
+// time axis ticks, 1 ms to 500 s: the roundest first, so they win the room
+let tickTimes = [1., 5., 2.]->Array.flatMap(m =>
+  [1., 10., 100., 1000., 10000., 100000.]->Array.map(d => m * d)
+)
+let tickText = ms => ms < 1000. ? `${Float.toString(ms)} ms` : `${Float.toString(ms / 1000.)} s`
 
 // A draggable point. Dragging it sideways sets `time` from the width of its segment (which
 // starts at x0); dragging it up and down sets `level`, or for a bend point, `curve`.
@@ -68,11 +76,23 @@ type frame = {
   limit: float,
 }
 
+// A stretch of the time axis: xFrom to xTo covers msFrom to msTo, timed from the note-on,
+// or for a release, from the note-off. Time is linear within a stretch, as the curve is.
+type stretch = {
+  xFrom: float,
+  xTo: float,
+  msFrom: float,
+  msTo: float,
+  release: bool,
+}
+
+let stretch = (~release=false, xFrom, xTo, msFrom, msTo) => {xFrom, xTo, msFrom, msTo, release}
+
 type shape = {
   ids: array<string>,
   fit: unit => frame,
-  // the curve and the points for the current values
-  layout: frame => (array<(float, float)>, array<handle>),
+  // the curve, the points and the time axis for the current values
+  layout: frame => (array<(float, float)>, array<handle>, array<stretch>),
   // sets a handle's time from its segment width in pixels
   setTime: (handle, float, frame) => unit,
   // sets a handle's level from a y position
@@ -127,7 +147,7 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
   let curve = c => model->ParamModel.get(c)
   let levelDef = model->ParamModel.def(id("Sustain"))
   let decibels = prefix == ""
-  let (top, bottom) = (margin, h - margin)
+  let (top, bottom) = (margin, bottomOf(h))
   let yOf = v => {
     let f = decibels ? levelDef.toNorm(v) : v
     bottom - clamp(f, 0., 1.) * (bottom - top)
@@ -162,10 +182,7 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
     let points = [(x0, yOf(0.))]
     // each sampled segment, and its middle point
     let sample = (xFrom: float, xTo: float, level) => {
-      for k in 1 to 24 {
-        let t = Int.toFloat(k) / 24.
-        points->Array.push((xFrom + (xTo - xFrom) * t, yOf(level(t))))
-      }
+      points->Plots.trace(t => (xFrom + (xTo - xFrom) * t, yOf(level(t))))
       ((xFrom + xTo) / 2., yOf(level(0.5)))
     }
     let (ca, cd, cr) = (curve(attackCurve), curve(decayCurve), curve(releaseCurve))
@@ -174,7 +191,13 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
       (2. - a) * a
     })
     points->Array.push((xh, yOf(1.)))
-    let decay1Mid = skip ? None : Some(sample(xh, xb, t => bend(envCubic(Math.pow(bp, ~exp=t), bp, 1.), 1., bp, cd)))
+    let decay1Mid = if skip {
+      // decay 2 starts from the top, at the hollow breakpoint
+      points->Array.push((xb, yOf(1.)))
+      None
+    } else {
+      Some(sample(xh, xb, t => bend(envCubic(Math.pow(bp, ~exp=t), bp, 1.), 1., bp, cd)))
+    }
     let lo = Math.max(sus, 1e-4)
     let decay2Mid = sample(xb, xs, t => bend(envCubic(bp * Math.pow(lo / bp, ~exp=t), lo, bp), bp, lo, cd))
     points->Array.push((xr0, yOf(sus)))
@@ -187,6 +210,17 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
     | _ => (decay2Mid, sus > bp)
     }
 
+    let ta = get("Attack")
+    let th = ta + get("Hold")
+    let tb = th + (skip ? 0. : get("Decay1"))
+    let times = [
+      stretch(x0, xa, 0., ta),
+      stretch(xa, xh, ta, th),
+      stretch(xh, xb, th, tb),
+      stretch(xb, xs, tb, tb + get("Decay2")),
+      stretch(~release=true, xr0, xr, 0., get("Release")),
+    ]
+
     let top = yOf(1.)
     let handles = [
       point(~time=id("Attack"), x0, xa, top),
@@ -198,7 +232,7 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
       bendPoint(decayCurve, decayMid, ~rising=decayRising),
       bendPoint(releaseCurve, releaseMid, ~rising=false),
     ]
-    (points, handles)
+    (points, handles, times)
   }
 
   let setTime = (h, width, f) =>
@@ -248,7 +282,7 @@ let pitch = (ctx: Ctx.t, ~w, ~h): shape => {
   let attackFactor = () => peakRatio() <= startRatio() ? 0.5 : 1.
   let holdPx = 0.12 * (w - 2. * margin)
   let releasePx = 0.16 * (w - 2. * margin)
-  let mid = h / 2.
+  let mid = (margin + bottomOf(h)) / 2.
   let yOf = (st, f) => mid - clamp(st / f.limit, -1., 1.) * (mid - margin)
   let semitonesAt = (y, f) => clamp((mid - y) / (mid - margin), -1., 1.) * f.limit
 
@@ -282,13 +316,19 @@ let pitch = (ctx: Ctx.t, ~w, ~h): shape => {
     let xs = xp + segmentGap + units(get("PEnv_Decay")) * f.unitPx
     let xr = xs + holdPx + releasePx
 
-    let points = Array.fromInitializer(~length=25, k => {
-      let t = Int.toFloat(k) / 24.
-      (x0 + (xp - x0) * t, yOf(semitones(r0 + (r1 - r0) * t), f))
-    })
+    let attack = t => (x0 + (xp - x0) * t, yOf(semitones(r0 + (r1 - r0) * t), f))
+    let points = [attack(0.)]
+    points->Plots.trace(attack)
     points->Array.push((xs, yOf(sustain, f)))
     points->Array.push((xs + holdPx, yOf(sustain, f)))
     points->Array.push((xr, yOf(sustain + release, f)))
+
+    let tp = get("PEnv_Attack") * attackFactor()
+    let times = [
+      stretch(x0, xp, 0., tp),
+      stretch(xp, xs, tp, tp + get("PEnv_Decay")),
+      stretch(~release=true, xs + holdPx, xr, 0., 1000.),
+    ]
 
     let handles = [
       point(~level="PEnv_Start", x0, x0, yOf(semitones(r0), f)),
@@ -296,7 +336,7 @@ let pitch = (ctx: Ctx.t, ~w, ~h): shape => {
       point(~time="PEnv_Decay", ~level="PEnv_Sustain", xp, xs, yOf(sustain, f)),
       point(~level="PEnv_Release", xs, xr, yOf(sustain + release, f)),
     ]
-    (points, handles)
+    (points, handles, times)
   }
 
   let setTime = (h, width, f) =>
@@ -353,6 +393,7 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
   let svgEl = Plots.svgEl(s, ...)
   let zero = svgEl("line", [("class", Str("axis")), ("x1", Num(2.)), ("x2", Num(box.w - 2.))])
   let fill = svgEl("path", [("class", Str("fill"))])
+  let ticks = svgEl("g", [])
   let curve = svgEl("path", [("class", Str("curve"))])
   let layer = svgEl("g", [])
   let readout = svgEl("text", [("class", Str("readout"))])
@@ -381,14 +422,53 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
     ->Array.map(id => (model->ParamModel.def(id)).shortText(model->ParamModel.get(id)))
     ->Array.join("  ·  ")
 
+  // a faint line and a label at each tick time that has room, the release's counted from
+  // the note-off
+  let drawTicks = (times: array<stretch>) => {
+    ticks->setTextContent("")
+    // the room each tick takes, line and label; the note-on and note-off keep a little
+    let taken = times->Array.filterMap(t => t.msFrom == 0. ? Some((t.xFrom - 6., t.xFrom + 16.)) : None)
+    tickTimes->Array.forEach(ms =>
+      times->Array.forEach(t =>
+        if ms > t.msFrom && ms <= t.msTo {
+          let x = t.xFrom + (t.xTo - t.xFrom) * (ms - t.msFrom) / (t.msTo - t.msFrom)
+          let text = (t.release ? "+" : "") ++ tickText(ms)
+          let width = 5. * Int.toFloat(String.length(text))
+          // near the right edge, the label sits left of its line
+          let flip = x + 3. + width > box.w - 4.
+          let (left, right) = flip ? (x - 3. - width, x) : (x, x + 3. + width)
+          if left > 2. && taken->Array.every(((l, r)) => right + 8. < l || left - 8. > r) {
+            taken->Array.push((left, right))
+            Plots.svgEl(
+              ticks,
+              "line",
+              [("class", Str("axis faint")), ("x1", Num(x)), ("x2", Num(x)), ("y1", Num(1.)), ("y2", Num(box.h - 1.))],
+            )->ignore
+            Plots.svgEl(
+              ticks,
+              "text",
+              [
+                ("class", Str("tick")),
+                ("x", Num(flip ? x - 3. : x + 3.)),
+                ("y", Num(box.h - 4.)),
+                ("text-anchor", Str(flip ? "end" : "start")),
+              ],
+            )->setTextContent(text)
+          }
+        }
+      )
+    )
+  }
+
   let draw = () => {
-    let (points, hs) = shape.layout(frame.contents)
+    let (points, hs, times) = shape.layout(frame.contents)
     handles := hs
+    drawTicks(times)
     let d = Plots.pathFrom(points)
     curve->setAttribute("d", Str(d))
     switch (points[0], points[Array.length(points) - 1], shape.zero) {
     | (Some((xa, _)), Some((xb, _)), None) =>
-      let base = Float.toString(box.h - margin)
+      let base = Float.toString(bottomOf(box.h))
       fill->setAttribute(
         "d",
         Str(`${d}L${Float.toString(xb)} ${base}L${Float.toString(xa)} ${base}Z`),
@@ -462,7 +542,7 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
           last := (mv->clientX, mv->clientY)
           let f = mv->shiftKey ? fine * k : k
           x := clamp(x.contents + (mv->clientX - lastX) * f, h.x0 + segmentGap, box.w * 4.)
-          y := clamp(y.contents + (mv->clientY - lastY) * f, margin, box.h - margin)
+          y := clamp(y.contents + (mv->clientY - lastY) * f, margin, bottomOf(box.h))
           // the level first: it decides whether decay 1 is skipped
           shape.setLevel(h, y.contents, frame.contents)
           shape.setTime(h, x.contents - h.x0 - segmentGap, frame.contents)
@@ -531,7 +611,7 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
     (dot, hit)
   }
 
-  let (_, initial) = shape.layout(frame.contents)
+  let (_, initial, _) = shape.layout(frame.contents)
   nodes := initial->Array.mapWithIndex((h, i) => {
     let (dot, hit) = makeNode(i)
     let cursor = switch (h.time, h.level) {

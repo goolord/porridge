@@ -58,6 +58,10 @@ let hookStatus = (c, e) => {
   })
 }
 
+// A double right-click opens the host's menu for the parameter (see HostMenu). Hook it before
+// the control's own pointer handlers.
+let hookHostMenu = (c, e) => c.ctx.hostMenu->HostMenu.attach(c.ctx.model, e, c.id)
+
 // Calls onMove for every move of a captured pointer, and onUp once it is released.
 let capturePointer = (e, ev, ~onMove, ~onUp) => {
   e->setPointerCapture(ev->pointerId)
@@ -140,6 +144,7 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
   // the range modulation connections sweep, for parameters the matrix can reach
   let modBar = ModMatrix.targetOfParam(id) >= 0 ? Some(el("em", ~parent=track)) : None
   hookStatus(c, e)
+  hookHostMenu(c, e)
 
   let update = () => {
     let x = current(c)
@@ -289,6 +294,7 @@ let choice = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=76., ~label=?, ~names=?) => {
   let v = el("span", ~cls=withIcons ? "v withicon" : "v", ~parent=e)
   let icon = value => Icons.forValue(id, value, menuNames[value]->Option.getOr(""))
   hookStatus(c, e)
+  hookHostMenu(c, e)
 
   let update = () => {
     let x = current(c)
@@ -362,6 +368,7 @@ let toggle = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=?, ~label=?) => {
   el("b", ~parent=e)->ignore
   el("span", ~text=label->Option.getOr(c.def.name), ~parent=e)->ignore
   hookStatus(c, e)
+  hookHostMenu(c, e)
 
   let flip = () => gestureSet(c, current(c) != 0. ? 0. : 1.)
   let update = () => {

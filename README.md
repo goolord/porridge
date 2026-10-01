@@ -20,6 +20,10 @@ in `%APPDATA%\Porridge`, `~/Library/Application Support/Porridge` or `~/.config/
 Drag or scroll a value, double-click to type one, right-click to reset it. Click a list to
 pick from it; right-click steps through it (shift-right-click steps back).
 
+Double-right-click a control to open the host's menu for its parameter, in hosts that offer one
+to CLAP plugins: in FL Studio it has **Create automation clip**, **Link to controller** and the
+rest of FL's knob menu. The second click puts back the value the first one reset or stepped.
+
 MIDI is sample-accurate: every message, and every arpeggiator step, starts on its own sample,
 where Oatmeal starts it at the next 64-sample block (up to about 1.5 ms late at 44.1 kHz). This
 costs a constant latency of one block (64 samples), which the plugin reports to the host. **Oat
@@ -44,7 +48,13 @@ The header switches between six pages:
   EQ's title row to reorder them (right-click: Oatmeal's order).
 - **Arp / XY**: the arpeggiator pattern and the XY pad with its targets.
 - **Shapes**: draw the two oscillator waveforms and the two LFO shapes. Under a waveform, click
-  or drag the level and phase of its first 64 harmonics (right-click clears one).
+  or drag the level and phase of its first 64 harmonics (right-click clears one). Drop a sample
+  onto the window (or use "sample…") to build a waveform from its harmonics: a single cycle is
+  taken whole, a wavetable gives one frame (Serum's frame size is read from the file), and a
+  recording is measured at its pitch over a few periods. Drag along the sample's overview,
+  above the drawing, to measure another part of it or pick another frame. An LFO shape takes
+  the sample's volume envelope instead. WAV and AIFF always work; FLAC, MP3 and OGG need the
+  host's web view to decode them.
 - **MIDI**: channel filter, sustain pedal, velocity and aftertouch curves, MPE, and the six
   assignable controllers (with learn). With MPE on (lower zone, master channel 1), every note
   on channels 2-16 follows its own channel's pitch bend (range up to ±96 semitones), pressure
@@ -73,6 +83,14 @@ Programs and banks are saved as `.porridge` files (JSON, see
 description (**Info**). Oatmeal programs and banks load as they are, and **Save ▸ Export for
 Oatmeal** writes them back out for Oatmeal.
 
+**Browse** (ctrl+F) searches the programs in the bank, the banks that come with Porridge
+(Vanilla, Porridge's own, and Oatmeal's factory bank) and any files you open or drop on it,
+by name, category, tags, author and description. Words must all match; `tag:`, `cat:`,
+`author:` and `name:` search one field (`tag:"per-voice pan"`), and the lists on the left
+narrow the search by source, category, tag and author. Clicking a preset plays it; **Load**
+puts it into the current program (or goes to it, for one of the bank's), and **Cancel** puts
+back what was playing.
+
 ## Layout
 
 ```
@@ -88,20 +106,24 @@ ui/                     patch view (ReScript)
   Index.res               entry point; View.res builds the pages
   Preset.res              Porridge's preset format; PorridgeParams.res and ModMatrix.res
                           list the parameters and modulation sources/targets Oatmeal doesn't have
+  PresetBrowser.res       the preset browser; Library.res searches and filters for it
   oatmeal/                file formats, parameter table, value texts
   bindings/               Cmajor PatchConnection and browser API bindings
 worker/PatchWorker.res  restores shapes/curves and installs the factory bank
 bundle/                 view.js and worker.js, built by `npm run build`
 presets/oatmealprs.dat  Oatmeal's factory bank
+presets/vanilla.porridge  Porridge's own bank (built by tools/vanilla-bank.mjs)
 docs/internals/         reverse-engineering notes on the original
 tools/
   gen.mjs                 regenerates ParamStore/Slots/ModTables from the parameter tables
   bundle.mjs              bundles the compiled view and worker into bundle/
   clap-patch.mjs          patches the generated CLAP wrapper: aspect-locked resizing, the
-                          interface size setting, and the 64-sample latency
+                          interface size setting, the host's parameter menu, and the
+                          64-sample latency
   test/                   native C++ test host built from the patch (cmaj generate --target=cpp),
                           golden.mjs (bit-exact factory renders, in Oat mode), presets.mjs
-                          (format round trips)
+                          (format round trips), library.mjs (the preset browser's search)
+  vanilla-bank.mjs        builds presets/vanilla.porridge
   re/                     comparisons against Oatmeal.dll (32-bit Python) and data checks
   ui-preview/             runs the view in a browser with a mock PatchConnection
 ```

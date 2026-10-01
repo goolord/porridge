@@ -162,13 +162,15 @@ let make = (ctx: Ctx.t, parent, box: box) => {
     )->ignore
   }
 
-  let points = 160
-  let response = filters =>
-    Array.fromInitializer(~length=points + 1, k => {
-      let x = left + (right - left) * Int.toFloat(k) / Int.toFloat(points)
-      let f = freqAt(x)
-      (x, yOf(filters->Array.reduce(0., (a, q) => a + gainDb(q, f))))
-    })
+  let response = filters => {
+    let at = t => {
+      let x = left + (right - left) * t
+      (x, yOf(filters->Array.reduce(0., (a, q) => a + gainDb(q, freqAt(x)))))
+    }
+    let points = [at(0.)]
+    points->Plots.trace(at, ~steps=160)
+    points
+  }
 
   let statusFor = b => {
     let (kind, freq, amp, slope) = ids(b)

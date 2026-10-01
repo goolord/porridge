@@ -40,9 +40,39 @@ let background = (s, box) =>
 let pathFrom = points =>
   points
   ->Array.mapWithIndex(((x, y), i) =>
-    (i == 0 ? "M" : "L") ++ Float.toFixed(x, ~digits=1) ++ " " ++ Float.toFixed(y, ~digits=1)
+    (i == 0 ? "M" : "L") ++ Float.toFixed(x, ~digits=2) ++ " " ++ Float.toFixed(y, ~digits=2)
   )
   ->Array.join("")
+
+// Adds the curve t => (x, y) for t in (0, 1] to `points`, which already hold its start.
+// `steps` even pieces are halved until the curve strays less than a tenth of a pixel from
+// each straight line, so that steep bends stay smooth however far a curve is dragged.
+let trace = (points, at: float => (float, float), ~steps=16) => {
+  let rec piece = (t0: float, p0: (float, float), t1: float, p1: (float, float), depth) => {
+    let ((x0, y0), (x1, y1)) = (p0, p1)
+    let t = (t0 + t1) / 2.
+    let (x, y) as p = at(t)
+    // the middle's distance from the straight line
+    let (dx, dy) = (x1 - x0, y1 - y0)
+    let length2 = dx * dx + dy * dy
+    let u = length2 > 0. ? Math.max(0., Math.min(1., ((x - x0) * dx + (y - y0) * dy) / length2)) : 0.
+    let (ex, ey) = (x - x0 - u * dx, y - y0 - u * dy)
+    if depth < 10 && ex * ex + ey * ey > 0.01 {
+      piece(t0, p0, t, p, depth + 1)
+      piece(t, p, t1, p1, depth + 1)
+    } else {
+      points->Array.push(p1)
+    }
+  }
+  let last = ref((0., at(0.)))
+  for k in 1 to steps {
+    let (t0, p0) = last.contents
+    let t1 = Int.toFloat(k) / Int.toFloat(steps)
+    let p1 = at(t1)
+    piece(t0, p0, t1, p1, 0)
+    last := (t1, p1)
+  }
+}
 
 let userAt = (user, phase) =>
   user->ByteView.getUnsafe(Float.toInt(Math.floor(phase * 512.)) &&& 511)

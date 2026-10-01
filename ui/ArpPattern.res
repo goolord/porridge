@@ -36,6 +36,7 @@ let make = (ctx: Ctx.t, parent, box) => {
     let c =
       el("div", ~cls="cell", ~parent)->place(box.x + Int.toFloat(i) * cw, box.y, ~w=cw - 2., ~h=24.)
     c->setTabIndex(0)
+    ctx.hostMenu->HostMenu.attach(model, c, id)
     c->onPointer(#pointerdown, ev => {
       ev->preventDefault
       switch ev->button {
