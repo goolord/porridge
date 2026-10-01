@@ -160,5 +160,3 @@ let table = (src: source): result<table, string> =>
       })
     }
   }
-
-let isScale = text => parseScale(text)->Result.isOk

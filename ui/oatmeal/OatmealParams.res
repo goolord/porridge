@@ -612,352 +612,6 @@ let ccTargets = [
 ]
 let oscMix = ["normal", "hardsync", "FM (1 -> 2, 1 silent)"]
 
-// getParameter() values of the Init program (as printed by the DLL, 6 decimals).
-let defaultNormalized = [
-  0.,
-  0.666667,
-  0.5,
-  0.5,
-  0.,
-  0.5,
-  0.,
-  0.,
-  0.5,
-  0.5,
-  0.,
-  0.5,
-  0.625,
-  0.5,
-  0.5,
-  0.,
-  0.5,
-  0.,
-  0.5,
-  0.058824,
-  0.,
-  0.383007,
-  0.,
-  1.,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.058824,
-  0.,
-  0.396078,
-  0.,
-  1.,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.5,
-  0.,
-  0.021909,
-  0.,
-  0.03874,
-  1.,
-  0.222542,
-  0.899657,
-  0.044733,
-  0.5,
-  0.,
-  0.5,
-  0.291667,
-  0.375,
-  0.5,
-  0.5,
-  0.5,
-  0.021909,
-  0.,
-  0.03874,
-  1.,
-  0.222542,
-  0.899657,
-  0.044733,
-  0.,
-  0.,
-  0.2,
-  0.068929,
-  0.039039,
-  0.079079,
-  0.5,
-  0.8,
-  0.,
-  0.357143,
-  0.,
-  0.,
-  0.,
-  0.020202,
-  0.020202,
-  0.675,
-  0.675,
-  0.5,
-  0.5,
-  0.7,
-  0.,
-  0.666667,
-  0.645131,
-  0.,
-  0.43679,
-  0.191805,
-  0.8,
-  0.2,
-  0.666667,
-  0.51134,
-  0.385,
-  0.125,
-  0.635,
-  0.86,
-  0.5,
-  0.5,
-  0.5,
-  0.225806,
-  0.,
-  0.166667,
-  0.444444,
-  0.825,
-  1.,
-  0.5,
-  0.5,
-  0.,
-  0.223607,
-  0.028868,
-  0.,
-  1.,
-  0.,
-  0.,
-  1.,
-  0.,
-  0.,
-  0.,
-  1.,
-  0.,
-  0.014434,
-  0.25,
-  0.,
-  0.,
-  0.,
-  0.470588,
-  1.,
-  0.25,
-  0.066667,
-  0.,
-  0.,
-  0.066667,
-  0.,
-  0.,
-  0.066667,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.466667,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.375,
-  0.044498,
-  0.625,
-  0.067099,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.5,
-  0.25,
-  0.5,
-  0.3125,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.707107,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.366644,
-  0.366644,
-  0.366644,
-  0.366644,
-  0.366644,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.021909,
-  0.,
-  0.03874,
-  1.,
-  0.222542,
-  0.899657,
-  0.044733,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.021909,
-  0.,
-  0.03874,
-  1.,
-  0.222542,
-  0.899657,
-  0.044733,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  0.,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-]
-
 // ---------------------------------------------------------------------------------------------------
 // numeric helpers (x87 emulation)
 
@@ -1053,7 +707,6 @@ type t = {
   inv: float => float,
   // DLL status-bar string (0x100405f0) for normalized v, in the context of a program
   text: (float, Uint8Array.t) => string,
-  defaultNormalized: float,
 }
 
 let blank = {
@@ -1073,7 +726,6 @@ let blank = {
   get: x => x,
   inv: x => x,
   text: (_, _) => "",
-  defaultNormalized: 0.,
 }
 
 // Field offsets that some status texts read from the program.
@@ -2324,10 +1976,10 @@ def(
 // ---------------------------------------------------------------------------------------------------
 // public API
 
-// The parameter table, with the Init program's defaults.
+// The parameter table.
 let params = table->Array.mapWithIndex((spec, i) =>
   switch spec {
-  | Some(p) => {...p, defaultNormalized: defaultNormalized->Array.getUnsafe(i)}
+  | Some(p) => p
   | None => JsError.panic(`param ${Int.toString(i)} undefined`)
   }
 )
@@ -2342,36 +1994,6 @@ let toInternal = (i, v) => param(i).set(f32(v))
 let toNormalized = (i, x) => {
   let v = param(i).inv(x)
   Float.isNaN(v) ? 0. : Math.min(1., Math.max(0., v))
-}
-
-// Like toNormalized, but returns the float32 v (searching a few hundred ulps around the inverse) for which
-// toInternal(i, v) reproduces x bit-exactly when such a v exists (lossless VST parameter round trips).
-let toNormalizedF32 = (i, x) => {
-  let reproduces = v => {
-    let y = toInternal(i, v)
-    y == x || (Float.isNaN(y) && Float.isNaN(x))
-  }
-  // stay within [0, 1]
-  let candidate = bits =>
-    bits < 0 || bits > 0x3f800000
-      ? None
-      : Some(ByteView.float32OfBits(bits))->Option.filter(reproduces)
-  let v0 = f32(toNormalized(i, x))
-  let b0 = ByteView.bitsOfFloat32(v0)
-  let rec search = k =>
-    if k > 512 {
-      v0
-    } else {
-      switch candidate(b0 + k) {
-      | Some(v) => v
-      | None =>
-        switch candidate(b0 - k) {
-        | Some(v) => v
-        | None => search(k + 1)
-        }
-      }
-    }
-  reproduces(v0) ? v0 : search(1)
 }
 
 // internal -> what Oatmeal.dll's getParameter returns (float32, with its quirks: PWM rate = v/2, F envspeed > 0.5 -> v-1).
@@ -2409,9 +2031,6 @@ let writeInternal = (prog, i, x) => {
 
 // setParameter(i, v) applied to a program: exactly the bytes the DLL writes into the program.
 let setParamNormalized = (prog, i, v) => writeInternal(prog, i, toInternal(i, v))
-
-// getParameter as the DLL computes it from a program.
-let getParamDll = (prog, i) => dllGetParameter(i, readInternal(prog, i))
 
 // Context used when no program is passed: only the fields status texts read, set to their Init values.
 let initContext = Lazy.make(() => {
@@ -2459,57 +2078,3 @@ let displayText = (i, x, ~prog=?, ~dll=false, ~v=?) => {
   let value = statusText(i, v, ~prog?)->valuePart
   String.startsWith(value, " ") ? value->String.slice(~start=1) : value
 }
-
-// Exactly what the VST host sees from effGetParamDisplay: " " + value part (from the DLL getParameter value), max 23 chars.
-let hostDisplay = (prog, i) =>
-  statusText(i, getParamDll(prog, i), ~prog)->valuePart->String.slice(~start=0, ~end=23)
-
-// Switch value names for parameter i (None for continuous params).
-let valueNames = i => param(i).labels->Option.map(Array.copy)
-
-// Plain-data description of a parameter (for docs / GUIs).
-type description = {
-  index: int,
-  name: string,
-  action: string,
-  offset: int,
-  offset2: Null.t<int>,
-  @as("type") storage: storage,
-  min: float,
-  max: float,
-  unit: string,
-  states: Null.t<int>,
-  add: int,
-  labels: Null.t<array<string>>,
-  defaultNormalized: float,
-  defaultInternal?: float,
-  defaultText?: string,
-}
-
-// Pass the Init program (OatmealFormat.makeDefaultProgram) to also get defaultInternal / defaultText.
-let describeParams = (~init=?) =>
-  params->Array.map(p => {
-    let defaultInternal = init->Option.map(prog => readInternal(prog, p.index))
-    let defaultText =
-      init->Option.map(prog => statusText(p.index, getParamDll(prog, p.index), ~prog))
-    {
-      index: p.index,
-      name: p.name,
-      action: p.action,
-      offset: p.offset,
-      offset2: Null.fromOption(p.offset2),
-      storage: p.storage,
-      min: p.min,
-      max: p.max,
-      unit: switch (p.unit, p.labels) {
-      | ("", Some(_)) => "enum"
-      | (unit, _) => unit
-      },
-      states: Null.fromOption(p.states),
-      add: p.add,
-      labels: Null.fromOption(p.labels->Option.map(Array.copy)),
-      defaultNormalized: p.defaultNormalized,
-      ?defaultInternal,
-      ?defaultText,
-    }
-  })

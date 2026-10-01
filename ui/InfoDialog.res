@@ -22,7 +22,6 @@ let categories = [
 
 @set external setPlaceholder: (element, string) => unit = "placeholder"
 @set external setId: (element, string) => unit = "id"
-@set external setList: (element, string) => unit = "list"
 @send external setAttributeString: (element, string, string) => unit = "setAttribute"
 
 let show = (ctx: Ctx.t, stage) => {
