@@ -10,7 +10,8 @@ type setup = {
 
 @tag("type")
 type request =
-  | @as("init") Init({wasm: MatchEngine.wasmModule})
+  // the engine's module, and the predictor's file if the build has one (MatchModel.res)
+  | @as("init") Init({wasm: MatchEngine.wasmModule, model: option<Uint8Array.t>})
   // makes a sample ready to match (SoundTarget.prepare)
   | @as("prepare") Prepare({task: int, name: string, samples: Float32Array.t, sampleRate: float})
   // what the evaluations of a session render against, sent before its first one
@@ -23,6 +24,13 @@ type request =
 type response =
   | @as("ready") Ready
   | @as("failed") Failed({task: int, message: string})
+  // a prepared sample, its picture, and where the predictor suggests the search starts
   | @as("target")
-  Target({task: int, target: SoundTarget.t, envelope: array<float>, spectrum: array<float>})
+  Target({
+      task: int,
+      target: SoundTarget.t,
+      envelope: array<float>,
+      spectrum: array<float>,
+      suggestions: array<Float64Array.t>,
+    })
   | @as("evaluated") Evaluated({task: int, loss: float, candidate: option<MatchSearch.candidate>})
