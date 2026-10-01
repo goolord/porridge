@@ -1,11 +1,13 @@
 // The sound to match: a sample, made ready for the matcher. It is mixed to mono, resampled to
 // 44.1 kHz, trimmed to start at its onset and cut to at most maxSeconds; then its pitch is
 // found (the note the synth plays when rendering a candidate) and its shape described, which
-// gives the search its starting point (Genome.seed).
+// gives the search its starting point (Genome.seed). A pitched sample's harmonics also make a
+// waveform (fitWave), which the first oscillator's "fitted" wave plays.
 
 @get_index external get32: (Float32Array.t, int) => float = ""
 @set_index external set32: (Float32Array.t, int, float) => unit = ""
 @get_index external get64: (Float64Array.t, int) => float = ""
+@set_index external set64: (Float64Array.t, int, float) => unit = ""
 
 let sampleRate = Spectrum.sampleRate
 let maxSeconds = 1.6
@@ -33,6 +35,10 @@ type t = {
   pitchDrop: float,
   // peak levels of 160 stretches, for the drawer's picture of it
   overview: array<float>,
+  // its loudness every 10 ms, dB
+  loudness: array<float>,
+  // its harmonics as a waveform of 512 points (peak 1), when it has a pitch
+  wave: option<Float32Array.t>,
 }
 
 let seconds = t => Int.toFloat(TypedArray.length(t.samples)) / sampleRate
@@ -123,6 +129,76 @@ let findPitch = (x: Float32Array.t, env: Float64Array.t) => {
   }
 }
 
+// The pitch from the spectrum, when YIN finds none (a pitched sound with noise in it, or one
+// whose pitch wavers): the fundamental whose harmonics stand highest over the spectrum's
+// median, summed with less weight further up, over long spectra of the loud part. None if no
+// fundamental stands out from the rest.
+let pitchResolution = Lazy.make(() => Spectrum.makeResolution(~size=8192, ~hop=4096, ~bands=8, ~lowest=30.))
+
+let spectralPitch = (x: Float32Array.t, env: Float64Array.t) => {
+  let r = Lazy.get(pitchResolution)
+  let half = r.size / 2
+  let steps = TypedArray.length(env)
+  let loudest = ref(0.)
+  env->TypedArray.forEach(v => loudest := Math.max(loudest.contents, v))
+  let loud = Array.fromInitializer(~length=steps, s => s)->Array.filter(s => env->get64(s) > loudest.contents * 0.25)
+  let count = Math.Int.min(6, Array.length(loud))
+  let centres =
+    Array.fromInitializer(~length=count, i => loud->Array.getUnsafe(i * Array.length(loud) / Math.Int.max(1, count)))
+    ->Array.map(s => s * Spectrum.envelopeStep + Spectrum.envelopeStep / 2)
+  // the frames' power, two at a time
+  let power = Float64Array.fromLength(half + 1)
+  let i = ref(0)
+  while i.contents < count {
+    let pair = i.contents + 1 < count
+    Spectrum.transform(r, x, centres->Array.getUnsafe(i.contents), pair ? centres->Array.getUnsafe(i.contents + 1) : -2 * r.size)
+    for k in 0 to half {
+      power->set64(k, power->get64(k) + r.powerA->get64(k) + (pair ? r.powerB->get64(k) : 0.))
+    }
+    i := i.contents + 2
+  }
+  let binHz = sampleRate / Int.toFloat(r.size)
+  let mag = power->TypedArray.map(p => Math.sqrt(p))
+  let top = Math.Int.min(half, Float.toInt(8000. / binHz))
+  let low = Float.toInt(50. / binHz)
+  let noise = Math.max(1e-12, median(Array.fromInitializer(~length=top - low, k => mag->get64(low + k)))->Option.getOr(0.))
+  // a harmonic's level: the highest of the three bins nearest it
+  let level = hz => {
+    let k = Float.toInt(Math.round(hz / binHz))
+    let m = ref(0.)
+    for j in Math.Int.max(1, k - 1) to Math.Int.min(half, k + 1) {
+      m := Math.max(m.contents, mag->get64(j))
+    }
+    m.contents
+  }
+  let score = f0 => {
+    let s = ref(0.)
+    let k = ref(1)
+    while k.contents <= 12 && Int.toFloat(k.contents) * f0 < 8000. {
+      let weight = Math.pow(0.85, ~exp=Int.toFloat(k.contents - 1))
+      s := s.contents + weight * Math.log(1. + level(Int.toFloat(k.contents) * f0) / noise)
+      k := k.contents + 1
+    }
+    s.contents
+  }
+  // 40 Hz to 2.5 kHz, in sixteenths of a semitone
+  let steps = 16 * 12
+  let hzOf = i => 40. * Math.pow(2., ~exp=i / Int.toFloat(steps))
+  let scores = Array.fromInitializer(~length=steps * 6, i => score(hzOf(Int.toFloat(i))))
+  let (best, bestScore) = scores->Array.reduceWithIndex((0, neg_infinity), ((b, bs), s, i) => s > bs ? (i, s) : (b, bs))
+  let typical = median(scores)->Option.getOr(0.)
+  if count == 0 || bestScore < 1.8 * typical || bestScore < 4. {
+    None
+  } else {
+    // between grid points: the parabola through the best and its neighbours
+    let at = i => scores[i]->Option.getOr(bestScore)
+    let (a, b, c) = (at(best - 1), bestScore, at(best + 1))
+    let curve = a - 2. * b + c
+    let offset = curve < 0. ? 0.5 * (a - c) / curve : 0.
+    Some(hzOf(Int.toFloat(best) + offset))
+  }
+}
+
 // The key that plays hz (kept within the keyboard's middle), and the cents left over.
 let noteOf = hz => {
   let midi = 69. + 12. * Math.log2(hz / 440.)
@@ -195,6 +271,58 @@ let overviewOf = (x: Float32Array.t, ~points) => {
   })
 }
 
+// The sample's harmonics at its pitch, as a waveform: their levels over up to eight points in
+// its loud part (whole periods under a window, as WaveImport measures a recording), averaged
+// by power, with the phases of the loudest point.
+let fitWave = (x: Float32Array.t, env: Float64Array.t, ~hz) => {
+  let n = TypedArray.length(x)
+  let period = sampleRate / hz
+  let cycles = Math.Int.max(2, Math.Int.min(24, Float.toInt(Math.round(0.06 * sampleRate / period))))
+  let span = period * Int.toFloat(cycles)
+  let steps = TypedArray.length(env)
+  let loudest = ref(0)
+  for s in 0 to steps - 1 {
+    if env->get64(s) > env->get64(loudest.contents) {
+      loudest := s
+    }
+  }
+  let peak = env->get64(loudest.contents)
+  let loud = Array.fromInitializer(~length=steps, s => s)->Array.filter(s => env->get64(s) > peak * 0.25)
+  let count = Math.Int.min(8, Array.length(loud))
+  let points = Array.fromInitializer(~length=count, i => loud->Array.getUnsafe(i * Array.length(loud) / Math.Int.max(1, count)))
+  let spectrumAt = s => {
+    let centre = Int.toFloat(s * Spectrum.envelopeStep + Spectrum.envelopeStep / 2)
+    let start = Math.max(0., Math.min(centre - span / 2., Int.toFloat(n - 1) - span))
+    WaveImport.spectrumOfPeriods(x, ~start, ~period, ~cycles)
+  }
+  if Int.toFloat(n) < span + 2. || count == 0 {
+    None
+  } else {
+    let shape = spectrumAt(loudest.contents)
+    WaveImport.align(shape)
+    let power = Array.make(~length=WaveImport.harmonics, 0.)
+    points->Array.forEach(s =>
+      spectrumAt(s).amp->Array.forEachWithIndex((a, k) => power->Array.setUnsafe(k, power->Array.getUnsafe(k) + a * a))
+    )
+    WaveImport.synthesise({
+      amp: power->Array.map(p => Math.sqrt(p / Int.toFloat(count))),
+      phase: shape.phase,
+    })
+  }
+}
+
+// Where a sound starts: 2 ms before it first reaches -40 dB of its peak. The sample is cut
+// there, and so is each candidate's render (MatchSearch.renderGenes), so that they line up.
+let onsetOf = (x: Float32Array.t) => {
+  let n = TypedArray.length(x)
+  let peak = peakOf(x)
+  let onset = ref(0)
+  while onset.contents < n && Math.abs(x->get32(onset.contents)) < peak * 0.01 {
+    onset := onset.contents + 1
+  }
+  Math.Int.max(0, Math.Int.min(n, onset.contents) - 88)
+}
+
 let prepare = (~name, audio: AudioFile.t): result<t, string> => {
   let x = resample(audio.samples, ~from=audio.sampleRate)
   let n = TypedArray.length(x)
@@ -202,16 +330,12 @@ let prepare = (~name, audio: AudioFile.t): result<t, string> => {
   if n == 0 || peak < 1e-6 {
     Error(`${name} is silent`)
   } else {
-    // from 2 ms before it first reaches -40 dB to 20 ms after it last passes -60 dB
-    let onset = ref(0)
-    while onset.contents < n && Math.abs(x->get32(onset.contents)) < peak * 0.01 {
-      onset := onset.contents + 1
-    }
+    // from its onset to 20 ms after it last passes -60 dB
+    let start = onsetOf(x)
     let ending = ref(n - 1)
-    while ending.contents > onset.contents && Math.abs(x->get32(ending.contents)) < peak * 0.001 {
+    while ending.contents > start && Math.abs(x->get32(ending.contents)) < peak * 0.001 {
       ending := ending.contents - 1
     }
-    let start = Math.Int.max(0, onset.contents - 88)
     let stop = Math.Int.min(n, ending.contents + 882)
     let length = Math.Int.min(stop - start, Float.toInt(maxSeconds * sampleRate))
     if Int.toFloat(length) < minSeconds * sampleRate {
@@ -224,7 +348,10 @@ let prepare = (~name, audio: AudioFile.t): result<t, string> => {
         samples->set32(i, x->get32(start + i) * 0.5 / cutPeak)
       }
       let features = Spectrum.measure(samples, ~period=None)
-      let (hz, pitchDrop) = findPitch(samples, features.envelope)
+      let (hz, pitchDrop) = switch findPitch(samples, features.envelope) {
+      | (None, _) => (spectralPitch(samples, features.envelope), 0.)
+      | found => found
+      }
       let (note, cents) = hz->Option.mapOr((60, 0.), noteOf)
       let (attack, decay, sustain) = describeEnvelope(features.envelope)
       Ok({
@@ -240,6 +367,10 @@ let prepare = (~name, audio: AudioFile.t): result<t, string> => {
         brightness: centroid(features),
         pitchDrop,
         overview: overviewOf(samples, ~points=160),
+        loudness: Array.fromInitializer(~length=TypedArray.length(features.envelope), s =>
+          Spectrum.db(features.envelope->get64(s))
+        ),
+        wave: hz->Option.flatMap(hz => fitWave(samples, features.envelope, ~hz)),
       })
     }
   }

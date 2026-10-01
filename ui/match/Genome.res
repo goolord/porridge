@@ -1,9 +1,16 @@
-// What the sound matcher searches: 32 genes, each from 0 to 1, that set the parts of a patch
-// that shape a single note (the oscillators, the filter and its envelope, the amp and pitch
-// envelopes, vibrato and filter wobble, drive, chorus and reverb). A choice gene picks one of
-// its options by which equal part of 0..1 it falls in. `decode` turns genes into parameter
-// values, which go on top of the patch the match starts from (Init, or the candidate a
-// re-match keeps parts of).
+// What the sound matcher searches: 40 genes, each from 0 to 1, that set the parts of a patch
+// that shape a single note (the oscillators and how they combine, the filter and its envelope,
+// the amp and pitch envelopes, vibrato and filter wobble, drive, chorus and reverb). A choice
+// gene picks one of its options by which equal part of 0..1 it falls in. `decode` turns genes
+// into parameter values, which go on top of the patch the match starts from (Init, or the
+// candidate a re-match keeps parts of).
+//
+// Two genes only change how a candidate is rendered, not the patch: the octave and the tuning
+// it is played at against the sample's pitch, so that a pitch found an octave off or a little
+// out (vibrato, chorus, a sweep) doesn't hold the match back.
+//
+// The first oscillator's "fitted" wave is the user waveform, which the match sets to the
+// sample's own harmonics (SoundTarget.fitWave) when it has a pitch.
 //
 // The genes are in groups that the drawer can lock (MatchDrawer.res), and each search keeps
 // some of them still (MatchSearch.islands).
@@ -28,28 +35,36 @@ let groupName = (g: group) =>
 type gene = {key: string, group: group, options: int}
 
 let genes: array<gene> = [
-  {key: "o1Wave", group: #osc, options: 4},
+  {key: "o1Wave", group: #osc, options: 5},
   {key: "o1Level", group: #osc, options: 0},
   {key: "width", group: #osc, options: 0},
   {key: "o2Wave", group: #osc, options: 4},
   {key: "o2Level", group: #osc, options: 0},
   {key: "o2Interval", group: #osc, options: 7},
+  {key: "o2Fine", group: #osc, options: 0},
   {key: "o2Detune", group: #osc, options: 0},
-  {key: "oscMix", group: #osc, options: 4},
+  {key: "oscMix", group: #osc, options: 7},
+  {key: "feedback", group: #osc, options: 0},
   {key: "noise", group: #osc, options: 0},
   {key: "noiseColour", group: #osc, options: 0},
   {key: "unison", group: #osc, options: 4},
   {key: "unisonDetune", group: #osc, options: 0},
-  {key: "filterType", group: #filter, options: 6},
+  {key: "octave", group: #osc, options: 3},
+  {key: "tune", group: #osc, options: 0},
+  {key: "filterType", group: #filter, options: 10},
   {key: "cutoff", group: #filter, options: 0},
   {key: "resonance", group: #filter, options: 0},
   {key: "filterEnv", group: #filter, options: 0},
   {key: "filterAttack", group: #filter, options: 0},
   {key: "filterDecay", group: #filter, options: 0},
   {key: "filterSustain", group: #filter, options: 0},
+  {key: "filterDrop", group: #filter, options: 0},
+  {key: "filterDecay1", group: #filter, options: 0},
   {key: "attack", group: #env, options: 0},
   {key: "decay", group: #env, options: 0},
   {key: "sustain", group: #env, options: 0},
+  {key: "drop", group: #env, options: 0},
+  {key: "decay1", group: #env, options: 0},
   {key: "pitchEnv", group: #env, options: 0},
   {key: "pitchTime", group: #env, options: 0},
   {key: "vibrato", group: #mod, options: 0},
@@ -64,21 +79,24 @@ let genes: array<gene> = [
 
 let count = Array.length(genes)
 
-// the genes a search's first stage moves: the first oscillator, the filter and the envelopes
-// (MatchSearch.phase)
+// the genes a search's first stage moves for each structure it tries: the first oscillator's
+// pulse width, the filter, the envelopes and the tuning (MatchSearch)
 let core = [
-  "o1Wave",
   "width",
-  "filterType",
   "cutoff",
   "resonance",
   "filterEnv",
   "filterAttack",
   "filterDecay",
   "filterSustain",
+  "filterDrop",
+  "filterDecay1",
   "attack",
   "decay",
   "sustain",
+  "drop",
+  "decay1",
+  "tune",
 ]
 
 let indexOf = {
@@ -93,16 +111,30 @@ let indexOf = {
 let gene = i => genes->Array.getUnsafe(i)
 
 // The options of the choice genes.
-let waves = [0., 6., 7., 8.] // sine, saw HQ, pulse HQ, triangle HQ
-let waveNames = ["sine", "saw", "pulse", "triangle"]
+let waves = [0., 6., 7., 8., 4.] // sine, saw HQ, pulse HQ, triangle HQ, user (the fitted wave)
+let waveNames = ["sine", "saw", "pulse", "triangle", "fitted wave"]
+let fittedWave = 4
 let intervals = [0., 12., -12., 7., 19., 24., 5.]
-let mixModes = [0., 1., 2., 5.] // normal, hard sync, FM 1 > 2, ring 1 × 2
-let mixNames = ["", "sync", "FM", "ring"]
+// normal, hard sync, FM 1 > 2, PM 2 > 1, PM 1 feedback, ring 1 × 2, AM 2 > 1
+let mixModes = [0., 1., 2., 3., 4., 5., 6.]
+let mixNames = ["", "sync", "FM", "PM", "feedback", "ring", "AM"]
+// the modes where osc 2 only modulates osc 1 (and osc 1 only osc 2 in FM)
+let modulates = mode => mode == 3 || mode == 5 || mode == 6
 let unisonVoices = [1., 2., 3., 4.]
+let octaves = [0, -12, 12]
 let filterTypes =
-  ["2P lowpass", "4P lowpass", "2P highpass", "2P wide bandpass", "ladder", "formant"]->Array.map(
-    FilterTypes.index,
-  )
+  [
+    "2P lowpass",
+    "4P lowpass",
+    "2P highpass",
+    "2P wide bandpass",
+    "ladder",
+    "formant",
+    "comb",
+    "formant I",
+    "formant II",
+    "formant III",
+  ]->Array.map(FilterTypes.index)
 
 // a choice gene's option, and the gene value in the middle of an option
 let choiceOf = (x, options) => Math.Int.max(0, Math.Int.min(options - 1, Float.toInt(x * Int.toFloat(options))))
@@ -120,35 +152,54 @@ let ofLogScale = (x: float, lo: float, hi: float) => clamp01(Math.log(x / lo) / 
 
 let def = id => Lazy.get(Preset.defsById)->Map.get(id)->Option.getOrThrow
 
-// Amp envelope times, in ms.
+// Envelope times, in ms.
 let attackMs = v => logScale(v, 0.2, 3000.)
 let decayMs = v => logScale(v, 10., 10000.)
+let decay1Ms = v => logScale(v, 10., 3000.)
 let filterAttackMs = v => logScale(v, 0.2, 2000.)
 let pitchMs = v => logScale(v, 10., 3000.)
 // an LFO rate in Hz to a speed in the "10 ms" unit
 let lfoSpeed = hz => 100. / hz
 let vibratoHz = v => logScale(v, 1.5, 12.)
 let wobbleHz = v => logScale(v, 0.3, 12.)
-// the pitch sweep's start, from 36 semitones down to 36 up, none in the middle fifth
-let pitchSemitones = v => {
+// A gene whose middle fifth is none and whose ends reach ±range, squared towards the middle: the
+// pitch sweep's start (±36 semitones) and osc 2's fine ratio (±12).
+let bipolar = (v, range) => {
   let u = 2. * v - 1.
   let past = Math.max(0., Math.abs(u) - 0.2) / 0.8
-  (u < 0. ? -36. : 36.) * past * past
+  (u < 0. ? -.range : range) * past * past
 }
-let pitchGene = st => {
-  let past = Math.sqrt(Math.min(36., Math.abs(st)) / 36.)
+let ofBipolar = (st, range) => {
+  let past = Math.sqrt(Math.min(range, Math.abs(st)) / range)
   let u = 0.2 + 0.8 * past
   (1. + (st < 0. ? -.u : u)) / 2.
 }
+let pitchSemitones = v => bipolar(v, 36.)
+let pitchGene = st => ofBipolar(st, 36.)
+let fineSemitones = v => bipolar(v, 12.)
+// the breakpoint: below dropOff none (one decay stage); then from just under the peak to -36 dB
+let breakpointOf = v => v < 0.1 ? 1. : ampOfDb(-36. * (v - 0.1) / 0.9)
+let dropOf = bp => bp > 0.999 ? 0. : 0.1 + 0.9 * clamp01(-.dbOfAmp(bp) / 36.)
+// the render's tuning against the sample's pitch, cents
+let tuneCents = v => 100. * (v - 0.5)
 // below these a gene switches its part off
 let o2Off = 0.12
 let noiseOff = 0.12
 let effectOff = 0.15
 let modOff = 0.2
 
+// The key a candidate is played at, and its tuning: the sample's, moved by the render genes.
+let playedNote = (x, ~note) => Math.Int.max(12, Math.Int.min(115, note + octaves->Array.getUnsafe(choice(x, "octave"))))
+let playedCents = (x, ~cents) => cents + tuneCents(get(x, "tune"))
+
+let secondOscSounds = x => {
+  let mode = choice(x, "oscMix")
+  get(x, "o2Level") >= o2Off || mode == 2
+}
+
 // Every parameter the genes set, with its value: the same ids whatever the genes, so that the
-// result replaces all of them. `note` is the key the match plays, which the cutoff is set for;
-// `base` reads the patch the values go on (for its effects rack).
+// result replaces all of them. `note` is the key the match plays (playedNote), which the
+// cutoff is set for; `base` reads the patch the values go on (for its effects rack).
 let decode = (x: Float64Array.t, ~note, ~base: string => float): array<(string, float)> => {
   let v = get(x, ...)
   let out = []
@@ -158,7 +209,8 @@ let decode = (x: Float64Array.t, ~note, ~base: string => float): array<(string, 
   let mode = choice(x, "oscMix")
   set("O1_Waveform", waves->Array.getUnsafe(choice(x, "o1Wave")))
   set("O2_Waveform", waves->Array.getUnsafe(choice(x, "o2Wave")))
-  // osc 1 is the modulator in FM mode, where its level is the depth
+  // osc 1 is the modulator in FM mode, where its level is the depth; osc 2's level is the depth
+  // in the PM, ring and AM modes
   set("O1_Amp", ampOfDb(-24. + 36. * v("o1Level")))
   let o2 = v("o2Level")
   set("O2_Amp", o2 < o2Off ? 0. : ampOfDb(-30. + 36. * (o2 - o2Off) / (1. - o2Off)))
@@ -167,9 +219,10 @@ let decode = (x: Float64Array.t, ~note, ~base: string => float): array<(string, 
   set("O2_PWM_W", width)
   set("O1_PWM_D", 0.)
   set("O2_PWM_D", 0.)
-  set("Transpose", intervals->Array.getUnsafe(choice(x, "o2Interval")) / 12.)
+  set("Transpose", (intervals->Array.getUnsafe(choice(x, "o2Interval")) + fineSemitones(v("o2Fine"))) / 12.)
   set("Detune", 6. * v("o2Detune") * v("o2Detune"))
   set("OscMix", mixModes->Array.getUnsafe(mode))
+  set("PM_Feedback", mode == 3 || mode == 4 ? v("feedback") : 0.)
   let noise = v("noise")
   set("N_Amp", noise < noiseOff ? 0. : ampOfDb(-36. + 36. * (noise - noiseOff) / (1. - noiseOff)))
   set("N_Resonance", 0.9 * v("noiseColour") * v("noiseColour"))
@@ -191,7 +244,8 @@ let decode = (x: Float64Array.t, ~note, ~base: string => float): array<(string, 
   set("F_EnvMod", -0.15 + 0.85 * fe * fe)
   set("F_Attack", filterAttackMs(v("filterAttack")))
   set("F_Hold", 0.)
-  set("F_Breakpoint", 1.)
+  set("F_Decay1", decay1Ms(v("filterDecay1")))
+  set("F_Breakpoint", breakpointOf(v("filterDrop")))
   set("F_Decay2", decayMs(v("filterDecay")))
   set("F_Sustain", v("filterSustain"))
 
@@ -202,7 +256,8 @@ let decode = (x: Float64Array.t, ~note, ~base: string => float): array<(string, 
   let release = sustain < 0.05 ? decay : Math.min(1500., 60. + 0.3 * decay)
   set("Attack", attackMs(v("attack")))
   set("Hold", 0.)
-  set("Breakpoint", 1.)
+  set("Decay1", decay1Ms(v("decay1")))
+  set("Breakpoint", breakpointOf(v("drop")))
   set("Decay2", decay)
   set("Sustain", sustain)
   set("Release", release)
@@ -265,8 +320,19 @@ let decode = (x: Float64Array.t, ~note, ~base: string => float): array<(string, 
   out
 }
 
-// Where the search starts for a target: its envelope, brightness and pitch movement, a saw
-// through a lowpass, and nothing else.
+// The amp envelope's genes for envelope stages (EnvelopeFit), and back.
+let envelopeKeys = ["attack", "decay1", "drop", "decay", "sustain"]
+let stagesOf = (e: Float64Array.t): EnvelopeFit.stages => {
+  attackMs: attackMs(e->get64(0)),
+  decay1Ms: decay1Ms(e->get64(1)),
+  breakpoint: breakpointOf(e->get64(2)),
+  decay2Ms: decayMs(e->get64(3)),
+  sustain: def("Sustain").fromNorm(e->get64(4)),
+}
+
+// Where the search starts for a target: a saw through a lowpass, nothing else, with the amp
+// envelope fitted to the sample's loudness, the cutoff from its brightness and its pitch
+// movement as a sweep.
 let seed = (t: SoundTarget.t) => {
   let x = Float64Array.fromLength(count)
   let set = (key, value) => x->set64(indexOf(key), clamp01(value))
@@ -277,12 +343,16 @@ let seed = (t: SoundTarget.t) => {
   setChoice("o2Wave", 1)
   set("o2Level", 0.)
   setChoice("o2Interval", 0)
+  set("o2Fine", 0.5)
   set("o2Detune", 0.3)
   setChoice("oscMix", 0)
+  set("feedback", 0.)
   set("noise", 0.)
   set("noiseColour", 0.)
   setChoice("unison", 0)
   set("unisonDetune", 0.4)
+  setChoice("octave", 0)
+  set("tune", 0.5)
   setChoice("filterType", 1)
   let hz = Math.max(200., Math.min(10000., 2. * t.brightness))
   set("cutoff", FilterTypes.cutoffOfHz(~filterType=filterTypes->Array.getUnsafe(1), hz))
@@ -292,9 +362,8 @@ let seed = (t: SoundTarget.t) => {
   set("filterAttack", 0.)
   set("filterDecay", ofLogScale(Math.max(10., 1000. * t.decay * 0.7), 10., 10000.))
   set("filterSustain", percussive ? 0.2 : 0.8)
-  set("attack", ofLogScale(Math.max(0.2, 1000. * t.attack * 0.6), 0.2, 3000.))
-  set("decay", ofLogScale(Math.max(10., 1000. * t.decay), 10., 10000.))
-  set("sustain", def("Sustain").toNorm(t.sustain))
+  set("filterDrop", 0.)
+  set("filterDecay1", 0.3)
   set("pitchEnv", Math.abs(t.pitchDrop) < 0.5 ? 0.5 : pitchGene(t.pitchDrop))
   set("pitchTime", ofLogScale(60., 10., 3000.))
   set("vibrato", 0.)
@@ -305,18 +374,42 @@ let seed = (t: SoundTarget.t) => {
   set("chorus", 0.)
   set("reverb", 0.)
   set("reverbTime", 0.4)
+
+  // the amp envelope: from the sample's attack, decay and sustain, then fitted to its loudness
+  let start = Float64Array.fromArray([
+    ofLogScale(Math.max(0.2, 1000. * t.attack * 0.6), 0.2, 3000.),
+    0.3,
+    0.,
+    ofLogScale(Math.max(10., 1000. * t.decay), 10., 10000.),
+    def("Sustain").toNorm(t.sustain),
+  ])
+  let loudness = t.loudness
+  let peak = loudness->Array.reduce(neg_infinity, Math.max)
+  let target = loudness->Array.map(l => l - peak)
+  let fit = e => EnvelopeFit.distance(stagesOf(e), target, ~floor=-60.)
+  let (best, _) = [start, Float64Array.fromArray([start->get64(0), 0.15, 0.5, start->get64(3), start->get64(4)])]
+  ->Array.map(s => EnvelopeFit.minimize(fit, s, ~step=0.15, ~iterations=160))
+  ->Array.reduce(None, (best, (x, f)) =>
+    switch best {
+    | Some((_, b)) if b <= f => best
+    | _ => Some((x, f))
+    }
+  )
+  ->Option.getOr((start, 0.))
+  envelopeKeys->Array.forEachWithIndex((key, i) => set(key, best->get64(i)))
   x
 }
 
 // How many of the optional parts the genes switch on (a second oscillator, noise, unison, a
-// mix mode, a pitch sweep, vibrato, wobble, drive, chorus, reverb). The search charges a little
-// for each, so that a part stays only if it helps the match.
+// mix mode, an off-harmonic ratio, a pitch sweep, vibrato, wobble, drive, chorus, reverb). The
+// search charges a little for each, so that a part stays only if it helps the match.
 let parts = (x: Float64Array.t) => {
   let v = get(x, ...)
   let mode = choice(x, "oscMix")
   [
-    v("o2Level") >= o2Off || mode == 2,
+    secondOscSounds(x) || modulates(mode),
     mode != 0,
+    Math.abs(fineSemitones(v("o2Fine"))) >= 0.05 && (secondOscSounds(x) || modulates(mode)),
     v("noise") >= noiseOff,
     choice(x, "unison") > 0,
     Math.abs(pitchSemitones(v("pitchEnv"))) >= 0.25,
@@ -334,7 +427,7 @@ let parts = (x: Float64Array.t) => {
 let structure = (x: Float64Array.t) => {
   let v = get(x, ...)
   let mode = choice(x, "oscMix")
-  let o2 = v("o2Level") >= o2Off || mode == 2
+  let o2 = secondOscSounds(x) || modulates(mode)
   [
     choice(x, "o1Wave"),
     choice(x, "filterType"),
@@ -351,17 +444,99 @@ let structure = (x: Float64Array.t) => {
   ]
 }
 
+// Which genes make a difference to a patch: those of the parts it has on (osc 2's when it
+// sounds or modulates, the noise colour with noise, the second decay stages with a breakpoint
+// and so on). The rest are left out where genes are compared or learned.
+let relevant = (x: Float64Array.t) => {
+  let v = get(x, ...)
+  let mode = choice(x, "oscMix")
+  let o2 = secondOscSounds(x) || modulates(mode)
+  let pulse = choice(x, "o1Wave") == 2 || o2 && choice(x, "o2Wave") == 2
+  genes->Array.map(g =>
+    switch g.key {
+    | "width" => pulse
+    | "o2Wave" | "o2Interval" | "o2Fine" | "o2Detune" => o2
+    | "feedback" => mode == 3 || mode == 4
+    | "noiseColour" => v("noise") >= noiseOff
+    | "unisonDetune" => choice(x, "unison") > 0
+    | "filterDecay1" => v("filterDrop") >= 0.1
+    | "decay1" => v("drop") >= 0.1
+    | "pitchTime" => Math.abs(pitchSemitones(v("pitchEnv"))) >= 0.25
+    | "vibratoRate" => v("vibrato") >= modOff
+    | "wobbleRate" => v("wobble") >= modOff
+    | "reverbTime" => v("reverb") >= effectOff
+    | _ => true
+    }
+  )
+}
+
+// A random patch the genes can make, for tests and for training the predictor: every gene
+// anywhere, each optional part more often off than on, played at the sample's own pitch and
+// never with the fitted wave (which needs a sample).
+let random = (random: unit => float) => {
+  let x = Float64Array.fromLength(count)
+  for i in 0 to count - 1 {
+    x->set64(i, random())
+  }
+  let set = (key, value) => x->set64(indexOf(key), value)
+  let setChoice = (key, i) => set(key, valueOfChoice(i, gene(indexOf(key)).options))
+  let often = p => random() < p
+  if choice(x, "o1Wave") == fittedWave {
+    setChoice("o1Wave", Float.toInt(random() * 4.))
+  }
+  [("o2Level", 0.5), ("noise", 0.7), ("vibrato", 0.75), ("wobble", 0.75), ("drive", 0.7), ("chorus", 0.75), ("reverb", 0.75)]->Array.forEach(((
+    key,
+    p,
+  )) =>
+    if often(p) {
+      set(key, 0.)
+    }
+  )
+  if often(0.5) {
+    setChoice("oscMix", 0)
+  }
+  if often(0.6) {
+    setChoice("unison", 0)
+  }
+  if often(0.7) {
+    set("pitchEnv", 0.5)
+  }
+  if often(0.6) {
+    set("o2Fine", 0.5)
+  }
+  if often(0.5) {
+    set("drop", 0.)
+  }
+  if often(0.6) {
+    set("filterDrop", 0.)
+  }
+  setChoice("octave", 0)
+  set("tune", 0.5)
+  x
+}
+
 // A short description of a patch, for its card: "saw + pulse +12 · 4P LP · pluck · reverb".
 let describe = (x: Float64Array.t) => {
   let v = get(x, ...)
   let wave = key => waveNames->Array.getUnsafe(choice(x, key))
   let mode = choice(x, "oscMix")
-  let o2 = v("o2Level") >= o2Off || mode == 2
-  let interval = intervals->Array.getUnsafe(choice(x, "o2Interval"))
-  let intervalText = interval == 0. ? "" : (interval > 0. ? " +" : " ") ++ Float.toString(interval)
+  let o2 = secondOscSounds(x) || modulates(mode)
+  let semis = intervals->Array.getUnsafe(choice(x, "o2Interval")) + fineSemitones(v("o2Fine"))
+  let rounded = Math.round(semis * 10.) / 10.
+  let intervalText = rounded == 0. ? "" : (rounded > 0. ? " +" : " ") ++ Float.toString(rounded)
   let oscText =
-    (o2 ? (mode == 2 ? wave("o1Wave") ++ " FM " ++ wave("o2Wave") : `${wave("o1Wave")} + ${wave("o2Wave")}${intervalText}`) : wave("o1Wave")) ++
-    (mode == 1 || mode == 3 ? " " ++ mixNames->Array.getUnsafe(mode) : "") ++
+    (
+      !o2
+        ? wave("o1Wave")
+        : switch mode {
+          | 2 => `${wave("o1Wave")} FM ${wave("o2Wave")}${intervalText}`
+          | 3 => `${wave("o2Wave")}${intervalText} PM ${wave("o1Wave")}`
+          | 5 => `${wave("o1Wave")} ring ${wave("o2Wave")}${intervalText}`
+          | 6 => `${wave("o1Wave")} AM ${wave("o2Wave")}${intervalText}`
+          | _ => `${wave("o1Wave")} + ${wave("o2Wave")}${intervalText}`
+          }
+    ) ++
+    (mode == 1 || mode == 4 ? " " ++ mixNames->Array.getUnsafe(mode) : "") ++
     (v("noise") >= noiseOff ? " + noise" : "") ++
     switch unisonVoices->Array.getUnsafe(choice(x, "unison")) {
     | 1. => ""

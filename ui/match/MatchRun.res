@@ -1,7 +1,8 @@
-// Runs the sound matcher's searches (MatchSearch.res) in the view: each asks for a generation,
-// every candidate of it goes to the workers to be rendered and scored on its own (so that a
-// generation spreads over all of them), and the search learns from the scores and goes on.
-// The searches run side by side, each keeping away from its rivals' best so far.
+// Runs a match (MatchSearch.res) in the view: the outline first, then the four searches side
+// by side, each keeping away from its rivals' best so far. Each search asks for a round of
+// candidates, every one of them goes to the workers to be rendered and scored on its own (so
+// that a round spreads over all of them), and the search learns from the scores and goes on.
+// While the outline runs, its best shows on the first card.
 // Variations are rendered once.
 //
 // `evaluate` scores genes by weights, with the candidate if it scores under the threshold:
@@ -19,40 +20,57 @@ type t = {mutable cancelled: bool}
 
 let cancel = t => t.cancelled = true
 
-let search = (evaluate: evaluate, searches: array<MatchSearch.search>, handlers) => {
+let search = (evaluate: evaluate, m: MatchSearch.match_, handlers) => {
   let t = {cancelled: false}
-  searches->Array.forEach(s =>
-    s.rivals = searches->Array.filter(r => s.island.rivals->Array.includes(r.islandIndex))
-  )
+  let islands = Array.length(MatchSearch.islands)
   let report = (s: MatchSearch.search) => s.best->Option.forEach(handlers.onCandidate)
-  let run = async (s: MatchSearch.search) => {
+  // each card's share of the outline, then its own search
+  let progress = (~outline, ~own, ~island) =>
+    handlers.onProgress(
+      ~island,
+      ~evals=outline / islands + own,
+      ~budget=m.outline.budget / islands + m.islandBudget,
+    )
+  let step = async (s: MatchSearch.search) => {
+    let pending = MatchSearch.ask(s)
+    let threshold = MatchSearch.threshold(s)
+    let results = await Promise.all(pending.genes->Array.map(x => evaluate(x, s.weights, threshold)))
+    !t.cancelled && MatchSearch.tell(s, pending, results)
+  }
+  let run = async (s: MatchSearch.search) =>
     while !t.cancelled && !MatchSearch.isDone(s) {
-      let pending = MatchSearch.ask(s)
-      let threshold = MatchSearch.threshold(s)
-      let results = await Promise.all(pending.genes->Array.map(x => evaluate(x, s.island.weights, threshold)))
+      if await step(s) {
+        report(s)
+      }
       if !t.cancelled {
-        if MatchSearch.tell(s, pending, results) {
-          report(s)
-        }
-        handlers.onProgress(~island=s.islandIndex, ~evals=s.evals, ~budget=s.budget)
+        progress(~outline=m.outline.evals, ~own=s.evals, ~island=s.islandIndex)
       }
     }
-  }
-  Promise.all(searches->Array.map(run))
-  ->Promise.thenResolve(_ =>
-    if !t.cancelled {
-      // each against its rivals' final answers, those with fewer rivals first
-      searches
-      ->Array.toSorted((a, b) => Int.compare(Array.length(a.rivals), Array.length(b.rivals)))
-      ->Array.forEach(s =>
-        if MatchSearch.reselect(s) {
-          report(s)
-        }
-      )
-      handlers.onDone()
+  (async () => {
+    while !t.cancelled && !MatchSearch.isDone(m.outline) {
+      if await step(m.outline) {
+        report(m.outline)
+      }
+      for island in 0 to islands - 1 {
+        progress(~outline=m.outline.evals, ~own=0, ~island)
+      }
     }
-  )
-  ->ignore
+    if !t.cancelled {
+      let searches = MatchSearch.branchAll(m)
+      let _ = await Promise.all(searches->Array.map(run))
+      if !t.cancelled {
+        // each against its rivals' final answers, those with fewer rivals first
+        searches
+        ->Array.toSorted((a, b) => Int.compare(Array.length(a.rivals), Array.length(b.rivals)))
+        ->Array.forEach(s =>
+          if MatchSearch.reselect(s) {
+            report(s)
+          }
+        )
+        handlers.onDone()
+      }
+    }
+  })()->ignore
   t
 }
 

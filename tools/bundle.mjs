@@ -1,12 +1,12 @@
 // Bundles the compiled ReScript view and worker into the two self-contained ES modules
-// the patch manifest loads (Cmajor can't resolve the @rescript/runtime imports itself), and
+// the patch manifest loads (Cmajor can't resolve the @rescript/runtime imports itself),
 // encodes Oatmeal's factory bank as a new instance's stored state keeps it, which the worker
-// installs (worker/PatchWorker.res).
+// installs (worker/PatchWorker.res), and copies in the sound matcher's predictor.
 //
 // run: npm run build   (compiles the ReScript sources, then bundles)
 
 import { build } from "esbuild";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -37,6 +37,14 @@ await build ({
     logLevel: "warning",
 });
 console.log ("ui/match/MatchWorker.res.mjs -> bundle/match-worker.js");
+
+// The sound matcher's predictor (tools/match-train.mjs trains it), read by its workers.
+const model = join (root, "ui", "match", "match-model.bin");
+if (existsSync (model))
+{
+    copyFileSync (model, join (root, "bundle", "match-model.bin"));
+    console.log ("ui/match/match-model.bin -> bundle/match-model.bin");
+}
 
 const Preset = await import (pathToFileURL (join (root, "ui", "Preset.res.mjs")).href);
 const factory = Preset.factoryBank (new Uint8Array (readFileSync (join (root, "presets", "oatmealprs.dat"))));

@@ -12,12 +12,14 @@ let engineClass: unit => MatchEngine.engineClass = %raw(`() => PorridgeMatchEngi
 
 let engine = ref(None)
 let context = ref(None)
+let model = ref(None)
 
 let messageOf = (e, fallback) => e->JsExn.fromException->Option.flatMap(JsExn.message)->Option.getOr(fallback)
 
 let handle = async (request: request) =>
   switch (request, engine.contents) {
-  | (Init({wasm}), _) =>
+  | (Init({wasm, model: file}), _) =>
+    model := file->Option.flatMap(MatchModel.parse)
     switch await MatchEngine.make(engineClass(), wasm) {
     | e =>
       engine := Some(e)
@@ -29,7 +31,8 @@ let handle = async (request: request) =>
     | Ok(target) =>
       let (envelope, spectrum) =
         MatchSearch.targetPicture(Spectrum.measure(target.samples, ~period=SoundTarget.period(target)))
-      post(Target({task, target, envelope, spectrum}))
+      let suggestions = model.contents->Option.mapOr([], m => MatchModel.suggest(m, target))
+      post(Target({task, target, envelope, spectrum, suggestions}))
     | Error(message) => post(Failed({task, message}))
     }
   | (_, None) => post(Failed({task: -1, message: "the engine isn't ready"}))

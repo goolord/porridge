@@ -16,7 +16,8 @@
 open! Web
 
 let slotCount = 4
-let budget = 300
+// the renders a match has, for the outline and the four searches together
+let budget = 1400
 let amounts = [("a little", 0.15), ("some", 0.35), ("a lot", 0.7)]
 
 type card = {
@@ -46,6 +47,8 @@ type generation = {
 
 type loaded = {
   target: SoundTarget.t,
+  // where the predictor (MatchModel.res) suggests the search starts, best guess first
+  suggestions: array<Float64Array.t>,
   // the pool's session for it (MatchPool.session), once it has one
   mutable session: option<int>,
   // the target's picture: loudness and spectrum, dB
@@ -425,10 +428,10 @@ let make = (ctx: Ctx.t, stage): t => {
     playingNote := None
   }
 
-  let playNote = () =>
+  // a card's note, at the key it matched the sample's pitch with
+  let playNote = note =>
     loaded.contents->Option.forEach(l => {
       noteOff()
-      let note = l.target.note
       Wheels.send(ctx, 0x90, note, MatchEngine.velocity)
       playingNote := Some(note)
       let seconds = Math.max(0.35, Math.min(2.5, SoundTarget.seconds(l.target)))
@@ -438,15 +441,20 @@ let make = (ctx: Ctx.t, stage): t => {
   let baseName = () =>
     loaded.contents->Option.mapOr("Match", l => Web.baseName(l.fileName)->String.slice(~start=0, ~end=Preset.maxNameLength))
 
-  // A candidate as a program: Init with its values, named after the sample.
+  // A candidate as a program: Init with its values (and the fitted wave, if it plays it),
+  // named after the sample.
   let presetOf = (c: MatchSearch.candidate, ~title) => {
     let init = Lazy.get(init)
     let values = Map.fromArray(init.values->Map.entries->Array.fromIterator)
     c.values->Array.forEach(((id, v)) => values->Map.set(id, v))
+    let tables = Preset.copyTables(init.tables)
     let preset: Preset.t = {
       ...init,
       values,
-      tables: Preset.copyTables(init.tables),
+      tables: switch loaded.contents {
+      | Some(l) if c.fitted => MatchSearch.tablesFor(l.target, tables)
+      | _ => tables
+      },
       meta: {
         ...init.meta,
         name: baseName(),
@@ -481,7 +489,7 @@ let make = (ctx: Ctx.t, stage): t => {
       }
       chosen := Some(slot)
       keptSlot := None
-      playNote()
+      playNote(c.note)
       renderAll()
     | _ => ()
     }
@@ -639,9 +647,9 @@ let make = (ctx: Ctx.t, stage): t => {
     loaded.contents->Option.forEach(l => {
       let locked = lockedNow()
       let reference = locked == [] ? None : chosen.contents->Option.flatMap(candidateAt)
-      let start = switch reference {
-      | Some(c) => Float64Array.fromArray(c.genes)
-      | None => Genome.seed(l.target)
+      let starts = switch reference {
+      | Some(c) => [Float64Array.fromArray(c.genes)]
+      | None => [Genome.seed(l.target), ...l.suggestions]
       }
       runs := runs.contents + 1
       let seed = 7919 * runs.contents
@@ -656,16 +664,14 @@ let make = (ctx: Ctx.t, stage): t => {
       push(gen, l, (_, evaluate) =>
         MatchRun.search(
           evaluate,
-          MatchSearch.islands->Array.mapWithIndex((_, island) =>
-            MatchSearch.makeSearch(
-              island,
-              ~start,
-              ~locks=locked,
-              ~reference=reference->Option.map(c => Float64Array.fromArray(c.genes)),
-              ~budget,
-              ~sigma=reference == None ? 0.25 : 0.2,
-              ~seed=seed + island,
-            )
+          MatchSearch.makeMatch(
+            ~starts,
+            ~fitted=l.target.wave != None,
+            ~locks=locked,
+            ~reference=reference->Option.map(c => Float64Array.fromArray(c.genes)),
+            ~budget,
+            ~sigma=reference == None ? 0.25 : 0.2,
+            ~seed,
           ),
           handlersFor(gen),
         )
@@ -691,6 +697,7 @@ let make = (ctx: Ctx.t, stage): t => {
       }
       let mutants = MatchSearch.mutants(
         Float64Array.fromArray(c.genes),
+        ~fitted=l.target.wave != None,
         ~locks=locked,
         ~amount,
         ~count=slotCount,
@@ -747,13 +754,13 @@ let make = (ctx: Ctx.t, stage): t => {
         | Ok(p) =>
           switch await MatchPool.prepare(p, ~name, audio) {
           | Error(text) => message(text)
-          | Ok((target, envelope, spectrum)) =>
+          | Ok((target, envelope, spectrum, suggestions)) =>
             settle()
             cancelShown()
             generations->Array.splice(~start=0, ~remove=Array.length(generations), ~insert=[])
             runs := 0
             undo := None
-            loaded := Some({target, session: None, picture: (envelope, spectrum), fileName: name})
+            loaded := Some({target, suggestions, session: None, picture: (envelope, spectrum), fileName: name})
             startMatch()
           }
         }

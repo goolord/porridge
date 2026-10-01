@@ -1,6 +1,6 @@
 // The sound matcher's workers, as the view runs them. The first time someone matches a sound,
-// the engine (bundle/match-engine.wasm and .js) and the worker (bundle/match-worker.js) are
-// read from the patch's resources, the module is compiled once, and the workers start, each
+// the engine (bundle/match-engine.wasm and .js), the worker (bundle/match-worker.js) and the
+// predictor (bundle/match-model.bin, if the build has one) are read from the patch's resources, the module is compiled once, and the workers start, each
 // with an engine of its own (about 45 MB each, so at most six).
 //
 // Work goes out as tasks, each to the next idle worker: rendering and scoring one candidate
@@ -82,6 +82,7 @@ let start = async (pc): result<t, string> => {
   let glue = await Resources.readText(pc, "bundle/match-engine.js")
   let code = await Resources.readText(pc, "bundle/match-worker.js")
   let bytes = await Resources.readBytes(pc, "bundle/match-engine.wasm")
+  let model = await Resources.readBytes(pc, "bundle/match-model.bin")
   switch (glue, code, bytes) {
   | (Some(glue), Some(code), Some(bytes)) =>
     switch await compile(bytes) {
@@ -109,7 +110,7 @@ let start = async (pc): result<t, string> => {
               | _ => ()
               }
             )
-            slot.worker->postMessage(Init({wasm: wasm}))
+            slot.worker->postMessage(Init({wasm, model}))
           })
         ),
       )
@@ -169,7 +170,7 @@ let evaluate = (t, ~session, ~run, genes: Float64Array.t, weights, threshold) =>
 
 let prepare = async (t, ~name, audio: AudioFile.t) =>
   switch await request(t, task => Prepare({task, name, samples: audio.samples, sampleRate: audio.sampleRate})) {
-  | Target({target, envelope, spectrum}) => Ok((target, envelope, spectrum))
+  | Target({target, envelope, spectrum, suggestions}) => Ok((target, envelope, spectrum, suggestions))
   | Failed({message}) => Error(message)
   | _ => Error(`${name} couldn't be read`)
   }
