@@ -110,6 +110,7 @@ let default = pc => {
     switch (key, value) {
     | ("shapes", String(shapes)) =>
       Bank.decodeShapes(shapes)->Option.forEach(Bank.sendShapes(pc, _))
+    | ("tuning", String(tuning)) => Bank.sendTuning(pc, tuning == "" ? None : Bank.decodeTuning(tuning))
     | _ => ()
     }
     if !settled.contents {
@@ -118,6 +119,7 @@ let default = pc => {
   })
   pc->requestStoredStateValue("bank")
   pc->requestStoredStateValue("shapes")
+  pc->requestStoredStateValue("tuning")
 
   // Give the host a moment to answer; if there is no bank in the session this is a
   // new instance.

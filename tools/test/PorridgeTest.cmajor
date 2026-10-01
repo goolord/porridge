@@ -9,6 +9,7 @@ graph PorridgeTest  [[ main ]]
     input event std::timeline::Tempo tempoIn;
     input event porridge::Shape shapeIn;
     input event porridge::Curve curveIn;
+    input event porridge::Tuning tuningIn;
     input event int panic;
     input event int testMode;
     input stream float<2> testIn;
@@ -25,6 +26,7 @@ graph PorridgeTest  [[ main ]]
         tempoIn         -> synth.tempoIn;
         shapeIn         -> synth.shapeIn;
         curveIn         -> synth.curveIn;
+        tuningIn        -> synth.tuningIn;
         panic           -> synth.panicIn;
         testMode        -> synth.testModeIn;
         testIn          -> synth.testIn;

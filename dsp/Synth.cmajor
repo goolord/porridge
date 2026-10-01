@@ -13,6 +13,7 @@ namespace porridge
         input event std::timeline::Position positionIn;
         input event Shape shapeIn;
         input event Curve curveIn;
+        input event Tuning tuningIn;
         input event int panicIn;
 
         // test-only: lets the offline test graph replace the voices with a recorded signal
@@ -27,6 +28,8 @@ namespace porridge
         float[numSlots] P;                          // program mirror, slot = chunk offset / 4
         float[512] wave1, wave2, lfoShape1, lfoShape2;
         float[64] velCurve, touchCurve;
+        bool tuningOn;
+        float[128] keySemitones;
         bool user1Dirty, user2Dirty;
 
         float64 sampleRate, samplesPerBeat;
@@ -131,6 +134,12 @@ namespace porridge
         {
             if (c.which == 0) velCurve = c.data;
             else if (c.which == 1) touchCurve = c.data;
+        }
+
+        event tuningIn (Tuning t)
+        {
+            tuningOn = t.on != 0;
+            keySemitones = t.semitones;
         }
 
         event tempoIn (std::timeline::Tempo t)          { if (t.bpm > 0) bpm = t.bpm; }
@@ -765,11 +774,22 @@ namespace porridge
                 return;
             }
 
+            // a microtuned key that isn't mapped doesn't sound
+            if (tuningOn && keySemitones.at (key & 0x7f) < -1000.0f)
+                return;
+
             let x = float (vel) * 0.00787401572f * 64.0f;
             let velc = curveLerp (false, x);
             let det = (float (rng.next()) * (1.0f / 16384.0f) - 1.0f) * P[slot::RandomFreq] * 0.01f;
             let semis = float (det + off);
-            let freq = float64 (P[slot::Tune_Main]) * pow (float64 (octave), (float64 ((key & 0xff) - 69) + float64 (semis)) / 12.0);
+            var freq = float64 (P[slot::Tune_Main]) * pow (float64 (octave), (float64 ((key & 0xff) - 69) + float64 (semis)) / 12.0);
+
+            // a scale sets the key's pitch; tune still moves 440 Hz, and offsets (arp shifts,
+            // random detune) stay in the octave's semitones
+            if (tuningOn)
+                freq = float64 (P[slot::Tune_Main]) * pow (2.0, float64 (keySemitones.at (key & 0x7f)) / 12.0)
+                         * pow (float64 (octave), float64 (semis) / 12.0);
+
             vmNoteOn (freq, key, velc);
         }
 

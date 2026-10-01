@@ -15,4 +15,12 @@ namespace porridge
         int which;
         float[64] data;
     }
+
+    /// Microtuning: every key's pitch in semitones from 440 Hz (below -1000: the key is silent).
+    /// With on = 0 the keys follow Oatmeal's tuning.
+    struct Tuning
+    {
+        int on;
+        float[128] semitones;
+    }
 }

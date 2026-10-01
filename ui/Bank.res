@@ -67,6 +67,36 @@ let sendShape = (pc, table, data) => {
 let sendShapes = (pc, shapes) =>
   allTables->Array.forEach(table => sendShape(pc, table, shapes->getTable(table)))
 
+type tuningPayload = {on: int, semitones: array<float>}
+
+// a microtuning (or Oatmeal's tuning, for None) to the patch
+let sendTuning = (pc, tuning: option<Scala.source>) => {
+  let payload = switch tuning->Option.map(Scala.table) {
+  | Some(Ok({semitones})) => {on: 1, semitones}
+  | _ => {on: 0, semitones: Array.make(~length=128, 0.)}
+  }
+  pc->PatchConnection.sendEventOrValueNow("tuningIn", payload)
+}
+
+// the stored-state form of a microtuning: JSON text, or "" for none
+let encodeTuning = (tuning: option<Scala.source>) =>
+  switch tuning {
+  | Some({scl, kbm}) =>
+    JSON.stringify(JSON.Object(Dict.fromArray([("scl", JSON.String(scl)), ("kbm", JSON.String(kbm))])))
+  | None => ""
+  }
+
+let decodeTuning = (s): option<Scala.source> =>
+  switch JSON.parseOrThrow(s) {
+  | Object(d) =>
+    switch (d->Dict.get("scl"), d->Dict.get("kbm")) {
+    | (Some(String(scl)), Some(String(kbm))) => Some({scl, kbm})
+    | _ => None
+    }
+  | _ => None
+  | exception _ => None
+  }
+
 let sendValues = (pc, values: values) =>
   values->Map.forEachWithKey((x, id) => pc->PatchConnection.sendEventOrValueNow(id, x))
 

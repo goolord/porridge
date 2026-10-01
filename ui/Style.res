@@ -170,6 +170,9 @@ let css = `
 .sep { position: absolute; height: 1px; background: rgba(31,26,14,0.2); }
 .note { position: absolute; font-size: 11px; color: var(--ink-faint); white-space: nowrap; }
 .note.wrap { white-space: normal; line-height: 1.35; }
+.scale { position: absolute; height: 20px; line-height: 20px; font-size: 12.5px; color: var(--ink-faint);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scale.on { color: var(--ink); font-weight: 700; }
 
 /* header: page tabs, then the program and file controls */
 .pv-head {

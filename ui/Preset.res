@@ -6,7 +6,8 @@
 //     "params": { "Cutoff": 0.42, "O1_Waveform": 1, ... },   // endpoint id -> internal value
 //     "modulations": [ { "source": "lfo1", "target": "Cutoff", "amount": 0.25, "via": "modWheel" } ],
 //     "macros": ["brightness", "", "", ""],                    // macro knob names
-//     "tables": { "wave1": "<base64 float32 LE>", ... }       // only tables that differ from Init
+//     "tables": { "wave1": "<base64 float32 LE>", ... },      // only tables that differ from Init
+//     "tuning": { "scl": "<.scl text>", "kbm": "<.kbm text>" }  // microtuning, if any
 //   }
 //
 // The modulation matrix's slot parameters (Mod1_Source ...) are written as "modulations",
@@ -42,6 +43,8 @@ type t = {
   // every parameter, by endpoint id
   values: Bank.values,
   tables: tables,
+  // a Scala scale and keyboard mapping; None plays Oatmeal's tuning
+  tuning: option<Scala.source>,
 }
 
 let defs = Lazy.make(() => ParamDefs.makeDefs())
@@ -66,6 +69,7 @@ let make = name => {
   meta: emptyMeta(name),
   values: defaultValues(),
   tables: copyTables(Lazy.get(defaultTables)),
+  tuning: None,
 }
 
 let name = p => p.meta.name
@@ -96,7 +100,7 @@ let fromOatmeal = (bytes: Uint8Array.t) => {
   Bank.programValues(bytes)->Map.forEachWithKey((x, id) =>
     clampValue(id, x)->Option.forEach(x => values->Map.set(id, x))
   )
-  {meta: emptyMeta(getName(bytes)), values, tables: extractTables(bytes)}
+  {meta: emptyMeta(getName(bytes)), values, tables: extractTables(bytes), tuning: None}
 }
 
 // What an Oatmeal export of this preset loses.
@@ -114,6 +118,7 @@ let porridgeOnly = p => {
     modulated ? Some("modulations") : None,
     macros ? Some("macros") : None,
     mpe ? Some("MPE settings") : None,
+    p.tuning != None ? Some("the microtuning") : None,
     String.length(p.meta.name) > nameLength - 1 ? Some("the full name") : None,
   ]->Array.filterMap(x => x)
 }
@@ -234,6 +239,13 @@ let toJson = (p, ~header=true) => {
     }
   })
   fields->Dict.set("tables", JSON.Object(tables))
+
+  p.tuning->Option.forEach(({scl, kbm}) => {
+    let t = Dict.make()
+    t->Dict.set("scl", str(scl))
+    t->Dict.set("kbm", str(kbm))
+    fields->Dict.set("tuning", JSON.Object(t))
+  })
   JSON.Object(fields)
 }
 
@@ -329,6 +341,12 @@ let fromJsonObject = (d: dict<JSON.t>) => {
     },
     values,
     tables,
+    tuning: switch d->Dict.get("tuning") {
+    | Some(Object(t)) =>
+      let source: Scala.source = {scl: getString(t, "scl"), kbm: getString(t, "kbm")}
+      Scala.table(source)->Result.isOk ? Some(source) : None
+    | _ => None
+    },
   }
 }
 

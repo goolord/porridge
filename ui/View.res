@@ -196,7 +196,7 @@ let make = (host, pc) => {
   button(
     head,
     "Load",
-    "Load a Porridge preset or bank (.porridge), or an Oatmeal program or bank (.omp, .omb, .fxp, .fxb, .dat). You can also drop the file onto the window.",
+    "Load a Porridge preset or bank (.porridge), an Oatmeal program or bank (.omp, .omb, .fxp, .fxb, .dat), or a Scala tuning (.scl, .kbm). You can also drop the file onto the window.",
     () => fileInput->click,
   )->ignore
   let save = ref(None)
@@ -236,7 +236,7 @@ let make = (host, pc) => {
 
   stage->appendChild(fileInput)
   fileInput->setInputType("file")
-  fileInput->setAccept(".porridge,.json,.omp,.omb,.fxp,.fxb,.dat")
+  fileInput->setAccept(".porridge,.json,.omp,.omb,.fxp,.fxb,.dat,.scl,.kbm")
   fileInput->setStyle("display", "none")
   fileInput->onEvent(#change, _ => {
     fileInput->files->Option.flatMap(item(_, 0))->Option.forEach(f => loadFile(f)->Promise.ignore)

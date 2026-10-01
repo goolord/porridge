@@ -15,6 +15,8 @@ type element = Dom.element
 @send external contains: (element, Dom.eventTarget) => bool = "contains"
 @send @return(nullable)
 external querySelector: (element, string) => option<element> = "querySelector"
+@send external querySelectorAll: (element, string) => Dom.nodeList = "querySelectorAll"
+@val external nodesToArray: Dom.nodeList => array<element> = "Array.from"
 @get @return(nullable) external parentElement: element => option<element> = "parentElement"
 @set external setClassName: (element, string) => unit = "className"
 @set external setTextContent: (element, string) => unit = "textContent"

@@ -100,6 +100,72 @@ let lfo = (ctx: Ctx.t, body, n, box: box) => {
   g->Grid.param(n == 1 ? "LFO_1_2" : "LFO_2_1", 2, 3, n == 1 ? "rate 2" : "rate 1")
 }
 
+// Microtuning: a Scala scale (and keyboard mapping) instead of the 12 notes above it.
+let scale = (ctx: Ctx.t, body, g: Grid.t) => {
+  let y = g->Grid.cy(4) + 6.
+  el("div", ~cls="sep", ~parent=body)->place(g->Grid.cx(0) + 3., y - 3., ~w=4. * g.cw - 8.)->ignore
+  let name = el("div", ~cls="scale", ~parent=body)->place(g->Grid.cx(0) + 3., y + 2., ~w=2. * g.cw - 6.)
+  let picker = el("input", ~parent=body)
+  picker->setInputType("file")
+  picker->setAccept(".scl,.kbm")
+  picker->setStyle("display", "none")
+  picker->onEvent(#change, _ => {
+    picker
+    ->files
+    ->Option.flatMap(item(_, 0))
+    ->Option.forEach(file =>
+      file
+      ->arrayBuffer
+      ->Promise.thenResolve(buffer =>
+        ctx.programs->ProgramStore.loadTuningFile(
+          Preset.utf8Decode(Uint8Array.fromBuffer(buffer)),
+          file->fileName,
+        )
+      )
+      ->Promise.ignore
+    )
+    picker->setValue("")
+  })
+  // the 12 note offsets don't apply while a scale is loaded
+  let notes = body->querySelectorAll(".p")->nodesToArray->Array.slice(~start=4)
+  g->Grid.button(
+    "load scale",
+    2,
+    4,
+    ~w=g.cw - 8.,
+    ~status="Load a Scala scale (.scl) or keyboard mapping (.kbm); they're saved with the program",
+    ~dy=5.,
+    () => picker->click,
+  )
+  g->Grid.button(
+    "clear",
+    3,
+    4,
+    ~w=g.cw - 8.,
+    ~status="Back to the 12-note tuning above",
+    ~dy=5.,
+    () => ctx.programs->ProgramStore.setTuning(None),
+  )
+  let help = el("div", ~cls="note wrap", ~parent=body)->place(
+    g->Grid.cx(0) + 3.,
+    y + 28.,
+    ~w=4. * g.cw - 8.,
+  )
+  let update = () => {
+    let scaleName = ctx.programs->ProgramStore.tuningName
+    name->setTextContent(scaleName->Option.getOr("12 notes, as above"))
+    name->toggleClass("on", scaleName != None)
+    notes->Array.forEach(e => e->toggleClass("dim", scaleName != None))
+    help->setTextContent(
+      scaleName == None
+        ? "Load a Scala scale to retune every key. Tune still sets 440 Hz; the keyboard mapping (.kbm) sets which key plays which degree."
+        : "The scale replaces the 12 notes above. Tune still moves 440 Hz, so 440 Hz plays the scale as written.",
+    )
+  }
+  ctx.programs->ProgramStore.onChanged(update)
+  update()
+}
+
 let build = (ctx: Ctx.t, page) => {
   let x0 = margin
   let x1 = x0 + columnWidth + gap
@@ -249,4 +315,5 @@ let build = (ctx: Ctx.t, page) => {
     ("Tune_Bb", "a#"),
     ("Tune_B", "b"),
   ]->Array.forEachWithIndex(((id, label), i) => tuning->Grid.param(id, mod(i, 4), 1 + i / 4, label))
+  scale(ctx, voice->Panel.body(1), tuning)
 }

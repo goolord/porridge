@@ -14,6 +14,7 @@ graph Porridge  [[ main ]]
     input event std::timeline::Position positionIn;
     input event porridge::Shape shapeIn;
     input event porridge::Curve curveIn;
+    input event porridge::Tuning tuningIn;
     input event int panic;
 
     output stream float<2> out                            [[ name: "Audio Out" ]];
@@ -32,6 +33,7 @@ graph Porridge  [[ main ]]
         positionIn      -> synth.positionIn;
         shapeIn         -> synth.shapeIn;
         curveIn         -> synth.curveIn;
+        tuningIn        -> synth.tuningIn;
         panic           -> synth.panicIn;
         synth.out       -> out;
         synth.xyOut     -> xyOut;

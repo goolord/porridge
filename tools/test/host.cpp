@@ -63,7 +63,7 @@ static void sendShape (Patch& p, const char* endpoint, int which, const float* d
 
 int main (int argc, char** argv)
 {
-    std::string programPath, eventsPath, inputPath, outPath = "out.f32";
+    std::string programPath, eventsPath, inputPath, tuningPath, outPath = "out.f32";
     long frames = 44100, preroll = 0;
     double rate = 44100.0, tempo = 120.0;
     std::vector<std::pair<std::string, std::string>> overrides;
@@ -80,6 +80,7 @@ int main (int argc, char** argv)
         else if (a == "--tempo") tempo = atof (next().c_str());
         else if (a == "--input") inputPath = next();
         else if (a == "--preroll") preroll = atol (next().c_str());
+        else if (a == "--tuning") tuningPath = next();
         else if (a == "--set")
         {
             auto s = next(); auto eq = s.find ('=');
@@ -140,6 +141,22 @@ int main (int argc, char** argv)
             if (id == f.id) isInt = f.isInt;
         if (isInt) sendInt (*patch, id.c_str(), atoi (val.c_str()));
         else sendFloat (*patch, id.c_str(), (float) atof (val.c_str()));
+    }
+
+    // --tuning: 128 numbers, each key's pitch in semitones from 440 Hz
+    if (! tuningPath.empty())
+    {
+        std::ifstream f (tuningPath);
+        std::vector<unsigned char> buf (4 + 128 * 4);
+        int32_t on = 1;
+        memcpy (buf.data(), &on, 4);
+        for (int k = 0; k < 128; ++k)
+        {
+            float s = 0;
+            f >> s;
+            memcpy (buf.data() + 4 + 4 * k, &s, 4);
+        }
+        patch->addEvent (Patch::getEndpointHandleForName ("tuningIn"), 0, buf.data());
     }
 
     std::vector<Event> events;

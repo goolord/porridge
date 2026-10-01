@@ -17,7 +17,8 @@ The interface is one 1100 × 580 panel, scaled to fit any window size, so that i
 
 - **Synth**: oscillators (with noise, unison and phase on tabs), the filter, the amp
   envelope, the modulation sources (mod envelopes, pitch envelope and LFOs, on tabs), and
-  voice and tuning settings.
+  voice and tuning settings. The tuning tab loads Scala scales (`.scl`) and keyboard
+  mappings (`.kbm`) for microtuning; they are saved with the program.
 - **Mod**: the modulation matrix as a patch bay. Drag a cable from a source (LFOs, envelopes,
   velocity, key, aftertouch, mod wheel, bend, XY, a random value per note, the four macro
   knobs, the assignable controllers) to a target (pitch, volume, pan, and the oscillator,

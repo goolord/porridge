@@ -16,6 +16,7 @@ type rec t = {
   mutable current: int,
   mutable programs: array<Preset.t>,
   mutable shapes: tables,
+  mutable tuning: option<Scala.source>,
   pendingSend: Set.t<table>,
   mutable learning: option<string>,
   mutable listeners: option<(PatchConnection.storedStateEvent => unit, JSON.t => unit)>,
@@ -35,6 +36,7 @@ let make = (pc, model, ~onChange, ~onMessage) => {
     current: 0,
     programs,
     shapes: Preset.copyTables((programs->Array.getUnsafe(0)).tables),
+    tuning: None,
     pendingSend: Set.make(),
     learning: None,
     listeners: None,
@@ -61,6 +63,9 @@ let onState = (t, {key, value}: PatchConnection.storedStateEvent) =>
     })
   | ("program", Number(i)) if Float.isFinite(i) =>
     t.current = Math.Int.max(0, Math.Int.min(bankPrograms - 1, Float.toInt(i)))
+    changed(t)
+  | ("tuning", String(s)) =>
+    t.tuning = s == "" ? None : Bank.decodeTuning(s)
     changed(t)
   | ("shapes", String(shapes)) =>
     Bank.decodeShapes(shapes)->Option.forEach(shapes => {
@@ -98,6 +103,7 @@ let start = t => {
   t.pc->PatchConnection.requestStoredStateValue("bank")
   t.pc->PatchConnection.requestStoredStateValue("program")
   t.pc->PatchConnection.requestStoredStateValue("shapes")
+  t.pc->PatchConnection.requestStoredStateValue("tuning")
 }
 
 let dispose = t =>
@@ -134,12 +140,20 @@ let captureCurrent = (t): Preset.t => {
   ...t.programs->Array.getUnsafe(t.current),
   values: Map.fromArray(t.model.values->Map.entries->Array.fromIterator),
   tables: Preset.copyTables(t.shapes),
+  tuning: t.tuning,
 }
 
 let storeBank = t =>
   t.pc->PatchConnection.sendStoredStateValue("bank", Preset.encodeBank(t.programs))
 
+let sendTuning = t => {
+  Bank.sendTuning(t.pc, t.tuning)
+  t.pc->PatchConnection.sendStoredStateValue("tuning", Bank.encodeTuning(t.tuning))
+}
+
 let apply = (t, preset: Preset.t) => {
+  t.tuning = preset.tuning
+  sendTuning(t)
   t.model->ParamModel.setAll(preset.values)
   t.shapes = Preset.copyTables(preset.tables)
   Bank.sendShapes(t.pc, t.shapes)
@@ -174,10 +188,42 @@ let setMeta = (t, meta: Preset.meta) => {
 
 let setMacroName = (t, i, name) => {
   let meta = (t.programs->Array.getUnsafe(t.current)).meta
-  setMeta(t, {
-    ...meta,
-    macroNames: meta.macroNames->Array.mapWithIndex((n, k) => k == i ? String.trim(name) : n),
-  })
+  setMeta(
+    t,
+    {
+      ...meta,
+      macroNames: meta.macroNames->Array.mapWithIndex((n, k) => k == i ? String.trim(name) : n),
+    },
+  )
+}
+
+let setTuning = (t, tuning) => {
+  t.tuning = tuning
+  sendTuning(t)
+  t.programs->Array.setUnsafe(t.current, captureCurrent(t))
+  storeBank(t)
+  changed(t)
+}
+
+let tuningName = t =>
+  t.tuning->Option.flatMap(src =>
+    switch Scala.table(src) {
+    | Ok({name}) => Some(name)
+    | Error(_) => None
+    }
+  )
+
+// A .scl replaces the scale and keeps the keyboard mapping; a .kbm the other way round.
+let loadTuningFile = (t, text, filename) => {
+  let isMapping = filename->String.toLowerCase->String.endsWith(".kbm")
+  let current = t.tuning->Option.getOr({Scala.scl: "", kbm: ""})
+  let next: Scala.source = isMapping ? {...current, kbm: text} : {...current, scl: text}
+  switch Scala.table(next) {
+  | Ok({name}) =>
+    setTuning(t, Some(next))
+    t.message(isMapping ? `Keyboard mapping ${filename} loaded` : `Tuned to ${name}`)
+  | Error(e) => t.message(`${filename}: ${e}`)
+  }
 }
 
 let initCurrent = t => {
@@ -190,29 +236,36 @@ let initCurrent = t => {
 
 let panic = t => t.pc->PatchConnection.sendEventOrValue("panic", 1)
 
+let isTuningFile = filename =>
+  [".scl", ".kbm"]->Array.some(ext => filename->String.toLowerCase->String.endsWith(ext))
+
 let loadFile = (t, bytes, filename) =>
-  switch Preset.parseFile(bytes) {
-  | Error(e) => t.message(`${filename} isn't a Porridge or Oatmeal program or bank (${e})`)
-  | Ok({presets: []}) => t.message(`${filename} has no programs in it`)
-  | Ok({kind: Single, presets: [p]}) =>
-    t.programs->Array.setUnsafe(t.current, p)
-    apply(t, p)
-    t.message(`Loaded "${Preset.name(p)}" into program ${Int.toString(t.current + 1)}`)
-    storeBank(t)
-    changed(t)
-  | Ok({presets: programs}) =>
-    t.programs = Array.fromInitializer(~length=bankPrograms, i =>
-      switch programs[i] {
-      | Some(p) => p
-      | None => Preset.make(`Init ${Int.toString(i)}`)
-      }
-    )
-    t.current = 0
-    apply(t, t.programs->Array.getUnsafe(0))
-    t.pc->PatchConnection.sendStoredStateValue("program", 0)
-    t.message(`Loaded bank ${filename} (${Int.toString(Array.length(programs))} programs)`)
-    storeBank(t)
-    changed(t)
+  if isTuningFile(filename) {
+    loadTuningFile(t, Preset.utf8Decode(bytes), filename)
+  } else {
+    switch Preset.parseFile(bytes) {
+    | Error(e) => t.message(`${filename} isn't a Porridge or Oatmeal program or bank (${e})`)
+    | Ok({presets: []}) => t.message(`${filename} has no programs in it`)
+    | Ok({kind: Single, presets: [p]}) =>
+      t.programs->Array.setUnsafe(t.current, p)
+      apply(t, p)
+      t.message(`Loaded "${Preset.name(p)}" into program ${Int.toString(t.current + 1)}`)
+      storeBank(t)
+      changed(t)
+    | Ok({presets: programs}) =>
+      t.programs = Array.fromInitializer(~length=bankPrograms, i =>
+        switch programs[i] {
+        | Some(p) => p
+        | None => Preset.make(`Init ${Int.toString(i)}`)
+        }
+      )
+      t.current = 0
+      apply(t, t.programs->Array.getUnsafe(0))
+      t.pc->PatchConnection.sendStoredStateValue("program", 0)
+      t.message(`Loaded bank ${filename} (${Int.toString(Array.length(programs))} programs)`)
+      storeBank(t)
+      changed(t)
+    }
   }
 
 let download = (bytes, filename) => {

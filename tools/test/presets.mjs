@@ -2,7 +2,8 @@
 //   - every factory program survives Oatmeal -> Porridge JSON -> Oatmeal with identical
 //     parameters, tables and name;
 //   - the stored-state bank encoding reads back to the same presets;
-//   - a preset missing parameters and tables reads back with their defaults.
+//   - a preset missing parameters and tables reads back with their defaults;
+//   - modulations, macro names and microtunings survive a round trip.
 //
 // run: node tools/test/presets.mjs
 
@@ -12,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import * as Preset from "../../ui/Preset.res.mjs";
 import * as Bank from "../../ui/Bank.res.mjs";
 import * as OatmealFormat from "../../ui/oatmeal/OatmealFormat.res.mjs";
+import * as Scala from "../../ui/Scala.res.mjs";
 
 const root = join (dirname (fileURLToPath (import.meta.url)), "..", "..");
 let failures = 0;
@@ -81,6 +83,23 @@ else
     if (back.meta.macroNames[0] !== "tone") fail ("macro names");
     if (Preset.porridgeOnly (back).join () !== "modulations,macros") fail ("porridgeOnly: " + Preset.porridgeOnly (back));
     if (Preset.porridgeOnly (presets[0]).length !== 0) fail ("factory program reported as Porridge-only");
+}
+
+// a microtuning keeps its Scala text, and the Scala table follows the files
+{
+    const scl = "! 19edo.scl\n19 equal\n 19\n" + Array.from ({ length: 19 }, (_, i) => ((i + 1) * 1200 / 19).toFixed (6)).join ("\n") + "\n";
+    const kbm = "! 19-EDO on the white keys\n12\n0\n127\n60\n69\n432.0\n19\n0\nx\n3\nx\n6\n8\nx\n11\nx\n14\nx\n17\n";
+    const p = { ...Preset.make ("tuned"), tuning: { scl, kbm } };
+    const back = Preset.parseFile (Preset.writePreset (p))._0.presets[0];
+    if (back.tuning?.scl !== scl || back.tuning?.kbm !== kbm) fail ("tuning text");
+    if (! Preset.porridgeOnly (back).includes ("the microtuning")) fail ("porridgeOnly: tuning");
+    const t = Scala.table ({ scl, kbm })._0.semitones;
+    const near = (a, b) => Math.abs (a - b) < 1e-6;
+    if (! near (t[69], 12 * Math.log2 (432 / 440))) fail ("tuning: reference key " + t[69]);
+    if (! near (t[67] - t[60], 11 * 12 / 19)) fail ("tuning: G is degree 11");
+    if (! near (t[72] - t[60], 12)) fail ("tuning: the mapping repeats an octave up");
+    if (t[61] > -1000) fail ("tuning: C# is unmapped");
+    if (Preset.make ("plain").tuning !== undefined) fail ("Init has a tuning");
 }
 
 console.log (failures === 0 ? `ok: ${programs.length} programs round-trip` : `${failures} failures`);

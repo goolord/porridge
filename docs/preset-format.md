@@ -22,7 +22,12 @@ settings Oatmeal has.
   { "source": "macro1", "target": "R_Wet", "amount": 0.5 }
  ],
  "macros": ["space", "", "", ""],
- "tables": { "wave1": "AAAAAD8AAAA..." }
+ "tables": { "wave1": "AAAAAD8AAAA..." },
+ "tuning": { "scl": "! 19edo.scl
+19 equal
+ 19
+ 63.157895
+...", "kbm": "" }
 }
 ```
 
@@ -34,6 +39,7 @@ settings Oatmeal has.
 | `params` | parameter values by endpoint id (the ids in `dsp/ParamStore.cmajor`). The values are the internal values the patch's endpoints take: Oatmeal's stored value for Oatmeal parameters, except that pulse widths are 0..1 fractions. Lists are stored as the item's index |
 | `modulations` | the modulation matrix's connections, in slot order: `source` and `target` keys from `ui/ModMatrix.res` (a parameter target's key is its endpoint id), `amount` (-1..1), and an optional `via` source that scales the amount. The slot parameters (`Mod1_Source` ...) aren't written to `params` |
 | `macros` | the four macro knobs' names (their values are the `Macro_1`..`Macro_4` parameters) |
+| `tuning` | a microtuning: the text of a Scala scale (`scl`) and keyboard mapping (`kbm`, empty for the default: middle C is degree 0, A above it is 440 Hz). Left out for Oatmeal's 12-note tuning. An empty `scl` with a `kbm` maps 12-tone equal temperament |
 | `tables` | user waveforms (`wave1`, `wave2`), LFO shapes (`lfoShape1`, `lfoShape2`) and response curves (`velocityCurve`, `aftertouchCurve`) as base64 little-endian float32 arrays (512 or 64 values). A table is written only when it differs from Init |
 
 Numbers are written with the fewest digits that still read back as the same float32
