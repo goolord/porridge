@@ -52,7 +52,7 @@ The presets in a bank have the same fields as a preset file, without `porridge` 
 
 Porridge's own parameters follow Oatmeal's 342 as host parameters (`ui/PorridgeParams.res`):
 the macros `Macro_1`..`Macro_4`, then four per modulation slot (`ModN_Source`, `ModN_Target`,
-`ModN_Amount`, `ModN_Via` for N = 1..16). They are appended to, never reordered, and each one's
+`ModN_Amount`, `ModN_Via` for N = 1..16), then `MPE_On` and `MPE_BendRange`. They are appended to, never reordered, and each one's
 default leaves the sound exactly as Oatmeal's. **Export for Oatmeal** leaves them out and says
 so.
 

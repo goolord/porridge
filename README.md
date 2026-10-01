@@ -28,8 +28,10 @@ The interface is one 1100 × 580 panel, scaled to fit any window size, so that i
 - **Arp / XY**: the arpeggiator pattern and the XY pad with its targets.
 - **Shapes**: draw the two oscillator waveforms and the two LFO shapes. The editor shows the
   waveform's harmonics.
-- **MIDI**: channel filter, sustain pedal, velocity and aftertouch curves, and the six
-  assignable controllers (with learn).
+- **MIDI**: channel filter, sustain pedal, velocity and aftertouch curves, MPE, and the six
+  assignable controllers (with learn). With MPE on (lower zone, master channel 1), every note
+  on channels 2-16 follows its own channel's pitch bend (range up to ±96 semitones), pressure
+  (it drives the touch settings) and slide (CC 74, a modulation source).
 
 Programs and banks are saved as `.porridge` files (JSON, see
 [docs/preset-format.md](docs/preset-format.md)), with a name, author, category, tags and

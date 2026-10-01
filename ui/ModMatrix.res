@@ -36,6 +36,7 @@ let sources = [
   {key: "cc4", label: "controller 4", bipolar: false},
   {key: "cc5", label: "controller 5", bipolar: false},
   {key: "cc6", label: "controller 6", bipolar: false},
+  {key: "slide", label: "slide (CC 74)", bipolar: false},
 ]
 
 let sourceHelp = key =>
@@ -46,9 +47,10 @@ let sourceHelp = key =>
   | "filterEnv" => "the filter envelope level"
   | "velocity" => "note-on velocity, through the velocity curve"
   | "key" => "the note: -1 at note 0, 0 at middle C (60), 1 at note 120 and above"
-  | "aftertouch" => "poly aftertouch in poly touch mode, channel pressure otherwise"
+  | "aftertouch" => "poly aftertouch in poly touch mode, channel pressure otherwise; with MPE, the note's pressure"
   | "modWheel" => "controller 1"
-  | "bend" => "the pitch bend wheel, -1..1"
+  | "bend" => "the pitch bend wheel, -1..1; with MPE, the note's own bend"
+  | "slide" => "MPE: the note's slide (controller 74), 0..1"
   | "x" | "y" => "the XY pad, including its random walk"
   | "random" => "a random value for every note, -1..1"
   | "macro1" | "macro2" | "macro3" | "macro4" => "a macro knob on this page"

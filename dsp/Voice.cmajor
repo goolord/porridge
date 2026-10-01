@@ -34,6 +34,9 @@ namespace porridge
 
         // modulation matrix sources from the last block, and the volume target's gain
         float lfo1Raw, lfo2Raw, ampLast, modRand, modGain;
+
+        // MPE: the MIDI channel the note came from (0 = the master channel)
+        int chan;
     }
 
     /// The voice's current amp level (used for stealing and re-strike velocity).

@@ -96,10 +96,11 @@ let build = (ctx: Ctx.t, page) => {
   let ccH = Grid.panelHeight(3)
   let yControllers = Style.pageHeight - y0 - 2. * ccH - Grid.gap
 
-  // curve editors fill the space between
+  // curve editors fill the space between, next to the MPE settings
   let y1 = channels->Panel.bottom
   let curveH = yControllers - Grid.gap - y1
-  let curveW = (w - Grid.gap) / 2.
+  let mpeW = 2. * Grid.columnWidth + 12.
+  let curveW = (w - 2. * Grid.gap - mpeW) / 2.
   curveBlock(ctx, page, "velocity map", VelocityCurve, ~x=x0, ~y=y1, ~w=curveW, ~h=curveH)
   curveBlock(
     ctx,
@@ -110,6 +111,26 @@ let build = (ctx: Ctx.t, page) => {
     ~y=y1,
     ~w=curveW,
     ~h=curveH,
+  )
+
+  let mpe = Panel.make(
+    page,
+    ~title="mpe",
+    ~x=x0 + 2. * (curveW + Grid.gap),
+    ~y=y1,
+    ~w=mpeW,
+    ~h=curveH,
+  )
+  mpe->Panel.headerToggle(ctx, "MPE_On", ~label="on")
+  let m = Grid.make(ctx, mpe.el)
+  m->Grid.param("MPE_BendRange", 0, 0, "note bend", ~span=2)
+  let note = el("div", ~cls="note wrap", ~parent=mpe.el)->place(
+    Grid.padX + 2.,
+    Grid.padTop + Grid.rowHeight + 6.,
+    ~w=mpeW - 2. * Grid.padX - 6.,
+  )
+  note->setTextContent(
+    "Channel 1 is the master channel. A note on channels 2-16 gets that channel's pitch bend, pressure (as aftertouch, when touch isn't ignored) and slide (CC 74, a modulation source). The channel switches above don't apply.",
   )
 
   for k in 0 to 5 {

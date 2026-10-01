@@ -109,9 +109,11 @@ let porridgeOnly = p => {
   )
   let modulated = changed->Array.some(spec => ModMatrix.isSlotParam(spec.id))
   let macros = changed->Array.some(spec => String.startsWith(spec.id, "Macro"))
+  let mpe = changed->Array.some(spec => String.startsWith(spec.id, "MPE"))
   [
     modulated ? Some("modulations") : None,
     macros ? Some("macros") : None,
+    mpe ? Some("MPE settings") : None,
     String.length(p.meta.name) > nameLength - 1 ? Some("the full name") : None,
   ]->Array.filterMap(x => x)
 }

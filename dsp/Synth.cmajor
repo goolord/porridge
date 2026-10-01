@@ -95,6 +95,11 @@ namespace porridge
         float gLfo1Raw, gLfo2Raw, bendNormTarget, bendNorm, wheel;
         int64 modRngState;
 
+        // MPE: each member channel's note bend (semitones), pressure and slide (CC 74), and
+        // the channel each key last came from
+        float[16] chBendTarget, chBend, chPressureTarget, chPressure, chSlideTarget, chSlide;
+        int[128] noteChan;
+
         // MIDI arriving during a block is handled at the start of the next one
         std::midi::Message[256] midiQueue;
         int midiCount;
@@ -176,6 +181,9 @@ namespace porridge
 
             P[slot::Tune_Octave] = 2.0f;
             P[slot::Tune_Main] = 440.0f;
+
+            for (wrap<porridgeSlots.size> i)
+                P.at (porridgeSlots[i]) = porridgeDefaults[i];
 
             globalDist.clearState();
             delay.prepare();
@@ -378,6 +386,7 @@ namespace porridge
             v.ampLast = 0;
             v.modRand = 0;
             v.modGain = 1.0f;
+            v.chan = 0;
         }
 
         int listPos (int vi)
@@ -489,6 +498,7 @@ namespace porridge
             v.relCount = -1;
             v.vel = velc;
             v.modRand = nextModRandom();
+            v.chan = noteChan.at (key & 0x7f);
             v.randAmp = float (pow (10.0, float64 ((float (rng.next()) * (1.0f / 16384.0f) - 1.0f) * P[slot::RandomAmp] * 0.05f)));
 
             if (fresh)
@@ -1237,6 +1247,10 @@ namespace porridge
 
         void handleMidi()
         {
+            // MPE (lower zone): channel 1 is the master channel and plays like any other; notes on
+            // channels 2-16 get the bend, pressure and slide of their own channel
+            let mpe = P[slot::MPE_On] != 0;
+
             for (int i = 0; i < midiCount; ++i)
             {
                 let m = midiQueue.at (i).message;
@@ -1246,8 +1260,31 @@ namespace porridge
                 let d1 = (m >> 8) & 0x7f;
                 let d2 = m & 0x7f;
 
-                if (P.at (slot::MIDI_Channel_1 + ch) == 0)
+                if (! mpe && P.at (slot::MIDI_Channel_1 + ch) == 0)
                     continue;
+
+                let member = mpe && ch != 0;
+
+                if (member && type == 0xd0)
+                {
+                    chPressureTarget.at (ch) = curveLerp (true, float (d1) * 0.00787401572f * 64.0f);
+                    continue;
+                }
+
+                if (member && type == 0xe0)
+                {
+                    chBendTarget.at (ch) = float ((d2 - 64) * 128 + d1) * P[slot::MPE_BendRange] * (1.0f / 8192.0f);
+                    continue;
+                }
+
+                if (member && type == 0xb0 && d1 == 74)
+                {
+                    chSlideTarget.at (ch) = float (d2) / 127.0f;
+                    continue;
+                }
+
+                if (type == 0x90 && d2 > 0)
+                    noteChan.at (d1) = mpe ? ch : 0;
 
                 if (type == 0x90 && d2 > 0)
                 {
@@ -1367,6 +1404,16 @@ namespace porridge
             bendSmooth += (bendTarget - bendSmooth) * k64;
             bendNorm += (bendNormTarget - bendNorm) * k64;
             wheel += (rawCC[1] - wheel) * k64;
+
+            if (P[slot::MPE_On] != 0)
+            {
+                for (wrap<16> c)
+                {
+                    chBend[c] += (chBendTarget[c] - chBend[c]) * k64;
+                    chPressure[c] += (chPressureTarget[c] - chPressure[c]) * k64;
+                    chSlide[c] += (chSlideTarget[c] - chSlide[c]) * k64;
+                }
+            }
             pressureSmooth += (pressureTarget - pressureSmooth) * k64;
             xSmooth += (P[slot::XY_X] - xSmooth) * k64;
             ySmooth += (P[slot::XY_Y] - ySmooth) * k64;
@@ -1471,6 +1518,7 @@ namespace porridge
 
             let maxPoly = clamp (int (P[slot::Voices]), 1, maxVoices);
             let atMode = int (P[slot::AftertouchMode]);
+            let mpe = P[slot::MPE_On] != 0;
             bool any = false;
             var i = 0;
 
@@ -1484,8 +1532,15 @@ namespace porridge
 
                 let vi = order.at (i);
                 let key = voices.at (vi).key;
-                let at = atMode == 0 ? 1.0f : (atMode == 1 ? pressureSmooth : perKeyAT.at (key & 0x7f));
+                var at = atMode == 0 ? 1.0f : (atMode == 1 ? pressureSmooth : perKeyAT.at (key & 0x7f));
                 var semisArg = P.at (slot::Tune_C + ((key & 0xff) % 12)) * 0.01f + P[slot::GlobalTranspose] * 12.0f + globalPitch;
+                let chan = voices.at (vi).chan;
+
+                if (mpe && chan != 0)
+                {
+                    if (atMode != 0) at = chPressure.at (chan);
+                    semisArg += chBend.at (chan);
+                }
 
                 if (numLive > 0)
                 {
@@ -1558,7 +1613,6 @@ namespace porridge
             if (s >= mods::src::macro1 && s <= mods::src::macro4) return P.at (slot::Macro_1 + (s - mods::src::macro1));
             if (s >= mods::src::cc1 && s <= mods::src::cc6)       return ccSmooth.at (s - mods::src::cc1);
             if (s == mods::src::modWheel)                         return wheel;
-            if (s == mods::src::bend)                             return bendNorm;
             if (s == mods::src::x)                                return curX;
             if (s == mods::src::y)                                return curY;
 
@@ -1567,8 +1621,16 @@ namespace porridge
                 if (s == mods::src::lfo1)       return gLfo1Raw;
                 if (s == mods::src::lfo2)       return gLfo2Raw;
                 if (s == mods::src::aftertouch) return pressureSmooth;
+                if (s == mods::src::bend)       return bendNorm;
                 return 0;
             }
+
+            // MPE notes have their own bend, pressure and slide
+            let chan = P[slot::MPE_On] != 0 ? voices.at (vi).chan : 0;
+
+            if (s == mods::src::slide)      return chan != 0 ? chSlide.at (chan) : 0.0f;
+            if (s == mods::src::bend)       return chan != 0 ? chBend.at (chan) / max (P[slot::MPE_BendRange], 0.01f) : bendNorm;
+            if (chan != 0 && s == mods::src::aftertouch) return chPressure.at (chan);
 
             if (s == mods::src::lfo1)      return voices.at (vi).lfo1Raw;
             if (s == mods::src::lfo2)      return voices.at (vi).lfo2Raw;

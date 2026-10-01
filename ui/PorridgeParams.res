@@ -38,6 +38,17 @@ let slotSpecs = Array.fromInitializer(~length=ModMatrix.slots, i => {
   ]
 })->Array.flat
 
-let all = Array.concat(macroSpecs, slotSpecs)
+let semitones = x => Float.toFixed(x, ~digits=1) ++ " st"
+
+let mpeSpecs = [
+  {id: "MPE_On", name: "MPE", kind: Choice({names: ["off", "on"], init: 0})},
+  {
+    id: "MPE_BendRange",
+    name: "MPE note bend range",
+    kind: Float({min: 0., max: 96., init: 48., text: semitones}),
+  },
+]
+
+let all = [...macroSpecs, ...slotSpecs, ...mpeSpecs]
 
 let slotOf = i => firstSlot + i

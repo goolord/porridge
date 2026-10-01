@@ -105,6 +105,12 @@ writeFileSync (join (root, "dsp", "Slots.cmajor"), header +
     }
 
     let numSlots = ${NUM_SLOTS};
+
+    /// Porridge's own parameters and their defaults, which the synth starts from (hosts may
+    /// not send a parameter they have never changed)
+    let porridgeSlots = int[${porridgeParams.length}] (${all.filter (f => f.porridge).map (f => f.slot).join (", ")});
+    let porridgeDefaults = float[${porridgeParams.length}] (${all.filter (f => f.porridge).map (f => {
+        const v = paramInfo (f.index).init; let t = num (v); if (! /[.e]/.test (t)) t += ".0"; return t + "f"; }).join (", ")});
 }
 
 /// Index of every parameter in the synth's mirror of the program struct.
