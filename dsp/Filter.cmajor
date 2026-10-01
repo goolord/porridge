@@ -642,6 +642,7 @@ namespace porridge
         float[2050] sine;       // sin(j*pi/1024)
         float[2050] asym;       // Gompertz curve
         float[32 * 3 * 4] fir;  // [set][2x,4x,8x][32]
+        float[1026] custom;     // the custom shape (type 5) from -1 to 1, set by the synth
     }
 
     void build (DistTables& this)
@@ -687,6 +688,14 @@ namespace porridge
         if (type == 1)
             return (abs (v + 1.0f) - abs (v - 1.0f)) * 0.5f;
 
+        if (type == 5)
+        {
+            let u = (clamp (v, -1.0f, 1.0f) + 1.0f) * 512.0f;
+            let i = min (int (u), 1023);
+            let fr = u - float (i);
+            return (1.0f - fr) * t.custom.at (i) + fr * t.custom.at (i + 1);
+        }
+
         if (type == 2)
         {
             let u = (abs (v + 8.0f) - abs (v - 8.0f)) * 64.0f + 1024.0f;
@@ -709,6 +718,36 @@ namespace porridge
         let i = int (u);
         let fr = u - float (i);
         return (1.0f - fr) * t.asym.at (i) + fr * t.asym.at (i + 1);
+    }
+
+    /// A custom shape's points (ui/PorridgeParams.res shaperSpecs): the count less 2, then for
+    /// every point its input, its output and the bend of the segment that ends at it.
+    let shaperValues = 1 + 16 * 3;
+
+    /// Renders the custom shape whose values start at P[first] into a table from -1 to 1.
+    void renderShaper (float[1026]& table, const float[numSlots]& P, int first)
+    {
+        let n = clamp (int (P.at (first)) + 2, 2, 16);
+
+        for (int i = 0; i <= 1024; ++i)
+        {
+            let x = float (i) / 512.0f - 1.0f;
+            int k = 1;
+
+            while (k < n - 1 && P.at (first + 1 + 3 * k) < x)
+                ++k;
+
+            let x0 = P.at (first + 1 + 3 * (k - 1));
+            let y0 = P.at (first + 2 + 3 * (k - 1));
+            let x1 = P.at (first + 1 + 3 * k);
+            let y1 = P.at (first + 2 + 3 * k);
+            let bend = P.at (first + 3 + 3 * k);
+            let t = x1 > x0 ? clamp ((x - x0) / (x1 - x0), 0.0f, 1.0f) : 1.0f;
+            let s = bend == 0 ? t : float (pow (float64 (t), pow (8.0, float64 (bend))));
+            table.at (i) = y0 + (y1 - y0) * s;
+        }
+
+        table.at (1025) = table.at (1024);
     }
 
     struct Distortion

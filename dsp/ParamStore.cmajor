@@ -179,7 +179,7 @@ processor ParamStore
     input event float PEnv_Sustain [[ name: "P sustain", min: -48, max: 48, init: 0, unit: "st" ]];
     input event float PEnv_Release [[ name: "P release", min: -48, max: 48, init: 0, unit: "st/sec" ]];
     input event float PEnv_VeloSens [[ name: "P env velo sens", min: -1, max: 1, init: 0 ]];
-    input event int Sat_Type [[ name: "Dist type", min: 0, max: 4, init: 0, text: "off|hard clip|soft clip|sine|asymmetric" ]];
+    input event int Sat_Type [[ name: "Dist type", min: 0, max: 5, init: 0, text: "off|hard clip|soft clip|sine|asymmetric|custom shape" ]];
     input event int Sat_Mode [[ name: "Dist mode", min: 0, max: 3, init: 0, text: "global|per voice, after filter|per voice, before filter|double (before filter and global)" ]];
     input event float Sat_Limit [[ name: "Dist limit", min: -30, max: 30, init: 0, unit: "dB" ]];
     input event float Sat_Pregain [[ name: "Dist pregain", min: -60, max: 60, init: 0, unit: "dB" ]];
@@ -354,67 +354,67 @@ processor ParamStore
     input event float Macro_3 [[ name: "Macro 3", min: 0, max: 1, init: 0 ]];
     input event float Macro_4 [[ name: "Macro 4", min: 0, max: 1, init: 0 ]];
     input event int Mod1_Source [[ name: "Mod 1 source", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
-    input event int Mod1_Target [[ name: "Mod 1 target", min: 0, max: 62, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch" ]];
+    input event int Mod1_Target [[ name: "Mod 1 target", min: 0, max: 75, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch|chorus 2 mix|chorus 3 mix|chorus 4 mix|delay 2 wet|delay 3 wet|delay 4 wet|reverb 2 wet|reverb 3 wet|reverb 4 wet|dist 2 pregain|dist 3 pregain|dist 4 pregain|dist 5 pregain" ]];
     input event float Mod1_Amount [[ name: "Mod 1 amount", min: -1, max: 1, init: 0 ]];
     input event int Mod1_Via [[ name: "Mod 1 via", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
     input event int Mod2_Source [[ name: "Mod 2 source", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
-    input event int Mod2_Target [[ name: "Mod 2 target", min: 0, max: 62, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch" ]];
+    input event int Mod2_Target [[ name: "Mod 2 target", min: 0, max: 75, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch|chorus 2 mix|chorus 3 mix|chorus 4 mix|delay 2 wet|delay 3 wet|delay 4 wet|reverb 2 wet|reverb 3 wet|reverb 4 wet|dist 2 pregain|dist 3 pregain|dist 4 pregain|dist 5 pregain" ]];
     input event float Mod2_Amount [[ name: "Mod 2 amount", min: -1, max: 1, init: 0 ]];
     input event int Mod2_Via [[ name: "Mod 2 via", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
     input event int Mod3_Source [[ name: "Mod 3 source", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
-    input event int Mod3_Target [[ name: "Mod 3 target", min: 0, max: 62, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch" ]];
+    input event int Mod3_Target [[ name: "Mod 3 target", min: 0, max: 75, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch|chorus 2 mix|chorus 3 mix|chorus 4 mix|delay 2 wet|delay 3 wet|delay 4 wet|reverb 2 wet|reverb 3 wet|reverb 4 wet|dist 2 pregain|dist 3 pregain|dist 4 pregain|dist 5 pregain" ]];
     input event float Mod3_Amount [[ name: "Mod 3 amount", min: -1, max: 1, init: 0 ]];
     input event int Mod3_Via [[ name: "Mod 3 via", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
     input event int Mod4_Source [[ name: "Mod 4 source", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
-    input event int Mod4_Target [[ name: "Mod 4 target", min: 0, max: 62, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch" ]];
+    input event int Mod4_Target [[ name: "Mod 4 target", min: 0, max: 75, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch|chorus 2 mix|chorus 3 mix|chorus 4 mix|delay 2 wet|delay 3 wet|delay 4 wet|reverb 2 wet|reverb 3 wet|reverb 4 wet|dist 2 pregain|dist 3 pregain|dist 4 pregain|dist 5 pregain" ]];
     input event float Mod4_Amount [[ name: "Mod 4 amount", min: -1, max: 1, init: 0 ]];
     input event int Mod4_Via [[ name: "Mod 4 via", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
     input event int Mod5_Source [[ name: "Mod 5 source", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
-    input event int Mod5_Target [[ name: "Mod 5 target", min: 0, max: 62, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch" ]];
+    input event int Mod5_Target [[ name: "Mod 5 target", min: 0, max: 75, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch|chorus 2 mix|chorus 3 mix|chorus 4 mix|delay 2 wet|delay 3 wet|delay 4 wet|reverb 2 wet|reverb 3 wet|reverb 4 wet|dist 2 pregain|dist 3 pregain|dist 4 pregain|dist 5 pregain" ]];
     input event float Mod5_Amount [[ name: "Mod 5 amount", min: -1, max: 1, init: 0 ]];
     input event int Mod5_Via [[ name: "Mod 5 via", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
     input event int Mod6_Source [[ name: "Mod 6 source", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
-    input event int Mod6_Target [[ name: "Mod 6 target", min: 0, max: 62, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch" ]];
+    input event int Mod6_Target [[ name: "Mod 6 target", min: 0, max: 75, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch|chorus 2 mix|chorus 3 mix|chorus 4 mix|delay 2 wet|delay 3 wet|delay 4 wet|reverb 2 wet|reverb 3 wet|reverb 4 wet|dist 2 pregain|dist 3 pregain|dist 4 pregain|dist 5 pregain" ]];
     input event float Mod6_Amount [[ name: "Mod 6 amount", min: -1, max: 1, init: 0 ]];
     input event int Mod6_Via [[ name: "Mod 6 via", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
     input event int Mod7_Source [[ name: "Mod 7 source", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
-    input event int Mod7_Target [[ name: "Mod 7 target", min: 0, max: 62, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch" ]];
+    input event int Mod7_Target [[ name: "Mod 7 target", min: 0, max: 75, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch|chorus 2 mix|chorus 3 mix|chorus 4 mix|delay 2 wet|delay 3 wet|delay 4 wet|reverb 2 wet|reverb 3 wet|reverb 4 wet|dist 2 pregain|dist 3 pregain|dist 4 pregain|dist 5 pregain" ]];
     input event float Mod7_Amount [[ name: "Mod 7 amount", min: -1, max: 1, init: 0 ]];
     input event int Mod7_Via [[ name: "Mod 7 via", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
     input event int Mod8_Source [[ name: "Mod 8 source", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
-    input event int Mod8_Target [[ name: "Mod 8 target", min: 0, max: 62, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch" ]];
+    input event int Mod8_Target [[ name: "Mod 8 target", min: 0, max: 75, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch|chorus 2 mix|chorus 3 mix|chorus 4 mix|delay 2 wet|delay 3 wet|delay 4 wet|reverb 2 wet|reverb 3 wet|reverb 4 wet|dist 2 pregain|dist 3 pregain|dist 4 pregain|dist 5 pregain" ]];
     input event float Mod8_Amount [[ name: "Mod 8 amount", min: -1, max: 1, init: 0 ]];
     input event int Mod8_Via [[ name: "Mod 8 via", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
     input event int Mod9_Source [[ name: "Mod 9 source", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
-    input event int Mod9_Target [[ name: "Mod 9 target", min: 0, max: 62, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch" ]];
+    input event int Mod9_Target [[ name: "Mod 9 target", min: 0, max: 75, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch|chorus 2 mix|chorus 3 mix|chorus 4 mix|delay 2 wet|delay 3 wet|delay 4 wet|reverb 2 wet|reverb 3 wet|reverb 4 wet|dist 2 pregain|dist 3 pregain|dist 4 pregain|dist 5 pregain" ]];
     input event float Mod9_Amount [[ name: "Mod 9 amount", min: -1, max: 1, init: 0 ]];
     input event int Mod9_Via [[ name: "Mod 9 via", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
     input event int Mod10_Source [[ name: "Mod 10 source", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
-    input event int Mod10_Target [[ name: "Mod 10 target", min: 0, max: 62, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch" ]];
+    input event int Mod10_Target [[ name: "Mod 10 target", min: 0, max: 75, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch|chorus 2 mix|chorus 3 mix|chorus 4 mix|delay 2 wet|delay 3 wet|delay 4 wet|reverb 2 wet|reverb 3 wet|reverb 4 wet|dist 2 pregain|dist 3 pregain|dist 4 pregain|dist 5 pregain" ]];
     input event float Mod10_Amount [[ name: "Mod 10 amount", min: -1, max: 1, init: 0 ]];
     input event int Mod10_Via [[ name: "Mod 10 via", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
     input event int Mod11_Source [[ name: "Mod 11 source", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
-    input event int Mod11_Target [[ name: "Mod 11 target", min: 0, max: 62, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch" ]];
+    input event int Mod11_Target [[ name: "Mod 11 target", min: 0, max: 75, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch|chorus 2 mix|chorus 3 mix|chorus 4 mix|delay 2 wet|delay 3 wet|delay 4 wet|reverb 2 wet|reverb 3 wet|reverb 4 wet|dist 2 pregain|dist 3 pregain|dist 4 pregain|dist 5 pregain" ]];
     input event float Mod11_Amount [[ name: "Mod 11 amount", min: -1, max: 1, init: 0 ]];
     input event int Mod11_Via [[ name: "Mod 11 via", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
     input event int Mod12_Source [[ name: "Mod 12 source", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
-    input event int Mod12_Target [[ name: "Mod 12 target", min: 0, max: 62, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch" ]];
+    input event int Mod12_Target [[ name: "Mod 12 target", min: 0, max: 75, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch|chorus 2 mix|chorus 3 mix|chorus 4 mix|delay 2 wet|delay 3 wet|delay 4 wet|reverb 2 wet|reverb 3 wet|reverb 4 wet|dist 2 pregain|dist 3 pregain|dist 4 pregain|dist 5 pregain" ]];
     input event float Mod12_Amount [[ name: "Mod 12 amount", min: -1, max: 1, init: 0 ]];
     input event int Mod12_Via [[ name: "Mod 12 via", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
     input event int Mod13_Source [[ name: "Mod 13 source", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
-    input event int Mod13_Target [[ name: "Mod 13 target", min: 0, max: 62, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch" ]];
+    input event int Mod13_Target [[ name: "Mod 13 target", min: 0, max: 75, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch|chorus 2 mix|chorus 3 mix|chorus 4 mix|delay 2 wet|delay 3 wet|delay 4 wet|reverb 2 wet|reverb 3 wet|reverb 4 wet|dist 2 pregain|dist 3 pregain|dist 4 pregain|dist 5 pregain" ]];
     input event float Mod13_Amount [[ name: "Mod 13 amount", min: -1, max: 1, init: 0 ]];
     input event int Mod13_Via [[ name: "Mod 13 via", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
     input event int Mod14_Source [[ name: "Mod 14 source", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
-    input event int Mod14_Target [[ name: "Mod 14 target", min: 0, max: 62, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch" ]];
+    input event int Mod14_Target [[ name: "Mod 14 target", min: 0, max: 75, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch|chorus 2 mix|chorus 3 mix|chorus 4 mix|delay 2 wet|delay 3 wet|delay 4 wet|reverb 2 wet|reverb 3 wet|reverb 4 wet|dist 2 pregain|dist 3 pregain|dist 4 pregain|dist 5 pregain" ]];
     input event float Mod14_Amount [[ name: "Mod 14 amount", min: -1, max: 1, init: 0 ]];
     input event int Mod14_Via [[ name: "Mod 14 via", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
     input event int Mod15_Source [[ name: "Mod 15 source", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
-    input event int Mod15_Target [[ name: "Mod 15 target", min: 0, max: 62, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch" ]];
+    input event int Mod15_Target [[ name: "Mod 15 target", min: 0, max: 75, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch|chorus 2 mix|chorus 3 mix|chorus 4 mix|delay 2 wet|delay 3 wet|delay 4 wet|reverb 2 wet|reverb 3 wet|reverb 4 wet|dist 2 pregain|dist 3 pregain|dist 4 pregain|dist 5 pregain" ]];
     input event float Mod15_Amount [[ name: "Mod 15 amount", min: -1, max: 1, init: 0 ]];
     input event int Mod15_Via [[ name: "Mod 15 via", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
     input event int Mod16_Source [[ name: "Mod 16 source", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
-    input event int Mod16_Target [[ name: "Mod 16 target", min: 0, max: 62, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch" ]];
+    input event int Mod16_Target [[ name: "Mod 16 target", min: 0, max: 75, init: 0, text: "none|pitch ±24 st|pitch ±1 st|volume|pan|osc 1 amp|osc 1 pulsewidth|osc 1 pwm rate|osc 1 pwm depth|osc 2 amp|osc 2 pulsewidth|osc 2 pwm rate|osc 2 pwm depth|osc 2 transpose|osc 2 detune|noise amp|noise resonance|noise transpose|unison detune|unison spread|cutoff|resonance|filter env mod|filter keytrack|filter split|filter mix|dist pregain|dist postgain|LFO 1 rate|LFO 1 pitch|LFO 1 cut 1|LFO 1 pan|LFO 2 rate|LFO 2 pitch|LFO 2 cut 1|LFO 2 pan|chorus rate|chorus depth|chorus feedback|chorus mix|delay feedback L|delay feedback R|delay lowpass|delay highpass|delay wet|reverb dullness|reverb brightness|reverb wet|EQ 1 gain|EQ 2 gain|EQ 3 gain|EQ 4 gain|EQ 5 gain|EQ 1 freq|EQ 2 freq|EQ 3 freq|EQ 4 freq|EQ 5 freq|output gain|filter morph|pm feedback|unison width|drift pitch|chorus 2 mix|chorus 3 mix|chorus 4 mix|delay 2 wet|delay 3 wet|delay 4 wet|reverb 2 wet|reverb 3 wet|reverb 4 wet|dist 2 pregain|dist 3 pregain|dist 4 pregain|dist 5 pregain" ]];
     input event float Mod16_Amount [[ name: "Mod 16 amount", min: -1, max: 1, init: 0 ]];
     input event int Mod16_Via [[ name: "Mod 16 via", min: 0, max: 25, init: 0, text: "none|LFO 1|LFO 2|mod env 1|mod env 2|amp env|filter env|velocity|key|aftertouch|mod wheel|pitch bend|X|Y|random|macro 1|macro 2|macro 3|macro 4|controller 1|controller 2|controller 3|controller 4|controller 5|controller 6|slide (CC 74)" ]];
     input event int MPE_On [[ name: "MPE", min: 0, max: 1, init: 0, text: "off|on" ]];
@@ -451,6 +451,451 @@ processor ParamStore
     input event float U_DetuneCurve [[ name: "Unison detune curve", min: 0, max: 1, init: 0 ]];
     input event int U_RandomPhase [[ name: "Unison random phase", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event float U_Width [[ name: "Unison width", min: 0, max: 2, init: 1 ]];
+    input event int FX_Rack_1 [[ name: "FX slot 1", min: 0, max: 20, init: 1, text: "empty|Chorus|Delay|Reverb|EQ|Chorus 2|Chorus 3|Chorus 4|Delay 2|Delay 3|Delay 4|Reverb 2|Reverb 3|Reverb 4|EQ 2|EQ 3|EQ 4|Distortion 2|Distortion 3|Distortion 4|Distortion 5" ]];
+    input event int FX_Rack_2 [[ name: "FX slot 2", min: 0, max: 20, init: 2, text: "empty|Chorus|Delay|Reverb|EQ|Chorus 2|Chorus 3|Chorus 4|Delay 2|Delay 3|Delay 4|Reverb 2|Reverb 3|Reverb 4|EQ 2|EQ 3|EQ 4|Distortion 2|Distortion 3|Distortion 4|Distortion 5" ]];
+    input event int FX_Rack_3 [[ name: "FX slot 3", min: 0, max: 20, init: 3, text: "empty|Chorus|Delay|Reverb|EQ|Chorus 2|Chorus 3|Chorus 4|Delay 2|Delay 3|Delay 4|Reverb 2|Reverb 3|Reverb 4|EQ 2|EQ 3|EQ 4|Distortion 2|Distortion 3|Distortion 4|Distortion 5" ]];
+    input event int FX_Rack_4 [[ name: "FX slot 4", min: 0, max: 20, init: 4, text: "empty|Chorus|Delay|Reverb|EQ|Chorus 2|Chorus 3|Chorus 4|Delay 2|Delay 3|Delay 4|Reverb 2|Reverb 3|Reverb 4|EQ 2|EQ 3|EQ 4|Distortion 2|Distortion 3|Distortion 4|Distortion 5" ]];
+    input event int FX_Rack_5 [[ name: "FX slot 5", min: 0, max: 20, init: 0, text: "empty|Chorus|Delay|Reverb|EQ|Chorus 2|Chorus 3|Chorus 4|Delay 2|Delay 3|Delay 4|Reverb 2|Reverb 3|Reverb 4|EQ 2|EQ 3|EQ 4|Distortion 2|Distortion 3|Distortion 4|Distortion 5" ]];
+    input event int FX_Rack_6 [[ name: "FX slot 6", min: 0, max: 20, init: 0, text: "empty|Chorus|Delay|Reverb|EQ|Chorus 2|Chorus 3|Chorus 4|Delay 2|Delay 3|Delay 4|Reverb 2|Reverb 3|Reverb 4|EQ 2|EQ 3|EQ 4|Distortion 2|Distortion 3|Distortion 4|Distortion 5" ]];
+    input event int FX_Rack_7 [[ name: "FX slot 7", min: 0, max: 20, init: 0, text: "empty|Chorus|Delay|Reverb|EQ|Chorus 2|Chorus 3|Chorus 4|Delay 2|Delay 3|Delay 4|Reverb 2|Reverb 3|Reverb 4|EQ 2|EQ 3|EQ 4|Distortion 2|Distortion 3|Distortion 4|Distortion 5" ]];
+    input event int FX_Rack_8 [[ name: "FX slot 8", min: 0, max: 20, init: 0, text: "empty|Chorus|Delay|Reverb|EQ|Chorus 2|Chorus 3|Chorus 4|Delay 2|Delay 3|Delay 4|Reverb 2|Reverb 3|Reverb 4|EQ 2|EQ 3|EQ 4|Distortion 2|Distortion 3|Distortion 4|Distortion 5" ]];
+    input event int EQ_On [[ name: "EQ on", min: 0, max: 1, init: 1, text: "off|on" ]];
+    input event int Sat_Points [[ name: "Dist shape points", min: 0, max: 14, init: 0, text: "2|3|4|5|6|7|8|9|10|11|12|13|14|15|16" ]];
+    input event float Sat_X1 [[ name: "Dist shape point 1 in", min: -1, max: 1, init: -1 ]];
+    input event float Sat_Y1 [[ name: "Dist shape point 1 out", min: -1, max: 1, init: -1 ]];
+    input event float Sat_C1 [[ name: "Dist shape point 1 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat_X2 [[ name: "Dist shape point 2 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat_Y2 [[ name: "Dist shape point 2 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat_C2 [[ name: "Dist shape point 2 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat_X3 [[ name: "Dist shape point 3 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat_Y3 [[ name: "Dist shape point 3 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat_C3 [[ name: "Dist shape point 3 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat_X4 [[ name: "Dist shape point 4 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat_Y4 [[ name: "Dist shape point 4 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat_C4 [[ name: "Dist shape point 4 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat_X5 [[ name: "Dist shape point 5 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat_Y5 [[ name: "Dist shape point 5 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat_C5 [[ name: "Dist shape point 5 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat_X6 [[ name: "Dist shape point 6 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat_Y6 [[ name: "Dist shape point 6 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat_C6 [[ name: "Dist shape point 6 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat_X7 [[ name: "Dist shape point 7 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat_Y7 [[ name: "Dist shape point 7 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat_C7 [[ name: "Dist shape point 7 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat_X8 [[ name: "Dist shape point 8 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat_Y8 [[ name: "Dist shape point 8 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat_C8 [[ name: "Dist shape point 8 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat_X9 [[ name: "Dist shape point 9 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat_Y9 [[ name: "Dist shape point 9 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat_C9 [[ name: "Dist shape point 9 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat_X10 [[ name: "Dist shape point 10 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat_Y10 [[ name: "Dist shape point 10 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat_C10 [[ name: "Dist shape point 10 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat_X11 [[ name: "Dist shape point 11 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat_Y11 [[ name: "Dist shape point 11 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat_C11 [[ name: "Dist shape point 11 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat_X12 [[ name: "Dist shape point 12 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat_Y12 [[ name: "Dist shape point 12 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat_C12 [[ name: "Dist shape point 12 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat_X13 [[ name: "Dist shape point 13 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat_Y13 [[ name: "Dist shape point 13 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat_C13 [[ name: "Dist shape point 13 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat_X14 [[ name: "Dist shape point 14 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat_Y14 [[ name: "Dist shape point 14 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat_C14 [[ name: "Dist shape point 14 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat_X15 [[ name: "Dist shape point 15 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat_Y15 [[ name: "Dist shape point 15 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat_C15 [[ name: "Dist shape point 15 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat_X16 [[ name: "Dist shape point 16 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat_Y16 [[ name: "Dist shape point 16 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat_C16 [[ name: "Dist shape point 16 bend", min: -1, max: 1, init: 0 ]];
+    input event int C2_Mode [[ name: "Chorus 2 mode", min: 0, max: 4, init: 0, text: "off|sine|ramp|FM|irregular" ]];
+    input event int C2_Stereo [[ name: "Chorus 2 stereo", min: 0, max: 2, init: 0, text: "mono|stereo 1|stereo 2" ]];
+    input event int C2_Voices [[ name: "Chorus 2 voices", min: 1, max: 16, init: 4, step: 1 ]];
+    input event float C2_Rate [[ name: "Chorus 2 speed", min: 0.0010000000474974513, max: 4, init: 0.019999999552965164, unit: "Hz" ]];
+    input event float C2_MinDelay [[ name: "Chorus 2 delay", min: 0.10000000149011612, max: 100, init: 4, unit: "ms" ]];
+    input event float C2_Depth [[ name: "Chorus 2 depth", min: 0.10000000149011612, max: 100, init: 8, unit: "ms" ]];
+    input event float C2_Feedback [[ name: "Chorus 2 feedback", min: -1, max: 1, init: 0 ]];
+    input event float C2_Mix [[ name: "Chorus 2 mix", min: 0, max: 1, init: 0.800000011920929 ]];
+    input event int C3_Mode [[ name: "Chorus 3 mode", min: 0, max: 4, init: 0, text: "off|sine|ramp|FM|irregular" ]];
+    input event int C3_Stereo [[ name: "Chorus 3 stereo", min: 0, max: 2, init: 0, text: "mono|stereo 1|stereo 2" ]];
+    input event int C3_Voices [[ name: "Chorus 3 voices", min: 1, max: 16, init: 4, step: 1 ]];
+    input event float C3_Rate [[ name: "Chorus 3 speed", min: 0.0010000000474974513, max: 4, init: 0.019999999552965164, unit: "Hz" ]];
+    input event float C3_MinDelay [[ name: "Chorus 3 delay", min: 0.10000000149011612, max: 100, init: 4, unit: "ms" ]];
+    input event float C3_Depth [[ name: "Chorus 3 depth", min: 0.10000000149011612, max: 100, init: 8, unit: "ms" ]];
+    input event float C3_Feedback [[ name: "Chorus 3 feedback", min: -1, max: 1, init: 0 ]];
+    input event float C3_Mix [[ name: "Chorus 3 mix", min: 0, max: 1, init: 0.800000011920929 ]];
+    input event int C4_Mode [[ name: "Chorus 4 mode", min: 0, max: 4, init: 0, text: "off|sine|ramp|FM|irregular" ]];
+    input event int C4_Stereo [[ name: "Chorus 4 stereo", min: 0, max: 2, init: 0, text: "mono|stereo 1|stereo 2" ]];
+    input event int C4_Voices [[ name: "Chorus 4 voices", min: 1, max: 16, init: 4, step: 1 ]];
+    input event float C4_Rate [[ name: "Chorus 4 speed", min: 0.0010000000474974513, max: 4, init: 0.019999999552965164, unit: "Hz" ]];
+    input event float C4_MinDelay [[ name: "Chorus 4 delay", min: 0.10000000149011612, max: 100, init: 4, unit: "ms" ]];
+    input event float C4_Depth [[ name: "Chorus 4 depth", min: 0.10000000149011612, max: 100, init: 8, unit: "ms" ]];
+    input event float C4_Feedback [[ name: "Chorus 4 feedback", min: -1, max: 1, init: 0 ]];
+    input event float C4_Mix [[ name: "Chorus 4 mix", min: 0, max: 1, init: 0.800000011920929 ]];
+    input event int D2_On [[ name: "Delay 2 on", min: 0, max: 1, init: 0, text: "off|on" ]];
+    input event int D2_Unit [[ name: "Delay 2 unit", min: 0, max: 14, init: 5, text: "ms|10 ms|sec|4/5 16ths|2/3 16ths|16ths|4/5 8ths|2/3 8ths|8ths|4/5 quarter notes|2/3 quarter notes|quarter notes|4/5 half notes|2/3 half notes|half notes" ]];
+    input event int D2_Quantize [[ name: "Delay 2 quantize", min: 0, max: 1, init: 0, text: "free length|quantize length" ]];
+    input event int D2_ReverseL [[ name: "Delay 2 reverse L", min: 0, max: 2, init: 0, text: "normal|reverse output|reverse feedback" ]];
+    input event int D2_ReverseR [[ name: "Delay 2 reverse R", min: 0, max: 2, init: 0, text: "normal|reverse output|reverse feedback" ]];
+    input event float D2_LengthL [[ name: "Delay 2 length L", min: 1, max: 100, init: 3 ]];
+    input event float D2_LengthR [[ name: "Delay 2 length R", min: 1, max: 100, init: 3 ]];
+    input event float D2_FeedbackL [[ name: "Delay 2 feedback L", min: -2, max: 2, init: 0.699999988079071 ]];
+    input event float D2_FeedbackR [[ name: "Delay 2 feedback R", min: -2, max: 2, init: 0.699999988079071 ]];
+    input event float D2_InputPan [[ name: "Delay 2 input pan", min: 0, max: 1, init: 0.5 ]];
+    input event float D2_Rotation [[ name: "Delay 2 rotation", min: -3.1415927410125732, max: 3.1415927410125732, init: 0 ]];
+    input event float D2_LP [[ name: "Delay 2 lowpass", min: 0, max: 1, init: 0.699999988079071 ]];
+    input event float D2_HP [[ name: "Delay 2 highpass", min: 0, max: 1, init: 0 ]];
+    input event float D2_Dry [[ name: "Delay 2 dry out", min: 0, max: 31.622777938842773, init: 1 ]];
+    input event float D2_Wet [[ name: "Delay 2 wet out", min: 0, max: 31.622777938842773, init: 0.800000011920929 ]];
+    input event int D3_On [[ name: "Delay 3 on", min: 0, max: 1, init: 0, text: "off|on" ]];
+    input event int D3_Unit [[ name: "Delay 3 unit", min: 0, max: 14, init: 5, text: "ms|10 ms|sec|4/5 16ths|2/3 16ths|16ths|4/5 8ths|2/3 8ths|8ths|4/5 quarter notes|2/3 quarter notes|quarter notes|4/5 half notes|2/3 half notes|half notes" ]];
+    input event int D3_Quantize [[ name: "Delay 3 quantize", min: 0, max: 1, init: 0, text: "free length|quantize length" ]];
+    input event int D3_ReverseL [[ name: "Delay 3 reverse L", min: 0, max: 2, init: 0, text: "normal|reverse output|reverse feedback" ]];
+    input event int D3_ReverseR [[ name: "Delay 3 reverse R", min: 0, max: 2, init: 0, text: "normal|reverse output|reverse feedback" ]];
+    input event float D3_LengthL [[ name: "Delay 3 length L", min: 1, max: 100, init: 3 ]];
+    input event float D3_LengthR [[ name: "Delay 3 length R", min: 1, max: 100, init: 3 ]];
+    input event float D3_FeedbackL [[ name: "Delay 3 feedback L", min: -2, max: 2, init: 0.699999988079071 ]];
+    input event float D3_FeedbackR [[ name: "Delay 3 feedback R", min: -2, max: 2, init: 0.699999988079071 ]];
+    input event float D3_InputPan [[ name: "Delay 3 input pan", min: 0, max: 1, init: 0.5 ]];
+    input event float D3_Rotation [[ name: "Delay 3 rotation", min: -3.1415927410125732, max: 3.1415927410125732, init: 0 ]];
+    input event float D3_LP [[ name: "Delay 3 lowpass", min: 0, max: 1, init: 0.699999988079071 ]];
+    input event float D3_HP [[ name: "Delay 3 highpass", min: 0, max: 1, init: 0 ]];
+    input event float D3_Dry [[ name: "Delay 3 dry out", min: 0, max: 31.622777938842773, init: 1 ]];
+    input event float D3_Wet [[ name: "Delay 3 wet out", min: 0, max: 31.622777938842773, init: 0.800000011920929 ]];
+    input event int D4_On [[ name: "Delay 4 on", min: 0, max: 1, init: 0, text: "off|on" ]];
+    input event int D4_Unit [[ name: "Delay 4 unit", min: 0, max: 14, init: 5, text: "ms|10 ms|sec|4/5 16ths|2/3 16ths|16ths|4/5 8ths|2/3 8ths|8ths|4/5 quarter notes|2/3 quarter notes|quarter notes|4/5 half notes|2/3 half notes|half notes" ]];
+    input event int D4_Quantize [[ name: "Delay 4 quantize", min: 0, max: 1, init: 0, text: "free length|quantize length" ]];
+    input event int D4_ReverseL [[ name: "Delay 4 reverse L", min: 0, max: 2, init: 0, text: "normal|reverse output|reverse feedback" ]];
+    input event int D4_ReverseR [[ name: "Delay 4 reverse R", min: 0, max: 2, init: 0, text: "normal|reverse output|reverse feedback" ]];
+    input event float D4_LengthL [[ name: "Delay 4 length L", min: 1, max: 100, init: 3 ]];
+    input event float D4_LengthR [[ name: "Delay 4 length R", min: 1, max: 100, init: 3 ]];
+    input event float D4_FeedbackL [[ name: "Delay 4 feedback L", min: -2, max: 2, init: 0.699999988079071 ]];
+    input event float D4_FeedbackR [[ name: "Delay 4 feedback R", min: -2, max: 2, init: 0.699999988079071 ]];
+    input event float D4_InputPan [[ name: "Delay 4 input pan", min: 0, max: 1, init: 0.5 ]];
+    input event float D4_Rotation [[ name: "Delay 4 rotation", min: -3.1415927410125732, max: 3.1415927410125732, init: 0 ]];
+    input event float D4_LP [[ name: "Delay 4 lowpass", min: 0, max: 1, init: 0.699999988079071 ]];
+    input event float D4_HP [[ name: "Delay 4 highpass", min: 0, max: 1, init: 0 ]];
+    input event float D4_Dry [[ name: "Delay 4 dry out", min: 0, max: 31.622777938842773, init: 1 ]];
+    input event float D4_Wet [[ name: "Delay 4 wet out", min: 0, max: 31.622777938842773, init: 0.800000011920929 ]];
+    input event int R2_On [[ name: "Reverb 2 on", min: 0, max: 1, init: 0, text: "off|on" ]];
+    input event float R2_Size [[ name: "Reverb 2 size", min: 10, max: 250, init: 30 ]];
+    input event float R2_Length [[ name: "Reverb 2 length", min: 0.10000000149011612, max: 120, init: 1.2000000476837158, unit: "sec" ]];
+    input event float R2_Dullness [[ name: "Reverb 2 dullness", min: 0, max: 1, init: 0.800000011920929 ]];
+    input event float R2_Brightness [[ name: "Reverb 2 brightness", min: 0, max: 1, init: 0.20000000298023224 ]];
+    input event float R2_Dry [[ name: "Reverb 2 dry out", min: 0, max: 31.622777938842773, init: 1 ]];
+    input event float R2_Wet [[ name: "Reverb 2 wet out", min: 0, max: 31.622777938842773, init: 0.20000000298023224 ]];
+    input event float R2_1 [[ name: "Reverb 2 1", min: -3.1415927410125732, max: 3.1415927410125732, init: -0.7225663661956787 ]];
+    input event float R2_2 [[ name: "Reverb 2 2", min: -3.1415927410125732, max: 3.1415927410125732, init: -2.356194496154785 ]];
+    input event float R2_3 [[ name: "Reverb 2 3", min: -3.1415927410125732, max: 3.1415927410125732, init: 0.8482300639152527 ]];
+    input event float R2_Rotation [[ name: "Reverb 2 rotation", min: -3.1415927410125732, max: 3.1415927410125732, init: 2.2619469165802 ]];
+    input event float R2_Predelay [[ name: "Reverb 2 predelay", min: -500, max: 500, init: 0, unit: "ms" ]];
+    input event float R2_EarlyMix [[ name: "Reverb 2 early mix", min: 0, max: 1, init: 0.5 ]];
+    input event int R3_On [[ name: "Reverb 3 on", min: 0, max: 1, init: 0, text: "off|on" ]];
+    input event float R3_Size [[ name: "Reverb 3 size", min: 10, max: 250, init: 30 ]];
+    input event float R3_Length [[ name: "Reverb 3 length", min: 0.10000000149011612, max: 120, init: 1.2000000476837158, unit: "sec" ]];
+    input event float R3_Dullness [[ name: "Reverb 3 dullness", min: 0, max: 1, init: 0.800000011920929 ]];
+    input event float R3_Brightness [[ name: "Reverb 3 brightness", min: 0, max: 1, init: 0.20000000298023224 ]];
+    input event float R3_Dry [[ name: "Reverb 3 dry out", min: 0, max: 31.622777938842773, init: 1 ]];
+    input event float R3_Wet [[ name: "Reverb 3 wet out", min: 0, max: 31.622777938842773, init: 0.20000000298023224 ]];
+    input event float R3_1 [[ name: "Reverb 3 1", min: -3.1415927410125732, max: 3.1415927410125732, init: -0.7225663661956787 ]];
+    input event float R3_2 [[ name: "Reverb 3 2", min: -3.1415927410125732, max: 3.1415927410125732, init: -2.356194496154785 ]];
+    input event float R3_3 [[ name: "Reverb 3 3", min: -3.1415927410125732, max: 3.1415927410125732, init: 0.8482300639152527 ]];
+    input event float R3_Rotation [[ name: "Reverb 3 rotation", min: -3.1415927410125732, max: 3.1415927410125732, init: 2.2619469165802 ]];
+    input event float R3_Predelay [[ name: "Reverb 3 predelay", min: -500, max: 500, init: 0, unit: "ms" ]];
+    input event float R3_EarlyMix [[ name: "Reverb 3 early mix", min: 0, max: 1, init: 0.5 ]];
+    input event int R4_On [[ name: "Reverb 4 on", min: 0, max: 1, init: 0, text: "off|on" ]];
+    input event float R4_Size [[ name: "Reverb 4 size", min: 10, max: 250, init: 30 ]];
+    input event float R4_Length [[ name: "Reverb 4 length", min: 0.10000000149011612, max: 120, init: 1.2000000476837158, unit: "sec" ]];
+    input event float R4_Dullness [[ name: "Reverb 4 dullness", min: 0, max: 1, init: 0.800000011920929 ]];
+    input event float R4_Brightness [[ name: "Reverb 4 brightness", min: 0, max: 1, init: 0.20000000298023224 ]];
+    input event float R4_Dry [[ name: "Reverb 4 dry out", min: 0, max: 31.622777938842773, init: 1 ]];
+    input event float R4_Wet [[ name: "Reverb 4 wet out", min: 0, max: 31.622777938842773, init: 0.20000000298023224 ]];
+    input event float R4_1 [[ name: "Reverb 4 1", min: -3.1415927410125732, max: 3.1415927410125732, init: -0.7225663661956787 ]];
+    input event float R4_2 [[ name: "Reverb 4 2", min: -3.1415927410125732, max: 3.1415927410125732, init: -2.356194496154785 ]];
+    input event float R4_3 [[ name: "Reverb 4 3", min: -3.1415927410125732, max: 3.1415927410125732, init: 0.8482300639152527 ]];
+    input event float R4_Rotation [[ name: "Reverb 4 rotation", min: -3.1415927410125732, max: 3.1415927410125732, init: 2.2619469165802 ]];
+    input event float R4_Predelay [[ name: "Reverb 4 predelay", min: -500, max: 500, init: 0, unit: "ms" ]];
+    input event float R4_EarlyMix [[ name: "Reverb 4 early mix", min: 0, max: 1, init: 0.5 ]];
+    input event int EQ2_On [[ name: "EQ 2 on", min: 0, max: 1, init: 1, text: "off|on" ]];
+    input event float EQ2_1_Freq [[ name: "EQ 2 band 1 freq", min: 15, max: 20000, init: 1000, unit: "Hz" ]];
+    input event float EQ2_1_Amp [[ name: "EQ 2 band 1 amp", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event float EQ2_1_Slope [[ name: "EQ 2 band 1 slope", min: 0.0625, max: 16, init: 1 ]];
+    input event int EQ2_1_Type [[ name: "EQ 2 band 1 type", min: 0, max: 3, init: 0, text: "off|peak/notch|low shelf|high shelf" ]];
+    input event float EQ2_2_Freq [[ name: "EQ 2 band 2 freq", min: 15, max: 20000, init: 1000, unit: "Hz" ]];
+    input event float EQ2_2_Amp [[ name: "EQ 2 band 2 amp", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event float EQ2_2_Slope [[ name: "EQ 2 band 2 slope", min: 0.0625, max: 16, init: 1 ]];
+    input event int EQ2_2_Type [[ name: "EQ 2 band 2 type", min: 0, max: 3, init: 0, text: "off|peak/notch|low shelf|high shelf" ]];
+    input event float EQ2_3_Freq [[ name: "EQ 2 band 3 freq", min: 15, max: 20000, init: 1000, unit: "Hz" ]];
+    input event float EQ2_3_Amp [[ name: "EQ 2 band 3 amp", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event float EQ2_3_Slope [[ name: "EQ 2 band 3 slope", min: 0.0625, max: 16, init: 1 ]];
+    input event int EQ2_3_Type [[ name: "EQ 2 band 3 type", min: 0, max: 3, init: 0, text: "off|peak/notch|low shelf|high shelf" ]];
+    input event float EQ2_4_Freq [[ name: "EQ 2 band 4 freq", min: 15, max: 20000, init: 1000, unit: "Hz" ]];
+    input event float EQ2_4_Amp [[ name: "EQ 2 band 4 amp", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event float EQ2_4_Slope [[ name: "EQ 2 band 4 slope", min: 0.0625, max: 16, init: 1 ]];
+    input event int EQ2_4_Type [[ name: "EQ 2 band 4 type", min: 0, max: 3, init: 0, text: "off|peak/notch|low shelf|high shelf" ]];
+    input event float EQ2_5_Freq [[ name: "EQ 2 band 5 freq", min: 15, max: 20000, init: 1000, unit: "Hz" ]];
+    input event float EQ2_5_Amp [[ name: "EQ 2 band 5 amp", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event float EQ2_5_Slope [[ name: "EQ 2 band 5 slope", min: 0.0625, max: 16, init: 1 ]];
+    input event int EQ2_5_Type [[ name: "EQ 2 band 5 type", min: 0, max: 3, init: 0, text: "off|peak/notch|low shelf|high shelf" ]];
+    input event int EQ3_On [[ name: "EQ 3 on", min: 0, max: 1, init: 1, text: "off|on" ]];
+    input event float EQ3_1_Freq [[ name: "EQ 3 band 1 freq", min: 15, max: 20000, init: 1000, unit: "Hz" ]];
+    input event float EQ3_1_Amp [[ name: "EQ 3 band 1 amp", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event float EQ3_1_Slope [[ name: "EQ 3 band 1 slope", min: 0.0625, max: 16, init: 1 ]];
+    input event int EQ3_1_Type [[ name: "EQ 3 band 1 type", min: 0, max: 3, init: 0, text: "off|peak/notch|low shelf|high shelf" ]];
+    input event float EQ3_2_Freq [[ name: "EQ 3 band 2 freq", min: 15, max: 20000, init: 1000, unit: "Hz" ]];
+    input event float EQ3_2_Amp [[ name: "EQ 3 band 2 amp", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event float EQ3_2_Slope [[ name: "EQ 3 band 2 slope", min: 0.0625, max: 16, init: 1 ]];
+    input event int EQ3_2_Type [[ name: "EQ 3 band 2 type", min: 0, max: 3, init: 0, text: "off|peak/notch|low shelf|high shelf" ]];
+    input event float EQ3_3_Freq [[ name: "EQ 3 band 3 freq", min: 15, max: 20000, init: 1000, unit: "Hz" ]];
+    input event float EQ3_3_Amp [[ name: "EQ 3 band 3 amp", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event float EQ3_3_Slope [[ name: "EQ 3 band 3 slope", min: 0.0625, max: 16, init: 1 ]];
+    input event int EQ3_3_Type [[ name: "EQ 3 band 3 type", min: 0, max: 3, init: 0, text: "off|peak/notch|low shelf|high shelf" ]];
+    input event float EQ3_4_Freq [[ name: "EQ 3 band 4 freq", min: 15, max: 20000, init: 1000, unit: "Hz" ]];
+    input event float EQ3_4_Amp [[ name: "EQ 3 band 4 amp", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event float EQ3_4_Slope [[ name: "EQ 3 band 4 slope", min: 0.0625, max: 16, init: 1 ]];
+    input event int EQ3_4_Type [[ name: "EQ 3 band 4 type", min: 0, max: 3, init: 0, text: "off|peak/notch|low shelf|high shelf" ]];
+    input event float EQ3_5_Freq [[ name: "EQ 3 band 5 freq", min: 15, max: 20000, init: 1000, unit: "Hz" ]];
+    input event float EQ3_5_Amp [[ name: "EQ 3 band 5 amp", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event float EQ3_5_Slope [[ name: "EQ 3 band 5 slope", min: 0.0625, max: 16, init: 1 ]];
+    input event int EQ3_5_Type [[ name: "EQ 3 band 5 type", min: 0, max: 3, init: 0, text: "off|peak/notch|low shelf|high shelf" ]];
+    input event int EQ4_On [[ name: "EQ 4 on", min: 0, max: 1, init: 1, text: "off|on" ]];
+    input event float EQ4_1_Freq [[ name: "EQ 4 band 1 freq", min: 15, max: 20000, init: 1000, unit: "Hz" ]];
+    input event float EQ4_1_Amp [[ name: "EQ 4 band 1 amp", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event float EQ4_1_Slope [[ name: "EQ 4 band 1 slope", min: 0.0625, max: 16, init: 1 ]];
+    input event int EQ4_1_Type [[ name: "EQ 4 band 1 type", min: 0, max: 3, init: 0, text: "off|peak/notch|low shelf|high shelf" ]];
+    input event float EQ4_2_Freq [[ name: "EQ 4 band 2 freq", min: 15, max: 20000, init: 1000, unit: "Hz" ]];
+    input event float EQ4_2_Amp [[ name: "EQ 4 band 2 amp", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event float EQ4_2_Slope [[ name: "EQ 4 band 2 slope", min: 0.0625, max: 16, init: 1 ]];
+    input event int EQ4_2_Type [[ name: "EQ 4 band 2 type", min: 0, max: 3, init: 0, text: "off|peak/notch|low shelf|high shelf" ]];
+    input event float EQ4_3_Freq [[ name: "EQ 4 band 3 freq", min: 15, max: 20000, init: 1000, unit: "Hz" ]];
+    input event float EQ4_3_Amp [[ name: "EQ 4 band 3 amp", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event float EQ4_3_Slope [[ name: "EQ 4 band 3 slope", min: 0.0625, max: 16, init: 1 ]];
+    input event int EQ4_3_Type [[ name: "EQ 4 band 3 type", min: 0, max: 3, init: 0, text: "off|peak/notch|low shelf|high shelf" ]];
+    input event float EQ4_4_Freq [[ name: "EQ 4 band 4 freq", min: 15, max: 20000, init: 1000, unit: "Hz" ]];
+    input event float EQ4_4_Amp [[ name: "EQ 4 band 4 amp", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event float EQ4_4_Slope [[ name: "EQ 4 band 4 slope", min: 0.0625, max: 16, init: 1 ]];
+    input event int EQ4_4_Type [[ name: "EQ 4 band 4 type", min: 0, max: 3, init: 0, text: "off|peak/notch|low shelf|high shelf" ]];
+    input event float EQ4_5_Freq [[ name: "EQ 4 band 5 freq", min: 15, max: 20000, init: 1000, unit: "Hz" ]];
+    input event float EQ4_5_Amp [[ name: "EQ 4 band 5 amp", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event float EQ4_5_Slope [[ name: "EQ 4 band 5 slope", min: 0.0625, max: 16, init: 1 ]];
+    input event int EQ4_5_Type [[ name: "EQ 4 band 5 type", min: 0, max: 3, init: 0, text: "off|peak/notch|low shelf|high shelf" ]];
+    input event int Sat2_Type [[ name: "Distortion 2 type", min: 0, max: 5, init: 0, text: "off|hard clip|soft clip|sine|asymmetric|custom shape" ]];
+    input event int Sat2_Oversample [[ name: "Distortion 2 oversample", min: 0, max: 3, init: 0, text: "off|2x|4x|8x" ]];
+    input event float Sat2_Pregain [[ name: "Distortion 2 pregain", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event float Sat2_Limit [[ name: "Distortion 2 limit", min: -30, max: 30, init: 0, unit: "dB" ]];
+    input event float Sat2_Postgain [[ name: "Distortion 2 postgain", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event int Sat2_Points [[ name: "Distortion 2 points", min: 0, max: 14, init: 0, text: "2|3|4|5|6|7|8|9|10|11|12|13|14|15|16" ]];
+    input event float Sat2_X1 [[ name: "Distortion 2 point 1 in", min: -1, max: 1, init: -1 ]];
+    input event float Sat2_Y1 [[ name: "Distortion 2 point 1 out", min: -1, max: 1, init: -1 ]];
+    input event float Sat2_C1 [[ name: "Distortion 2 point 1 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat2_X2 [[ name: "Distortion 2 point 2 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_Y2 [[ name: "Distortion 2 point 2 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_C2 [[ name: "Distortion 2 point 2 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat2_X3 [[ name: "Distortion 2 point 3 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_Y3 [[ name: "Distortion 2 point 3 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_C3 [[ name: "Distortion 2 point 3 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat2_X4 [[ name: "Distortion 2 point 4 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_Y4 [[ name: "Distortion 2 point 4 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_C4 [[ name: "Distortion 2 point 4 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat2_X5 [[ name: "Distortion 2 point 5 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_Y5 [[ name: "Distortion 2 point 5 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_C5 [[ name: "Distortion 2 point 5 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat2_X6 [[ name: "Distortion 2 point 6 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_Y6 [[ name: "Distortion 2 point 6 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_C6 [[ name: "Distortion 2 point 6 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat2_X7 [[ name: "Distortion 2 point 7 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_Y7 [[ name: "Distortion 2 point 7 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_C7 [[ name: "Distortion 2 point 7 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat2_X8 [[ name: "Distortion 2 point 8 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_Y8 [[ name: "Distortion 2 point 8 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_C8 [[ name: "Distortion 2 point 8 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat2_X9 [[ name: "Distortion 2 point 9 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_Y9 [[ name: "Distortion 2 point 9 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_C9 [[ name: "Distortion 2 point 9 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat2_X10 [[ name: "Distortion 2 point 10 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_Y10 [[ name: "Distortion 2 point 10 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_C10 [[ name: "Distortion 2 point 10 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat2_X11 [[ name: "Distortion 2 point 11 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_Y11 [[ name: "Distortion 2 point 11 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_C11 [[ name: "Distortion 2 point 11 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat2_X12 [[ name: "Distortion 2 point 12 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_Y12 [[ name: "Distortion 2 point 12 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_C12 [[ name: "Distortion 2 point 12 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat2_X13 [[ name: "Distortion 2 point 13 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_Y13 [[ name: "Distortion 2 point 13 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_C13 [[ name: "Distortion 2 point 13 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat2_X14 [[ name: "Distortion 2 point 14 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_Y14 [[ name: "Distortion 2 point 14 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_C14 [[ name: "Distortion 2 point 14 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat2_X15 [[ name: "Distortion 2 point 15 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_Y15 [[ name: "Distortion 2 point 15 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_C15 [[ name: "Distortion 2 point 15 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat2_X16 [[ name: "Distortion 2 point 16 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_Y16 [[ name: "Distortion 2 point 16 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat2_C16 [[ name: "Distortion 2 point 16 bend", min: -1, max: 1, init: 0 ]];
+    input event int Sat3_Type [[ name: "Distortion 3 type", min: 0, max: 5, init: 0, text: "off|hard clip|soft clip|sine|asymmetric|custom shape" ]];
+    input event int Sat3_Oversample [[ name: "Distortion 3 oversample", min: 0, max: 3, init: 0, text: "off|2x|4x|8x" ]];
+    input event float Sat3_Pregain [[ name: "Distortion 3 pregain", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event float Sat3_Limit [[ name: "Distortion 3 limit", min: -30, max: 30, init: 0, unit: "dB" ]];
+    input event float Sat3_Postgain [[ name: "Distortion 3 postgain", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event int Sat3_Points [[ name: "Distortion 3 points", min: 0, max: 14, init: 0, text: "2|3|4|5|6|7|8|9|10|11|12|13|14|15|16" ]];
+    input event float Sat3_X1 [[ name: "Distortion 3 point 1 in", min: -1, max: 1, init: -1 ]];
+    input event float Sat3_Y1 [[ name: "Distortion 3 point 1 out", min: -1, max: 1, init: -1 ]];
+    input event float Sat3_C1 [[ name: "Distortion 3 point 1 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat3_X2 [[ name: "Distortion 3 point 2 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_Y2 [[ name: "Distortion 3 point 2 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_C2 [[ name: "Distortion 3 point 2 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat3_X3 [[ name: "Distortion 3 point 3 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_Y3 [[ name: "Distortion 3 point 3 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_C3 [[ name: "Distortion 3 point 3 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat3_X4 [[ name: "Distortion 3 point 4 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_Y4 [[ name: "Distortion 3 point 4 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_C4 [[ name: "Distortion 3 point 4 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat3_X5 [[ name: "Distortion 3 point 5 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_Y5 [[ name: "Distortion 3 point 5 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_C5 [[ name: "Distortion 3 point 5 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat3_X6 [[ name: "Distortion 3 point 6 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_Y6 [[ name: "Distortion 3 point 6 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_C6 [[ name: "Distortion 3 point 6 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat3_X7 [[ name: "Distortion 3 point 7 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_Y7 [[ name: "Distortion 3 point 7 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_C7 [[ name: "Distortion 3 point 7 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat3_X8 [[ name: "Distortion 3 point 8 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_Y8 [[ name: "Distortion 3 point 8 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_C8 [[ name: "Distortion 3 point 8 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat3_X9 [[ name: "Distortion 3 point 9 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_Y9 [[ name: "Distortion 3 point 9 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_C9 [[ name: "Distortion 3 point 9 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat3_X10 [[ name: "Distortion 3 point 10 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_Y10 [[ name: "Distortion 3 point 10 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_C10 [[ name: "Distortion 3 point 10 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat3_X11 [[ name: "Distortion 3 point 11 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_Y11 [[ name: "Distortion 3 point 11 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_C11 [[ name: "Distortion 3 point 11 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat3_X12 [[ name: "Distortion 3 point 12 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_Y12 [[ name: "Distortion 3 point 12 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_C12 [[ name: "Distortion 3 point 12 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat3_X13 [[ name: "Distortion 3 point 13 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_Y13 [[ name: "Distortion 3 point 13 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_C13 [[ name: "Distortion 3 point 13 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat3_X14 [[ name: "Distortion 3 point 14 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_Y14 [[ name: "Distortion 3 point 14 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_C14 [[ name: "Distortion 3 point 14 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat3_X15 [[ name: "Distortion 3 point 15 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_Y15 [[ name: "Distortion 3 point 15 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_C15 [[ name: "Distortion 3 point 15 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat3_X16 [[ name: "Distortion 3 point 16 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_Y16 [[ name: "Distortion 3 point 16 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat3_C16 [[ name: "Distortion 3 point 16 bend", min: -1, max: 1, init: 0 ]];
+    input event int Sat4_Type [[ name: "Distortion 4 type", min: 0, max: 5, init: 0, text: "off|hard clip|soft clip|sine|asymmetric|custom shape" ]];
+    input event int Sat4_Oversample [[ name: "Distortion 4 oversample", min: 0, max: 3, init: 0, text: "off|2x|4x|8x" ]];
+    input event float Sat4_Pregain [[ name: "Distortion 4 pregain", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event float Sat4_Limit [[ name: "Distortion 4 limit", min: -30, max: 30, init: 0, unit: "dB" ]];
+    input event float Sat4_Postgain [[ name: "Distortion 4 postgain", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event int Sat4_Points [[ name: "Distortion 4 points", min: 0, max: 14, init: 0, text: "2|3|4|5|6|7|8|9|10|11|12|13|14|15|16" ]];
+    input event float Sat4_X1 [[ name: "Distortion 4 point 1 in", min: -1, max: 1, init: -1 ]];
+    input event float Sat4_Y1 [[ name: "Distortion 4 point 1 out", min: -1, max: 1, init: -1 ]];
+    input event float Sat4_C1 [[ name: "Distortion 4 point 1 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat4_X2 [[ name: "Distortion 4 point 2 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_Y2 [[ name: "Distortion 4 point 2 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_C2 [[ name: "Distortion 4 point 2 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat4_X3 [[ name: "Distortion 4 point 3 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_Y3 [[ name: "Distortion 4 point 3 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_C3 [[ name: "Distortion 4 point 3 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat4_X4 [[ name: "Distortion 4 point 4 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_Y4 [[ name: "Distortion 4 point 4 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_C4 [[ name: "Distortion 4 point 4 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat4_X5 [[ name: "Distortion 4 point 5 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_Y5 [[ name: "Distortion 4 point 5 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_C5 [[ name: "Distortion 4 point 5 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat4_X6 [[ name: "Distortion 4 point 6 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_Y6 [[ name: "Distortion 4 point 6 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_C6 [[ name: "Distortion 4 point 6 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat4_X7 [[ name: "Distortion 4 point 7 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_Y7 [[ name: "Distortion 4 point 7 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_C7 [[ name: "Distortion 4 point 7 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat4_X8 [[ name: "Distortion 4 point 8 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_Y8 [[ name: "Distortion 4 point 8 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_C8 [[ name: "Distortion 4 point 8 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat4_X9 [[ name: "Distortion 4 point 9 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_Y9 [[ name: "Distortion 4 point 9 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_C9 [[ name: "Distortion 4 point 9 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat4_X10 [[ name: "Distortion 4 point 10 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_Y10 [[ name: "Distortion 4 point 10 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_C10 [[ name: "Distortion 4 point 10 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat4_X11 [[ name: "Distortion 4 point 11 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_Y11 [[ name: "Distortion 4 point 11 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_C11 [[ name: "Distortion 4 point 11 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat4_X12 [[ name: "Distortion 4 point 12 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_Y12 [[ name: "Distortion 4 point 12 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_C12 [[ name: "Distortion 4 point 12 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat4_X13 [[ name: "Distortion 4 point 13 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_Y13 [[ name: "Distortion 4 point 13 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_C13 [[ name: "Distortion 4 point 13 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat4_X14 [[ name: "Distortion 4 point 14 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_Y14 [[ name: "Distortion 4 point 14 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_C14 [[ name: "Distortion 4 point 14 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat4_X15 [[ name: "Distortion 4 point 15 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_Y15 [[ name: "Distortion 4 point 15 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_C15 [[ name: "Distortion 4 point 15 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat4_X16 [[ name: "Distortion 4 point 16 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_Y16 [[ name: "Distortion 4 point 16 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat4_C16 [[ name: "Distortion 4 point 16 bend", min: -1, max: 1, init: 0 ]];
+    input event int Sat5_Type [[ name: "Distortion 5 type", min: 0, max: 5, init: 0, text: "off|hard clip|soft clip|sine|asymmetric|custom shape" ]];
+    input event int Sat5_Oversample [[ name: "Distortion 5 oversample", min: 0, max: 3, init: 0, text: "off|2x|4x|8x" ]];
+    input event float Sat5_Pregain [[ name: "Distortion 5 pregain", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event float Sat5_Limit [[ name: "Distortion 5 limit", min: -30, max: 30, init: 0, unit: "dB" ]];
+    input event float Sat5_Postgain [[ name: "Distortion 5 postgain", min: -60, max: 60, init: 0, unit: "dB" ]];
+    input event int Sat5_Points [[ name: "Distortion 5 points", min: 0, max: 14, init: 0, text: "2|3|4|5|6|7|8|9|10|11|12|13|14|15|16" ]];
+    input event float Sat5_X1 [[ name: "Distortion 5 point 1 in", min: -1, max: 1, init: -1 ]];
+    input event float Sat5_Y1 [[ name: "Distortion 5 point 1 out", min: -1, max: 1, init: -1 ]];
+    input event float Sat5_C1 [[ name: "Distortion 5 point 1 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat5_X2 [[ name: "Distortion 5 point 2 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_Y2 [[ name: "Distortion 5 point 2 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_C2 [[ name: "Distortion 5 point 2 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat5_X3 [[ name: "Distortion 5 point 3 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_Y3 [[ name: "Distortion 5 point 3 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_C3 [[ name: "Distortion 5 point 3 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat5_X4 [[ name: "Distortion 5 point 4 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_Y4 [[ name: "Distortion 5 point 4 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_C4 [[ name: "Distortion 5 point 4 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat5_X5 [[ name: "Distortion 5 point 5 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_Y5 [[ name: "Distortion 5 point 5 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_C5 [[ name: "Distortion 5 point 5 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat5_X6 [[ name: "Distortion 5 point 6 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_Y6 [[ name: "Distortion 5 point 6 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_C6 [[ name: "Distortion 5 point 6 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat5_X7 [[ name: "Distortion 5 point 7 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_Y7 [[ name: "Distortion 5 point 7 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_C7 [[ name: "Distortion 5 point 7 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat5_X8 [[ name: "Distortion 5 point 8 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_Y8 [[ name: "Distortion 5 point 8 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_C8 [[ name: "Distortion 5 point 8 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat5_X9 [[ name: "Distortion 5 point 9 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_Y9 [[ name: "Distortion 5 point 9 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_C9 [[ name: "Distortion 5 point 9 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat5_X10 [[ name: "Distortion 5 point 10 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_Y10 [[ name: "Distortion 5 point 10 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_C10 [[ name: "Distortion 5 point 10 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat5_X11 [[ name: "Distortion 5 point 11 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_Y11 [[ name: "Distortion 5 point 11 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_C11 [[ name: "Distortion 5 point 11 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat5_X12 [[ name: "Distortion 5 point 12 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_Y12 [[ name: "Distortion 5 point 12 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_C12 [[ name: "Distortion 5 point 12 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat5_X13 [[ name: "Distortion 5 point 13 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_Y13 [[ name: "Distortion 5 point 13 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_C13 [[ name: "Distortion 5 point 13 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat5_X14 [[ name: "Distortion 5 point 14 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_Y14 [[ name: "Distortion 5 point 14 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_C14 [[ name: "Distortion 5 point 14 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat5_X15 [[ name: "Distortion 5 point 15 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_Y15 [[ name: "Distortion 5 point 15 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_C15 [[ name: "Distortion 5 point 15 bend", min: -1, max: 1, init: 0 ]];
+    input event float Sat5_X16 [[ name: "Distortion 5 point 16 in", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_Y16 [[ name: "Distortion 5 point 16 out", min: -1, max: 1, init: 1 ]];
+    input event float Sat5_C16 [[ name: "Distortion 5 point 16 bend", min: -1, max: 1, init: 0 ]];
 
     event O1_Waveform (int v) { paramOut <- porridge::ParamChange (2117, float (v)); }
     event O1_Amp (float v) { paramOut <- porridge::ParamChange (2127, v); }
@@ -896,4 +1341,449 @@ processor ParamStore
     event U_DetuneCurve (float v) { paramOut <- porridge::ParamChange (2699, v); }
     event U_RandomPhase (int v) { paramOut <- porridge::ParamChange (2700, float (v)); }
     event U_Width (float v) { paramOut <- porridge::ParamChange (2701, v); }
+    event FX_Rack_1 (int v) { paramOut <- porridge::ParamChange (2702, float (v)); }
+    event FX_Rack_2 (int v) { paramOut <- porridge::ParamChange (2703, float (v)); }
+    event FX_Rack_3 (int v) { paramOut <- porridge::ParamChange (2704, float (v)); }
+    event FX_Rack_4 (int v) { paramOut <- porridge::ParamChange (2705, float (v)); }
+    event FX_Rack_5 (int v) { paramOut <- porridge::ParamChange (2706, float (v)); }
+    event FX_Rack_6 (int v) { paramOut <- porridge::ParamChange (2707, float (v)); }
+    event FX_Rack_7 (int v) { paramOut <- porridge::ParamChange (2708, float (v)); }
+    event FX_Rack_8 (int v) { paramOut <- porridge::ParamChange (2709, float (v)); }
+    event EQ_On (int v) { paramOut <- porridge::ParamChange (2710, float (v)); }
+    event Sat_Points (int v) { paramOut <- porridge::ParamChange (2711, float (v)); }
+    event Sat_X1 (float v) { paramOut <- porridge::ParamChange (2712, v); }
+    event Sat_Y1 (float v) { paramOut <- porridge::ParamChange (2713, v); }
+    event Sat_C1 (float v) { paramOut <- porridge::ParamChange (2714, v); }
+    event Sat_X2 (float v) { paramOut <- porridge::ParamChange (2715, v); }
+    event Sat_Y2 (float v) { paramOut <- porridge::ParamChange (2716, v); }
+    event Sat_C2 (float v) { paramOut <- porridge::ParamChange (2717, v); }
+    event Sat_X3 (float v) { paramOut <- porridge::ParamChange (2718, v); }
+    event Sat_Y3 (float v) { paramOut <- porridge::ParamChange (2719, v); }
+    event Sat_C3 (float v) { paramOut <- porridge::ParamChange (2720, v); }
+    event Sat_X4 (float v) { paramOut <- porridge::ParamChange (2721, v); }
+    event Sat_Y4 (float v) { paramOut <- porridge::ParamChange (2722, v); }
+    event Sat_C4 (float v) { paramOut <- porridge::ParamChange (2723, v); }
+    event Sat_X5 (float v) { paramOut <- porridge::ParamChange (2724, v); }
+    event Sat_Y5 (float v) { paramOut <- porridge::ParamChange (2725, v); }
+    event Sat_C5 (float v) { paramOut <- porridge::ParamChange (2726, v); }
+    event Sat_X6 (float v) { paramOut <- porridge::ParamChange (2727, v); }
+    event Sat_Y6 (float v) { paramOut <- porridge::ParamChange (2728, v); }
+    event Sat_C6 (float v) { paramOut <- porridge::ParamChange (2729, v); }
+    event Sat_X7 (float v) { paramOut <- porridge::ParamChange (2730, v); }
+    event Sat_Y7 (float v) { paramOut <- porridge::ParamChange (2731, v); }
+    event Sat_C7 (float v) { paramOut <- porridge::ParamChange (2732, v); }
+    event Sat_X8 (float v) { paramOut <- porridge::ParamChange (2733, v); }
+    event Sat_Y8 (float v) { paramOut <- porridge::ParamChange (2734, v); }
+    event Sat_C8 (float v) { paramOut <- porridge::ParamChange (2735, v); }
+    event Sat_X9 (float v) { paramOut <- porridge::ParamChange (2736, v); }
+    event Sat_Y9 (float v) { paramOut <- porridge::ParamChange (2737, v); }
+    event Sat_C9 (float v) { paramOut <- porridge::ParamChange (2738, v); }
+    event Sat_X10 (float v) { paramOut <- porridge::ParamChange (2739, v); }
+    event Sat_Y10 (float v) { paramOut <- porridge::ParamChange (2740, v); }
+    event Sat_C10 (float v) { paramOut <- porridge::ParamChange (2741, v); }
+    event Sat_X11 (float v) { paramOut <- porridge::ParamChange (2742, v); }
+    event Sat_Y11 (float v) { paramOut <- porridge::ParamChange (2743, v); }
+    event Sat_C11 (float v) { paramOut <- porridge::ParamChange (2744, v); }
+    event Sat_X12 (float v) { paramOut <- porridge::ParamChange (2745, v); }
+    event Sat_Y12 (float v) { paramOut <- porridge::ParamChange (2746, v); }
+    event Sat_C12 (float v) { paramOut <- porridge::ParamChange (2747, v); }
+    event Sat_X13 (float v) { paramOut <- porridge::ParamChange (2748, v); }
+    event Sat_Y13 (float v) { paramOut <- porridge::ParamChange (2749, v); }
+    event Sat_C13 (float v) { paramOut <- porridge::ParamChange (2750, v); }
+    event Sat_X14 (float v) { paramOut <- porridge::ParamChange (2751, v); }
+    event Sat_Y14 (float v) { paramOut <- porridge::ParamChange (2752, v); }
+    event Sat_C14 (float v) { paramOut <- porridge::ParamChange (2753, v); }
+    event Sat_X15 (float v) { paramOut <- porridge::ParamChange (2754, v); }
+    event Sat_Y15 (float v) { paramOut <- porridge::ParamChange (2755, v); }
+    event Sat_C15 (float v) { paramOut <- porridge::ParamChange (2756, v); }
+    event Sat_X16 (float v) { paramOut <- porridge::ParamChange (2757, v); }
+    event Sat_Y16 (float v) { paramOut <- porridge::ParamChange (2758, v); }
+    event Sat_C16 (float v) { paramOut <- porridge::ParamChange (2759, v); }
+    event C2_Mode (int v) { paramOut <- porridge::ParamChange (2760, float (v)); }
+    event C2_Stereo (int v) { paramOut <- porridge::ParamChange (2761, float (v)); }
+    event C2_Voices (int v) { paramOut <- porridge::ParamChange (2762, float (v)); }
+    event C2_Rate (float v) { paramOut <- porridge::ParamChange (2763, v); }
+    event C2_MinDelay (float v) { paramOut <- porridge::ParamChange (2764, v); }
+    event C2_Depth (float v) { paramOut <- porridge::ParamChange (2765, v); }
+    event C2_Feedback (float v) { paramOut <- porridge::ParamChange (2766, v); }
+    event C2_Mix (float v) { paramOut <- porridge::ParamChange (2767, v); }
+    event C3_Mode (int v) { paramOut <- porridge::ParamChange (2768, float (v)); }
+    event C3_Stereo (int v) { paramOut <- porridge::ParamChange (2769, float (v)); }
+    event C3_Voices (int v) { paramOut <- porridge::ParamChange (2770, float (v)); }
+    event C3_Rate (float v) { paramOut <- porridge::ParamChange (2771, v); }
+    event C3_MinDelay (float v) { paramOut <- porridge::ParamChange (2772, v); }
+    event C3_Depth (float v) { paramOut <- porridge::ParamChange (2773, v); }
+    event C3_Feedback (float v) { paramOut <- porridge::ParamChange (2774, v); }
+    event C3_Mix (float v) { paramOut <- porridge::ParamChange (2775, v); }
+    event C4_Mode (int v) { paramOut <- porridge::ParamChange (2776, float (v)); }
+    event C4_Stereo (int v) { paramOut <- porridge::ParamChange (2777, float (v)); }
+    event C4_Voices (int v) { paramOut <- porridge::ParamChange (2778, float (v)); }
+    event C4_Rate (float v) { paramOut <- porridge::ParamChange (2779, v); }
+    event C4_MinDelay (float v) { paramOut <- porridge::ParamChange (2780, v); }
+    event C4_Depth (float v) { paramOut <- porridge::ParamChange (2781, v); }
+    event C4_Feedback (float v) { paramOut <- porridge::ParamChange (2782, v); }
+    event C4_Mix (float v) { paramOut <- porridge::ParamChange (2783, v); }
+    event D2_On (int v) { paramOut <- porridge::ParamChange (2784, float (v)); }
+    event D2_Unit (int v) { paramOut <- porridge::ParamChange (2785, float (v)); }
+    event D2_Quantize (int v) { paramOut <- porridge::ParamChange (2786, float (v)); }
+    event D2_ReverseL (int v) { paramOut <- porridge::ParamChange (2787, float (v)); }
+    event D2_ReverseR (int v) { paramOut <- porridge::ParamChange (2788, float (v)); }
+    event D2_LengthL (float v) { paramOut <- porridge::ParamChange (2789, v); }
+    event D2_LengthR (float v) { paramOut <- porridge::ParamChange (2790, v); }
+    event D2_FeedbackL (float v) { paramOut <- porridge::ParamChange (2791, v); }
+    event D2_FeedbackR (float v) { paramOut <- porridge::ParamChange (2792, v); }
+    event D2_InputPan (float v) { paramOut <- porridge::ParamChange (2793, v); }
+    event D2_Rotation (float v) { paramOut <- porridge::ParamChange (2794, v); }
+    event D2_LP (float v) { paramOut <- porridge::ParamChange (2795, v); }
+    event D2_HP (float v) { paramOut <- porridge::ParamChange (2796, v); }
+    event D2_Dry (float v) { paramOut <- porridge::ParamChange (2797, v); }
+    event D2_Wet (float v) { paramOut <- porridge::ParamChange (2798, v); }
+    event D3_On (int v) { paramOut <- porridge::ParamChange (2799, float (v)); }
+    event D3_Unit (int v) { paramOut <- porridge::ParamChange (2800, float (v)); }
+    event D3_Quantize (int v) { paramOut <- porridge::ParamChange (2801, float (v)); }
+    event D3_ReverseL (int v) { paramOut <- porridge::ParamChange (2802, float (v)); }
+    event D3_ReverseR (int v) { paramOut <- porridge::ParamChange (2803, float (v)); }
+    event D3_LengthL (float v) { paramOut <- porridge::ParamChange (2804, v); }
+    event D3_LengthR (float v) { paramOut <- porridge::ParamChange (2805, v); }
+    event D3_FeedbackL (float v) { paramOut <- porridge::ParamChange (2806, v); }
+    event D3_FeedbackR (float v) { paramOut <- porridge::ParamChange (2807, v); }
+    event D3_InputPan (float v) { paramOut <- porridge::ParamChange (2808, v); }
+    event D3_Rotation (float v) { paramOut <- porridge::ParamChange (2809, v); }
+    event D3_LP (float v) { paramOut <- porridge::ParamChange (2810, v); }
+    event D3_HP (float v) { paramOut <- porridge::ParamChange (2811, v); }
+    event D3_Dry (float v) { paramOut <- porridge::ParamChange (2812, v); }
+    event D3_Wet (float v) { paramOut <- porridge::ParamChange (2813, v); }
+    event D4_On (int v) { paramOut <- porridge::ParamChange (2814, float (v)); }
+    event D4_Unit (int v) { paramOut <- porridge::ParamChange (2815, float (v)); }
+    event D4_Quantize (int v) { paramOut <- porridge::ParamChange (2816, float (v)); }
+    event D4_ReverseL (int v) { paramOut <- porridge::ParamChange (2817, float (v)); }
+    event D4_ReverseR (int v) { paramOut <- porridge::ParamChange (2818, float (v)); }
+    event D4_LengthL (float v) { paramOut <- porridge::ParamChange (2819, v); }
+    event D4_LengthR (float v) { paramOut <- porridge::ParamChange (2820, v); }
+    event D4_FeedbackL (float v) { paramOut <- porridge::ParamChange (2821, v); }
+    event D4_FeedbackR (float v) { paramOut <- porridge::ParamChange (2822, v); }
+    event D4_InputPan (float v) { paramOut <- porridge::ParamChange (2823, v); }
+    event D4_Rotation (float v) { paramOut <- porridge::ParamChange (2824, v); }
+    event D4_LP (float v) { paramOut <- porridge::ParamChange (2825, v); }
+    event D4_HP (float v) { paramOut <- porridge::ParamChange (2826, v); }
+    event D4_Dry (float v) { paramOut <- porridge::ParamChange (2827, v); }
+    event D4_Wet (float v) { paramOut <- porridge::ParamChange (2828, v); }
+    event R2_On (int v) { paramOut <- porridge::ParamChange (2829, float (v)); }
+    event R2_Size (float v) { paramOut <- porridge::ParamChange (2830, v); }
+    event R2_Length (float v) { paramOut <- porridge::ParamChange (2831, v); }
+    event R2_Dullness (float v) { paramOut <- porridge::ParamChange (2832, v); }
+    event R2_Brightness (float v) { paramOut <- porridge::ParamChange (2833, v); }
+    event R2_Dry (float v) { paramOut <- porridge::ParamChange (2834, v); }
+    event R2_Wet (float v) { paramOut <- porridge::ParamChange (2835, v); }
+    event R2_1 (float v) { paramOut <- porridge::ParamChange (2836, v); }
+    event R2_2 (float v) { paramOut <- porridge::ParamChange (2837, v); }
+    event R2_3 (float v) { paramOut <- porridge::ParamChange (2838, v); }
+    event R2_Rotation (float v) { paramOut <- porridge::ParamChange (2839, v); }
+    event R2_Predelay (float v) { paramOut <- porridge::ParamChange (2840, v); }
+    event R2_EarlyMix (float v) { paramOut <- porridge::ParamChange (2841, v); }
+    event R3_On (int v) { paramOut <- porridge::ParamChange (2842, float (v)); }
+    event R3_Size (float v) { paramOut <- porridge::ParamChange (2843, v); }
+    event R3_Length (float v) { paramOut <- porridge::ParamChange (2844, v); }
+    event R3_Dullness (float v) { paramOut <- porridge::ParamChange (2845, v); }
+    event R3_Brightness (float v) { paramOut <- porridge::ParamChange (2846, v); }
+    event R3_Dry (float v) { paramOut <- porridge::ParamChange (2847, v); }
+    event R3_Wet (float v) { paramOut <- porridge::ParamChange (2848, v); }
+    event R3_1 (float v) { paramOut <- porridge::ParamChange (2849, v); }
+    event R3_2 (float v) { paramOut <- porridge::ParamChange (2850, v); }
+    event R3_3 (float v) { paramOut <- porridge::ParamChange (2851, v); }
+    event R3_Rotation (float v) { paramOut <- porridge::ParamChange (2852, v); }
+    event R3_Predelay (float v) { paramOut <- porridge::ParamChange (2853, v); }
+    event R3_EarlyMix (float v) { paramOut <- porridge::ParamChange (2854, v); }
+    event R4_On (int v) { paramOut <- porridge::ParamChange (2855, float (v)); }
+    event R4_Size (float v) { paramOut <- porridge::ParamChange (2856, v); }
+    event R4_Length (float v) { paramOut <- porridge::ParamChange (2857, v); }
+    event R4_Dullness (float v) { paramOut <- porridge::ParamChange (2858, v); }
+    event R4_Brightness (float v) { paramOut <- porridge::ParamChange (2859, v); }
+    event R4_Dry (float v) { paramOut <- porridge::ParamChange (2860, v); }
+    event R4_Wet (float v) { paramOut <- porridge::ParamChange (2861, v); }
+    event R4_1 (float v) { paramOut <- porridge::ParamChange (2862, v); }
+    event R4_2 (float v) { paramOut <- porridge::ParamChange (2863, v); }
+    event R4_3 (float v) { paramOut <- porridge::ParamChange (2864, v); }
+    event R4_Rotation (float v) { paramOut <- porridge::ParamChange (2865, v); }
+    event R4_Predelay (float v) { paramOut <- porridge::ParamChange (2866, v); }
+    event R4_EarlyMix (float v) { paramOut <- porridge::ParamChange (2867, v); }
+    event EQ2_On (int v) { paramOut <- porridge::ParamChange (2868, float (v)); }
+    event EQ2_1_Freq (float v) { paramOut <- porridge::ParamChange (2869, v); }
+    event EQ2_1_Amp (float v) { paramOut <- porridge::ParamChange (2870, v); }
+    event EQ2_1_Slope (float v) { paramOut <- porridge::ParamChange (2871, v); }
+    event EQ2_1_Type (int v) { paramOut <- porridge::ParamChange (2872, float (v)); }
+    event EQ2_2_Freq (float v) { paramOut <- porridge::ParamChange (2873, v); }
+    event EQ2_2_Amp (float v) { paramOut <- porridge::ParamChange (2874, v); }
+    event EQ2_2_Slope (float v) { paramOut <- porridge::ParamChange (2875, v); }
+    event EQ2_2_Type (int v) { paramOut <- porridge::ParamChange (2876, float (v)); }
+    event EQ2_3_Freq (float v) { paramOut <- porridge::ParamChange (2877, v); }
+    event EQ2_3_Amp (float v) { paramOut <- porridge::ParamChange (2878, v); }
+    event EQ2_3_Slope (float v) { paramOut <- porridge::ParamChange (2879, v); }
+    event EQ2_3_Type (int v) { paramOut <- porridge::ParamChange (2880, float (v)); }
+    event EQ2_4_Freq (float v) { paramOut <- porridge::ParamChange (2881, v); }
+    event EQ2_4_Amp (float v) { paramOut <- porridge::ParamChange (2882, v); }
+    event EQ2_4_Slope (float v) { paramOut <- porridge::ParamChange (2883, v); }
+    event EQ2_4_Type (int v) { paramOut <- porridge::ParamChange (2884, float (v)); }
+    event EQ2_5_Freq (float v) { paramOut <- porridge::ParamChange (2885, v); }
+    event EQ2_5_Amp (float v) { paramOut <- porridge::ParamChange (2886, v); }
+    event EQ2_5_Slope (float v) { paramOut <- porridge::ParamChange (2887, v); }
+    event EQ2_5_Type (int v) { paramOut <- porridge::ParamChange (2888, float (v)); }
+    event EQ3_On (int v) { paramOut <- porridge::ParamChange (2889, float (v)); }
+    event EQ3_1_Freq (float v) { paramOut <- porridge::ParamChange (2890, v); }
+    event EQ3_1_Amp (float v) { paramOut <- porridge::ParamChange (2891, v); }
+    event EQ3_1_Slope (float v) { paramOut <- porridge::ParamChange (2892, v); }
+    event EQ3_1_Type (int v) { paramOut <- porridge::ParamChange (2893, float (v)); }
+    event EQ3_2_Freq (float v) { paramOut <- porridge::ParamChange (2894, v); }
+    event EQ3_2_Amp (float v) { paramOut <- porridge::ParamChange (2895, v); }
+    event EQ3_2_Slope (float v) { paramOut <- porridge::ParamChange (2896, v); }
+    event EQ3_2_Type (int v) { paramOut <- porridge::ParamChange (2897, float (v)); }
+    event EQ3_3_Freq (float v) { paramOut <- porridge::ParamChange (2898, v); }
+    event EQ3_3_Amp (float v) { paramOut <- porridge::ParamChange (2899, v); }
+    event EQ3_3_Slope (float v) { paramOut <- porridge::ParamChange (2900, v); }
+    event EQ3_3_Type (int v) { paramOut <- porridge::ParamChange (2901, float (v)); }
+    event EQ3_4_Freq (float v) { paramOut <- porridge::ParamChange (2902, v); }
+    event EQ3_4_Amp (float v) { paramOut <- porridge::ParamChange (2903, v); }
+    event EQ3_4_Slope (float v) { paramOut <- porridge::ParamChange (2904, v); }
+    event EQ3_4_Type (int v) { paramOut <- porridge::ParamChange (2905, float (v)); }
+    event EQ3_5_Freq (float v) { paramOut <- porridge::ParamChange (2906, v); }
+    event EQ3_5_Amp (float v) { paramOut <- porridge::ParamChange (2907, v); }
+    event EQ3_5_Slope (float v) { paramOut <- porridge::ParamChange (2908, v); }
+    event EQ3_5_Type (int v) { paramOut <- porridge::ParamChange (2909, float (v)); }
+    event EQ4_On (int v) { paramOut <- porridge::ParamChange (2910, float (v)); }
+    event EQ4_1_Freq (float v) { paramOut <- porridge::ParamChange (2911, v); }
+    event EQ4_1_Amp (float v) { paramOut <- porridge::ParamChange (2912, v); }
+    event EQ4_1_Slope (float v) { paramOut <- porridge::ParamChange (2913, v); }
+    event EQ4_1_Type (int v) { paramOut <- porridge::ParamChange (2914, float (v)); }
+    event EQ4_2_Freq (float v) { paramOut <- porridge::ParamChange (2915, v); }
+    event EQ4_2_Amp (float v) { paramOut <- porridge::ParamChange (2916, v); }
+    event EQ4_2_Slope (float v) { paramOut <- porridge::ParamChange (2917, v); }
+    event EQ4_2_Type (int v) { paramOut <- porridge::ParamChange (2918, float (v)); }
+    event EQ4_3_Freq (float v) { paramOut <- porridge::ParamChange (2919, v); }
+    event EQ4_3_Amp (float v) { paramOut <- porridge::ParamChange (2920, v); }
+    event EQ4_3_Slope (float v) { paramOut <- porridge::ParamChange (2921, v); }
+    event EQ4_3_Type (int v) { paramOut <- porridge::ParamChange (2922, float (v)); }
+    event EQ4_4_Freq (float v) { paramOut <- porridge::ParamChange (2923, v); }
+    event EQ4_4_Amp (float v) { paramOut <- porridge::ParamChange (2924, v); }
+    event EQ4_4_Slope (float v) { paramOut <- porridge::ParamChange (2925, v); }
+    event EQ4_4_Type (int v) { paramOut <- porridge::ParamChange (2926, float (v)); }
+    event EQ4_5_Freq (float v) { paramOut <- porridge::ParamChange (2927, v); }
+    event EQ4_5_Amp (float v) { paramOut <- porridge::ParamChange (2928, v); }
+    event EQ4_5_Slope (float v) { paramOut <- porridge::ParamChange (2929, v); }
+    event EQ4_5_Type (int v) { paramOut <- porridge::ParamChange (2930, float (v)); }
+    event Sat2_Type (int v) { paramOut <- porridge::ParamChange (2931, float (v)); }
+    event Sat2_Oversample (int v) { paramOut <- porridge::ParamChange (2932, float (v)); }
+    event Sat2_Pregain (float v) { paramOut <- porridge::ParamChange (2933, v); }
+    event Sat2_Limit (float v) { paramOut <- porridge::ParamChange (2934, v); }
+    event Sat2_Postgain (float v) { paramOut <- porridge::ParamChange (2935, v); }
+    event Sat2_Points (int v) { paramOut <- porridge::ParamChange (2936, float (v)); }
+    event Sat2_X1 (float v) { paramOut <- porridge::ParamChange (2937, v); }
+    event Sat2_Y1 (float v) { paramOut <- porridge::ParamChange (2938, v); }
+    event Sat2_C1 (float v) { paramOut <- porridge::ParamChange (2939, v); }
+    event Sat2_X2 (float v) { paramOut <- porridge::ParamChange (2940, v); }
+    event Sat2_Y2 (float v) { paramOut <- porridge::ParamChange (2941, v); }
+    event Sat2_C2 (float v) { paramOut <- porridge::ParamChange (2942, v); }
+    event Sat2_X3 (float v) { paramOut <- porridge::ParamChange (2943, v); }
+    event Sat2_Y3 (float v) { paramOut <- porridge::ParamChange (2944, v); }
+    event Sat2_C3 (float v) { paramOut <- porridge::ParamChange (2945, v); }
+    event Sat2_X4 (float v) { paramOut <- porridge::ParamChange (2946, v); }
+    event Sat2_Y4 (float v) { paramOut <- porridge::ParamChange (2947, v); }
+    event Sat2_C4 (float v) { paramOut <- porridge::ParamChange (2948, v); }
+    event Sat2_X5 (float v) { paramOut <- porridge::ParamChange (2949, v); }
+    event Sat2_Y5 (float v) { paramOut <- porridge::ParamChange (2950, v); }
+    event Sat2_C5 (float v) { paramOut <- porridge::ParamChange (2951, v); }
+    event Sat2_X6 (float v) { paramOut <- porridge::ParamChange (2952, v); }
+    event Sat2_Y6 (float v) { paramOut <- porridge::ParamChange (2953, v); }
+    event Sat2_C6 (float v) { paramOut <- porridge::ParamChange (2954, v); }
+    event Sat2_X7 (float v) { paramOut <- porridge::ParamChange (2955, v); }
+    event Sat2_Y7 (float v) { paramOut <- porridge::ParamChange (2956, v); }
+    event Sat2_C7 (float v) { paramOut <- porridge::ParamChange (2957, v); }
+    event Sat2_X8 (float v) { paramOut <- porridge::ParamChange (2958, v); }
+    event Sat2_Y8 (float v) { paramOut <- porridge::ParamChange (2959, v); }
+    event Sat2_C8 (float v) { paramOut <- porridge::ParamChange (2960, v); }
+    event Sat2_X9 (float v) { paramOut <- porridge::ParamChange (2961, v); }
+    event Sat2_Y9 (float v) { paramOut <- porridge::ParamChange (2962, v); }
+    event Sat2_C9 (float v) { paramOut <- porridge::ParamChange (2963, v); }
+    event Sat2_X10 (float v) { paramOut <- porridge::ParamChange (2964, v); }
+    event Sat2_Y10 (float v) { paramOut <- porridge::ParamChange (2965, v); }
+    event Sat2_C10 (float v) { paramOut <- porridge::ParamChange (2966, v); }
+    event Sat2_X11 (float v) { paramOut <- porridge::ParamChange (2967, v); }
+    event Sat2_Y11 (float v) { paramOut <- porridge::ParamChange (2968, v); }
+    event Sat2_C11 (float v) { paramOut <- porridge::ParamChange (2969, v); }
+    event Sat2_X12 (float v) { paramOut <- porridge::ParamChange (2970, v); }
+    event Sat2_Y12 (float v) { paramOut <- porridge::ParamChange (2971, v); }
+    event Sat2_C12 (float v) { paramOut <- porridge::ParamChange (2972, v); }
+    event Sat2_X13 (float v) { paramOut <- porridge::ParamChange (2973, v); }
+    event Sat2_Y13 (float v) { paramOut <- porridge::ParamChange (2974, v); }
+    event Sat2_C13 (float v) { paramOut <- porridge::ParamChange (2975, v); }
+    event Sat2_X14 (float v) { paramOut <- porridge::ParamChange (2976, v); }
+    event Sat2_Y14 (float v) { paramOut <- porridge::ParamChange (2977, v); }
+    event Sat2_C14 (float v) { paramOut <- porridge::ParamChange (2978, v); }
+    event Sat2_X15 (float v) { paramOut <- porridge::ParamChange (2979, v); }
+    event Sat2_Y15 (float v) { paramOut <- porridge::ParamChange (2980, v); }
+    event Sat2_C15 (float v) { paramOut <- porridge::ParamChange (2981, v); }
+    event Sat2_X16 (float v) { paramOut <- porridge::ParamChange (2982, v); }
+    event Sat2_Y16 (float v) { paramOut <- porridge::ParamChange (2983, v); }
+    event Sat2_C16 (float v) { paramOut <- porridge::ParamChange (2984, v); }
+    event Sat3_Type (int v) { paramOut <- porridge::ParamChange (2985, float (v)); }
+    event Sat3_Oversample (int v) { paramOut <- porridge::ParamChange (2986, float (v)); }
+    event Sat3_Pregain (float v) { paramOut <- porridge::ParamChange (2987, v); }
+    event Sat3_Limit (float v) { paramOut <- porridge::ParamChange (2988, v); }
+    event Sat3_Postgain (float v) { paramOut <- porridge::ParamChange (2989, v); }
+    event Sat3_Points (int v) { paramOut <- porridge::ParamChange (2990, float (v)); }
+    event Sat3_X1 (float v) { paramOut <- porridge::ParamChange (2991, v); }
+    event Sat3_Y1 (float v) { paramOut <- porridge::ParamChange (2992, v); }
+    event Sat3_C1 (float v) { paramOut <- porridge::ParamChange (2993, v); }
+    event Sat3_X2 (float v) { paramOut <- porridge::ParamChange (2994, v); }
+    event Sat3_Y2 (float v) { paramOut <- porridge::ParamChange (2995, v); }
+    event Sat3_C2 (float v) { paramOut <- porridge::ParamChange (2996, v); }
+    event Sat3_X3 (float v) { paramOut <- porridge::ParamChange (2997, v); }
+    event Sat3_Y3 (float v) { paramOut <- porridge::ParamChange (2998, v); }
+    event Sat3_C3 (float v) { paramOut <- porridge::ParamChange (2999, v); }
+    event Sat3_X4 (float v) { paramOut <- porridge::ParamChange (3000, v); }
+    event Sat3_Y4 (float v) { paramOut <- porridge::ParamChange (3001, v); }
+    event Sat3_C4 (float v) { paramOut <- porridge::ParamChange (3002, v); }
+    event Sat3_X5 (float v) { paramOut <- porridge::ParamChange (3003, v); }
+    event Sat3_Y5 (float v) { paramOut <- porridge::ParamChange (3004, v); }
+    event Sat3_C5 (float v) { paramOut <- porridge::ParamChange (3005, v); }
+    event Sat3_X6 (float v) { paramOut <- porridge::ParamChange (3006, v); }
+    event Sat3_Y6 (float v) { paramOut <- porridge::ParamChange (3007, v); }
+    event Sat3_C6 (float v) { paramOut <- porridge::ParamChange (3008, v); }
+    event Sat3_X7 (float v) { paramOut <- porridge::ParamChange (3009, v); }
+    event Sat3_Y7 (float v) { paramOut <- porridge::ParamChange (3010, v); }
+    event Sat3_C7 (float v) { paramOut <- porridge::ParamChange (3011, v); }
+    event Sat3_X8 (float v) { paramOut <- porridge::ParamChange (3012, v); }
+    event Sat3_Y8 (float v) { paramOut <- porridge::ParamChange (3013, v); }
+    event Sat3_C8 (float v) { paramOut <- porridge::ParamChange (3014, v); }
+    event Sat3_X9 (float v) { paramOut <- porridge::ParamChange (3015, v); }
+    event Sat3_Y9 (float v) { paramOut <- porridge::ParamChange (3016, v); }
+    event Sat3_C9 (float v) { paramOut <- porridge::ParamChange (3017, v); }
+    event Sat3_X10 (float v) { paramOut <- porridge::ParamChange (3018, v); }
+    event Sat3_Y10 (float v) { paramOut <- porridge::ParamChange (3019, v); }
+    event Sat3_C10 (float v) { paramOut <- porridge::ParamChange (3020, v); }
+    event Sat3_X11 (float v) { paramOut <- porridge::ParamChange (3021, v); }
+    event Sat3_Y11 (float v) { paramOut <- porridge::ParamChange (3022, v); }
+    event Sat3_C11 (float v) { paramOut <- porridge::ParamChange (3023, v); }
+    event Sat3_X12 (float v) { paramOut <- porridge::ParamChange (3024, v); }
+    event Sat3_Y12 (float v) { paramOut <- porridge::ParamChange (3025, v); }
+    event Sat3_C12 (float v) { paramOut <- porridge::ParamChange (3026, v); }
+    event Sat3_X13 (float v) { paramOut <- porridge::ParamChange (3027, v); }
+    event Sat3_Y13 (float v) { paramOut <- porridge::ParamChange (3028, v); }
+    event Sat3_C13 (float v) { paramOut <- porridge::ParamChange (3029, v); }
+    event Sat3_X14 (float v) { paramOut <- porridge::ParamChange (3030, v); }
+    event Sat3_Y14 (float v) { paramOut <- porridge::ParamChange (3031, v); }
+    event Sat3_C14 (float v) { paramOut <- porridge::ParamChange (3032, v); }
+    event Sat3_X15 (float v) { paramOut <- porridge::ParamChange (3033, v); }
+    event Sat3_Y15 (float v) { paramOut <- porridge::ParamChange (3034, v); }
+    event Sat3_C15 (float v) { paramOut <- porridge::ParamChange (3035, v); }
+    event Sat3_X16 (float v) { paramOut <- porridge::ParamChange (3036, v); }
+    event Sat3_Y16 (float v) { paramOut <- porridge::ParamChange (3037, v); }
+    event Sat3_C16 (float v) { paramOut <- porridge::ParamChange (3038, v); }
+    event Sat4_Type (int v) { paramOut <- porridge::ParamChange (3039, float (v)); }
+    event Sat4_Oversample (int v) { paramOut <- porridge::ParamChange (3040, float (v)); }
+    event Sat4_Pregain (float v) { paramOut <- porridge::ParamChange (3041, v); }
+    event Sat4_Limit (float v) { paramOut <- porridge::ParamChange (3042, v); }
+    event Sat4_Postgain (float v) { paramOut <- porridge::ParamChange (3043, v); }
+    event Sat4_Points (int v) { paramOut <- porridge::ParamChange (3044, float (v)); }
+    event Sat4_X1 (float v) { paramOut <- porridge::ParamChange (3045, v); }
+    event Sat4_Y1 (float v) { paramOut <- porridge::ParamChange (3046, v); }
+    event Sat4_C1 (float v) { paramOut <- porridge::ParamChange (3047, v); }
+    event Sat4_X2 (float v) { paramOut <- porridge::ParamChange (3048, v); }
+    event Sat4_Y2 (float v) { paramOut <- porridge::ParamChange (3049, v); }
+    event Sat4_C2 (float v) { paramOut <- porridge::ParamChange (3050, v); }
+    event Sat4_X3 (float v) { paramOut <- porridge::ParamChange (3051, v); }
+    event Sat4_Y3 (float v) { paramOut <- porridge::ParamChange (3052, v); }
+    event Sat4_C3 (float v) { paramOut <- porridge::ParamChange (3053, v); }
+    event Sat4_X4 (float v) { paramOut <- porridge::ParamChange (3054, v); }
+    event Sat4_Y4 (float v) { paramOut <- porridge::ParamChange (3055, v); }
+    event Sat4_C4 (float v) { paramOut <- porridge::ParamChange (3056, v); }
+    event Sat4_X5 (float v) { paramOut <- porridge::ParamChange (3057, v); }
+    event Sat4_Y5 (float v) { paramOut <- porridge::ParamChange (3058, v); }
+    event Sat4_C5 (float v) { paramOut <- porridge::ParamChange (3059, v); }
+    event Sat4_X6 (float v) { paramOut <- porridge::ParamChange (3060, v); }
+    event Sat4_Y6 (float v) { paramOut <- porridge::ParamChange (3061, v); }
+    event Sat4_C6 (float v) { paramOut <- porridge::ParamChange (3062, v); }
+    event Sat4_X7 (float v) { paramOut <- porridge::ParamChange (3063, v); }
+    event Sat4_Y7 (float v) { paramOut <- porridge::ParamChange (3064, v); }
+    event Sat4_C7 (float v) { paramOut <- porridge::ParamChange (3065, v); }
+    event Sat4_X8 (float v) { paramOut <- porridge::ParamChange (3066, v); }
+    event Sat4_Y8 (float v) { paramOut <- porridge::ParamChange (3067, v); }
+    event Sat4_C8 (float v) { paramOut <- porridge::ParamChange (3068, v); }
+    event Sat4_X9 (float v) { paramOut <- porridge::ParamChange (3069, v); }
+    event Sat4_Y9 (float v) { paramOut <- porridge::ParamChange (3070, v); }
+    event Sat4_C9 (float v) { paramOut <- porridge::ParamChange (3071, v); }
+    event Sat4_X10 (float v) { paramOut <- porridge::ParamChange (3072, v); }
+    event Sat4_Y10 (float v) { paramOut <- porridge::ParamChange (3073, v); }
+    event Sat4_C10 (float v) { paramOut <- porridge::ParamChange (3074, v); }
+    event Sat4_X11 (float v) { paramOut <- porridge::ParamChange (3075, v); }
+    event Sat4_Y11 (float v) { paramOut <- porridge::ParamChange (3076, v); }
+    event Sat4_C11 (float v) { paramOut <- porridge::ParamChange (3077, v); }
+    event Sat4_X12 (float v) { paramOut <- porridge::ParamChange (3078, v); }
+    event Sat4_Y12 (float v) { paramOut <- porridge::ParamChange (3079, v); }
+    event Sat4_C12 (float v) { paramOut <- porridge::ParamChange (3080, v); }
+    event Sat4_X13 (float v) { paramOut <- porridge::ParamChange (3081, v); }
+    event Sat4_Y13 (float v) { paramOut <- porridge::ParamChange (3082, v); }
+    event Sat4_C13 (float v) { paramOut <- porridge::ParamChange (3083, v); }
+    event Sat4_X14 (float v) { paramOut <- porridge::ParamChange (3084, v); }
+    event Sat4_Y14 (float v) { paramOut <- porridge::ParamChange (3085, v); }
+    event Sat4_C14 (float v) { paramOut <- porridge::ParamChange (3086, v); }
+    event Sat4_X15 (float v) { paramOut <- porridge::ParamChange (3087, v); }
+    event Sat4_Y15 (float v) { paramOut <- porridge::ParamChange (3088, v); }
+    event Sat4_C15 (float v) { paramOut <- porridge::ParamChange (3089, v); }
+    event Sat4_X16 (float v) { paramOut <- porridge::ParamChange (3090, v); }
+    event Sat4_Y16 (float v) { paramOut <- porridge::ParamChange (3091, v); }
+    event Sat4_C16 (float v) { paramOut <- porridge::ParamChange (3092, v); }
+    event Sat5_Type (int v) { paramOut <- porridge::ParamChange (3093, float (v)); }
+    event Sat5_Oversample (int v) { paramOut <- porridge::ParamChange (3094, float (v)); }
+    event Sat5_Pregain (float v) { paramOut <- porridge::ParamChange (3095, v); }
+    event Sat5_Limit (float v) { paramOut <- porridge::ParamChange (3096, v); }
+    event Sat5_Postgain (float v) { paramOut <- porridge::ParamChange (3097, v); }
+    event Sat5_Points (int v) { paramOut <- porridge::ParamChange (3098, float (v)); }
+    event Sat5_X1 (float v) { paramOut <- porridge::ParamChange (3099, v); }
+    event Sat5_Y1 (float v) { paramOut <- porridge::ParamChange (3100, v); }
+    event Sat5_C1 (float v) { paramOut <- porridge::ParamChange (3101, v); }
+    event Sat5_X2 (float v) { paramOut <- porridge::ParamChange (3102, v); }
+    event Sat5_Y2 (float v) { paramOut <- porridge::ParamChange (3103, v); }
+    event Sat5_C2 (float v) { paramOut <- porridge::ParamChange (3104, v); }
+    event Sat5_X3 (float v) { paramOut <- porridge::ParamChange (3105, v); }
+    event Sat5_Y3 (float v) { paramOut <- porridge::ParamChange (3106, v); }
+    event Sat5_C3 (float v) { paramOut <- porridge::ParamChange (3107, v); }
+    event Sat5_X4 (float v) { paramOut <- porridge::ParamChange (3108, v); }
+    event Sat5_Y4 (float v) { paramOut <- porridge::ParamChange (3109, v); }
+    event Sat5_C4 (float v) { paramOut <- porridge::ParamChange (3110, v); }
+    event Sat5_X5 (float v) { paramOut <- porridge::ParamChange (3111, v); }
+    event Sat5_Y5 (float v) { paramOut <- porridge::ParamChange (3112, v); }
+    event Sat5_C5 (float v) { paramOut <- porridge::ParamChange (3113, v); }
+    event Sat5_X6 (float v) { paramOut <- porridge::ParamChange (3114, v); }
+    event Sat5_Y6 (float v) { paramOut <- porridge::ParamChange (3115, v); }
+    event Sat5_C6 (float v) { paramOut <- porridge::ParamChange (3116, v); }
+    event Sat5_X7 (float v) { paramOut <- porridge::ParamChange (3117, v); }
+    event Sat5_Y7 (float v) { paramOut <- porridge::ParamChange (3118, v); }
+    event Sat5_C7 (float v) { paramOut <- porridge::ParamChange (3119, v); }
+    event Sat5_X8 (float v) { paramOut <- porridge::ParamChange (3120, v); }
+    event Sat5_Y8 (float v) { paramOut <- porridge::ParamChange (3121, v); }
+    event Sat5_C8 (float v) { paramOut <- porridge::ParamChange (3122, v); }
+    event Sat5_X9 (float v) { paramOut <- porridge::ParamChange (3123, v); }
+    event Sat5_Y9 (float v) { paramOut <- porridge::ParamChange (3124, v); }
+    event Sat5_C9 (float v) { paramOut <- porridge::ParamChange (3125, v); }
+    event Sat5_X10 (float v) { paramOut <- porridge::ParamChange (3126, v); }
+    event Sat5_Y10 (float v) { paramOut <- porridge::ParamChange (3127, v); }
+    event Sat5_C10 (float v) { paramOut <- porridge::ParamChange (3128, v); }
+    event Sat5_X11 (float v) { paramOut <- porridge::ParamChange (3129, v); }
+    event Sat5_Y11 (float v) { paramOut <- porridge::ParamChange (3130, v); }
+    event Sat5_C11 (float v) { paramOut <- porridge::ParamChange (3131, v); }
+    event Sat5_X12 (float v) { paramOut <- porridge::ParamChange (3132, v); }
+    event Sat5_Y12 (float v) { paramOut <- porridge::ParamChange (3133, v); }
+    event Sat5_C12 (float v) { paramOut <- porridge::ParamChange (3134, v); }
+    event Sat5_X13 (float v) { paramOut <- porridge::ParamChange (3135, v); }
+    event Sat5_Y13 (float v) { paramOut <- porridge::ParamChange (3136, v); }
+    event Sat5_C13 (float v) { paramOut <- porridge::ParamChange (3137, v); }
+    event Sat5_X14 (float v) { paramOut <- porridge::ParamChange (3138, v); }
+    event Sat5_Y14 (float v) { paramOut <- porridge::ParamChange (3139, v); }
+    event Sat5_C14 (float v) { paramOut <- porridge::ParamChange (3140, v); }
+    event Sat5_X15 (float v) { paramOut <- porridge::ParamChange (3141, v); }
+    event Sat5_Y15 (float v) { paramOut <- porridge::ParamChange (3142, v); }
+    event Sat5_C15 (float v) { paramOut <- porridge::ParamChange (3143, v); }
+    event Sat5_X16 (float v) { paramOut <- porridge::ParamChange (3144, v); }
+    event Sat5_Y16 (float v) { paramOut <- porridge::ParamChange (3145, v); }
+    event Sat5_C16 (float v) { paramOut <- porridge::ParamChange (3146, v); }
 }

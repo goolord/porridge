@@ -116,6 +116,7 @@ namespace porridge
     let delayMax = 1323000;
     let delayHalf = delayMax / 2;   // each line is stored in two halves: WebAssembly targets cap arrays below 2^20 elements
 
+    /// Oatmeal's delay: 1323000 samples a side (30 s at 44.1 kHz).
     struct Delay
     {
         float[delayHalf] bufL0, bufL1, bufR0, bufR1;
@@ -126,14 +127,28 @@ namespace porridge
         float rotCur;
     }
 
-    void prepare (Delay& this)
+    /// The rack's other delays: the same, with a third of the memory (441000 samples a side, 10 s
+    /// at 44.1 kHz). The functions below take either; a line's longest length is its two halves.
+    let rackDelayHalf = 220500;
+
+    struct RackDelay
+    {
+        float[rackDelayHalf] bufL0, bufL1, bufR0, bufR1;
+        int lenL, lenR, posL, posR;
+        float lpxL, lpyL, lpxR, lpyR, hpxL, hpyL, hpxR, hpyR;
+        bool idle;
+        int silentCount;
+        float rotCur;
+    }
+
+    void prepare<D> (D& this)
     {
         this.lenL = -1;
         this.lenR = -1;
         this.clearState();
     }
 
-    void clearState (Delay& this)
+    void clearState<D> (D& this)
     {
         this.idle = true;
         this.silentCount = 0;
@@ -145,16 +160,16 @@ namespace porridge
         this.clearR (max (this.lenR, 0));
     }
 
-    void clearL (Delay& this, int n) { for (int i = 0; i < n; ++i) this.writeL (i, 0.0f); }
-    void clearR (Delay& this, int n) { for (int i = 0; i < n; ++i) this.writeR (i, 0.0f); }
+    void clearL<D> (D& this, int n) { for (int i = 0; i < n; ++i) this.writeL (i, 0.0f); }
+    void clearR<D> (D& this, int n) { for (int i = 0; i < n; ++i) this.writeR (i, 0.0f); }
 
-    float readL (const Delay& this, int i)          { return i < delayHalf ? this.bufL0.at (i) : this.bufL1.at (i - delayHalf); }
-    float readR (const Delay& this, int i)          { return i < delayHalf ? this.bufR0.at (i) : this.bufR1.at (i - delayHalf); }
-    void writeL (Delay& this, int i, float v)       { if (i < delayHalf) this.bufL0.at (i) = v; else this.bufL1.at (i - delayHalf) = v; }
-    void writeR (Delay& this, int i, float v)       { if (i < delayHalf) this.bufR0.at (i) = v; else this.bufR1.at (i - delayHalf) = v; }
+    float readL<D> (const D& this, int i)       { let h = this.bufL0.size; return i < h ? this.bufL0.at (i) : this.bufL1.at (i - h); }
+    float readR<D> (const D& this, int i)       { let h = this.bufR0.size; return i < h ? this.bufR0.at (i) : this.bufR1.at (i - h); }
+    void writeL<D> (D& this, int i, float v)    { let h = this.bufL0.size; if (i < h) this.bufL0.at (i) = v; else this.bufL1.at (i - h) = v; }
+    void writeR<D> (D& this, int i, float v)    { let h = this.bufR0.size; if (i < h) this.bufR0.at (i) = v; else this.bufR1.at (i - h) = v; }
 
-    bool process (Delay& this, const FxTables& t, float<2>[blockSize]& buf, bool active,
-                  const float[numSlots]& P, float64 sr, float64 spb)
+    bool process<D> (D& this, const FxTables& t, float<2>[blockSize]& buf, bool active,
+                     const float[numSlots]& P, float64 sr, float64 spb)
     {
         if (this.idle && ! active)
             return false;
@@ -169,8 +184,9 @@ namespace porridge
             lR = floor (lR + 0.5);
         }
 
-        let nL = clamp (int (lL * unit + 0.5), 2, delayMax);
-        let nR = clamp (int (lR * unit + 0.5), 2, delayMax);
+        let longest = 2 * this.bufL0.size;
+        let nL = clamp (int (lL * unit + 0.5), 2, longest);
+        let nR = clamp (int (lR * unit + 0.5), 2, longest);
 
         if (nL != this.lenL) { this.lenL = nL; this.clearL (nL); this.posL = 0; }
         if (nR != this.lenR) { this.lenR = nR; this.clearR (nR); this.posR = 0; }

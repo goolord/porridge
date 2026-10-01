@@ -15,7 +15,7 @@ let defaultAmount = 0.25
 let headingHeight = 20.
 
 // the target groups' columns in the picker
-let targetColumns = [["voice", "filter"], ["osc"], ["lfo"], ["fx"], ["eq"]]
+let targetColumns = [["voice", "filter"], ["osc"], ["lfo"], ["fx"], ["eq"], ["rack"]]
 
 let sourceColor = s =>
   switch ModMatrix.sources[s]->Option.mapOr("", s => s.key) {

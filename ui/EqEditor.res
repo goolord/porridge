@@ -18,9 +18,10 @@ let clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x))
 // where bands that are off wait to be picked up, spread out so that each can be grabbed
 let restingFreqs = [80., 300., 1000., 3500., 10000.]
 
-let ids = b => {
+// band b's parameters; `id` maps the first EQ's to another's
+let ids = (id, b) => {
   let n = Int.toString(b + 1)
-  (`EQ_${n}_Type`, `EQ_${n}_Freq`, `EQ_${n}_Amp`, `EQ_${n}_Slope`)
+  (id(`EQ_${n}_Type`), id(`EQ_${n}_Freq`), id(`EQ_${n}_Amp`), id(`EQ_${n}_Slope`))
 }
 
 type biquad = {b0: float, b1: float, b2: float, a0: float, a1: float, a2: float}
@@ -68,7 +69,8 @@ let gainDb = (q, freq) => {
   10. * Math.log10(Math.max(1e-12, power(q.b0, q.b1, q.b2)) / Math.max(1e-12, power(q.a0, q.a1, q.a2)))
 }
 
-let make = (ctx: Ctx.t, parent, box: box) => {
+let make = (ctx: Ctx.t, parent, box: box, ~id=x => x) => {
+  let ids = ids(id, ...)
   let model = ctx.model
   let get = id => model->ParamModel.get(id)
   let root = el("div", ~cls="ed", ~parent)->placeBox(box)

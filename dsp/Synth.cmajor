@@ -56,6 +56,20 @@ namespace porridge
         Reverb reverb;
         EQ eq;
 
+        // the rack's copies of the effects (ui/PorridgeParams.res); each chorus copy draws from
+        // its own random numbers, so that adding one changes nothing else
+        Chorus[rack::chorusCount] choruses;
+        Rand[rack::chorusCount] chorusRngs;
+        RackDelay[rack::delayCount] delays;
+        Reverb[rack::reverbCount] reverbs;
+        EQ[rack::eqCount] eqs;
+        Distortion[rack::distortionCount] distortions;
+
+        // every distortion's custom shape (Oatmeal's first), rendered when its points change
+        float[1026][1 + rack::distortionCount] shaperTables;
+        float[shaperValues][1 + rack::distortionCount] shaperDrawn;
+        bool[1 + rack::distortionCount] shaperValid;
+
         //==============================================================================
         // voices: a pool with an explicit list, newest first
         Voice[maxVoices] voices;
@@ -218,6 +232,13 @@ namespace porridge
             eq.clearState();
             chorus.clearState (rng, P, sampleRate);
 
+            for (wrap<rack::chorusCount> k)
+                chorusRngs[k].state = 2 + int (k);
+
+            for (wrap<rack::delayCount> k)   delays[k].prepare();
+            for (wrap<rack::reverbCount> k)  reverbs[k].prepare();
+            clearCopies();
+
             for (wrap<maxVoices> i)
                 constructVoice (voices[i]);
 
@@ -237,6 +258,120 @@ namespace porridge
             delay.clearState();
             reverb.clearState();
             eq.clearState();
+
+            for (wrap<rack::delayCount> k)   delays[k].clearState();
+            for (wrap<rack::reverbCount> k)  reverbs[k].clearState();
+            clearCopies();
+        }
+
+        void clearCopies()
+        {
+            for (wrap<rack::chorusCount> k)
+            {
+                swapParams (rack::chorusFirst, rack::chorusCopies, k);
+                choruses[k].clearState (chorusRngs[k], P, sampleRate);
+                swapParams (rack::chorusFirst, rack::chorusCopies, k);
+            }
+
+            for (wrap<rack::eqCount> k)          eqs[k].clearState();
+            for (wrap<rack::distortionCount> k)  distortions[k].clearState();
+        }
+
+        /// Swaps copy k's parameters with the first effect's, so that the first's code runs the
+        /// copy; swapping again puts both back.
+        void swapParams (const int[] first, const int[] copies, int k)
+        {
+            let base = k * first.size;
+
+            for (int i = 0; i < first.size; ++i)
+            {
+                let a = first.at (i);
+                let b = copies.at (base + i);
+                let x = P.at (a);
+                P.at (a) = P.at (b);
+                P.at (b) = x;
+            }
+        }
+
+        /// Runs one of Oatmeal's four effects (0 chorus, 1 delay, 2 reverb, 3 EQ).
+        bool runFirst (int fx, bool active)
+        {
+            if (fx == 0) return P[slot::C_Mode] != 0 ? chorus.process (fxTables, rng, mix, active, P, sampleRate) : active;
+            if (fx == 1) return P[slot::D_On] != 0 ? delay.process (fxTables, mix, active, P, sampleRate, samplesPerBeat) : active;
+            if (fx == 2) return P[slot::R_On] != 0 ? reverb.process (mix, active, P, sampleRate) : active;
+            return P[slot::EQ_On] != 0 ? eq.process (mix, active, P, sampleRate) : active;
+        }
+
+        /// Puts distortion k's custom shape (0: Oatmeal's, whose points are in P at Sat_Points;
+        /// a copy's are swapped there to run it) where the distortion reads it, rendering it if
+        /// its points changed.
+        void useShaper (int k)
+        {
+            if (int (P[slot::Sat_Type]) != 5)
+                return;
+
+            var same = shaperValid.at (k);
+
+            for (int i = 0; i < shaperValues && same; ++i)
+                same = shaperDrawn.at (k).at (i) == P.at (slot::Sat_Points + i);
+
+            if (! same)
+            {
+                renderShaper (shaperTables.at (k), P, slot::Sat_Points);
+
+                for (int i = 0; i < shaperValues; ++i)
+                    shaperDrawn.at (k).at (i) = P.at (slot::Sat_Points + i);
+
+                shaperValid.at (k) = true;
+            }
+
+            distTables.custom = shaperTables.at (k);
+        }
+
+        /// Runs the copy of an effect that a rack slot's value names, with its parameters swapped
+        /// into the first effect's.
+        bool runCopy (int fx, bool active)
+        {
+            var out = active;
+
+            if (fx >= rack::chorusValue && fx < rack::chorusValue + rack::chorusCount)
+            {
+                let k = fx - rack::chorusValue;
+                swapParams (rack::chorusFirst, rack::chorusCopies, k);
+                if (P[slot::C_Mode] != 0) out = choruses.at (k).process (fxTables, chorusRngs.at (k), mix, active, P, sampleRate);
+                swapParams (rack::chorusFirst, rack::chorusCopies, k);
+            }
+            else if (fx >= rack::delayValue && fx < rack::delayValue + rack::delayCount)
+            {
+                let k = fx - rack::delayValue;
+                swapParams (rack::delayFirst, rack::delayCopies, k);
+                if (P[slot::D_On] != 0) out = delays.at (k).process (fxTables, mix, active, P, sampleRate, samplesPerBeat);
+                swapParams (rack::delayFirst, rack::delayCopies, k);
+            }
+            else if (fx >= rack::reverbValue && fx < rack::reverbValue + rack::reverbCount)
+            {
+                let k = fx - rack::reverbValue;
+                swapParams (rack::reverbFirst, rack::reverbCopies, k);
+                if (P[slot::R_On] != 0) out = reverbs.at (k).process (mix, active, P, sampleRate);
+                swapParams (rack::reverbFirst, rack::reverbCopies, k);
+            }
+            else if (fx >= rack::eqValue && fx < rack::eqValue + rack::eqCount)
+            {
+                let k = fx - rack::eqValue;
+                swapParams (rack::eqFirst, rack::eqCopies, k);
+                if (P[slot::EQ_On] != 0) out = eqs.at (k).process (mix, active, P, sampleRate);
+                swapParams (rack::eqFirst, rack::eqCopies, k);
+            }
+            else if (fx >= rack::distortionValue && fx < rack::distortionValue + rack::distortionCount && active)
+            {
+                let k = fx - rack::distortionValue;
+                swapParams (rack::distortionFirst, rack::distortionCopies, k);
+                useShaper (k + 1);
+                if (P[slot::Sat_Type] != 0) distortions.at (k).processStereo (distTables, P, 0.0f, sampleRate, mix);
+                swapParams (rack::distortionFirst, rack::distortionCopies, k);
+            }
+
+            return out;
         }
 
         //==============================================================================
@@ -2825,16 +2960,19 @@ namespace porridge
 
             if (active && P[slot::Sat_Type] != 0)
             {
+                useShaper (0);
                 let mode = int (P[slot::Sat_Mode]);
 
                 if (mode == 0 || mode == 3)
                     globalDist.processStereo (distTables, P, xySum (7, curX, curY) + ccDepthSum (7, false), sampleRate, mix);
             }
 
-            // the effects in the program's order (Oatmeal's: chorus, delay, reverb, EQ); each one
-            // says whether its output still sounds, and the last one's answer gates the output
+            // the rack, in the program's order (Oatmeal's: chorus, delay, reverb, EQ); each effect
+            // says whether its output still sounds, and the last one's answer gates the output.
+            // The slots naming one of Oatmeal's four take them in FX_Order's order.
             var order = int (P[slot::FX_Order]);
             int[4] left = (0, 1, 2, 3);
+            int[4] firsts;
             let place = int[4] (6, 2, 1, 1);
 
             for (wrap<4> k)
@@ -2842,15 +2980,32 @@ namespace porridge
                 // permutation `order` of 0..3 in lexicographic order (ui/PorridgeParams.res)
                 let i = clamp (order / place[k], 0, 3 - int (k));
                 order -= i * place[k];
-                let fx = left.at (i);
+                firsts[k] = left.at (i);
 
                 for (int j = i; j < 3; ++j)
                     left.at (j) = left.at (j + 1);
+            }
 
-                if (fx == 0)      { if (P[slot::C_Mode] != 0) active = chorus.process (fxTables, rng, mix, active, P, sampleRate); }
-                else if (fx == 1) { if (P[slot::D_On] != 0)   active = delay.process (fxTables, mix, active, P, sampleRate, samplesPerBeat); }
-                else if (fx == 2) { if (P[slot::R_On] != 0)   active = reverb.process (mix, active, P, sampleRate); }
-                else              active = eq.process (mix, active, P, sampleRate);
+            int numFirsts = 0;
+            int ran = 0;    // the copies already run, as bits of their rack values
+
+            for (wrap<rack::slots.size> k)
+            {
+                let fx = int (P.at (rack::slots[k]));
+
+                if (fx >= 1 && fx <= 4)
+                {
+                    if (numFirsts < 4)
+                    {
+                        active = runFirst (firsts.at (numFirsts), active);
+                        ++numFirsts;
+                    }
+                }
+                else if (fx >= 5 && fx < 31 && (ran & (1 << fx)) == 0)
+                {
+                    ran |= 1 << fx;
+                    active = runCopy (fx, active);
+                }
             }
 
             let outputOn = active;
@@ -2867,6 +3022,7 @@ namespace porridge
         {
             smoothControllers (n);
             prepareMods();
+            useShaper (0);
             let active = renderVoices (pos, n);
             if (numLive > 0) restoreMods();
             return active;

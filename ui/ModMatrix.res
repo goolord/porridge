@@ -147,6 +147,11 @@ let targets = [
   knob("PM_Feedback", "pm feedback", "osc"),
   knob("U_Width", "unison width", "osc"),
   knob("Drift_Pitch", "drift pitch", "osc"),
+  // the rack's copies of the effects (PorridgeParams.rackKinds): their levels
+  ...[2, 3, 4]->Array.map(n => knob(`C${Int.toString(n)}_Mix`, `chorus ${Int.toString(n)} mix`, "rack")),
+  ...[2, 3, 4]->Array.map(n => knob(`D${Int.toString(n)}_Wet`, `delay ${Int.toString(n)} wet`, "rack")),
+  ...[2, 3, 4]->Array.map(n => knob(`R${Int.toString(n)}_Wet`, `reverb ${Int.toString(n)} wet`, "rack")),
+  ...[2, 3, 4, 5]->Array.map(n => knob(`Sat${Int.toString(n)}_Pregain`, `dist ${Int.toString(n)} pregain`, "rack")),
 ]
 
 // The target groups, by the key in each target's group, with their titles.
@@ -157,6 +162,7 @@ let groups = [
   ("lfo", "LFOs"),
   ("fx", "effects"),
   ("eq", "EQ"),
+  ("rack", "rack copies"),
 ]
 
 let sourceIndex = key => sources->Array.findIndex(s => s.key == key)

@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { all as fields } from "../ui/oatmeal/Fields.res.mjs";
 import { paramInfo } from "../ui/ParamInfo.res.mjs";
-import { all as porridgeParams, slotOf as porridgeSlot } from "../ui/PorridgeParams.res.mjs";
+import { all as porridgeParams, slotOf as porridgeSlot, rackId, rackSlots, rackKinds, rackEntries, copyId } from "../ui/PorridgeParams.res.mjs";
 import { makeDefs } from "../ui/ParamDefs.res.mjs";
 import * as ModMatrix from "../ui/ModMatrix.res.mjs";
 
@@ -44,11 +44,19 @@ function num (x)
 
 const endpoints = [], handlers = [], slots = [], cfields = [], cextra = [];
 
+const defList = makeDefs();
+
 const all = [
     ...fields.map (f => ({ ...f, slot: slotOf (f) })),
-    ...porridgeParams.map ((p, i) => ({ index: fields.length + i, id: p.id, kind: p.kind.TAG === "Choice" ? "i32" : "f32",
+    ...porridgeParams.map ((p, i) => ({ index: fields.length + i, id: p.id, kind: defList[fields.length + i].isInt ? "i32" : "f32",
                                        slot: porridgeSlot (i), porridge: true })),
 ];
+const slotById = id =>
+{
+    const f = all.find (f => f.id === id);
+    if (! f) throw new Error (`unknown parameter ${id}`);
+    return f.slot;
+};
 
 for (const f of all)
 {
@@ -118,6 +126,19 @@ namespace porridge::slot
 {
 ${slots.join ("\n")}
 }
+
+/// The effects rack (ui/PorridgeParams.res): its slots, and for each kind of effect the first's
+/// parameters, every copy's after one another (which the synth swaps in to run that copy), the
+/// value a rack slot holds for the first copy, and how many copies there are.
+namespace porridge::rack
+{
+    let slots = int[${rackSlots}] (${Array.from ({ length: rackSlots }, (_, k) => slotById (rackId (k + 1))).join (", ")});
+${rackKinds.map (k =>
+`    let ${k.key}First = int[${k.params.length}] (${k.params.map (([id]) => slotById (id)).join (", ")});
+    let ${k.key}Copies = int[${k.params.length * k.copies.length}] (${k.copies.flatMap (n => k.params.map (([id]) => slotById (copyId (id, n)))).join (", ")});
+    let ${k.key}Value = ${rackEntries.findIndex (e => e && e[0] === k.key && e[1] === k.copies[0])};
+    let ${k.key}Count = ${k.copies.length};`).join ("\n")}
+}
 `);
 
 mkdirSync (join (root, "tools", "test", "build"), { recursive: true });
@@ -150,7 +171,7 @@ function cf (x)
     if (! /[.e]/.test (s)) s += ".0";
     return s + "f";
 }
-const defs = new Map (makeDefs().map (d => [d.id, d]));
+const defs = new Map (defList.map (d => [d.id, d]));
 const kinds = { Knob: 1, Pitch: 2, Volume: 3, Pan: 4 };
 const targetKind = [], targetSlot = [], targetRow = [], targetScale = [], rows = [], rowNames = [];
 

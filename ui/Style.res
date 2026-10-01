@@ -95,21 +95,121 @@ let css = `
 .pbody.on { display: block; }
 .blk > .hdr { position: absolute; right: 6px; top: 1px; width: 40px; height: 18px; }
 
-/* the effects order: a chain of chips in the title row, dragged sideways */
-.fxorder {
-    position: absolute; right: 6px; top: 1px; height: 18px; display: flex; align-items: center; gap: 3px;
-    font-size: 12px; color: var(--ink-faint); user-select: none;
+/* the FX page: a tab per effect in the order they run (the rack's are dragged sideways), and a
+   page per tab */
+.fxstrip { position: absolute; display: flex; align-items: center; gap: 3px; }
+.fxtab {
+    position: relative; display: flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 2px;
+    font-size: 13px; font-weight: 700; white-space: nowrap; color: var(--ink-soft); cursor: pointer;
+    background: var(--panel); box-shadow: inset 0 0 0 1px var(--edge);
 }
-.fxorder .lbl { margin-right: 2px; }
-.fxorder .arrow { font-weight: 700; }
-.fxorder .chip {
-    padding: 0 7px; height: 18px; line-height: 18px; border-radius: 2px; font-weight: 700;
-    color: var(--ink); background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge); cursor: grab;
+.fxtab:hover { color: var(--ink); background: var(--panel-hi); }
+.fxtab.on { color: var(--paper); background: var(--signal); box-shadow: none; }
+.fxtab .led { width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--ink-faint); }
+.fxtab .led.lit { background: var(--signal); border-color: var(--signal); }
+.fxtab .led, .card .led { cursor: pointer; position: relative; }
+.fxtab .led::after, .card .led::after { content: ""; position: absolute; inset: -5px; }
+.fxtab .led:hover, .card .led:hover { box-shadow: 0 0 0 2px var(--panel-hi), 0 0 0 3px var(--ink-soft); }
+.fxtab.on .led { border-color: var(--paper); }
+.fxtab.on .led.lit { background: var(--paper); }
+.fxtab .x { font-weight: 400; font-size: 14px; margin: 0 -4px 0 1px; opacity: 0; }
+.fxtab:hover .x { opacity: 0.6; }
+.fxtab .x:hover { opacity: 1; }
+.fxtab.add { padding: 0 8px; font-size: 15px; background: transparent; box-shadow: none; border: 1.5px dashed var(--edge); height: 19px; }
+.fxtab.add:hover { background: var(--panel-hi); }
+.fxtab.drag { z-index: 2; cursor: grabbing; color: var(--paper); background: var(--signal); }
+.fxtab.drop-before, .card.drop-before { box-shadow: inset 0 0 0 1px var(--edge), -4px 0 0 var(--signal); }
+.fxtab.drop-after, .card.drop-after { box-shadow: inset 0 0 0 1px var(--edge), 4px 0 0 var(--signal); }
+.fxsep { font-weight: 700; color: var(--paper); font-size: 15px; }
+.fxgap { width: 10px; }
+.fxbody { position: absolute; display: none; }
+.fxbody.on { display: block; }
+.pbody > .hdr { position: absolute; right: 6px; top: 1px; width: 40px; height: 18px; }
+
+/* the routing tab: nodes, the distortion's places, and the rack's cards */
+.flowsvg { left: 0; top: 0; pointer-events: none; }
+.fnode, .fslot {
+    position: absolute; box-sizing: border-box; border-radius: 2px; font-size: 13px; text-align: center;
+    line-height: 28px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.fxorder .chip:hover { background: var(--panel-hi); }
-.fxorder .chip.drag { color: var(--paper); background: var(--signal); position: relative; z-index: 1; cursor: grabbing; }
-.fxorder .chip.drop-before { box-shadow: inset 0 0 0 1px var(--tile-edge), -3px 0 0 var(--signal); }
-.fxorder .chip.drop-after { box-shadow: inset 0 0 0 1px var(--tile-edge), 3px 0 0 var(--signal); }
+.fnode { background: var(--paper); border: 1px solid var(--edge); color: var(--ink); }
+.fnode.out { line-height: normal; text-align: left; background: var(--tile); }
+.fnode.end { background: transparent; border: none; font-weight: 700; text-align: left; padding-left: 4px; }
+.fnode .olabel { position: absolute; left: 7px; top: 3px; font-weight: 700; font-size: 13px; }
+.fslot { border: 1.5px dashed var(--edge); color: var(--ink-faint); cursor: pointer; }
+.fslot:hover { background: var(--panel-hi); }
+.fslot:empty::after { content: "distortion here?"; opacity: 0; }
+.fslot:empty:hover::after { opacity: 1; }
+.fslot.on { border: 1px solid var(--signal); background: var(--signal); color: var(--paper); font-weight: 700; }
+.fslot.idle { border-style: solid; color: var(--ink-soft); }
+.card {
+    position: absolute; box-sizing: border-box; border-radius: 3px; background: var(--tile);
+    box-shadow: inset 0 0 0 1px var(--edge);
+}
+.card.drag { z-index: 3; box-shadow: inset 0 0 0 1.5px var(--signal), 3px 3px 0 rgba(31,26,14,0.25); background: var(--panel-hi); }
+.card .chead {
+    position: absolute; left: 0; right: 0; top: 0; height: 26px; display: flex; align-items: center; gap: 6px;
+    padding: 0 6px; box-sizing: border-box; cursor: grab; border-bottom: 1px solid var(--tile-edge);
+}
+.card .chead:hover { background: var(--panel-hi); }
+.card .ctitle { flex: 1; font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .led { flex: none; width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--ink-faint); }
+.card .led.lit { background: var(--signal); border-color: var(--signal); }
+.card .cx { font-weight: 400; font-size: 15px; color: var(--ink-faint); cursor: pointer; }
+.card .cx:hover { color: var(--ink); }
+.card .cctl { position: absolute; left: 6px; right: 6px; top: 32px; height: 56px; }
+.card .csum { position: absolute; left: 7px; right: 6px; top: 92px; font-size: 11.5px; line-height: 1.4;
+    color: var(--ink-soft); white-space: pre-line; overflow: hidden; }
+.card.off .csum { opacity: 0.55; }
+.card.compact .cctl { display: none; }
+.card.compact .csum { top: 34px; }
+.addcard {
+    position: absolute; box-sizing: border-box; border: 1.5px dashed var(--edge); border-radius: 3px;
+    display: flex; align-items: center; justify-content: center; font-size: 20px; color: var(--ink-soft); cursor: pointer;
+}
+.addcard:hover { background: var(--panel-hi); color: var(--ink); }
+.plot path.flow { fill: none; stroke: var(--ink-soft); stroke-width: 1.5; }
+.plot path.flowhead { fill: none; stroke: var(--ink-soft); stroke-width: 1.5; stroke-linejoin: round; }
+
+/* the effects' graphs */
+.plot line.stem { stroke: var(--signal); stroke-width: 1.8; }
+.plot line.stem.dry { stroke: var(--ink-faint); stroke-width: 1.5; stroke-dasharray: 3 2; }
+.plot circle.head { fill: var(--signal); }
+.plot path.glyph { fill: var(--signal-soft); stroke: var(--signal); stroke-width: 0.9; }
+.plot circle.pointed { fill: none; stroke: var(--mod); stroke-width: 1.5; }
+.plot path.curve.hl { stroke: var(--mod); stroke-width: 1.6; }
+.plot path.swell { fill: var(--signal-soft); stroke: var(--signal); stroke-width: 1; }
+.plot line.link { stroke: var(--signal); stroke-width: 1; stroke-dasharray: 2 3; opacity: 0.7; }
+.plot line.marker { stroke: var(--mod); stroke-width: 1.2; stroke-dasharray: 4 3; }
+.plot text.clip { font-size: 8px; fill: var(--mod); }
+.plot text.lane { font-size: 13px; font-weight: 700; fill: var(--ink-soft); }
+.plot text.curvelabel { fill: var(--ink-soft); }
+.plot path.env { fill: var(--signal-soft); stroke: var(--signal); stroke-width: 1; stroke-linejoin: round; }
+.plot path.tail { fill: var(--signal-soft); stroke: var(--signal); stroke-width: 1.3; stroke-linejoin: round; }
+.plot path.hit { fill: var(--ink-soft); }
+.plot line.bracket { stroke: var(--ink-faint); stroke-width: 1; }
+.plot text.note { font-size: 11px; fill: var(--ink-soft); }
+.plot text.note.big { font-size: 13px; font-weight: 700; fill: var(--ink); }
+.plot rect.room { fill: var(--paper); fill-opacity: 0.5; stroke: var(--ink-soft); stroke-width: 1.5; }
+.plot path.ray { fill: none; stroke: var(--signal); stroke-width: 1; }
+.plot circle.source { fill: var(--mod); }
+.plot circle.listener { fill: var(--ink); }
+.plot path.decay { fill: none; stroke: var(--ink); stroke-width: 1.2; stroke-dasharray: 5 3; }
+.plot path.wave { fill: none; stroke: var(--signal); stroke-width: 1; }
+.plot rect.band { fill: var(--signal-soft); stroke: none; }
+.plot line.edge { stroke: var(--signal); stroke-width: 1.2; }
+.plot circle.voice { fill: var(--signal); fill-opacity: 0.75; stroke: var(--paper); stroke-width: 1; }
+.plot circle.dry { fill: none; stroke: var(--ink-soft); stroke-width: 1.5; stroke-dasharray: 2 2; }
+.plot rect.dline { fill: var(--paper); stroke: var(--edge); }
+.plot text.dlabel { font-size: 11px; fill: var(--ink); }
+.plot circle.dial { fill: none; stroke: var(--edge); stroke-dasharray: 2 2; }
+.plot line.needle { stroke: var(--ink); stroke-width: 1.5; }
+.ed .plot path.flow { stroke: var(--signal); stroke-width: 1.5; opacity: 0.85; }
+.ed .plot path.flow.neg { stroke-dasharray: 3 2; }
+.ed .plot path.flowhead { stroke: var(--signal); }
+.ed .plot path.flow.none, .ed .plot path.flowhead.none { opacity: 0.12; }
+.ed .node.faint { fill: var(--panel); stroke: var(--ink-faint); }
+.ed .node.faint.hot { fill: var(--ink-faint); }
 
 /* a parameter row: label left, value right, position track underneath, on a tile */
 .p {

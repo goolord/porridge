@@ -70,6 +70,10 @@ the macros `Macro_1`..`Macro_4`, then four per modulation slot (`ModN_Source`, `
 | `Curve_Amp_Attack` ... `Curve_Mod2_Release` | a curve for the attack, decays and release of the amp, filter, mod 1 and mod 2 envelopes, -1..1 |
 | `LFO_N_Delay`, `LFO_N_Fade`, `LFO_N_Slew`, `LFO_N_Steps`, `LFO_N_OneShot` | LFO delay and fade-in (ms), slew, sample & hold steps per cycle, one-shot |
 | `U_DetuneCurve`, `U_RandomPhase`, `U_Width` | unison detune curve, random phase per copy, stereo width |
+| `FX_Rack_1` ... `FX_Rack_8` | the effects rack, in the order it runs: each slot holds `empty`, one of Oatmeal's chorus, delay, reverb or EQ, or a copy (`chorus 2`..`4`, `delay 2`..`4`, `reverb 2`..`4`, `EQ 2`..`4`, `distortion 2`..`5`). Slots holding one of Oatmeal's four take them in `FX_Order`'s order; the default is Oatmeal's chain |
+| `EQ_On` | switches Oatmeal's EQ (on by default) |
+| `Sat_Points`, `Sat_X1`..`Sat_X16`, `Sat_Y1`..`Sat_Y16`, `Sat_C1`..`Sat_C16` | the distortion's custom shape (type `custom shape`): the number of points less 2, then each point's input and output (-1..1) and the bend of the segment ending at it |
+| `C2_Mode` ... `Sat5_C16` | the rack's copies: each of Oatmeal's chorus (`C_`), delay (`D_`), reverb (`R_`), EQ (`EQ_`, with `EQ_On`) and distortion (`Sat_`, without `Sat_Mode`) parameters again, numbered (`D3_Wet` is delay copy 3's wet level) |
 
 They are appended to, never reordered, and each one's default leaves the sound exactly as
 Oatmeal's, except `Oat_Mode` (off: MIDI is sample-accurate). **Export for Oatmeal** leaves
@@ -78,8 +82,10 @@ them out and says so.
 Porridge also adds values after the last of some of Oatmeal's lists: the waveforms `Saw HQ`,
 `Pulse HQ` and `Triangle HQ` (6..8), the osc mix modes `PM 2 > 1`, `PM 1 feedback`, `ring 1 × 2`
 and `AM 2 > 1` (3..6), and the filter types `SVF`, `ladder`, `diode ladder`, `Sallen-Key`, `comb`
-and `formant` (16..21, for both filters). An Oatmeal export writes the closest value Oatmeal
-has (the plain waveform, normal mix, a lowpass or bandpass) and says so.
+and `formant` (16..21, for both filters), and the distortion type `custom shape` (5). An Oatmeal
+export writes the closest value Oatmeal has (the plain waveform, normal mix, a lowpass or
+bandpass, soft clipping) and says so. It also keeps Oatmeal's effects order, leaves the rack's
+copies out, and switches off those of Oatmeal's effects that are out of the rack or off.
 
 ## Compatibility rules
 

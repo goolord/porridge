@@ -89,6 +89,7 @@ let porridgeValuesFor = id =>
       ["SVF LP > BP > HP", "ladder", "diode ladder", "Sallen-Key", "comb", "formant"],
       ["SVF morph", "ladder", "diode", "Sallen-Key", "comb", "formant"],
     ))
+  | "Sat_Type" => Some((["custom shape"], ["custom"]))
   | _ => None
   }
 
@@ -97,6 +98,7 @@ let oatmealValue = (id, x) =>
   switch id {
   | "O1_Waveform" | "O2_Waveform" if x > 5. => x -. 5.
   | "OscMix" if x > 2. => 0.
+  | "Sat_Type" if x > 4. => 2.
   | "Filter" | "Filter2" if x > 15. =>
     switch Float.toInt(x) {
     | 16 | 19 => 2.
@@ -179,9 +181,19 @@ type t = {
 
 let pw32 = 4294967296.
 
-// A Porridge parameter (PorridgeParams): plain linear knobs and lists.
-let porridgeDef = (index, spec: PorridgeParams.spec) =>
+// A Porridge parameter (PorridgeParams): plain linear knobs and lists, or a copy of an Oatmeal
+// parameter (`like` finds it).
+let porridgeDef = (index, spec: PorridgeParams.spec, ~like: string => t) =>
   switch spec.kind {
+  | Like(first) =>
+    let d = like(first)
+    {
+      ...d,
+      id: spec.id,
+      index,
+      name: spec.name,
+      longText: x => `${spec.name}: ${d.valueText(x)}`,
+    }
   | Float({min, max, init, text}) =>
     let clamp = x => Float.isFinite(x) ? Math.max(min, Math.min(max, x)) : init
     {
@@ -271,7 +283,7 @@ let extend = (def, oatNames, extra, extraShort) => {
 let makeDefs = (~context=() => None) => {
   let init = OatmealFormat.makeDefaultProgram("Init")
 
-  Fields.all->Array.map(field => {
+  let oatmeal = Fields.all->Array.map(field => {
     let {index, id, name, kind} = field
     let p = OatmealParams.param(index)
     let isPw = kind == Pw
@@ -379,9 +391,19 @@ let makeDefs = (~context=() => None) => {
     | (Some((extra, extraShort)), Some(oatNames)) => extend(def, oatNames, extra, extraShort)
     | _ => def
     }
-  })->Array.concat(
-    PorridgeParams.all->Array.mapWithIndex((spec, i) =>
-      porridgeDef(OatmealParams.paramCount + i, spec)
-    ),
+  })
+  // a copy is like a parameter before it, Oatmeal's or Porridge's
+  let byId = oatmeal->Array.map(d => (d.id, d))->Map.fromArray
+  let like = id =>
+    switch byId->Map.get(id) {
+    | Some(d) => d
+    | None => JsError.panic("no parameter " ++ id ++ " to copy")
+    }
+  oatmeal->Array.concat(
+    PorridgeParams.all->Array.mapWithIndex((spec, i) => {
+      let d = porridgeDef(OatmealParams.paramCount + i, spec, ~like)
+      byId->Map.set(d.id, d)
+      d
+    }),
   )
 }

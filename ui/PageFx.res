@@ -1,97 +1,333 @@
-// Effects page: distortion and chorus, delay, reverb, and the EQ as a curve to drag. The
-// order of the effects after the distortion is a chain in the EQ panel's title row.
+// Effects page: a tab per effect, in the order the sound goes through them, after a routing tab
+// for what isn't about one effect (the signal flow, where the distortion sits, the rack's order
+// and levels, the output gain). Each effect's tab shows what it does as graphs to drag.
+//
+// The tabs after Oatmeal's distortion are the rack (FxRack): up to eight effects, each kind up to
+// four times. Drag a tab sideways to move that effect, × takes it out, right-click duplicates it,
+// + adds one.
 
 open! Web
 
-let hint = "Drag or scroll to change a value, shift for fine steps. Double-click to type, right-click to reset. Click a list to pick from it, right-click to step through it."
+let hint = "Drag a rack tab sideways to move that effect, × takes it out, right-click duplicates it, + adds one. On a graph, drag the points; shift for fine steps, right-click to reset."
+
+type dest = Routing | Distortion | Rack(FxRack.effect)
 
 let build = (ctx: Ctx.t, page) => {
-  let (margin, gap) = (6., Grid.gap)
-  let columnWidth = 358.
-  let x1 = margin + columnWidth + gap
-  let x2 = x1 + columnWidth + gap
-  let lastWidth = Style.designWidth - margin - x2
+  let model = ctx.model
+  let get = id => model->ParamModel.get(id)
+  let rack = () => FxRack.read(get)
+  let (x, w) = (6., Style.designWidth - 12.)
+  let bodyY = 34.
+  let bodyH = Style.pageHeight - 6. - bodyY
+  let strip = el("div", ~cls="fxstrip", ~parent=page)->place(x, 6., ~w, ~h=22.)
+  let status = text => ctx.status->Status.show(text)
 
-  let distortion = Panel.make(
-    page,
-    ~title="distortion",
-    ~x=margin,
-    ~y=margin,
-    ~w=columnWidth,
-    ~h=Grid.panelHeight(2),
+  let current = ref(Routing)
+  // each tab's page, made when it is first shown: the element and its refresh
+  let bodies: Map.t<string, (element, unit => unit)> = Map.make()
+  let destKey = dest =>
+    switch dest {
+    | Routing => "routing"
+    | Distortion => "distortion"
+    | Rack(e) => Int.toString(FxRack.value(e))
+    }
+  // every tab made so far, by destination
+  let tabs: array<(dest, element, element)> = []
+
+  let makeBody = (dest, routing) => {
+    let body = el("div", ~cls="fxbody", ~parent=page)->place(x, bodyY, ~w, ~h=bodyH)
+    let refresh = switch dest {
+    | Routing => routing(body)
+    | Distortion => DistEditor.make(ctx, body, ~id=x => x, ~placement=true)
+    | Rack(e) =>
+      switch e.kind {
+      | #chorus => ChorusEditor.make(ctx, body, e)
+      | #delay => DelayEditor.make(ctx, body, e)
+      | #reverb => ReverbEditor.make(ctx, body, e)
+      | #distortion => DistEditor.make(ctx, body, ~id=FxRack.id(e, ...), ~placement=false)
+      | #eq =>
+        let panel = Panel.make(body, ~title="EQ", ~x=0., ~y=0., ~w, ~h=bodyH)
+        panel->Panel.headerToggle(ctx, FxRack.id(e, "EQ_On"), ~label="on")
+        EqEditor.make(ctx, panel.el, {x: 8., y: 25., w: w - 18., h: bodyH - 35.}, ~id=FxRack.id(e, ...))
+        () => ()
+      }
+    }
+    bodies->Map.set(destKey(dest), (body, refresh))
+    (body, refresh)
+  }
+  let routingMaker = ref(_ => () => ())
+
+  let select = dest => {
+    current := dest
+    tabs->Array.forEach(((d, t, _)) => t->toggleClass("on", d == dest))
+    let (shown, refresh) = switch bodies->Map.get(destKey(dest)) {
+    | Some(b) => b
+    | None => makeBody(dest, routingMaker.contents)
+    }
+    bodies->Map.forEach(((body, _)) => body->toggleClass("on", body === shown))
+    refresh()
+    ctx.menu->Menu.close
+  }
+
+  //==============================================================================
+  // the rack
+
+  let setRack = list =>
+    FxRack.values(list)->Array.forEach(((id, v)) =>
+      if get(id) != v {
+        model->ParamModel.gestureSet(id, v)
+      }
+    )
+
+  let move = (e, pos) => {
+    let others = rack()->Array.filter(o => o != e)
+    others->Array.splice(~start=pos, ~remove=0, ~insert=[e])
+    setRack(others)
+  }
+
+  // an effect comes into the rack switched on, at the end (or after `after`)
+  let insert = (e: FxRack.effect, ~after=?, ~show) => {
+    let list = rack()
+    switch after->Option.map(a => list->Array.findIndex(x => x == a)) {
+    | Some(i) if i >= 0 => list->Array.splice(~start=i + 1, ~remove=0, ~insert=[e])
+    | _ => list->Array.push(e)
+    }
+    setRack(list)
+    let id = FxRack.switchId(e)
+    if get(id) == 0. {
+      model->ParamModel.gestureSet(id, FxRack.onValue(e))
+    }
+    if show {
+      select(Rack(e))
+    }
+  }
+
+  let add = (kind, ~show) => FxRack.free(rack(), kind)->Option.forEach(insert(_, ~show))
+
+  // a copy with the same settings, right after it
+  let duplicate = (e: FxRack.effect, ~show) =>
+    FxRack.free(rack(), e.kind)->Option.forEach(copy => {
+      FxRack.params(e)->Array.forEachWithIndex((id, i) =>
+        FxRack.params(copy)[i]->Option.forEach(to => model->ParamModel.gestureSet(to, get(id)))
+      )
+      insert(copy, ~after=e, ~show)
+    })
+
+  let remove = e => {
+    setRack(rack()->Array.filter(o => o != e))
+    if current.contents == Rack(e) {
+      select(Routing)
+    }
+  }
+
+  let addMenu = (anchor, ~show) =>
+    ctx.menu->Menu.show(
+      anchor,
+      FxRack.addable(rack())->Array.mapWithIndex((k, i) => {Menu.label: FxRack.kindName(k), value: i}),
+      -1,
+      i => FxRack.addable(rack())[i]->Option.forEach(add(_, ~show)),
+    )
+
+  let effectMenu = (e: FxRack.effect, anchor, ~show) => {
+    let canCopy = FxRack.free(rack(), e.kind) != None
+    ctx.menu->Menu.show(
+      anchor,
+      [
+        ...canCopy ? [{Menu.label: "duplicate", value: 0}] : [],
+        {Menu.label: "remove from the rack", value: 1},
+      ],
+      -1,
+      v => v == 0 ? duplicate(e, ~show) : remove(e),
+    )
+  }
+
+  // Switching an effect on and off by its light. A chorus or distortion is off at its list's
+  // first value, and comes back on as it was.
+  let lastOn: Map.t<string, float> = Map.make()
+  let toggleSwitch = (id, ~onValue) => {
+    let x = get(id)
+    if x != 0. {
+      lastOn->Map.set(id, x)
+      model->ParamModel.gestureSet(id, 0.)
+    } else {
+      model->ParamModel.gestureSet(id, lastOn->Map.get(id)->Option.getOr(onValue))
+    }
+  }
+  let toggle = (e: FxRack.effect) => toggleSwitch(FxRack.switchId(e), ~onValue=FxRack.onValue(e))
+
+  //==============================================================================
+  // tabs
+
+  let tab = (dest, ~removable, ~title: unit => string) => {
+    let t = el("div", ~cls="fxtab")
+    let led = el("i", ~cls="led", ~parent=t)
+    led->onPointer(#pointerdown, ev =>
+      if ev->button == 0 {
+        ev->stopPropagation
+        ev->preventDefault
+        switch dest {
+        | Routing => ()
+        | Distortion => toggleSwitch("Sat_Type", ~onValue=2.)
+        | Rack(e) => toggle(e)
+        }
+      }
+    )
+    led->onMouse(#mouseenter, ev => {
+      ev->stopPropagation
+      status("Click to switch it on or off")
+    })
+    el("span", ~parent=t)->ignore
+    t->onMouse(#mouseenter, _ => status(title()))
+    t->onMouse(#mouseleave, _ => ctx.status->Status.clear)
+    if removable {
+      let x = el("b", ~cls="x", ~text="×", ~parent=t)
+      x->onPointer(#pointerdown, ev => {
+        ev->stopPropagation
+        ev->preventDefault
+        switch dest {
+        | Rack(e) => remove(e)
+        | _ => ()
+        }
+      })
+    }
+    t->suppressContextMenu
+    tabs->Array.push((dest, t, led))
+    t
+  }
+  let setLabel = (t, text) => t->querySelector("span")->Option.forEach(s => s->setTextContent(text))
+
+  let routingTab = tab(Routing, ~removable=false, ~title=() =>
+    "The signal flow: where the distortion sits, the rack's order and levels, and the output gain"
   )
-  let g = Grid.make(ctx, distortion.el)
-  g->Grid.choice("Sat_Type", 0, 0, "type", ~span=2)
-  g->Grid.choice("Sat_Mode", 2, 0, "mode", ~span=2)
-  g->Grid.choice("Sat_Oversample", 0, 1, "oversample")
-  g->Grid.param("Sat_Pregain", 1, 1, "pregain")
-  g->Grid.param("Sat_Limit", 2, 1, "limit")
-  g->Grid.param("Sat_Postgain", 3, 1, "postgain")
-
-  let chorus = Panel.make(
-    page,
-    ~title="chorus",
-    ~x=margin,
-    ~y=distortion->Panel.bottom,
-    ~w=columnWidth,
-    ~h=Grid.panelHeight(2),
+  routingTab->setLabel("routing")
+  routingTab->querySelector(".led")->Option.forEach(led => led->setStyle("display", "none"))
+  routingTab->onPointer(#pointerdown, ev => {
+    ev->preventDefault
+    select(Routing)
+  })
+  let distTab = tab(Distortion, ~removable=false, ~title=() =>
+    "Oatmeal's distortion: in every voice, or on the whole sound before the rack (see routing)"
   )
-  let g = Grid.make(ctx, chorus.el)
-  g->Grid.choice("C_Mode", 0, 0, "mode")
-  g->Grid.choice("C_Stereo", 1, 0, "stereo")
-  g->Grid.param("C_Rate", 2, 0, "rate")
-  g->Grid.param("C_Voices", 3, 0, "voices")
-  g->Grid.param("C_MinDelay", 0, 1, "delay")
-  g->Grid.param("C_Depth", 1, 1, "range")
-  g->Grid.param("C_Feedback", 2, 1, "feedback")
-  g->Grid.param("C_Mix", 3, 1, "mix")
+  distTab->setLabel("distortion")
+  distTab->onPointer(#pointerdown, ev => {
+    ev->preventDefault
+    select(Distortion)
+  })
 
-  let rowHeight = chorus.y + chorus.h - margin
+  // the rack's tabs, made when an effect first comes into it
+  let rackTabs = Map.make()
+  let rackTab = (e: FxRack.effect) =>
+    switch rackTabs->Map.get(FxRack.value(e)) {
+    | Some(t) => t
+    | None =>
+      let t = tab(Rack(e), ~removable=true, ~title=() =>
+        `${FxRack.label(rack(), e)} (${FxRack.hostName(e)}'s parameters): click to open, drag sideways to move it, right-click to duplicate it, × takes it out (its settings stay)`
+      )
+      t->onPointer(#pointerdown, ev =>
+        switch ev->button {
+        | 0 =>
+          ev->preventDefault
+          let others =
+            rack()->Array.filter(o => o != e)->Array.filterMap(o => rackTabs->Map.get(FxRack.value(o)))
+          Reorder.start(ev, t, ~others, ~onDrop=pos => move(e, pos), ~onClick=() => select(Rack(e)))
+        | 2 =>
+          ev->preventDefault
+          effectMenu(e, t, ~show=true)
+        | _ => ()
+        }
+      )
+      rackTabs->Map.set(FxRack.value(e), t)
+      t
+    }
 
-  let delay = Panel.make(page, ~title="delay", ~x=x1, ~y=margin, ~w=columnWidth, ~h=rowHeight)
-  delay->Panel.headerToggle(ctx, "D_On", ~label="on")
-  let g = Grid.make(ctx, delay.el)
-  g->Grid.choice("D_Unit", 0, 0, "unit")
-  g->Grid.toggle("D_Quantize", 1, 0, "quantize")
-  g->Grid.param("D_InputPan", 2, 0, "input pan")
-  g->Grid.param("D_Rotation", 3, 0, "rotation")
-  g->Grid.param("D_LengthL", 0, 1, "length l")
-  g->Grid.param("D_FeedbackL", 1, 1, "feedback l")
-  g->Grid.choice("D_ReverseL", 2, 1, "reverse l")
-  g->Grid.param("D_LP", 3, 1, "lowpass")
-  g->Grid.param("D_LengthR", 0, 2, "length r")
-  g->Grid.param("D_FeedbackR", 1, 2, "feedback r")
-  g->Grid.choice("D_ReverseR", 2, 2, "reverse r")
-  g->Grid.param("D_HP", 3, 2, "highpass")
-  g->Grid.param("D_Dry", 0, 3, "dry")
-  g->Grid.param("D_Wet", 1, 3, "wet")
+  let addTab = el("div", ~cls="fxtab add", ~text="+")
+  addTab->onMouse(#mouseenter, _ => status("Add an effect to the end of the rack: up to eight, each kind up to four times"))
+  addTab->onMouse(#mouseleave, _ => ctx.status->Status.clear)
+  addTab->onPointer(#pointerdown, ev => {
+    ev->preventDefault
+    if ev->button == 0 {
+      addMenu(addTab, ~show=true)
+    }
+  })
 
-  let reverb = Panel.make(page, ~title="reverb", ~x=x2, ~y=margin, ~w=lastWidth, ~h=rowHeight)
-  reverb->Panel.headerToggle(ctx, "R_On", ~label="on")
-  let g = Grid.make(ctx, reverb.el)
-  g->Grid.param("R_Size", 0, 0, "room size")
-  g->Grid.param("R_Length", 1, 0, "length")
-  g->Grid.param("R_Predelay", 2, 0, "predelay")
-  g->Grid.param("R_EarlyMix", 3, 0, "early")
-  g->Grid.param("R_Dullness", 0, 1, "dull")
-  g->Grid.param("R_Brightness", 1, 1, "bright")
-  g->Grid.param("R_Dry", 2, 1, "dry")
-  g->Grid.param("R_Wet", 3, 1, "wet")
-  g->Grid.param("R_1", 0, 2, "angle 1")
-  g->Grid.param("R_2", 1, 2, "angle 2")
-  g->Grid.param("R_3", 2, 2, "angle 3")
-  g->Grid.param("R_Rotation", 3, 2, "rotate")
+  let arrow = () => el("span", ~cls="fxsep", ~text="›")
+  let layoutStrip = () => {
+    let list = rack()
+    strip->setTextContent("")
+    strip->appendChild(routingTab)
+    strip->appendChild(el("span", ~cls="fxgap"))
+    strip->appendChild(distTab)
+    list->Array.forEach(e => {
+      strip->appendChild(arrow())
+      let t = rackTab(e)
+      t->setLabel(FxRack.label(list, e))
+      strip->appendChild(t)
+    })
+    if FxRack.addable(list) != [] {
+      strip->appendChild(addTab)
+    }
+  }
 
-  let eqY = delay->Panel.bottom
-  let eqHeight = Style.pageHeight - margin - eqY
-  let eq = Panel.make(
-    page,
-    ~title="eq",
-    ~x=margin,
-    ~y=eqY,
-    ~w=Style.designWidth - 2. * margin,
-    ~h=eqHeight,
+  let lights = () =>
+    tabs->Array.forEach(((dest, _, led)) =>
+      led->toggleClass(
+        "lit",
+        switch dest {
+        | Routing => false
+        | Distortion => get("Sat_Type") != 0.
+        | Rack(e) => FxRack.isOn(e, get)
+        },
+      )
+    )
+
+  //==============================================================================
+  // the routing tab
+
+  routingMaker :=
+    body =>
+      FxRouting.make(
+        ctx,
+        body,
+        {
+          rack,
+          move,
+          add: add(_, ~show=false),
+          remove,
+          duplicate: duplicate(_, ~show=false),
+          toggle,
+          menu: (e, anchor) => effectMenu(e, anchor, ~show=false),
+          addMenu: addMenu(_, ~show=false),
+          openEffect: e => select(Rack(e)),
+          openDistortion: () => select(Distortion),
+        },
+      )
+
+  let rackIds = Array.fromInitializer(~length=PorridgeParams.rackSlots, k => PorridgeParams.rackId(k + 1))
+  [...rackIds, "FX_Order"]->Array.forEach(id =>
+    model->ParamModel.listen(id, () => {
+      layoutStrip()
+      lights()
+      // a tab whose effect left the rack (a program change, the host) gives way to routing
+      switch current.contents {
+      | Rack(e) if !FxRack.holds(rack(), e) => select(Routing)
+      | _ => ()
+      }
+    })
   )
-  EqEditor.make(ctx, eq.el, {x: 8., y: 25., w: eq.w - 18., h: eqHeight - 25. - 10.})
-  FxOrder.make(ctx, eq)
+  model->ParamModel.listenAny(_ => lights())
+
+  layoutStrip()
+  lights()
+  select(Routing)
+
+  // the tabs skip redrawing while the page is hidden: catch up when it shows
+  let wasShown = ref(false)
+  let observer = makeResizeObserver(() => {
+    let shown = page->offsetParent->Option.isSome
+    if shown && !wasShown.contents {
+      select(current.contents)
+    }
+    wasShown := shown
+  })
+  observer->observe(page)
 }

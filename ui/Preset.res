@@ -103,6 +103,9 @@ let fromOatmeal = (bytes: Uint8Array.t) => {
   {meta: emptyMeta(getName(bytes)), values, tables: extractTables(bytes), tuning: None}
 }
 
+let valueOf = (p, id) =>
+  p.values->Map.get(id)->Option.getOr(Lazy.get(defsById)->Map.get(id)->Option.mapOr(0., d => d.init))
+
 // What an Oatmeal export of this preset loses.
 let porridgeOnly = p => {
   let changed = PorridgeParams.all->Array.filter(spec =>
@@ -126,7 +129,17 @@ let porridgeOnly = p => {
     macros ? Some("macros") : None,
     mpe ? Some("MPE settings") : None,
     some(["Drift"]) ? Some("the analog drift") : None,
-    some(["FX_Order"]) ? Some("the effects order") : None,
+    {
+      // Oatmeal's chain is chorus, delay, reverb, EQ; effects left out of the rack are exported
+      // switched off, so only their order is lost
+      let firsts = FxRack.read(valueOf(p, _))->Array.filter(FxRack.isFirst)
+      firsts != FxRack.firsts->Array.filter(e => FxRack.holds(firsts, e)) ? Some("the effects order") : None
+    },
+    switch FxRack.read(valueOf(p, _))->Array.filter(e => !FxRack.isFirst(e)) {
+    | [] => None
+    | copies =>
+      Some(`the rack's extra effects (${copies->Array.map(e => FxRack.kindName(e.kind))->Array.join(", ")})`)
+    },
     some(["Curve_"]) ? Some("the envelope curves") : None,
     some(["LFO_1_", "LFO_2_"]) ? Some("the LFO delay, slew, steps and one-shot") : None,
     some(["U_DetuneCurve", "U_RandomPhase", "U_Width"]) ? Some("the unison extras") : None,
@@ -144,7 +157,19 @@ let porridgeOnly = p => {
 // closest ones it does.
 let toOatmeal = p => {
   let bytes = makeDefaultProgram(p.meta.name)
-  Bank.writeValues(bytes, p.values->Map.entries->Iterator.toArray->Array.map(((id, x)) => (id, ParamDefs.oatmealValue(id, x)))->Map.fromArray)
+  let values = p.values->Map.entries->Iterator.toArray->Array.map(((id, x)) => (id, ParamDefs.oatmealValue(id, x)))->Map.fromArray
+  // Oatmeal always runs its four effects: those left out of the rack go switched off, and an EQ
+  // that is off (Oatmeal's has no switch) loses its bands
+  let rack = FxRack.read(valueOf(p, _))
+  FxRack.firsts->Array.forEach(e =>
+    if !FxRack.holds(rack, e) || !FxRack.isOn(e, valueOf(p, _)) {
+      switch e.kind {
+      | #eq => FxRack.eqBandTypes(e)->Array.forEach(id => values->Map.set(id, 0.))
+      | _ => values->Map.set(FxRack.switchId(e), 0.)
+      }
+    }
+  )
+  Bank.writeValues(bytes, values)
   allTables->Array.forEach(table => writeTable(bytes, table, p.tables->getTable(table)))
   bytes
 }
