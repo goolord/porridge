@@ -89,9 +89,9 @@ let toggle = (g, id, c, r, label, ~span=1) =>
   g->at(c, r, ~span, id, b => Controls.toggle(g.ctx, g.el, id, ~x=b.x, ~y=b.y, ~w=b.w, ~label))
 
 // A button filling its cells.
-let button = (g, text, c, r, ~span=1, ~status=?, onClick) =>
+let button = (g, text, c, r, ~span=1, ~icon=?, ~status=?, onClick) =>
   g->at(c, r, ~span, text, b =>
-    Controls.button(g.ctx, g.el, text, ~x=b.x, ~y=b.y, ~w=b.w, ~h=b.h, ~cls="gc", ~status?, onClick)->ignore
+    Controls.button(g.ctx, g.el, text, ~x=b.x, ~y=b.y, ~w=b.w, ~h=b.h, ~cls="gc", ~icon?, ~status?, onClick)->ignore
   )
 
 // A note (wrapped, faint text) filling a span of cells.

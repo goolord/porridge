@@ -400,8 +400,17 @@ let toggle = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=?, ~label=?) => {
   bind(c, update)
 }
 
-let button = (ctx: Ctx.t, parent, text, ~x, ~y, ~w, ~h=?, ~cls="", ~status=?, onClick) => {
-  let e = el("button", ~cls=cls == "" ? "btn" : "btn " ++ cls, ~text, ~parent)->place(x, y, ~w, ~h?)
+// (an icon goes in front of the text)
+let button = (ctx: Ctx.t, parent, text, ~x, ~y, ~w, ~h=?, ~cls="", ~icon=?, ~status=?, onClick) => {
+  let cls = cls == "" ? "btn" : "btn " ++ cls
+  let e = switch icon {
+  | Some(icon) =>
+    let e = el("button", ~cls=cls ++ " withicon", ~parent)
+    e->appendChild(Icons.render(icon))
+    el("span", ~text, ~parent=e)->ignore
+    e
+  | None => el("button", ~cls, ~text, ~parent)
+  }->place(x, y, ~w, ~h?)
   e->onMouse(#click, _ => onClick())
   status->Option.forEach(status => ctx.status->Status.hover(e, () => status))
   e

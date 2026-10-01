@@ -285,6 +285,8 @@ let css = `
 /* a button in a grid cell */
 .btn.gc { height: ${px(controlHeight)}; line-height: ${px(controlHeight - 2.)}; padding: 0 4px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.btn.withicon { display: flex; align-items: center; justify-content: center; gap: 5px; }
+.btn.withicon > span { overflow: hidden; text-overflow: ellipsis; }
 
 .plot { position: absolute; display: block; }
 .plot path.curve { fill: none; stroke: var(--signal); stroke-width: 1.4; }

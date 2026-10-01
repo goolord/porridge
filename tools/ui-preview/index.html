@@ -126,6 +126,8 @@ class MockPatchConnection
 
         if (request.startsWith ("menu="))
             this.hostMenus.push (JSON.parse (request.slice (5)));
+        else if (request === "dismiss")
+            this.hostMenus.push ("dismiss");
         else
             this.stateListeners.forEach (f => f ({ key: "porridge:host", value: { menu: true } }));
     }

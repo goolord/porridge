@@ -300,8 +300,9 @@ let loadIntoCurrent = (t, p) => {
 
 // The browser plays presets without storing them: it keeps the current program as it was
 // (captureCurrent) and plays others with preview. Then either restore puts the kept one back,
-// or the picked preset is loaded (loadIntoCurrent), or its program is selected (keep puts the
-// kept program back into its slot, then select with ~keepEdits=false).
+// or the picked preset's bank is loaded and its program selected (loadBank; loadIntoCurrent
+// for a lone preset), or its program is selected (keep puts the kept program back into its
+// slot, then select with ~keepEdits=false).
 let preview = (t, p) => apply(t, p)
 let restore = (t, kept: Preset.t) => apply(t, kept)
 let keep = (t, kept: Preset.t) => t.programs->Array.setUnsafe(t.current, kept)
@@ -320,6 +321,15 @@ let newBank = (t, ~name, ~author) => {
   t.message(`New bank${name == "" ? "" : ` "${name}"`}: ${Int.toString(bankPrograms)} Init programs`)
 }
 
+// Replaces the bank with programs and goes to program `index` of them (with more than a bank
+// holds, the bank-sized run of them it falls in).
+let loadBank = (t, programs, ~name, ~index=0) => {
+  let start = index / bankPrograms * bankPrograms
+  t.programs = Preset.fillBank(programs->Array.slice(~start, ~end=start + bankPrograms))
+  t.bankName = name
+  select(t, index - start, ~keepEdits=false)
+}
+
 let panic = t => t.pc->PatchConnection.sendEventOrValue("panic", 1)
 
 let isTuningFile = filename =>
@@ -335,9 +345,7 @@ let loadFile = (t, bytes, filename) =>
       loadIntoCurrent(t, p)
       t.message(`Loaded "${Preset.name(p)}" into program ${Int.toString(t.current + 1)}`)
     | Ok({presets: programs, name}) =>
-      t.programs = Preset.fillBank(programs)
-      t.bankName = name != "" ? name : Web.baseName(filename)
-      select(t, 0, ~keepEdits=false)
+      loadBank(t, programs, ~name=name != "" ? name : Web.baseName(filename))
       t.message(`Loaded bank ${filename} (${Int.toString(Array.length(programs))} programs)`)
     }
   }

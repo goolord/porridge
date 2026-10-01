@@ -109,6 +109,27 @@ namespace porridge
         return nullptr;
     }
 
+    /// Closes the menu the host is showing for the plugin. On Windows a press or a key in the
+    /// view never reaches it, since the web view's window belongs to another process: a host's
+    /// own menu window (FL Studio's) holds the mouse capture of the host's thread, which only
+    /// sees presses on that thread's windows, and a Win32 menu sees none either.
+    inline void dismissHostMenu()
+    {
+       #if CHOC_WINDOWS
+        EndMenu();
+
+        if (auto capture = GetCapture())
+        {
+            DWORD process = 0;
+            GetWindowThreadProcessId (capture, &process);
+
+            // losing the capture closes it (DefWindowProc releases it)
+            if (process == GetCurrentProcessId())
+                SendMessageW (capture, WM_CANCELMODE, 0, 0);
+        }
+       #endif
+    }
+
     /// Listens to what the patch sends its views, and passes on the settings, host and library
     /// requests (the whole key).
     struct RequestBridge  : public cmaj::PatchView

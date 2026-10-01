@@ -1,8 +1,9 @@
 // The preset browser: searches the programs in the bank, the banks bundled with the plugin,
 // the banks in the user's bank folders and any files opened in it, by name, category, tags,
 // author and description (Library.res). Clicking a preset plays it (unless preview is off)
-// without storing it anywhere; Load puts it into the current program, or goes to it if it is
-// one of the bank's, and Cancel puts back what was playing. The browser keeps its search and
+// without storing it anywhere; Load goes to it if it is one of the bank's, loads its bank and
+// goes to it if it is in another bank, or puts a lone preset into the current program, and
+// Cancel puts back what was playing. The browser keeps its search and
 // filters for as long as the view is open. In the plugin, the bank folders' banks and the opened
 // files are kept by the plugin (BankLibrary), so they're there the next time the window opens;
 // elsewhere opened files last as long as the view.
@@ -40,6 +41,9 @@ let isOpen = t => t.refresh != None
 let sources = t => [t.bank, ...t.bundled, ...t.cached->Array.map(((s, _)) => s), ...t.opened]
 
 let refresh = t => t.refresh->Option.forEach(fn => fn())
+
+// A source that's a bank of presets rather than a lone preset file: Load loads all of it.
+let isBank = (source: Library.source) => Array.length(source.presets) > 1
 
 let libraryId = (bank: BankLibrary.bank) => "lib:" ++ bank.id
 
@@ -287,6 +291,9 @@ let show = t => {
       | Bank =>
         programs->ProgramStore.keep(kept)
         programs->ProgramStore.select(e.index, ~keepEdits=false)
+      | Bundled | Cached | File if isBank(e.source) =>
+        programs->ProgramStore.loadBank(e.source.presets, ~name=e.source.name, ~index=e.index)
+        ctx.toast(`Loaded bank "${e.source.name}" at program ${ProgramStore.number(programs.current)}`)
       | Bundled | Cached | File =>
         programs->ProgramStore.loadIntoCurrent(e.preset)
         ctx.toast(`Loaded "${Preset.name(e.preset)}" into program ${ProgramStore.number(programs.current)}`)
@@ -372,6 +379,7 @@ let show = t => {
     let label = switch selected.contents {
     | Some({source: {kind: Bank}, index}) if index == programs.current => "Keep program " ++ ProgramStore.number(index)
     | Some({source: {kind: Bank}, index}) => "Go to program " ++ ProgramStore.number(index)
+    | Some({source}) if isBank(source) => "Load bank"
     | Some(_) => "Load into program " ++ ProgramStore.number(programs.current)
     | None => "Load"
     }

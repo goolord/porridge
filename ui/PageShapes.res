@@ -86,9 +86,10 @@ let build = (ctx: Ctx.t, page) => {
   let current = ref(0)
   let shape = () => shapes->Array.getUnsafe(current.contents)
 
-  // osc waveforms have their harmonics under them; LFO shapes get the whole height
-  let waveBox = {x: 10., y: 54., w: width, h: 232.}
-  let lfoHeight = 446.
+  // two rows of tools on top; osc waveforms have their harmonics under them, LFO shapes get
+  // the whole height
+  let waveBox = {x: 10., y: Grid.padTop + 2. * Grid.rowHeight + 1., w: width, h: 218.}
+  let lfoHeight = 418.
 
   // every edit goes through here, so that the shape being edited is the one that plays
   let setShape = (data, ~commit) => {
@@ -124,8 +125,8 @@ let build = (ctx: Ctx.t, page) => {
     ctx,
     blk,
     editor,
-    ~levels={x: 10., y: 292., w: width, h: 128.},
-    ~phases={x: 10., y: 426., w: width, h: 76.},
+    ~levels={x: 10., y: 306., w: width, h: 118.},
+    ~phases={x: 10., y: 430., w: width, h: 72.},
     ~onEdit=() => setShape(editor.data, ~commit=false),
     ~onCommit=() => setShape(editor.data, ~commit=true),
   )
@@ -211,12 +212,15 @@ let build = (ctx: Ctx.t, page) => {
       d->ShapeEditor.blit(shape().bipolar ? ShapeEditor.genWave(kind) : ShapeEditor.genLfo(kind))
     )
 
-  let tools = [
-    ("sine", () => generate(Sine)),
-    ("saw", () => generate(Saw)),
-    ("square", () => generate(Square)),
-    ("triangle", () => generate(Triangle)),
-    ("random", () => generate(Random)),
+  // the waveforms, with their icons, and the actions
+  let waves = [
+    ("sine", Icons.sine, ShapeEditor.Sine),
+    ("saw", Icons.saw, Saw),
+    ("square", Icons.pulse, Square),
+    ("triangle", Icons.triangle, Triangle),
+    ("random", Icons.smoothRandom, Random),
+  ]
+  let actions = [
     (sampleTool, pickSample),
     ("fix", () => apply(d => ShapeEditor.fix(d, ~bipolar=shape().bipolar))),
     ("soften", () => apply(d => ShapeEditor.soften(d))),
@@ -233,8 +237,10 @@ let build = (ctx: Ctx.t, page) => {
     ("undo", () => editor->ShapeEditor.undo),
   ]
   // the tools save their own undo steps and commit, as on the toolbar
-  editor.menu =
-    tools->Array.map(((label, f)) => {ShapeEditor.label, run: _ => f()})
+  editor.menu = [
+    ...waves->Array.map(((label, _, kind)) => {ShapeEditor.label, run: _ => generate(kind)}),
+    ...actions->Array.map(((label, f)) => {ShapeEditor.label, run: _ => f()}),
+  ]
 
   let select = i => {
     if i != current.contents {
@@ -253,12 +259,18 @@ let build = (ctx: Ctx.t, page) => {
   }
 
   selectRef := select
-  // the tools, right-aligned above the drawing; the sample a shape came from, left of them
+  // the tools, right-aligned above the drawing: the waveforms on top, sharing the width of
+  // the actions under them; the sample a shape came from, left of them
   let toolWidth = 58.
-  let toolbarX = 10. + width + Grid.columnGap - Int.toFloat(Array.length(tools)) * toolWidth
-  let toolbar = Grid.make(ctx, blk, ~x=toolbarX, ~cw=toolWidth)
-  tools->Array.forEachWithIndex(((label, f), i) =>
-    toolbar->Grid.button(label, i, 0, ~status=?label == sampleTool ? Some(sampleStatus) : None, f)
+  let toolbarWidth = Int.toFloat(Array.length(actions)) * toolWidth
+  let toolbarX = 10. + width + Grid.columnGap - toolbarWidth
+  let waveRow = Grid.make(ctx, blk, ~x=toolbarX, ~cw=toolbarWidth / Int.toFloat(Array.length(waves)))
+  waves->Array.forEachWithIndex(((label, icon, kind), i) =>
+    waveRow->Grid.button(label, i, 0, ~icon, () => generate(kind))
+  )
+  let actionRow = Grid.make(ctx, blk, ~x=toolbarX, ~y=Grid.padTop + Grid.rowHeight, ~cw=toolWidth)
+  actions->Array.forEachWithIndex(((label, f), i) =>
+    actionRow->Grid.button(label, i, 0, ~status=?label == sampleTool ? Some(sampleStatus) : None, f)
   )
   strip(~toolbarX)->ignore
 

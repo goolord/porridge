@@ -23,8 +23,9 @@
 //    "porridge:host?": ?get is answered with a "porridge:host" state value
 //    { menu: <whether the host can show it> }; ?menu=<json> { id, x, y, scale } shows it for
 //    the parameter with that endpoint ID, at a point in the view (CSS pixels, and the view's
-//    device pixel ratio). The menu is shown from on_main_thread, once the view's message has
-//    been handled. See ui/HostMenu.res.
+//    device pixel ratio); ?dismiss closes it, for a press or Escape in the view, which the
+//    menu never hears on Windows. The menu is shown from on_main_thread, once the view's
+//    message has been handled. See ui/HostMenu.res.
 //  - The latency is the synth's 64 samples (dsp/Synth.cmajor applies MIDI a block late, on
 //    its own sample). Cmajor's C++ generator reports 0 whatever the patch declares.
 //
@@ -447,8 +448,8 @@ inline bool Plugin::Impl::canShowHostMenu() const
 
 ${marker} ?get answers with what the host offers; ?menu=<json> { id, x, y, scale } shows the
 // host's menu for the parameter with that endpoint ID, at a point in the view in CSS pixels,
-// scale being the view's device pixel ratio. The menu is left to on_main_thread rather than
-// shown here, inside the web view's message handler.
+// scale being the view's device pixel ratio; ?dismiss closes it. The menu is left to
+// on_main_thread rather than shown here, inside the web view's message handler.
 inline void Plugin::Impl::handleHostRequest (std::string_view request)
 {
     if (! editor)
@@ -482,6 +483,13 @@ inline void Plugin::Impl::handleHostRequest (std::string_view request)
         }
         catch (...) {}
 
+        return;
+    }
+
+    if (request == "dismiss")
+    {
+        pendingHostMenu = {};
+        porridge::dismissHostMenu();
         return;
     }
 
