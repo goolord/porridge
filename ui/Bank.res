@@ -64,9 +64,6 @@ let sendShape = (pc, table, data) => {
   pc->PatchConnection.sendEventOrValueNow(endpoint, {which, data: arrayOfFloats(data)})
 }
 
-let sendShapes = (pc, shapes) =>
-  allTables->Array.forEach(table => sendShape(pc, table, shapes->getTable(table)))
-
 type tuningPayload = {on: int, semitones: array<float>}
 
 // a microtuning (or Oatmeal's tuning, for None) to the patch

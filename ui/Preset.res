@@ -72,6 +72,15 @@ let make = name => {
   tuning: None,
 }
 
+// A whole bank: presets, then Init programs.
+let fillBank = presets =>
+  Array.fromInitializer(~length=bankPrograms, i =>
+    switch presets[i] {
+    | Some(p) => p
+    | None => make(`Init ${Int.toString(i)}`)
+    }
+  )
+
 let name = p => p.meta.name
 
 let withName = (p, name) => {
@@ -452,7 +461,25 @@ let writeBank = (presets, ~name=?) => utf8Encode(JSON.stringify(bankToJson(prese
 //==============================================================================
 // The bank in the patch's stored state
 
-let encodeBank = presets => JSON.stringify(bankToJson(presets))
+// It's written on every program change, so each preset's JSON is kept (presets aren't
+// changed once made) and only new ones are encoded.
+let encoded: WeakMap.t<t, string> = WeakMap.make()
+
+let encodePreset = p =>
+  switch encoded->WeakMap.get(p) {
+  | Some(json) => json
+  | None =>
+    let json = JSON.stringify(toJson(p, ~header=false))
+    encoded->WeakMap.set(p, json)->ignore
+    json
+  }
+
+let encodeBank = presets => {
+  // the bank's fields, ending in "presets":[]}
+  let empty = JSON.stringify(bankToJson([]))
+  String.slice(empty, ~start=0, ~end=-2) ++
+  presets->Array.map(encodePreset)->Array.join(",") ++ "]}"
+}
 
 // Older sessions stored the bank as base64 Oatmeal chunks.
 let decodeBank = s =>

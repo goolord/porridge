@@ -167,6 +167,8 @@ type t = {
   shortText: float => string,
   // Typed values are read in display units.
   parse: string => option<float>,
+  // the parameters its readouts also depend on (octave size, tuning, breakpoint, targets...)
+  dependsOn: array<string>,
 }
 
 // A Porridge parameter (PorridgeParams): plain linear knobs and lists.
@@ -186,6 +188,7 @@ let porridgeDef = (index, spec: PorridgeParams.spec) =>
       min,
       max,
       bipolar: min < 0. && max > 0.,
+      dependsOn: [],
       clamp,
       toNorm: x => (x - min) / (max - min),
       fromNorm: v => min + (max - min) * v,
@@ -213,6 +216,7 @@ let porridgeDef = (index, spec: PorridgeParams.spec) =>
       min: 0.,
       max: last,
       bipolar: false,
+      dependsOn: [],
       clamp,
       toNorm: x => last > 0. ? x / last : 0.,
       fromNorm: v => Math.round(v * last),
@@ -299,6 +303,12 @@ let makeDefs = (~context=() => None) => {
     let zdfCutoff = () =>
       id == "Cutoff" &&
         context()->Option.mapOr(false, prog => Bank.readValue(prog, "Filter") >= 16.)
+    // the fields the status text reads from the context program (and the cutoff's range)
+    let dependsOn =
+      p.reads
+      ->Array.flatMap(offset => Fields.all->Array.filter(f => f.offset == offset && f.id != id))
+      ->Array.map(f => f.id)
+      ->Array.concat(id == "Cutoff" ? ["Filter"] : [])
     let valueText = (x: float) =>
       zdfCutoff()
         ? Float.toFixed(x * x * x * 19980. + 20., ~digits=2) ++ " Hz"
@@ -359,6 +369,7 @@ let makeDefs = (~context=() => None) => {
       valueText,
       shortText: x => compact(valueText(x)),
       parse,
+      dependsOn,
     }
 
     switch (porridgeValuesFor(id), def.names) {

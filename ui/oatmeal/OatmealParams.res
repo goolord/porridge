@@ -709,6 +709,8 @@ type t = {
   inv: float => float,
   // DLL status-bar string (0x100405f0) for normalized v, in the context of a program
   text: (float, Uint8Array.t) => string,
+  // offsets of the other fields text reads from that program
+  reads: array<int>,
 }
 
 let blank = {
@@ -728,6 +730,7 @@ let blank = {
   get: x => x,
   inv: x => x,
   text: (_, _) => "",
+  reads: [],
 }
 
 // Field offsets that some status texts read from the program.
@@ -993,9 +996,9 @@ let paramCount = 342
 
 let table: array<option<t>> = Array.make(~length=paramCount, None)
 
-let def = (i, spec) => {
+let def = (i, ~reads=[], spec) => {
   let (name, action) = names->Array.getUnsafe(i)
-  table->Array.setUnsafe(i, Some({...spec, index: i, name, action}))
+  table->Array.setUnsafe(i, Some({...spec, index: i, name, action, reads: Array.concat(spec.reads, reads)}))
 }
 
 [(0, 1), (6, 2)]->Array.forEach(((o, n)) => {
@@ -1047,6 +1050,7 @@ let def = (i, spec) => {
 def(
   12,
   bip(8516, 4., ratioText("Transpose", 2, 48., 4.), ~unit="octaves (display: semitones = 12*x)"),
+  ~reads=[offOctave],
 )
 def(13, bip(8520, 50., (v: float, _) => `Detune: ${fixed((2. * v - 1.) * 50., 3)} Hz`, ~unit="Hz"))
 def(
@@ -1076,7 +1080,7 @@ def(
       : "Noise resonance: no filtering"
   ),
 )
-def(18, bip(8536, 48., ratioText("Noise transpose", 2, 48., 4.), ~unit="semitones"))
+def(18, bip(8536, 48., ratioText("Noise transpose", 2, 48., 4.), ~unit="semitones"), ~reads=[offOctave])
 
 type lfoOffsets = {
   unit: int,
@@ -1149,6 +1153,7 @@ type lfoOffsets = {
         ),
       inv: x => x <= 1. ? (4. - 1. / x) / 9. : ((x - 1.) / 255. + 0.5) / 1.5,
       text: unitsText(`${l} speed`, o.quantize, lfoSpeed),
+      reads: [o.quantize],
     },
   )
   def(base + 3, sw(o.quantize, 1, Some(lfoQuantize), enumText(`${l}: `, 1, lfoQuantize)))
@@ -1205,6 +1210,7 @@ def(
         enumText("Filter 2: ", 15, filter2Types)(v, prog)
       }
     ),
+    reads: [offFilter, offFDouble],
     storage: Hi16,
     states: Some(13),
     max: 12.,
@@ -1227,6 +1233,7 @@ def(
         ? `Cutoff: ${fixed(hz, 2)} Hz (/${fixed(ref / hz, 4)})`
         : `Cutoff: ${fixed(hz, 2)} Hz (*${fixed(hz / ref, 4)})`
     },
+    reads: [offOctave, offCutRef, offTune],
   },
 )
 def(44, uni(8436, pct("Resonance")))
@@ -1250,7 +1257,7 @@ envelopes->Array.forEach(({first, offset: o, display}) => {
     }
   def(first + 0, sq(o + 4, 9999.8, 0.2, attackText, ~unit="ms"))
   def(first + 1, sq(o + 8, 10000., 0., holdText, ~unit="ms"))
-  def(first + 2, sq(o + 12, 19990., 10., decay1Text(o + 44), ~unit="ms"))
+  def(first + 2, sq(o + 12, 19990., 10., decay1Text(o + 44), ~unit="ms"), ~reads=[o + 44])
   def(
     first + 3,
     lvl(o + 44, levelText("Breakpoint", "Breakpoint: skip decay 1", "Breakpoint: skip decay 1")),
@@ -1382,6 +1389,7 @@ def(79, sw(8664, 2, Some(delayReverse), enumText("Delay, right: ", 2, delayRever
           ? `${label}: ${int(ftol(length + 0.5))} units`
           : `${label}: ${fixed(length, 3)} units`
       },
+      reads: [8656],
     },
   )
 )
@@ -1570,6 +1578,7 @@ def(
         (x - 1.) / K.arpStep + 0.25
       },
     text: unitsText("Arp step", 8852, arpStep),
+    reads: [8852],
   },
 )
 for k in 1 to 16 {
@@ -1608,6 +1617,7 @@ for k in 1 to 7 {
   def(
     156 + k,
     bip(4 * (156 + k) + 8328, 36., ratioText(`Arp note ${note}`, 3, 36., 3.), ~unit="semitones"),
+    ~reads=[offOctave],
   )
 }
 def(
@@ -1721,8 +1731,8 @@ let refText = label =>
     let hz = pow(prog->ByteView.getF32(offOctave), t * 2.) * prog->ByteView.getF32(offTune)
     `${label}: ${fixed(t * 24., 2)} st (${fixed(hz, 2)} Hz)`
   }
-def(180, bip(9072, 24., refText("Cutoff reference frequency"), ~unit="semitones"))
-def(181, bip(9076, 24., refText("Pan center frequency"), ~unit="semitones"))
+def(180, bip(9072, 24., refText("Cutoff reference frequency"), ~unit="semitones"), ~reads=[offOctave, offTune])
+def(181, bip(9076, 24., refText("Pan center frequency"), ~unit="semitones"), ~reads=[offOctave, offTune])
 [
   "C",
   "C#/Db",
@@ -1751,6 +1761,7 @@ def(181, bip(9076, 24., refText("Pan center frequency"), ~unit="semitones"))
       },
       ~unit="cents",
     ),
+    ~reads=[offOctave],
   )
 })
 def(
@@ -1796,6 +1807,7 @@ def(197, bip(9140, 1., (v: float, _) => `Y: ${fixed(2. * v - 1., 4)}`))
         1.,
         depthText(prefix, prefix, target0 + 4 * (k - 1), xyDepthUnit, 4.),
       ),
+      ~reads=[target0 + 4 * (k - 1)],
     )
     def(
       base + 3 + k,
@@ -1901,6 +1913,7 @@ def(261, bip(9508, 1., veloText))
     def(
       base + k - 1,
       bip(depthOffset + 4 * (k - 1), 1., depthText(prefix, prefix, targetOffset, envDepthUnit, 2.)),
+      ~reads=[targetOffset],
     )
     def(
       base + 3 + k,
@@ -1953,7 +1966,7 @@ for c in 1 to 6 {
       ccDepthUnit,
       4.,
     )
-    def(base + k, bip(offset + 4 * k, 1., depth))
+    def(base + k, bip(offset + 4 * k, 1., depth), ~reads=[offset + 16 + 4 * k])
     def(
       base + 4 + k,
       sw(offset + 16 + 4 * k, 34, Some(ccTargets), (v: float, _) => {
