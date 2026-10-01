@@ -628,14 +628,24 @@ namespace porridge
 
     //==============================================================================
     /// A voice filter (Filter.cmajor, any type) in the FX chain: one per side, the cutoffs
-    /// spread apart by Ff_Spread semitones, with a dry/wet mix.
+    /// spread apart by Ff_Spread semitones, with a dry/wet mix, muted when it oscillates by
+    /// itself after its input stops (autoMute).
     struct FilterFx
     {
         Filter left, right;
         float hz;                   // ln (cutoff Hz), smoothed per block
+        float morph;                // smoothed per block too
         float mix;                  // smoothed per sample
         bool fresh, idle;
         int silentCount;
+
+        // the auto-mute: samples into this tenth of a second of quiet input, the wet peaks of
+        // this tenth and the last, tenths in a row the peak held up, whether it is fading the
+        // wet out, and how far (0 .. 1, per sample)
+        int quietCount, heldCount;
+        float peak, lastPeak;
+        bool muting;
+        float muted;
     }
 
     void clearState (FilterFx& this)
@@ -645,6 +655,62 @@ namespace porridge
         this.fresh = true;
         this.idle = true;
         this.silentCount = 0;
+        this.resetQuiet();
+        this.muting = false;
+        this.muted = 0.0f;
+    }
+
+    void resetQuiet (FilterFx& this)
+    {
+        this.quietCount = 0;
+        this.heldCount = 0;
+        this.peak = 0.0f;
+        this.lastPeak = 0.0f;
+    }
+
+    /// The auto-mute. A filter oscillating by itself would go on for ever once its input stops:
+    /// when the input has been quiet and the wet output's peak has held up (fallen by less than
+    /// half a dB a second) for three tenths of a second in a row, this fades the wet out over
+    /// 0.3 s, and it stays out until the input is back (process then restarts the filters).
+    /// Tails that die away (resonance short of oscillating, the combs' and the reverb's echoes,
+    /// the slowest falling about 2 dB a second) are left alone. l, r: the block's wet output.
+    void autoMute (FilterFx& this, bool quiet, float[blockSize]& l, float[blockSize]& r, float64 sr)
+    {
+        if (! quiet)
+        {
+            this.resetQuiet();
+            this.muting = false;
+        }
+        else if (! this.muting)
+        {
+            for (wrap<blockSize> i)
+                this.peak = max (this.peak, max (abs (l[i]), abs (r[i])));
+
+            this.quietCount += blockSize;
+
+            if (float (this.quietCount) >= float (sr) * 0.1f)
+            {
+                let held = this.lastPeak > 0.0f && this.peak > 1e-6f && this.peak > this.lastPeak * 0.994f;
+                this.heldCount = held ? this.heldCount + 1 : 0;
+                this.lastPeak = this.peak;
+                this.peak = 0.0f;
+                this.quietCount = 0;
+                this.muting = this.heldCount >= 3;
+            }
+        }
+
+        if (! this.muting && this.muted <= 0.0f)
+            return;
+
+        // out over 0.3 s; back in over 10 ms when the input comes back in the middle of a fade
+        let step = this.muting ? float (1.0 / (0.3 * sr)) : float (-1.0 / (0.01 * sr));
+
+        for (wrap<blockSize> i)
+        {
+            this.muted = clamp (this.muted + step, 0.0f, 1.0f);
+            l[i] *= 1.0f - this.muted;
+            r[i] *= 1.0f - this.muted;
+        }
     }
 
     bool process (FilterFx& this, const FxTables& tables, float<2>[blockSize]& buf, bool active,
@@ -660,31 +726,47 @@ namespace porridge
 
         let tHz = float (log (float64 (expKnob (20.0f, 20000.0f, P[slot::Ff_Cutoff]))));
         let tMix = clamp (P[slot::Ff_Mix], 0.0f, 1.0f);
+        let tMorph = clamp (P[slot::Ff_Morph], 0.0f, 1.0f);
 
         if (this.fresh)
         {
             this.fresh = false;
             this.hz = tHz;
             this.mix = tMix;
+            this.morph = tMorph;
         }
 
-        this.hz += (tHz - this.hz) * extraSmoothing (sr, 10.0, blockSize);
+        let kb = extraSmoothing (sr, 10.0, blockSize);
+        this.hz += (tHz - this.hz) * kb;
+        this.morph += (tMorph - this.morph) * kb;
 
         let spread = clamp (P[slot::Ff_Spread], -24.0f, 24.0f) * (0.693147181f / 24.0f);
         let res = clamp (P[slot::Ff_Resonance], 0.0f, 1.0f);
-        let morph = clamp (P[slot::Ff_Morph], 0.0f, 1.0f);
         let drive = clamp (P[slot::Ff_Drive], 0.0f, 1.0f);
 
         float[blockSize] l, r;
+        var inPeak = 0.0f;
 
         for (wrap<blockSize> i)
         {
             l[i] = buf[i][0];
             r[i] = buf[i][1];
+            inPeak = max (inPeak, max (abs (l[i]), abs (r[i])));
         }
 
-        this.left.process (tables, t, exp (this.hz - spread), res, morph, drive, sr, l, blockSize);
-        this.right.process (tables, t, exp (this.hz + spread), res, morph, drive, sr, r, blockSize);
+        // quiet: below -80 dB. Back after the auto-mute's silence, the filters start afresh.
+        let quiet = inPeak <= 1e-4f;
+
+        if (! quiet && this.muted >= 1.0f)
+        {
+            this.left.clearState();
+            this.right.clearState();
+            this.muted = 0.0f;
+        }
+
+        this.left.process (tables, t, exp (this.hz - spread), res, this.morph, drive, sr, l, blockSize);
+        this.right.process (tables, t, exp (this.hz + spread), res, this.morph, drive, sr, r, blockSize);
+        this.autoMute (quiet, l, r, sr);
 
         let k = extraSmoothing (sr, 20.0, 1);
 

@@ -308,6 +308,7 @@ const TABLE = 257;
 
 const kinds = { Knob: 1, Pitch: 2, Volume: 3, Pan: 4 };
 const targetKind = [], targetSlot = [], targetRow = [], targetScale = [], rows = [], rowNames = [];
+const rowOf = new Map();    // row text -> row index
 
 ModMatrix.targets.forEach ((t, i) =>
 {
@@ -322,13 +323,20 @@ ModMatrix.targets.forEach ((t, i) =>
         const f = byId.get (law._0);
         if (! d || ! f) throw new Error (`unknown modulation target ${law._0}`);
         targetSlot.push (f.slot);
-        targetRow.push (rows.length);
         const row = Array.from ({ length: TABLE }, (_, k) => cf (d.fromNorm (k / (TABLE - 1))));
         // a pulse width is a 32-bit phase, so the top of its knob (100 %) wraps to 0: end the
         // table on its last step instead, or the inverse lookup lands at the wrong end
         if (/_PWM_W$/.test (law._0)) row[TABLE - 1] = row[TABLE - 2];
-        rows.push (row);
-        rowNames.push (law._0);
+        // targets with the same law (an effect and its copies, say) share a row
+        const text = row.join (", ");
+        if (! rowOf.has (text))
+        {
+            rowOf.set (text, rows.length);
+            rows.push (row);
+            rowNames.push ([]);
+        }
+        targetRow.push (rowOf.get (text));
+        rowNames[rowOf.get (text)].push (law._0);
     }
     else
     {
@@ -338,6 +346,7 @@ ModMatrix.targets.forEach ((t, i) =>
 });
 
 const ident = s => s.replace (/[^A-Za-z0-9_]/g, "_");
+const names = ids => ids.slice (0, 3).join (", ") + (ids.length > 3 ? ` and ${ids.length - 3} more` : "");
 
 writeGenerated (join (root, "dsp", "ModTables.cmajor"), header +
 `/// The modulation matrix's sources and targets (ui/ModMatrix.res). A parameter target moves
@@ -362,7 +371,7 @@ namespace porridge::mods
     let targetScale = float[${targetScale.length}] (${targetScale.join (", ")});
 
     let table = float[${rows.length * TABLE}] (
-${rows.map ((r, i) => `        ${r.join (", ")}${i + 1 < rows.length ? "," : ""}  // ${rowNames[i]}`).join ("\n")}
+${rows.map ((r, i) => `        ${r.join (", ")}${i + 1 < rows.length ? "," : ""}  // ${names (rowNames[i])}`).join ("\n")}
     );
 }
 

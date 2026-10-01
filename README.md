@@ -12,33 +12,6 @@ cmaj play Porridge.cmajorpatch
 
 ![Synth page](docs/screenshot.png)
 
-## Matching a sound
-
-Drop a sample onto the window (the left half; the right half makes it a waveform, as before)
-or press **Match**, and Porridge looks for patches that sound like it. Four searches run at
-once, each after a different kind of match and kept apart from the others, and their cards
-fill in as they go:
-
-- **Detailed**: everything free: layers, modulation and effects where they help
-- **Simple**: one oscillator through the filter, with its envelopes, to take further by hand
-- **Punchy**: the attack matters most; dry
-- **Lush**: the tone matters most, with unison, chorus and reverb
-
-The one nearest the sample is marked **closest**. Each card shows how close it got, its loudness and spectrum over the sample's, and what it is
-made of. Clicking a card plays it on the synth at the sample's pitch without changing the
-program; **keep** puts it in the current program (and can be undone), **vary** makes four
-variations of it, a little, some or a lot apart. The locks keep the chosen card's
-oscillators, filter, envelopes, modulation or effects while re-matching or varying the rest.
-
-The search renders candidates with the synth itself, compiled to WebAssembly and run in
-workers in the view, so the plugin's audio thread is never involved. A match takes a few
-seconds; the workers start when the drawer opens and stop when it closes.
-
-```bash
-npm run engine            # rebuild the matcher's engine after DSP changes (about 30 s)
-node tools/test/match.mjs # match programs from the banks, and report how close each search gets
-```
-
 ## Layout
 
 ```
@@ -120,5 +93,4 @@ Porridge is not affiliated with Fuzzpilz.
 
 The ambience's clear coat and verb tiny models are ports of Airwindows ClearCoat and VerbTiny
 by Chris Johnson ([airwindows/airwindows](https://github.com/airwindows/airwindows), MIT licence).
-Its room model takes after the small settings of AIR Music Technology's AIR Reverb, with a
-design of its own; Porridge is not affiliated with either.
+Porridge is not affiliated with airwindows.

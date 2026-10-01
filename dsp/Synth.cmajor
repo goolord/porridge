@@ -124,6 +124,7 @@ namespace porridge
         float[128] rawCC;
         bool[128] ccReported;                       // this block, on ccOut
         float[6] ccSmooth;
+        float morphKnob, morphGlide;                // the filter morph knob, and where it has glided to
         float[ccTgt::unisonSpread + 1] ccSum, ccSumBipolar;    // sumCcMods: per piece
         float ccXyDepth, ccMe1Depth, ccMe2Depth, ccRes;
         bool sustainDown;
@@ -1816,6 +1817,11 @@ namespace porridge
             xSmooth += (P[slot::XY_X] - xSmooth) * k64;
             ySmooth += (P[slot::XY_Y] - ySmooth) * k64;
 
+            // the filter morph knob's steps would click while voices sound, so it glides there
+            // (runFilter puts its modulation back on top)
+            morphKnob = P[slot::F_Morph];
+            morphGlide = numActive == 0 || abs (morphGlide - morphKnob) < 0.001f ? morphKnob : morphGlide + (morphKnob - morphGlide) * k64;
+
             for (int cc = 0; cc < 6; ++cc)
             {
                 let num = int (P.at (slot::CC1 + cc * ccStride));
@@ -2944,7 +2950,8 @@ namespace porridge
             let f = (isF2 ? 1 : 0) + (right ? 2 : 0);
             let env = v.fenv.at (f).renderBlock (fenvCoefs (f), speed, sustainDown, n);
             let hz = cutoffHz (isF2, isZdfFilter (type), env, vel, at, keyFreq, Rg, X, Y, lfo1, lfo2, semisMod);
-            v.filt.at (f).process (fxTables, type, hz, res, P[slot::F_Morph], P[slot::F_Drive], sampleRate, buf, n);
+            let morph = clamp (P[slot::F_Morph] + (morphGlide - morphKnob), 0.0f, 1.0f);
+            v.filt.at (f).process (fxTables, type, hz, res, morph, P[slot::F_Drive], sampleRate, buf, n);
         }
 
         void filterChannel (Voice& v, bool right, float vel, float at, float keyFreq, float Rg, float X, float Y,

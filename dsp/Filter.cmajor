@@ -31,17 +31,18 @@ namespace porridge
         float pa, pr, pfb;                         // phaser
         float[36] px, py;
 
-        // zero-delay-feedback types: last block's coefficients (each block ramps from them),
-        // integrator states, the diode ladder's and Sallen-Key's solved matrix, the comb's line
+        // zero-delay-feedback types: last block's coefficients and morph (each block ramps from
+        // them), integrator states, the diode ladder's and Sallen-Key's solved matrix, the comb's
+        // line, delay and feedback
         bool zFirst;
-        float zg, zk;
+        float zg, zk, zMorph;
         float[4] zs;
         float[3] fg, fa;
         float[6] fs;
         float[20] zm;
         float[combSize] comb;
         int combPos;
-        float combD;
+        float combD, combFb;
 
         // types 22..59: last block's coefficients (each block ramps from them, except the first
         // after a reset or a change of type), and their integrator, allpass and one-pole states
@@ -544,25 +545,27 @@ namespace porridge
             let k = t == filterType::svf ? 2.0f - 1.96f * res : res * 4.2f;
             let g0 = first ? g : this.zg;
             let k0 = first ? k : this.zk;
+            let m0 = first ? morph : this.zMorph;
             let dg = (g - g0) * invN;
             let dk = (k - k0) * invN;
-            var gg = g0, kk = k0;
+            let dm = (morph - m0) * invN;
+            var gg = g0, kk = k0, mm = m0;
             var s1 = this.zs[0], s2 = this.zs[1], s3 = this.zs[2], s4 = this.zs[3];
-            let lpW = max (0.0f, 1.0f - 2.0f * morph);
-            let hpW = max (0.0f, 2.0f * morph - 1.0f);
-            let bpW = 1.0f - lpW - hpW;
 
             for (int i = 0; i < n; ++i)
             {
                 gg += dg;
                 kk += dk;
+                mm += dm;
                 let x = buf.at (i);
 
                 if (t == filterType::svf)
                 {
                     let v = svfStepA1 (s1, s2, gg, kk, x);
                     let hp = x - kk * v[0] - v[1];
-                    buf.at (i) = lpW * v[1] + bpW * v[0] + hpW * hp;
+                    let lpW = max (0.0f, 1.0f - 2.0f * mm);
+                    let hpW = max (0.0f, 2.0f * mm - 1.0f);
+                    buf.at (i) = lpW * v[1] + (1.0f - lpW - hpW) * v[0] + hpW * hp;
                 }
                 else
                 {
@@ -581,6 +584,7 @@ namespace porridge
             this.zs[0] = s1; this.zs[1] = s2; this.zs[2] = s3; this.zs[3] = s4;
             this.zg = g;
             this.zk = k;
+            this.zMorph = morph;
             return;
         }
 
@@ -632,22 +636,25 @@ namespace porridge
             let D = clamp (float (sr) / max (hz, 1.0f), 2.0f, float (combSize - 2));
             let D0 = first ? D : this.combD;
             let dD = (D - D0) * invN;
-            var d = D0;
             let fb = res * 0.98f * (1.0f - 2.0f * morph);
-            let gain = 1.0f - 0.9f * abs (fb);
+            let fb0 = first ? fb : this.combFb;
+            let dfb = (fb - fb0) * invN;
+            var d = D0, f = fb0;
             var pos = this.combPos;
 
             for (int i = 0; i < n; ++i)
             {
                 d += dD;
-                let y = buf.at (i) + fb * this.combReadLinear (pos, d, 0, combSize - 1);
+                f += dfb;
+                let y = buf.at (i) + f * this.combReadLinear (pos, d, 0, combSize - 1);
                 this.comb.at (pos) = y;
                 pos = (pos + 1) & (combSize - 1);
-                buf.at (i) = y * gain;
+                buf.at (i) = y * (1.0f - 0.9f * abs (f));
             }
 
             this.combPos = pos;
             this.combD = D;
+            this.combFb = fb;
             return;
         }
 

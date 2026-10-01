@@ -60,6 +60,8 @@ type cssStyleDeclaration
 @get @return(nullable) external offsetParent: element => option<element> = "offsetParent"
 @get external clientWidth: element => float = "clientWidth"
 @get external clientHeight: element => float = "clientHeight"
+@get external scrollTop: element => float = "scrollTop"
+@set external setScrollTop: (element, float) => unit = "scrollTop"
 
 type rect = {left: float, top: float, width: float, height: float}
 @send external getBoundingClientRect: element => rect = "getBoundingClientRect"
@@ -72,7 +74,9 @@ type rect = {left: float, top: float, width: float, height: float}
 @set external setAccept: (element, string) => unit = "accept"
 @set external setMultiple: (element, bool) => unit = "multiple"
 @set external setPlaceholder: (element, string) => unit = "placeholder"
+@set external setSpellcheck: (element, bool) => unit = "spellcheck"
 @send external select: element => unit = "select"
+@send external blur: element => unit = "blur"
 
 // Links
 @set external setHref: (element, string) => unit = "href"

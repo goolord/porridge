@@ -10,10 +10,6 @@
 
 open! Web
 
-@set external setSpellcheck: (element, bool) => unit = "spellcheck"
-@set external setScrollTop: (element, float) => unit = "scrollTop"
-@get external scrollTop: element => float = "scrollTop"
-
 type t = {
   ctx: Ctx.t,
   stage: element,

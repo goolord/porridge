@@ -3,7 +3,7 @@
 // Left, the sources in groups (the macro knobs among them). Right, the connections, one row
 // each: source, cable, target, amount, "via" source, remove. Grabbing a source (or "add
 // connection") brings up the targets in their groups over the list: drop the cable on one, or
-// click it. A row's source or target can be changed in place.
+// click it, or search for one. A row's source or target can be changed in place.
 
 open! Web
 
@@ -14,8 +14,9 @@ let sourcesWidth = 300.
 let defaultAmount = 0.25
 let headingHeight = 20.
 
-// the target groups' columns in the picker
-let targetColumns = [["voice", "filter"], ["osc"], ["lfo"], ["fx"], ["eq"], ["rack"]]
+// the target picker: its columns, its title row (the targets scroll under it), and the room
+// for its scrollbar
+let (pickerColumns, pickerTop, scrollbarWidth) = (5, 26., 9.)
 
 let sourceColor = s =>
   switch ModMatrix.sources[s]->Option.mapOr("", s => s.key) {
@@ -59,28 +60,29 @@ let sourceGroups = {
   rest == [] ? grouped : [...grouped, ("other", rest)]
 }
 
-// The target groups in their picker columns; groups no column names go in the shortest.
-let pickerColumns = {
-  let members = group =>
-    ModMatrix.targets
-    ->Array.mapWithIndex((t, i) => (t, i))
-    ->Array.filter(((t, _)) => t.group == group)
-    ->Array.map(Pair.second)
-  let title = group =>
-    ModMatrix.groups->Array.find(((key, _)) => key == group)->Option.mapOr(group, Pair.second)
-  let columns = targetColumns->Array.map(groups => groups->Array.map(g => (title(g), members(g))))
-  let placed = targetColumns->Array.flat
-  ModMatrix.groups->Array.forEach(((key, _)) =>
-    if !(placed->Array.includes(key)) {
-      let size = column => column->Array.reduce(0, (n, (_, ts)) => n + 1 + Array.length(ts))
-      let shortest = columns->Array.reduceWithIndex(0, (best, column, i) =>
-        size(column) < size(columns->Array.getUnsafe(best)) ? i : best
-      )
-      columns->Array.getUnsafe(shortest)->Array.push((title(key), members(key)))
-    }
+// The rack effect whose parameter a target moves, if any (not the voice's distortion: the
+// rack's distortions start at 2).
+let effectOf = {
+  let byParam = Map.fromArray(
+    FxRack.all->Array.flatMap(e => FxRack.params(e)->Array.map(id => (id, e))),
   )
-  columns
+  t =>
+    switch ModMatrix.targets[t] {
+    | Some({law: Knob(id)}) => byParam->Map.get(id)
+    | _ => None
+    }
 }
+let copyOf = t => effectOf(t)->Option.mapOr(0, e => e.copy)
+
+// The target groups, by index: an effect's own targets first, then each copy's.
+let targetGroups = ModMatrix.groups->Array.map(((key, title)) => (
+  title,
+  ModMatrix.targets
+  ->Array.mapWithIndex((t, i) => (t, i))
+  ->Array.filter(((t, i)) => i > 0 && t.group == key)
+  ->Array.map(Pair.second)
+  ->Array.toSorted((a, b) => Int.toFloat(copyOf(a) - copyOf(b))),
+))
 
 let build = (ctx: Ctx.t, page) => {
   let model = ctx.model
@@ -186,10 +188,13 @@ let build = (ctx: Ctx.t, page) => {
   )
   let count = el("div", ~cls="mcount", ~parent=list.el)
 
-  // the targets, over the list while a source is being connected
+  // the targets, over the list while a source is being connected: they scroll under the title
+  // row when they don't all fit
   let picker = Panel.make(page, ~x=listX, ~y=margin, ~w=listWidth, ~h=list.h)
   picker.el->addClass("picker")
   let pickerTitle = el("div", ~cls="ttl", ~parent=picker.el)
+  let picks = el("div", ~cls="picks", ~parent=picker.el)
+  picks->setStyle("top", px(pickerTop))
   let wires = Plots.svg(page, {x: 0., y: 0., w: Style.designWidth, h: Style.pageHeight})
   wires->setAttribute("class", Str("wires"))
 
@@ -277,47 +282,120 @@ let build = (ctx: Ctx.t, page) => {
   let targetChips = Map.make()
   let pickTargetRef = ref((_: int) => ())
 
-  let pg = Grid.fitColumns(listWidth, Array.length(pickerColumns))
-  pickerColumns->Array.forEachWithIndex((groups, c) => {
-    let y = ref(Grid.padTop - 4.)
-    groups->Array.forEach(((title, members)) => {
-      el("div", ~cls="grp", ~text=title, ~parent=picker.el)
-      ->place(Grid.padX + Int.toFloat(c) * pg + 1., y.contents)
-      ->ignore
-      let g = Grid.make(ctx, picker.el, ~y=y.contents + headingHeight, ~cw=pg)
-      members->Array.forEachWithIndex((t, r) => {
-        g->Grid.claim(c, r, targetLabel(t))
-        let chip = el("div", ~cls="tgt", ~parent=picker.el)->placeBox(g->Grid.cell(c, r))
-        chip->setTabIndex(0)
-        el("i", ~cls="jk", ~parent=chip)->ignore
-        el("span", ~cls="lbl", ~text=targetLabel(t), ~parent=chip)->ignore
-        chip->onPointer(#pointerdown, ev => {
-          ev->preventDefault
-          if ev->button == 0 {
-            pickTargetRef.contents(t)
-          }
-        })
-        chip->onActivate(() => pickTargetRef.contents(t))
-        chip->hover(() => targetText(t))
-        targetChips->Map.set(t, chip)
+  // whether the source being connected already reaches target t
+  let reaches = t => {
+    let s = switch mode.contents {
+    | Connect(s) => s
+    | Retarget(k) => sourceOf(k)
+    | Closed => 0
+    }
+    slotNumbers->Array.some(k => isUsed(k) && sourceOf(k) == s && targetOf(k) == t)
+  }
+
+  // the groups' headings, by group
+  let headings = targetGroups->Array.map(((title, members)) => {
+    members->Array.forEach(t => {
+      let chip = el("div", ~cls="tgt", ~parent=picks)
+      chip->setTabIndex(0)
+      el("i", ~cls="jk", ~parent=chip)->ignore
+      el("span", ~cls="lbl", ~text=targetLabel(t), ~parent=chip)->ignore
+      chip->onPointer(#pointerdown, ev => {
+        ev->preventDefault
+        if ev->button == 0 {
+          pickTargetRef.contents(t)
+        }
       })
-      y := y.contents + headingHeight + Int.toFloat(Array.length(members)) * Grid.rowHeight + 6.
+      chip->onActivate(() => pickTargetRef.contents(t))
+      chip->hover(() => targetText(t))
+      targetChips->Map.set(t, chip)
     })
+    el("div", ~cls="grp", ~text=title, ~parent=picks)
+  })
+  // what the targets scroll over, and what's said when a search finds none
+  let picksEnd = el("div", ~parent=picks)
+  let nothing = el("div", ~cls="note", ~parent=picks)->place(Grid.padX + 1., 4.)
+
+  let search = el("input", ~cls="psearch", ~parent=picker.el)->place(listWidth - 306., 2., ~w=230.)
+  search->setPlaceholder("search, or drop the cable on a target")
+  search->setSpellcheck(false)
+  // whether to show the targets of the effects that aren't in the rack (a search always does)
+  let allEffects = ref(false)
+  // the first target a search finds, which Enter picks
+  let found = ref(None)
+
+  // Shows the targets a search finds, or else those of the voice and of the effects in the
+  // rack, in their groups: rows of up to pickerColumns, a copy's on rows of their own.
+  let pg = Grid.fitColumns(listWidth - scrollbarWidth, pickerColumns)
+  let layoutPicker = () => {
+    let words = search->value->String.toLowerCase->String.split(" ")->Array.filter(w => w != "")
+    let rack = FxRack.read(get)
+    let shows = (title, t) =>
+      if words == [] {
+        allEffects.contents ||
+        reaches(t) ||
+        effectOf(t)->Option.mapOr(true, e => FxRack.holds(rack, e))
+      } else {
+        let text = String.toLowerCase(`${title} ${targetLabel(t)}`)
+        words->Array.every(w => text->String.includes(w))
+      }
+    found.contents->Option.flatMap(t => targetChips->Map.get(t))->Option.forEach(c => c->removeClass("first"))
+    found := None
+    targetChips->Map.forEach(c => c->setStyle("display", "none"))
+    let y = ref(0.)
+    targetGroups->Array.forEachWithIndex(((title, members), i) => {
+      let heading = headings->Array.getUnsafe(i)
+      switch members->Array.filter(t => shows(title, t)) {
+      | [] => heading->setStyle("display", "none")
+      | shown =>
+        heading->setStyle("display", "")
+        heading->place(Grid.padX + 1., y.contents)->ignore
+        let g = Grid.make(ctx, picks, ~y=y.contents + headingHeight, ~cw=pg)
+        let (c, r) = (ref(0), ref(0))
+        shown->Array.forEachWithIndex((t, k) => {
+          if k > 0 && (c.contents == pickerColumns || copyOf(t) != copyOf(shown->Array.getUnsafe(k - 1))) {
+            c := 0
+            r := r.contents + 1
+          }
+          targetChips->Map.get(t)->Option.forEach(chip => {
+            chip->setStyle("display", "")
+            chip->placeBox(g->Grid.cell(c.contents, r.contents))->ignore
+          })
+          c := c.contents + 1
+        })
+        if words != [] && found.contents == None {
+          found := shown[0]
+        }
+        y := y.contents + headingHeight + Int.toFloat(r.contents + 1) * Grid.rowHeight + 6.
+      }
+    })
+    found.contents->Option.flatMap(t => targetChips->Map.get(t))->Option.forEach(c => c->addClass("first"))
+    picksEnd->setStyle("height", px(y.contents))
+    nothing->setTextContent(y.contents == 0. ? `No target matches “${search->value}”` : "")
+  }
+
+  let allButton = Controls.button(
+    ctx,
+    picker.el,
+    "all effects",
+    ~x=listWidth - 398.,
+    ~y=2.,
+    ~w=86.,
+    ~status="Show the targets of every effect, not only of those in the rack (a search finds them all)",
+    () => (),
+  )
+  allButton->onMouse(#click, _ => {
+    allEffects := !allEffects.contents
+    allButton->toggleClass("on", allEffects.contents)
+    layoutPicker()
   })
   let cancel = Controls.button(ctx, picker.el, "cancel", ~x=listWidth - 70., ~y=2., ~w=60., () => ())
-  let pickerHint = el(
-    "div",
-    ~cls="note",
-    ~text="Drop the cable on a target, or click one. Esc cancels.",
-    ~parent=picker.el,
-  )
-  pickerHint->place(listWidth - 80. - 290., 4., ~w=280.)->ignore
-  pickerHint->setStyle("text-align", "right")
+  pickerTitle->setStyle("width", px(listWidth - 398. - 16.))
 
   // stops closing the picker on a press outside it
   let closer = ref(None)
   let closePicker = () => {
     mode := Closed
+    search->blur
     picker.el->removeClass("on")
     closer.contents->Option.forEach(stop => stop())
     closer := None
@@ -330,22 +408,60 @@ let build = (ctx: Ctx.t, page) => {
   document->onDocumentKeyDown(onEscape)
   cancel->onMouse(#click, _ => closePicker())
 
-  let openPicker = m => {
-    mode := m
-    let (title, source) = switch m {
-    | Connect(s) => (`connect ${sourceLabel(s)} to …`, s)
-    | Retarget(k) => (`move ${sourceLabel(sourceOf(k))} → ${targetLabel(targetOf(k))} to …`, sourceOf(k))
-    | Closed => ("", 0)
+  search->onEvent(#input, _ => {
+    picks->setScrollTop(0.)
+    layoutPicker()
+  })
+  // keys stay in the search (the host may otherwise take them as shortcuts)
+  search->onKeyDown(k => {
+    k->stopPropagation
+    switch k->key {
+    | "Enter" => found.contents->Option.forEach(t => pickTargetRef.contents(t))
+    | "Escape" if search->value != "" =>
+      search->setValue("")
+      layoutPicker()
+    | "Escape" => closePicker()
+    | _ => ()
     }
-    pickerTitle->setTextContent(title)
-    // the targets this source already reaches
-    targetChips->Map.forEachWithKey((chip, t) =>
-      chip->toggleClass(
-        "on",
-        slotNumbers->Array.some(k => isUsed(k) && sourceOf(k) == source && targetOf(k) == t),
-      )
+  })
+
+  let openPicker = m => {
+    let opening = mode.contents == Closed
+    mode := m
+    pickerTitle->setTextContent(
+      switch m {
+      | Connect(s) => `connect ${sourceLabel(s)} to …`
+      | Retarget(k) => `move ${sourceLabel(sourceOf(k))} → ${targetLabel(targetOf(k))} to …`
+      | Closed => ""
+      },
     )
+    // the targets this source already reaches
+    targetChips->Map.forEachWithKey((chip, t) => chip->toggleClass("on", reaches(t)))
+    if opening {
+      search->setValue("")
+    }
     picker.el->addClass("on")
+    layoutPicker()
+    // from the top, or with the target being moved in view
+    switch m {
+    | Retarget(k) =>
+      targetChips
+      ->Map.get(targetOf(k))
+      ->Option.forEach(chip => {
+        let top = chip->offsetTop - headingHeight
+        let bottom = chip->offsetTop + chip->offsetHeight + Grid.padBottom
+        let viewTop = picks->scrollTop
+        let viewHeight = picks->clientHeight
+        if top < viewTop {
+          picks->setScrollTop(top)
+        } else if bottom > viewTop + viewHeight {
+          picks->setScrollTop(bottom - viewHeight)
+        }
+      })
+    | _ if opening => picks->setScrollTop(0.)
+    | _ => ()
+    }
+    search->focus
     // a press outside the picker (and the sources) closes it
     if closer.contents == None {
       closer := Some(onPressOutside([picker.el, sources.el], closePicker))
@@ -376,15 +492,19 @@ let build = (ctx: Ctx.t, page) => {
     let r = e->getBoundingClientRect
     toLocal(r.left + r.width / 2., r.top + r.height / 2.)
   }
+  let within = (e, cx, cy) => {
+    let r = e->getBoundingClientRect
+    cx >= r.left && cx <= r.left + r.width && cy >= r.top && cy <= r.top + r.height
+  }
+  // (a target scrolled out of the picker's view isn't there to drop on)
   let targetAt = (cx, cy) =>
-    targetChips
-    ->Map.entries
-    ->Iterator.toArray
-    ->Array.find(((_, chip)) => {
-      let r = chip->getBoundingClientRect
-      cx >= r.left && cx <= r.left + r.width && cy >= r.top && cy <= r.top + r.height
-    })
-    ->Option.mapOr(-1, Pair.first)
+    within(picks, cx, cy)
+      ? targetChips
+        ->Map.entries
+        ->Iterator.toArray
+        ->Array.find(((_, chip)) => within(chip, cx, cy))
+        ->Option.mapOr(-1, Pair.first)
+      : -1
 
   startRef :=
     (ev, s, chip) =>

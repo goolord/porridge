@@ -422,11 +422,12 @@ let make = (ctx: Ctx.t, parent, box: box, src: source) => {
     }
   }
 
-  // the point: across for the cutoff, up for the resonance. Where the resonance steadily raises
-  // (or, for an EQ cutting, lowers) the response near the cutoff, the point sits on the curve
-  // there: on a lowpass's resonant peak, and dragging it up finds the resonance that puts the
-  // peak at the pointer. Elsewhere (notches, ring mod, the impulse responses) it uses a plain
-  // resonance scale.
+  // the point: across for the cutoff, up for the resonance, and it stays under the pointer.
+  // Where the resonance steadily raises (or, for an EQ cutting, lowers) the response near the
+  // cutoff, the point sits on the curve there, on a lowpass's resonant peak, except where the
+  // peak barely moves or has left the graph: there it keeps below the peak (above the dip), so
+  // that every resonance has its own height. Elsewhere (notches, ring mod, the impulse
+  // responses) it uses the plain resonance scale.
   let level = (fc, res) => {
     let t = src.typeOf()
     let morph = get(src.morph)
@@ -461,54 +462,65 @@ let make = (ctx: Ctx.t, parent, box: box, src: source) => {
     | _ => None
     }
   }
-  // the resonance that puts the level at `want` (dB)
-  let resonanceFor = (fc, want, up) => {
-    let rec bisect = (k, a: float, b: float) =>
-      if k == 24 {
-        (a + b) / 2.
-      } else {
-        let m = (a + b) / 2.
-        let v = level(fc, m)->Option.getOr(0.)
-        (up ? v < want : v > want) ? bisect(k + 1, m, b) : bisect(k + 1, a, m)
-      }
-    bisect(0, 0., 1.)
-  }
   // on the curve, the point may rise past the scale's top to the graph's edge (half of it
-  // clipped there), where the resonance is at its end: steep peaks go higher than the scale
+  // clipped there): steep peaks go higher than the scale
   let yOfLevel = v => clamp(bottom - (v - lo) / (hi - lo) * (bottom - top), 0., bottom)
-  let levelAt = y => lo + (bottom - y) / (bottom - top) * (hi - lo)
-  let pointY = fc =>
-    switch (direction(fc), level(fc, get(src.res))) {
-    | (Some(_), Some(v)) => yOfLevel(v)
-    | _ => yOfRes(get(src.res))
+  // the point's height at resonances 0, 1 / steps .. 1 for this cutoff. On the curve it moves
+  // at least a quarter as far per unit of resonance as on the plain scale: from the top down,
+  // each height is the curve's, or lower (higher for a dip) where the rest needs the room.
+  let steps = 64
+  let heights = fc => {
+    let n = Int.toFloat(steps)
+    switch direction(fc) {
+    | Some(up) =>
+      let ys = Array.fromInitializer(~length=steps + 1, k =>
+        level(fc, Int.toFloat(k) / n)->Option.mapOr(0., yOfLevel)
+      )
+      let room = (bottom - top - 12.) / 4. / n
+      for k in steps - 1 downto 0 {
+        let (y, above) = (ys->Array.getUnsafe(k), ys->Array.getUnsafe(k + 1))
+        ys->Array.setUnsafe(k, up ? Math.max(y, above + room) : Math.min(y, above - room))
+      }
+      ys
+    | None => Array.fromInitializer(~length=steps + 1, k => yOfRes(Int.toFloat(k) / n))
     }
+  }
+  // the height of a resonance, and the resonance at a height (they run one way)
+  let heightOf = (ys: array<float>, res) => {
+    let x = clamp(res, 0., 1.) * Int.toFloat(steps)
+    let k = Math.Int.min(Float.toInt(x), steps - 1)
+    let a = ys->Array.getUnsafe(k)
+    a + (ys->Array.getUnsafe(k + 1) - a) * (x - Int.toFloat(k))
+  }
+  let resonanceAt = (ys: array<float>, y) => {
+    // as heights that fall as the resonance rises
+    let s = ys->Array.getUnsafe(0) >= ys->Array.getUnsafe(steps) ? 1. : -1.
+    let z = k => s * ys->Array.getUnsafe(k)
+    let y = s * y
+    if y >= z(0) {
+      0.
+    } else if y <= z(steps) {
+      1.
+    } else {
+      let k = ref(0)
+      while z(k.contents + 1) > y {
+        k := k.contents + 1
+      }
+      let k = k.contents
+      (Int.toFloat(k) + (z(k) - y) / (z(k) - z(k + 1))) / Int.toFloat(steps)
+    }
+  }
   let hint = "Drag the point: across for the cutoff, up and down for the resonance; scroll for fine resonance, shift for fine steps, right-click to reset"
   let ids = [src.cutoff, src.res]
-  // the resonance when the drag started
-  let res0 = ref(0.)
   let point = FxGraph.handle(
     g,
     ~r=7.,
     ~ids,
     ~hot=false,
-    ~start=() => res0 := get(src.res),
-    ~drag=({x, y, dy}) => {
+    ~drag=({x, y}) => {
       model->ParamModel.set(src.cutoff, src.ofHz(hzAt(x)))
       let fc = src.toHz(get(src.cutoff))
-      let res = switch direction(fc) {
-      | Some(up) =>
-        let y = clamp(y, 0., bottom)
-        // at the edges, the resonance's end
-        if y <= 0.5 {
-          up ? 1. : 0.
-        } else if y >= bottom - 0.5 {
-          up ? 0. : 1.
-        } else {
-          resonanceFor(fc, levelAt(y), up)
-        }
-      | None => clamp(res0.contents - dy / (bottom - top - 12.), 0., 1.)
-      }
-      model->ParamModel.set(src.res, res)
+      model->ParamModel.set(src.res, resonanceAt(heights(fc), y))
     },
     ~wheel=src.res,
     ~hover=on => ctx.status->Status.show(on ? model->ParamModel.statusText(ids) : hint),
@@ -516,7 +528,7 @@ let make = (ctx: Ctx.t, parent, box: box, src: source) => {
   let place = () => {
     let fc = src.toHz(get(src.cutoff))
     let x = xOfHz(fc)
-    let y = pointY(fc)
+    let y = heightOf(heights(fc), get(src.res))
     point->FxGraph.place(x, y)
     g->FxGraph.readout(~x, ~y, `${FxGraph.hzText(src.toHz(get(src.cutoff)))} · ${FxGraph.short(g, src.res)}`)
   }

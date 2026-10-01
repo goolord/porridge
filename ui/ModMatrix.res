@@ -130,8 +130,8 @@ let targets = [
   knob("F_Track", "filter keytrack", "filter"),
   knob("F_Split", "filter split", "filter"),
   knob("F_Mix", "filter mix", "filter"),
-  knob("Sat_Pregain", "dist pregain", "filter"),
-  knob("Sat_Postgain", "dist postgain", "filter"),
+  knob("Sat_Pregain", "dist pregain", "distortion"),
+  knob("Sat_Postgain", "dist postgain", "distortion"),
   knob("LFO_1_Speed", "LFO 1 rate", "lfo"),
   knob("LFO_1_Pitch", "LFO 1 pitch", "lfo"),
   knob("LFO_1_Cutoff_1", "LFO 1 cut 1", "lfo"),
@@ -140,18 +140,18 @@ let targets = [
   knob("LFO_2_Pitch", "LFO 2 pitch", "lfo"),
   knob("LFO_2_Cutoff_1", "LFO 2 cut 1", "lfo"),
   knob("LFO_2_Pan", "LFO 2 pan", "lfo"),
-  knob("C_Rate", "chorus rate", "fx"),
-  knob("C_Depth", "chorus depth", "fx"),
-  knob("C_Feedback", "chorus feedback", "fx"),
-  knob("C_Mix", "chorus mix", "fx"),
-  knob("D_FeedbackL", "delay feedback L", "fx"),
-  knob("D_FeedbackR", "delay feedback R", "fx"),
-  knob("D_LP", "delay lowpass", "fx"),
-  knob("D_HP", "delay highpass", "fx"),
-  knob("D_Wet", "delay wet", "fx"),
-  knob("R_Dullness", "reverb dullness", "fx"),
-  knob("R_Brightness", "reverb brightness", "fx"),
-  knob("R_Wet", "reverb wet", "fx"),
+  knob("C_Rate", "chorus rate", "chorus"),
+  knob("C_Depth", "chorus depth", "chorus"),
+  knob("C_Feedback", "chorus feedback", "chorus"),
+  knob("C_Mix", "chorus mix", "chorus"),
+  knob("D_FeedbackL", "delay feedback L", "delay"),
+  knob("D_FeedbackR", "delay feedback R", "delay"),
+  knob("D_LP", "delay lowpass", "delay"),
+  knob("D_HP", "delay highpass", "delay"),
+  knob("D_Wet", "delay wet", "delay"),
+  knob("R_Dullness", "reverb dullness", "reverb"),
+  knob("R_Brightness", "reverb brightness", "reverb"),
+  knob("R_Wet", "reverb wet", "reverb"),
   knob("EQ_1_Amp", "EQ 1 gain", "eq"),
   knob("EQ_2_Amp", "EQ 2 gain", "eq"),
   knob("EQ_3_Amp", "EQ 3 gain", "eq"),
@@ -162,57 +162,262 @@ let targets = [
   knob("EQ_3_Freq", "EQ 3 freq", "eq"),
   knob("EQ_4_Freq", "EQ 4 freq", "eq"),
   knob("EQ_5_Freq", "EQ 5 freq", "eq"),
-  knob("Gain", "output gain", "fx"),
+  knob("Gain", "output gain", "voice"),
   knob("F_Morph", "filter morph", "filter"),
   knob("PM_Feedback", "pm feedback", "osc"),
   knob("U_Width", "unison width", "osc"),
   knob("Drift_Pitch", "drift pitch", "osc"),
   // the rack's copies of the effects (PorridgeParams.rackKinds): their levels
-  ...[2, 3, 4]->Array.map(n => knob(`C${Int.toString(n)}_Mix`, `chorus ${Int.toString(n)} mix`, "rack")),
-  ...[2, 3, 4]->Array.map(n => knob(`D${Int.toString(n)}_Wet`, `delay ${Int.toString(n)} wet`, "rack")),
-  ...[2, 3, 4]->Array.map(n => knob(`R${Int.toString(n)}_Wet`, `reverb ${Int.toString(n)} wet`, "rack")),
-  ...[2, 3, 4, 5]->Array.map(n => knob(`Sat${Int.toString(n)}_Pregain`, `dist ${Int.toString(n)} pregain`, "rack")),
+  ...[2, 3, 4]->Array.map(n => knob(`C${Int.toString(n)}_Mix`, `chorus ${Int.toString(n)} mix`, "chorus")),
+  ...[2, 3, 4]->Array.map(n => knob(`D${Int.toString(n)}_Wet`, `delay ${Int.toString(n)} wet`, "delay")),
+  ...[2, 3, 4]->Array.map(n => knob(`R${Int.toString(n)}_Wet`, `reverb ${Int.toString(n)} wet`, "reverb")),
+  ...[2, 3, 4, 5]->Array.map(n => knob(`Sat${Int.toString(n)}_Pregain`, `dist ${Int.toString(n)} pregain`, "distortion")),
   knob("F_Drive", "filter drive", "filter"),
   // Porridge's own effects (the first of each kind)
-  knob("Fl_Rate", "flanger rate", "fx2"),
-  knob("Fl_Depth", "flanger depth", "fx2"),
-  knob("Fl_Feedback", "flanger feedback", "fx2"),
-  knob("Fl_Mix", "flanger mix", "fx2"),
-  knob("Ph_Rate", "phaser rate", "fx2"),
-  knob("Ph_Freq", "phaser frequency", "fx2"),
-  knob("Ph_Feedback", "phaser feedback", "fx2"),
-  knob("Ph_Mix", "phaser mix", "fx2"),
-  knob("Cp_Depth", "compressor depth", "fx2"),
-  knob("Cp_InGain", "compressor input", "fx2"),
-  knob("Cp_Mix", "compressor mix", "fx2"),
-  knob("Rv_Size", "algo reverb size", "fx2"),
-  knob("Rv_Mix", "algo reverb mix", "fx2"),
-  knob("Cv_Mix", "convolve mix", "fx2"),
-  knob("Bd_Shift", "bode shift", "fx2"),
-  knob("Bd_Feedback", "bode feedback", "fx2"),
-  knob("Bd_Mix", "bode mix", "fx2"),
-  knob("Ff_Cutoff", "FX filter cutoff", "fx2"),
-  knob("Ff_Resonance", "FX filter resonance", "fx2"),
-  knob("Ff_Morph", "FX filter morph", "fx2"),
-  knob("Ff_Drive", "FX filter drive", "fx2"),
-  knob("Ut_Gain", "utility gain", "fx2"),
-  knob("Ut_Pan", "utility pan", "fx2"),
-  knob("Ut_Width", "utility width", "fx2"),
-  knob("Am_Size", "ambience size", "fx2"),
-  knob("Am_Time", "ambience time", "fx2"),
-  knob("Am_Mix", "ambience mix", "fx2"),
+  knob("Fl_Rate", "flanger rate", "flanger"),
+  knob("Fl_Depth", "flanger depth", "flanger"),
+  knob("Fl_Feedback", "flanger feedback", "flanger"),
+  knob("Fl_Mix", "flanger mix", "flanger"),
+  knob("Ph_Rate", "phaser rate", "phaser"),
+  knob("Ph_Freq", "phaser frequency", "phaser"),
+  knob("Ph_Feedback", "phaser feedback", "phaser"),
+  knob("Ph_Mix", "phaser mix", "phaser"),
+  knob("Cp_Depth", "compressor depth", "compressor"),
+  knob("Cp_InGain", "compressor input", "compressor"),
+  knob("Cp_Mix", "compressor mix", "compressor"),
+  knob("Rv_Size", "algo reverb size", "space"),
+  knob("Rv_Mix", "algo reverb mix", "space"),
+  knob("Cv_Mix", "convolve mix", "convolve"),
+  knob("Bd_Shift", "bode shift", "bode"),
+  knob("Bd_Feedback", "bode feedback", "bode"),
+  knob("Bd_Mix", "bode mix", "bode"),
+  knob("Ff_Cutoff", "FX filter cutoff", "fxfilter"),
+  knob("Ff_Resonance", "FX filter resonance", "fxfilter"),
+  knob("Ff_Morph", "FX filter morph", "fxfilter"),
+  knob("Ff_Drive", "FX filter drive", "fxfilter"),
+  knob("Ut_Gain", "utility gain", "utility"),
+  knob("Ut_Pan", "utility pan", "utility"),
+  knob("Ut_Width", "utility width", "utility"),
+  knob("Am_Size", "ambience size", "ambience"),
+  knob("Am_Time", "ambience time", "ambience"),
+  knob("Am_Mix", "ambience mix", "ambience"),
 ]
+
+// copy n's parameter (as PorridgeParams.copyId: D_Wet, 3 is D3_Wet)
+let copyParam = (id, n) => {
+  let i = String.indexOf(id, "_")
+  String.slice(id, ~start=0, ~end=i) ++ Int.toString(n) ++ String.slice(id, ~start=i)
+}
+
+// An effect's parameters as targets: its first's (`chorus rate`), then each copy's (`chorus 2
+// rate`).
+let effectTargets = (group, name, copies, params) =>
+  [1, ...copies]->Array.flatMap(n =>
+    params->Array.map(((id, what)) =>
+      n == 1
+        ? knob(id, `${name} ${what}`, group)
+        : knob(copyParam(id, n), `${name} ${Int.toString(n)} ${what}`, group)
+    )
+  )
+
+// More of the effects' parameters, and the rack copies' (those already above are left out).
+// Not the delay's lengths, the reverb's size and predelay or the convolver's length: changing
+// those restarts the effect. A fixed batch: targets added later go after it.
+let targets = {
+  let more = [
+    ...effectTargets(
+      "chorus",
+      "chorus",
+      [2, 3, 4],
+      [("C_Rate", "rate"), ("C_Depth", "depth"), ("C_Feedback", "feedback"), ("C_Mix", "mix"), ("C_MinDelay", "delay")],
+    ),
+    ...effectTargets(
+      "delay",
+      "delay",
+      [2, 3, 4],
+      [
+        ("D_FeedbackL", "feedback L"),
+        ("D_FeedbackR", "feedback R"),
+        ("D_LP", "lowpass"),
+        ("D_HP", "highpass"),
+        ("D_Wet", "wet"),
+        ("D_Dry", "dry"),
+        ("D_InputPan", "input pan"),
+        ("D_Rotation", "rotation"),
+      ],
+    ),
+    ...effectTargets(
+      "reverb",
+      "reverb",
+      [2, 3, 4],
+      [
+        ("R_Dullness", "dullness"),
+        ("R_Brightness", "brightness"),
+        ("R_Wet", "wet"),
+        ("R_Dry", "dry"),
+        ("R_Length", "length"),
+        ("R_EarlyMix", "early mix"),
+        ("R_Rotation", "rotation"),
+      ],
+    ),
+    // the bands' gains, then their frequencies and slopes (EQ 1 slope, EQ 2 band 1 gain)
+    ...[1, 2, 3, 4]->Array.flatMap(n =>
+      [("Amp", "gain"), ("Freq", "freq"), ("Slope", "slope")]->Array.flatMap(((p, what)) =>
+        [1, 2, 3, 4, 5]->Array.map(b => {
+          let (id, band) = (`EQ_${Int.toString(b)}_${p}`, Int.toString(b))
+          n == 1
+            ? knob(id, `EQ ${band} ${what}`, "eq")
+            : knob(copyParam(id, n), `EQ ${Int.toString(n)} band ${band} ${what}`, "eq")
+        })
+      )
+    ),
+    ...effectTargets(
+      "distortion",
+      "dist",
+      [2, 3, 4, 5],
+      [("Sat_Pregain", "pregain"), ("Sat_Postgain", "postgain"), ("Sat_Limit", "limit")],
+    ),
+    ...effectTargets(
+      "flanger",
+      "flanger",
+      [2, 3, 4],
+      [
+        ("Fl_Rate", "rate"),
+        ("Fl_Depth", "depth"),
+        ("Fl_Feedback", "feedback"),
+        ("Fl_Mix", "mix"),
+        ("Fl_Delay", "delay"),
+        ("Fl_Phase", "phase"),
+      ],
+    ),
+    ...effectTargets(
+      "phaser",
+      "phaser",
+      [2, 3, 4],
+      [
+        ("Ph_Rate", "rate"),
+        ("Ph_Freq", "frequency"),
+        ("Ph_Feedback", "feedback"),
+        ("Ph_Mix", "mix"),
+        ("Ph_Depth", "depth"),
+        ("Ph_Spread", "spread"),
+        ("Ph_Phase", "phase"),
+        ("Ph_Track", "tracking"),
+      ],
+    ),
+    ...effectTargets(
+      "compressor",
+      "compressor",
+      [2, 3, 4],
+      [
+        ("Cp_Depth", "depth"),
+        ("Cp_InGain", "input"),
+        ("Cp_Mix", "mix"),
+        ("Cp_OutGain", "output"),
+        ("Cp_Attack", "attack"),
+        ("Cp_Release", "release"),
+        ("Cp_LowSplit", "low split"),
+        ("Cp_HighSplit", "high split"),
+        ("Cp_LowGain", "low gain"),
+        ("Cp_MidGain", "mid gain"),
+        ("Cp_HighGain", "high gain"),
+      ],
+    ),
+    ...effectTargets(
+      "space",
+      "algo reverb",
+      [2, 3, 4],
+      [
+        ("Rv_Size", "size"),
+        ("Rv_Mix", "mix"),
+        ("Rv_Decay", "decay"),
+        ("Rv_Predelay", "predelay"),
+        ("Rv_Damp", "damping"),
+        ("Rv_LowCut", "low cut"),
+        ("Rv_Width", "width"),
+        ("Rv_Mod", "modulation"),
+      ],
+    ),
+    ...effectTargets(
+      "convolve",
+      "convolve",
+      [2],
+      [
+        ("Cv_Mix", "mix"),
+        ("Cv_Gain", "gain"),
+        ("Cv_Predelay", "predelay"),
+        ("Cv_LowCut", "low cut"),
+        ("Cv_HighCut", "high cut"),
+        ("Cv_Width", "width"),
+      ],
+    ),
+    ...effectTargets(
+      "bode",
+      "bode",
+      [2, 3, 4],
+      [("Bd_Shift", "shift"), ("Bd_Feedback", "feedback"), ("Bd_Mix", "mix"), ("Bd_Delay", "delay")],
+    ),
+    ...effectTargets(
+      "fxfilter",
+      "FX filter",
+      [2, 3, 4],
+      [
+        ("Ff_Cutoff", "cutoff"),
+        ("Ff_Resonance", "resonance"),
+        ("Ff_Morph", "morph"),
+        ("Ff_Drive", "drive"),
+        ("Ff_Spread", "spread"),
+        ("Ff_Mix", "mix"),
+      ],
+    ),
+    ...effectTargets(
+      "utility",
+      "utility",
+      [2, 3, 4],
+      [("Ut_Gain", "gain"), ("Ut_Pan", "pan"), ("Ut_Width", "width"), ("Ut_BassMono", "bass mono")],
+    ),
+    ...effectTargets(
+      "ambience",
+      "ambience",
+      [2, 3, 4],
+      [
+        ("Am_Size", "size"),
+        ("Am_Time", "time"),
+        ("Am_Mix", "mix"),
+        ("Am_Density", "density"),
+        ("Am_Predelay", "predelay"),
+        ("Am_HighCut", "high cut"),
+        ("Am_Width", "width"),
+        ("Am_HighTime", "high time"),
+        ("Am_HighFreq", "high freq"),
+        ("Am_LowTime", "low time"),
+        ("Am_LowFreq", "low freq"),
+      ],
+    ),
+  ]
+  [...targets, ...more->Array.filter(t => !(targets->Array.some(o => o.key == t.key)))]
+}
 
 // The target groups, by the key in each target's group, with their titles.
 let groups = [
-  ("voice", "voice"),
+  ("voice", "voice & output"),
   ("osc", "oscillators"),
-  ("filter", "filter & distortion"),
+  ("filter", "filter"),
   ("lfo", "LFOs"),
-  ("fx", "effects"),
+  ("chorus", "chorus"),
+  ("delay", "delay"),
+  ("reverb", "reverb"),
   ("eq", "EQ"),
-  ("rack", "rack copies"),
-  ("fx2", "more effects"),
+  ("distortion", "distortion"),
+  ("flanger", "flanger"),
+  ("phaser", "phaser"),
+  ("compressor", "compressor"),
+  ("space", "algo reverb"),
+  ("convolve", "convolve"),
+  ("bode", "bode"),
+  ("fxfilter", "FX filter"),
+  ("utility", "utility"),
+  ("ambience", "ambience"),
 ]
 
 let sourceIndex = key => sources->Array.findIndex(s => s.key == key)

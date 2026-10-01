@@ -379,15 +379,16 @@ let css = `
     font-size: 13px;
 }
 .pv-head .brand { font-weight: 700; font-size: 17px; letter-spacing: 0.02em; padding: 0 8px 0 4px; }
-.pv-head .btn { position: static; height: 22px; }
+/* a full header doesn't squeeze the buttons (their labels would wrap out of them): the program name gives way instead */
+.pv-head .btn { position: static; height: 22px; flex-shrink: 0; white-space: nowrap; }
 .pv-head .pages { display: flex; }
 .pv-head .pages .btn { border-radius: 0; margin-left: -1px; min-width: 64px; font-size: 13px; }
 .pv-head .pages .btn:first-child { border-radius: 2px 0 0 2px; }
 .pv-head .pages .btn:last-child { border-radius: 0 2px 2px 0; }
 .pv-head .spacer { flex: 1; }
-.pv-head .prog { display: flex; align-items: center; gap: 3px; }
+.pv-head .prog { display: flex; align-items: center; gap: 3px; min-width: 0; }
 .pv-head .prog .name {
-    width: 200px; height: 20px; line-height: 20px; padding: 0 6px; border: 1px solid var(--edge); background: var(--paper);
+    width: 200px; min-width: 0; height: 20px; line-height: 20px; padding: 0 6px; border: 1px solid var(--edge); background: var(--paper);
     font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .pv-head .prog .btn { width: 22px; padding: 0; }
@@ -404,7 +405,7 @@ let css = `
 
 /* menus */
 .menu {
-    position: absolute; z-index: 50; background: var(--paper); border: 1px solid var(--ink);
+    position: absolute; z-index: 70; background: var(--paper); border: 1px solid var(--ink);
     padding: 2px 0; font-size: 12.5px; max-height: 560px; overflow-y: auto; min-width: 120px;
     box-shadow: 2px 2px 0 rgba(31,26,14,0.35);
 }
@@ -505,11 +506,21 @@ let css = `
 .tgt.on .jk { background: var(--ink); }
 .tgt.hot { background: var(--signal); color: var(--paper); box-shadow: none; }
 .tgt.hot .jk { border-color: var(--paper); box-shadow: inset 0 0 0 2px var(--signal); }
+.tgt.first { box-shadow: inset 0 0 0 1.5px var(--signal); }
 .grp { position: absolute; font-size: 12px; font-weight: 700; line-height: 20px; color: var(--ink-faint); white-space: nowrap; }
 .mcount { position: absolute; right: 9px; top: 4px; font-size: 12px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
 .picker { display: none; z-index: 20; border-color: var(--signal); box-shadow: 3px 3px 0 rgba(31,26,14,0.3); }
 .picker.on { display: block; }
 .picker .btn { z-index: 1; }
+.picker > .ttl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* the picker's targets, under its title row: they scroll when they don't all fit */
+.picks { position: absolute; left: 0; right: 0; bottom: 0; overflow-x: hidden; overflow-y: auto; }
+.psearch {
+    position: absolute; z-index: 1; height: 20px; box-sizing: border-box; padding: 0 7px; border: 1px solid var(--edge); border-radius: 2px;
+    font: inherit; font-size: 12.5px; color: var(--ink); background: var(--paper); outline: none;
+}
+.psearch:focus { border-color: var(--signal); }
+.psearch::placeholder { color: var(--ink-faint); }
 .wires { position: absolute; pointer-events: none; overflow: visible; z-index: 30; }
 .wirecell { position: absolute; pointer-events: none; overflow: visible; z-index: 1; }
 .wire { fill: none; stroke-width: 3.5; stroke-linecap: round; opacity: 0.9; }
@@ -561,9 +572,9 @@ let css = `
     width: 1060px; height: 546px; box-sizing: border-box; display: flex; flex-direction: column;
     background: var(--panel); border: 1px solid var(--ink); border-radius: 3px; box-shadow: 3px 3px 0 rgba(31,26,14,0.35);
 }
-.brw ::-webkit-scrollbar { width: 9px; }
-.brw ::-webkit-scrollbar-thumb { background: rgba(111,95,54,0.45); border-radius: 4px; border: 2px solid transparent; background-clip: padding-box; }
-.brw ::-webkit-scrollbar-track { background: transparent; }
+.brw ::-webkit-scrollbar, .picks::-webkit-scrollbar { width: 9px; }
+.brw ::-webkit-scrollbar-thumb, .picks::-webkit-scrollbar-thumb { background: rgba(111,95,54,0.45); border-radius: 4px; border: 2px solid transparent; background-clip: padding-box; }
+.brw ::-webkit-scrollbar-track, .picks::-webkit-scrollbar-track { background: transparent; }
 .brw-head { display: flex; align-items: center; gap: 10px; padding: 8px 10px 7px 12px; }
 .brw-title { font-weight: 700; font-size: 16px; }
 .brw-search { flex: 1; position: relative; }
