@@ -114,6 +114,9 @@ type context = {
   engine: MatchEngine.t,
   target: SoundTarget.t,
   measured: Spectrum.features,
+  // the amp envelope that follows its loudness (Genome.seed's genes, in envelopeKeys' order),
+  // where envelope fits start from as well as from the candidate's own
+  seedEnvelope: Float64Array.t,
   base: Bank.values,
   // the base's output gain, which a candidate's level is set from
   baseGain: float,
@@ -142,6 +145,10 @@ let makeContext = (engine, target: SoundTarget.t, ~base: Bank.values, ~tables) =
     engine,
     target,
     measured: Spectrum.measure(target.samples, ~period=SoundTarget.period(target)),
+    seedEnvelope: {
+      let seed = Genome.seed(target)
+      Float64Array.fromArray(Genome.envelopeKeys->Array.map(key => Genome.get(seed, key)))
+    },
     base,
     baseGain: base->Map.get("Gain")->Option.getOr(0.1),
   }
@@ -233,13 +240,152 @@ let candidateOf = (ctx, x, note, values, y, f: Spectrum.features) => {
 
 let cost = x => partCost * Int.toFloat(Genome.parts(x))
 
+// The amp envelope of x as power (its mean square) over [a, b) ms, from a table every ms.
+let envelopePower = (x, ~ms) => {
+  let stages = Genome.stagesOf(Float64Array.fromArray(Genome.envelopeKeys->Array.map(key => Genome.get(x, key))))
+  let levels = EnvelopeFit.levels(stages, ~ms)
+  let sums = Float64Array.fromLength(ms + 1)
+  for t in 0 to ms - 1 {
+    let a = levels->get64(t)
+    sums->set64(t + 1, sums->get64(t) + a * a)
+  }
+  (a, b) => {
+    let lo = Math.Int.max(0, Math.Int.min(ms, Float.toInt(Math.floor(a))))
+    let hi = Math.Int.max(lo + 1, Math.Int.min(ms, Float.toInt(Math.ceil(b))))
+    (sums->get64(hi) - sums->get64(lo)) / Int.toFloat(hi - lo)
+  }
+}
+
+// A flat render's measurements with an envelope put on them: each frame's levels scaled by the
+// envelope as its window weighs it (averaged over the frames pooled into it), each
+// 10 ms step's loudness by the envelope over the step. Within a tenth of a point of measuring a
+// render with the envelope (tools/test/match.mjs checks it), at a twentieth of the cost.
+let shaped = (f: Spectrum.features, power) => {
+  let spectra = Spectrum.resolutions->Array.mapWithIndex((r, ri) => {
+    let pool = f.pools->Array.getUnsafe(ri)
+    let levels = f.spectra->Array.getUnsafe(ri)
+    let groups = TypedArray.length(levels) / r.bands
+    let frames = Spectrum.frameCount(r, f.length)
+    let out = Float64Array.fromLength(TypedArray.length(levels))
+    for g in 0 to groups - 1 {
+      let (p, count) = (ref(0.), ref(0))
+      for frame in g * pool to Math.Int.min(frames, (g + 1) * pool) - 1 {
+        let centre = 1000. * Int.toFloat(frame * r.hop) / Spectrum.sampleRate
+        p := p.contents + Spectrum.windowPower(power, ~centreMs=centre, ~size=r.size)
+        count := count.contents + 1
+      }
+      let a = Math.sqrt(p.contents / Int.toFloat(Math.Int.max(1, count.contents)))
+      for b in 0 to r.bands - 1 {
+        out->set64(g * r.bands + b, levels->get64(g * r.bands + b) * a)
+      }
+    }
+    out
+  })
+  let step = 1000. * Int.toFloat(Spectrum.envelopeStep) / Spectrum.sampleRate
+  let energy = ref(0.)
+  let envelope = f.envelope->TypedArray.mapWithIndex((v, s) => {
+    let e = v * Math.sqrt(power(Int.toFloat(s) * step, Int.toFloat(s + 1) * step))
+    energy := energy.contents + e * e * Int.toFloat(Spectrum.envelopeStep)
+    e
+  })
+  {...f, spectra, envelope, energy: energy.contents}
+}
+
+// Where a flat render with the envelope put on it would start, as SoundTarget.onsetOf finds
+// it (2 ms before it first reaches 1% of its peak), to the millisecond: from the render's peak
+// in each millisecond and the envelope's level there.
+let onsetMs = (y: Float32Array.t, power) => {
+  let perMs = Float.toInt(Spectrum.sampleRate / 1000.)
+  let ms = TypedArray.length(y) / perMs
+  let peaks = Float64Array.fromLength(ms)
+  let top = ref(0.)
+  for t in 0 to ms - 1 {
+    let gain = Math.sqrt(power(Int.toFloat(t), Int.toFloat(t + 1)))
+    let m = ref(0.)
+    for i in t * perMs to (t + 1) * perMs - 1 {
+      m := Math.max(m.contents, Math.abs(y->get32(i)))
+    }
+    peaks->set64(t, m.contents * gain)
+    top := Math.max(top.contents, m.contents * gain)
+  }
+  let first = ref(0)
+  while first.contents < ms && peaks->get64(first.contents) < 0.01 * top.contents {
+    first := first.contents + 1
+  }
+  Math.max(0., Int.toFloat(first.contents) - 2.)
+}
+
+// A flat render with the envelope put on it, sample by sample (its level each millisecond).
+let shapedSamples = (y: Float32Array.t, power) => {
+  let ms = Float.toInt(1000. * Int.toFloat(TypedArray.length(y)) / Spectrum.sampleRate) + 1
+  let gains = Float64Array.fromLength(ms)
+  for t in 0 to ms - 1 {
+    gains->set64(t, Math.sqrt(power(Int.toFloat(t), Int.toFloat(t + 1))))
+  }
+  let perMs = Spectrum.sampleRate / 1000.
+  y->TypedArray.mapWithIndex((v, i) => v * gains->get64(Float.toInt(Int.toFloat(i) / perMs)))
+}
+
+// x with the amp envelope that suits a flat render of it best by these weights: where the
+// loss itself is least (MatchLoss.envelopeObjective, on the flat render's measurements), found
+// from x's own envelope (in a search, one already fitted to a sound near it) or the one that
+// follows the sample's loudness, whichever is closer.
+let fitEnvelope = (ctx, x, flat: Spectrum.features, ~weights) => {
+  let objective = MatchLoss.envelopeObjective(weights, ctx.measured, flat)
+  let ms = Float.toInt(1000. * Int.toFloat(frames(ctx)) / Spectrum.sampleRate) + 60
+  let keys = Genome.envelopeKeys->Array.map(Genome.indexOf)
+  let trial = e => objective(EnvelopeFit.levels(Genome.stagesOf(e), ~ms)->TypedArray.map(a => a * a))
+  let own = Float64Array.fromArray(keys->Array.map(k => x->get64(k)))
+  let start = trial(own) <= trial(ctx.seedEnvelope) ? own : ctx.seedEnvelope
+  let (best, _) = EnvelopeFit.minimize(trial, start, ~step=0.08, ~iterations=20)
+  let y = TypedArray.copy(x)
+  keys->Array.forEachWithIndex((k, j) => y->set64(k, best->get64(j)))
+  y
+}
+
+// What an evaluation gives: the score, the genes scored (with their envelope fitted, if it
+// was), and the candidate if it scored under the threshold.
+type result = {loss: float, genes: array<float>, candidate: option<candidate>}
+
+let measureOf = (ctx, y) => Spectrum.measure(y, ~period=SoundTarget.period(ctx.target))
+
 // Renders x and scores it by these weights (with its parts' cost); the candidate too if it
 // scores under `threshold` (the search's best so far: only a new best is shown).
-let evaluate = (ctx, x, ~weights, ~threshold) => {
-  let (note, values, y) = renderGenes(ctx, x)
-  let f = Spectrum.measure(y, ~period=SoundTarget.period(ctx.target))
-  let loss = MatchLoss.compare(weights, ctx.measured, f) + cost(x)
-  (loss, loss < threshold ? Some(candidateOf(ctx, x, note, values, y, f)) : None)
+//
+// With `fit`, x's amp envelope is first fitted to the sample: x is rendered with a flat
+// envelope (Genome.flatOf), the envelope that best turns that render's loudness into the
+// sample's is found (Genome.fitEnvelope), and it is put on the render's measurements (`shaped`)
+// rather than rendered again; so the search never has to look for the envelope, and every
+// sound it tries is heard with the envelope that suits it best. Drive, chorus and reverb come
+// after the envelope or depend on its level, so x with any of them is rendered as it is, with
+// the envelope it has (from the dry sound it was found from, in the searches).
+let evaluate = (ctx, x, ~weights, ~threshold, ~fit) => {
+  let finish = (x, note, values, y, f) => {
+    let loss = MatchLoss.compare(weights, ctx.measured, f) + cost(x)
+    {
+      loss,
+      genes: Array.fromInitializer(~length=TypedArray.length(x), i => x->get64(i)),
+      candidate: loss < threshold ? Some(candidateOf(ctx, x, note, values, y(), f)) : None,
+    }
+  }
+  if !fit || Genome.wet(x) {
+    let (note, values, y) = renderGenes(ctx, x)
+    finish(x, note, values, () => y, measureOf(ctx, y))
+  } else {
+    let (note, _, flatY) = renderGenes(ctx, Genome.flatOf(x))
+    let flatF = measureOf(ctx, flatY)
+    let x = fitEnvelope(ctx, x, flatF, ~weights)
+    {
+      let values = Genome.decode(x, ~note, ~base=baseValue(ctx, _))
+      let ms = Float.toInt(1000. * Int.toFloat(frames(ctx)) / Spectrum.sampleRate) + 20
+      let power = envelopePower(x, ~ms=ms + 120)
+      // a render with the envelope would start where it first reaches -40 dB (SoundTarget.onsetOf),
+      // later than the flat one with a slow attack: the envelope moves on by as much
+      let onset = onsetMs(flatY, power)
+      let power = onset > 0. ? (a, b) => power(a +. onset, b +. onset) : power
+      finish(x, note, values, () => shapedSamples(flatY, power), shaped(flatF, power))
+    }
+  }
 }
 
 // The target's picture, in the candidates' terms.
@@ -343,6 +489,8 @@ type rec search = {
   budget: int,
   sigma: float,
   seed: int,
+  // whether the amp envelope is fitted to each candidate (evaluate's fit), not searched
+  fit: bool,
   mutable stage: stage,
   mutable evals: int,
   mutable bestLoss: float,
@@ -400,7 +548,7 @@ let gridOf = (starts: array<Float64Array.t>, lo, hi) => {
 
 // The outline: `starts` (the seed, or what the predictor suggests, best guess first) within
 // the bounds the locks leave.
-let outline = (~starts, ~fitted, ~locks, ~reference, ~budget, ~sigma, ~seed) => {
+let outline = (~starts, ~fitted, ~fit, ~locks, ~reference, ~budget, ~sigma, ~seed) => {
   let (lo, hi) = boundsFor(None, ~fitted, ~locks, ~reference)
   {
     islandIndex: -1,
@@ -411,6 +559,7 @@ let outline = (~starts, ~fitted, ~locks, ~reference, ~budget, ~sigma, ~seed) => 
     budget,
     sigma,
     seed,
+    fit,
     stage: Grid(gridOf(starts, lo, hi)),
     evals: 0,
     bestLoss: infinity,
@@ -439,6 +588,7 @@ let branch = (outline: search, islandIndex, ~fitted, ~locks, ~reference, ~budget
     budget,
     sigma,
     seed: outline.seed + 1 + islandIndex,
+    fit: outline.fit,
     stage: Grid(starts),
     evals: 0,
     bestLoss: infinity,
@@ -529,12 +679,15 @@ let reselect = s => {
 let roundRuns = 4
 let roundGenerations = [5, 7]
 
+// the genes fitted to each candidate rather than searched, when the envelope is fitted
+let fittedGenes = s => s.fit ? Genome.envelopeKeys : []
+
 // CMA-ES over the core genes of an entry's structure (the rest held where the entry has them).
 let coreRun = (s, x, ~seed) => {
   let lo = TypedArray.copy(s.lo)
   let hi = TypedArray.copy(s.hi)
   Genome.genes->Array.forEachWithIndex((g, i) =>
-    if !(Genome.core->Array.includes(g.key)) {
+    if !(Genome.core->Array.includes(g.key)) || fittedGenes(s)->Array.includes(g.key) {
       lo->set64(i, x->get64(i))
       hi->set64(i, x->get64(i))
     }
@@ -551,7 +704,12 @@ let polishGenes = (s, x) => {
   let relevant = Genome.relevant(x)
   Genome.genes
   ->Array.mapWithIndex((g, i) => (g, i))
-  ->Array.filter(((g, i)) => g.options == 0 && s.hi->get64(i) > s.lo->get64(i) && relevant->Array.getUnsafe(i))
+  ->Array.filter(((g, i)) =>
+    g.options == 0 &&
+    s.hi->get64(i) > s.lo->get64(i) &&
+    relevant->Array.getUnsafe(i) &&
+    (Genome.wet(x) || !(fittedGenes(s)->Array.includes(g.key)))
+  )
   ->Array.map(((_, i)) => i)
 }
 
@@ -569,11 +727,11 @@ let startPolish = s => {
 
 // Learns from the scores of what `ask` gave (with what keeping away from its rivals costs);
 // true if the best changed.
-let tell = (s, pending, results: array<(float, option<candidate>)>) => {
-  let losses = results->Array.mapWithIndex(((loss, _), i) => loss + apart(s, pending.genes->Array.getUnsafe(i)))
-  results->Array.forEachWithIndex(((raw, candidate), i) =>
-    candidate->Option.forEach(c => remember(s, raw, pending.genes->Array.getUnsafe(i), c))
-  )
+let tell = (s, pending, results: array<result>) => {
+  // the genes as scored (their envelope fitted, if it was)
+  let scored = results->Array.map(r => Float64Array.fromArray(r.genes))
+  let losses = results->Array.mapWithIndex((r, i) => r.loss + apart(s, scored->Array.getUnsafe(i)))
+  results->Array.forEachWithIndex((r, i) => r.candidate->Option.forEach(c => remember(s, r.loss, scored->Array.getUnsafe(i), c)))
   let improved = reselect(s)
   s.evals = s.evals + Array.length(results)
   let left = s.budget - s.evals
@@ -617,12 +775,12 @@ let tell = (s, pending, results: array<(float, option<candidate>)>) => {
       if p.together != None {
         let l = losses->Array.getUnsafe(0)
         if l < p.loss {
-          bestMove := Some((pending.genes->Array.getUnsafe(0), l))
+          bestMove := Some((scored->Array.getUnsafe(0), l))
         }
       }
       p.genes->Array.forEachWithIndex((i, j) => {
         let (down, up) = (losses->Array.getUnsafe(k.contents), losses->Array.getUnsafe(k.contents + 1))
-        let (l, x) = down < up ? (down, pending.genes->Array.getUnsafe(k.contents)) : (up, pending.genes->Array.getUnsafe(k.contents + 1))
+        let (l, x) = down < up ? (down, scored->Array.getUnsafe(k.contents)) : (up, scored->Array.getUnsafe(k.contents + 1))
         k := k.contents + 2
         if l < p.loss {
           gains->Array.push((i, x->get64(i)))
@@ -665,6 +823,8 @@ type match_ = {
   // the four searches, once the outline is done
   mutable searches: array<search>,
   fitted: bool,
+  // whether each candidate's envelope is fitted (unless the envelopes are locked)
+  fit: bool,
   locks: array<Genome.group>,
   reference: option<Float64Array.t>,
   // each search's renders
@@ -676,10 +836,12 @@ let outlineShare = 0.75
 
 let makeMatch = (~starts, ~fitted, ~locks, ~reference, ~budget, ~sigma, ~seed) => {
   let outlineBudget = Float.toInt(outlineShare * Int.toFloat(budget))
+  let fit = !(locks->Array.includes(#env))
   {
-    outline: outline(~starts, ~fitted, ~locks, ~reference, ~budget=outlineBudget, ~sigma, ~seed),
+    outline: outline(~starts, ~fitted, ~fit, ~locks, ~reference, ~budget=outlineBudget, ~sigma, ~seed),
     searches: [],
     fitted,
+    fit,
     locks,
     reference,
     islandBudget: (budget - outlineBudget) / Array.length(islands),

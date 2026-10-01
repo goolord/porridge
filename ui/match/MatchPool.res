@@ -161,11 +161,11 @@ let cancelRun = (t, run) => {
 }
 
 // Renders and scores genes in a session (MatchRun.evaluate); a failure scores nothing.
-let evaluate = (t, ~session, ~run, genes: Float64Array.t, weights, threshold) =>
-  request(t, ~session, ~run, task => Evaluate({task, genes: floatsOf(genes), weights, threshold}))->Promise.thenResolve(r =>
+let evaluate = (t, ~session, ~run, genes: Float64Array.t, weights, threshold, fit) =>
+  request(t, ~session, ~run, task => Evaluate({task, genes: floatsOf(genes), weights, threshold, fit}))->Promise.thenResolve(r =>
     switch r {
-    | Evaluated({loss, candidate}) => (loss, candidate)
-    | _ => (infinity, None)
+    | Evaluated({result}) => result
+    | _ => ({loss: infinity, genes: floatsOf(genes), candidate: None}: MatchSearch.result)
     }
   )
 

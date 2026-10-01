@@ -2,13 +2,15 @@
 // by side, each keeping away from its rivals' best so far. Each search asks for a round of
 // candidates, every one of them goes to the workers to be rendered and scored on its own (so
 // that a round spreads over all of them), and the search learns from the scores and goes on.
-// While the outline runs, its best shows on the first card.
+// While the outline runs, its best shows on the first card. At the end each card's patch is
+// rendered as it is, for what the card shows.
 // Variations are rendered once.
 //
 // `evaluate` scores genes by weights, with the candidate if it scores under the threshold:
 // the workers' (MatchPool.evaluate), or the engine itself in tools/test/match.mjs.
 
-type evaluate = (Float64Array.t, MatchLoss.weights, float) => promise<(float, option<MatchSearch.candidate>)>
+// genes, weights, threshold, and whether to fit the envelope
+type evaluate = (Float64Array.t, MatchLoss.weights, float, bool) => promise<MatchSearch.result>
 
 type handlers = {
   onCandidate: MatchSearch.candidate => unit,
@@ -34,7 +36,7 @@ let search = (evaluate: evaluate, m: MatchSearch.match_, handlers) => {
   let step = async (s: MatchSearch.search) => {
     let pending = MatchSearch.ask(s)
     let threshold = MatchSearch.threshold(s)
-    let results = await Promise.all(pending.genes->Array.map(x => evaluate(x, s.weights, threshold)))
+    let results = await Promise.all(pending.genes->Array.map(x => evaluate(x, s.weights, threshold, s.fit)))
     !t.cancelled && MatchSearch.tell(s, pending, results)
   }
   let run = async (s: MatchSearch.search) =>
@@ -62,12 +64,24 @@ let search = (evaluate: evaluate, m: MatchSearch.match_, handlers) => {
         // each against its rivals' final answers, those with fewer rivals first
         searches
         ->Array.toSorted((a, b) => Int.compare(Array.length(a.rivals), Array.length(b.rivals)))
-        ->Array.forEach(s =>
-          if MatchSearch.reselect(s) {
-            report(s)
-          }
+        ->Array.forEach(s => MatchSearch.reselect(s)->ignore)
+        // and each card's patch rendered as it is (its envelope may have been put on a flat
+        // render's measurements), so that what a card shows is what it sounds like
+        let confirmed = await Promise.all(
+          searches->Array.map(s =>
+            switch s.bestGenes {
+            | Some(x) => evaluate(x, MatchLoss.standard, infinity, false)->Promise.thenResolve(r => (s, r.candidate))
+            | None => Promise.resolve((s, None))
+            }
+          ),
         )
-        handlers.onDone()
+        if !t.cancelled {
+          confirmed->Array.forEach(((s, candidate)) => {
+            candidate->Option.forEach(c => s.best = Some({...c, island: s.islandIndex, slot: s.islandIndex}))
+            report(s)
+          })
+          handlers.onDone()
+        }
       }
     }
   })()->ignore
@@ -79,9 +93,9 @@ let vary = (evaluate: evaluate, mutants: array<Float64Array.t>, handlers) => {
   let t = {cancelled: false}
   mutants
   ->Array.mapWithIndex((x, slot) =>
-    evaluate(x, MatchLoss.standard, infinity)->Promise.thenResolve(((_, candidate)) =>
+    evaluate(x, MatchLoss.standard, infinity, false)->Promise.thenResolve(r =>
       if !t.cancelled {
-        candidate->Option.forEach(c => handlers.onCandidate({...c, slot}))
+        r.candidate->Option.forEach(c => handlers.onCandidate({...c, slot}))
         handlers.onProgress(~island=slot, ~evals=1, ~budget=1)
       }
     )

@@ -343,3 +343,29 @@ let envelopeOverview = (f: features, ~points, ~gain=1.) => {
     db(gain * m.contents)
   })
 }
+
+// How much of a level that changes over time reaches a frame: the frame's window squared
+// weights it (a Hann window's power), here in eight stretches. `power(a, b)` is the mean square
+// over [a, b) ms; the frame is `size` samples centred at `centreMs`.
+let windowSegments = 8
+let windowWeights = {
+  // the integral of sin⁴(πx)
+  let integral = x =>
+    3. * x / 8. - Math.sin(twoPi * x) / (4. * Math.Constants.pi) + Math.sin(2. * twoPi * x) / (32. * Math.Constants.pi)
+  let raw = Array.fromInitializer(~length=windowSegments, k =>
+    integral(Int.toFloat(k + 1) / Int.toFloat(windowSegments)) - integral(Int.toFloat(k) / Int.toFloat(windowSegments))
+  )
+  let sum = raw->Array.reduce(0., (s, v) => s + v)
+  raw->Array.map(v => v / sum)
+}
+let windowPower = (power: (float, float) => float, ~centreMs, ~size) => {
+  let span = 1000. * Int.toFloat(size) / sampleRate
+  let step = span / Int.toFloat(windowSegments)
+  let start = centreMs - span / 2.
+  let p = ref(0.)
+  windowWeights->Array.forEachWithIndex((w, k) => {
+    let a = start + Int.toFloat(k) * step
+    p := p.contents + w * power(a, a + step)
+  })
+  p.contents
+}
