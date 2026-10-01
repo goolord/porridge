@@ -658,4 +658,90 @@ let css = `
 .brw-load.off { opacity: 0.45; pointer-events: none; }
 
 .p:focus-visible, .btn:focus-visible, .tg:focus-visible, .cell:focus-visible, .src:focus-visible, .tgt:focus-visible, .addrow:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
+
+/* the sound matcher's drawer (MatchDrawer.res): the sample and the locks, then four cards */
+.mt {
+    position: absolute; left: 0; right: 0; bottom: ${px(statusHeight)}; height: 236px; z-index: 60;
+    box-sizing: border-box; display: flex; flex-direction: column;
+    background: var(--panel); border-top: 1px solid var(--ink); box-shadow: 0 -3px 0 rgba(31,26,14,0.16);
+    transform: translateY(calc(100% + 30px)); visibility: hidden; transition: transform 0.18s ease-out, visibility 0s 0.18s;
+}
+.mt.on { transform: none; visibility: visible; transition: transform 0.18s ease-out; }
+.mt-head { display: flex; align-items: center; gap: 7px; height: 36px; padding: 0 8px 0 10px; flex: none; }
+.mt-head .btn { position: static; height: 22px; white-space: nowrap; }
+.mt-head .btn.icon { width: 24px; padding: 0; font-size: 15px; line-height: 19px; }
+.mt-head .btn.hidden, .mt:not(.loaded) .mt-loaded { display: none; }
+.mt-head .spacer { flex: 1; }
+.mt-title { font-weight: 700; font-size: 15px; white-space: nowrap; margin-right: 4px; }
+.mt-target { display: none; align-items: center; gap: 7px; height: 28px; padding: 0 9px 0 4px; border-radius: 2px; cursor: pointer;
+    min-width: 0; max-width: 340px; background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge); }
+.mt.loaded .mt-target { display: flex; }
+.mt-target:hover { background: var(--panel-hi); box-shadow: inset 0 0 0 1px var(--edge); }
+.mt-wave { flex: none; display: block; }
+.mt-tnames { min-width: 0; line-height: 1.12; }
+.mt-tname { font-size: 12.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mt-tinfo { font-size: 11px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mt-locklabel { font-size: 12px; color: var(--ink-soft); white-space: nowrap; }
+.mt-locklabel.off { color: var(--ink-faint); }
+.mt-locks { display: flex; gap: 2px; }
+.mt-lock { display: flex; align-items: center; gap: 3px; height: 20px; padding: 0 6px 0 4px; border-radius: 2px; font-size: 12px; cursor: pointer;
+    color: var(--ink-soft); background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge); }
+.mt-lock .ic { height: 11px; opacity: 0.4; }
+.mt-lock:hover { background: var(--panel-hi); color: var(--ink); }
+.mt-lock.on { background: var(--signal); color: var(--paper); box-shadow: none; }
+.mt-lock.on .ic { opacity: 1; }
+.mt-lock.off { opacity: 0.45; cursor: default; }
+.mt-lock.off:hover { background: var(--tile); color: var(--ink-soft); }
+.mt-bar { height: 2px; flex: none; margin: 0 10px; background: rgba(31,26,14,0.1); visibility: hidden; }
+.mt-bar.on { visibility: visible; }
+.mt-bar > div { height: 100%; width: 0; background: var(--signal); transition: width 0.25s linear; }
+.mt-crumbs { display: none; align-items: center; gap: 6px; height: 18px; padding: 4px 12px 0; font-size: 12px; color: var(--ink-soft);
+    flex: none; white-space: nowrap; overflow: hidden; }
+.mt-crumbs.on { display: flex; }
+.mt-crumb { cursor: pointer; }
+.mt-crumb:hover { color: var(--ink); text-decoration: underline; }
+.mt-crumb.on { cursor: default; font-weight: 700; color: var(--ink); text-decoration: none; }
+.mt-sep { color: var(--ink-faint); }
+.mt-cards { flex: 1; min-height: 0; display: none; gap: 8px; padding: 8px 10px 10px; }
+.mt.loaded .mt-cards { display: flex; }
+.mt-card { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 5px; padding: 6px 8px 8px; box-sizing: border-box;
+    border-radius: 3px; cursor: pointer; background: var(--panel-hi); border: 1px solid var(--edge); }
+.mt-card:hover { border-color: var(--ink); }
+.mt-card.live { border-color: var(--signal); box-shadow: 0 0 0 1.5px var(--signal); }
+.mt-card.kept { border-color: var(--ink); box-shadow: 0 0 0 1.5px var(--ink); }
+.mt-card.empty { cursor: default; background: var(--panel); border-style: dashed; }
+.mt-ctop { display: flex; align-items: center; gap: 6px; height: 22px; }
+.mt-ctitle { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mt-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; line-height: 14px; color: var(--paper);
+    background: var(--signal); border-radius: 2px; padding: 0 4px; }
+.mt-badge:empty, .mt-best:empty { display: none; }
+.mt-best { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; line-height: 12px; color: var(--signal);
+    border: 1px solid var(--signal); border-radius: 2px; padding: 0 3px; }
+.mt-card.kept .mt-badge { background: var(--ink); }
+.mt-score { margin-left: auto; font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--signal); }
+.mt-card.empty .mt-score { color: var(--ink-faint); animation: mt-pulse 1.1s ease-in-out infinite; }
+@keyframes mt-pulse { 50% { opacity: 0.3; } }
+.mt-pic { display: block; border-radius: 2px; }
+.mt-desc { font-size: 12px; line-height: 15px; height: 30px; color: var(--ink-soft); overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.mt-cbtns { display: flex; gap: 4px; margin-top: auto; }
+.mt-cbtns .btn { position: static; flex: 1; height: 22px; }
+.mt-card.empty .mt-cbtns { visibility: hidden; }
+.mt-empty { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 8px; margin: 6px 14px 14px;
+    padding: 0 150px; text-align: center; border: 1.5px dashed var(--edge); border-radius: 3px; font-size: 12.5px; line-height: 1.4;
+    color: var(--ink-soft); cursor: pointer; }
+.mt-empty:hover { background: var(--panel-hi); }
+.mt-empty .big { font-size: 17px; font-weight: 700; color: var(--ink); }
+.mt-empty .btn { position: static; height: 22px; }
+.mt.loaded .mt-empty { display: none; }
+
+/* a sample dragged over the window: match it, or make a shape of it (by the half it's dropped on) */
+.drop .dz { display: none; }
+.drop:not(.sample) .dz.only { display: block; }
+.drop.sample .dz:not(.only) { display: flex; flex: 1; align-self: stretch; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
+.drop.sample:not(.split) .dz:last-child { display: none; }
+.drop.split .dz:last-child { border-left: 2px dashed rgba(236, 227, 196, 0.55); }
+.drop.split .dz.hot { background: rgba(28, 60, 115, 0.4); }
+.dz b { font-size: 22px; }
+.dz span { font-size: 13px; font-weight: 400; max-width: 380px; text-align: center; opacity: 0.92; }
 `
