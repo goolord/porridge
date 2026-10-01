@@ -26,6 +26,10 @@ const project = process.argv[2] ?? join(root, "build", "clap-project");
 const file = join(project, "helpers", "clap", "cmaj_CLAPPlugin.h");
 const marker = "// Porridge:";
 
+// The synth reports one block of latency for sample-accurate MIDI (dsp/Synth.cmajor).
+const blockSize = Number(/let blockSize = (\d+);/.exec(readFileSync(join(root, "dsp", "Types.cmajor"), "utf8"))?.[1]);
+if (!blockSize) throw new Error("blockSize not found in dsp/Types.cmajor");
+
 let source = readFileSync(file, "utf8").replace(/\r\n/g, "\n");
 
 if (source.includes(marker)) {
@@ -444,8 +448,8 @@ inline void Plugin::Impl::resetIfRequestIsPending()
 //==============================================================================
 replace(
   `    return static_cast<uint32_t> (patch.getFramesLatency());`,
-  `    ${marker} the synth's MIDI latency, one 64-sample block (see dsp/Synth.cmajor)
-    return static_cast<uint32_t> (std::max (patch.getFramesLatency(), 64.0));`,
+  `    ${marker} the synth's MIDI latency, one ${blockSize}-sample block (see dsp/Synth.cmajor)
+    return static_cast<uint32_t> (std::max (patch.getFramesLatency(), ${blockSize}.0));`,
 );
 
 writeFileSync(file, source);

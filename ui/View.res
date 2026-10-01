@@ -132,8 +132,7 @@ let make = (host, pc) => {
   let button = (parent, text, title, onClick) => {
     let b = el("button", ~cls="btn", ~text, ~parent)
     b->onMouse(#click, _ => onClick())
-    b->onMouse(#mouseenter, _ => status->Status.show(title))
-    b->onMouse(#mouseleave, _ => status->Status.clear)
+    status->Status.hover(b, () => title)
     b
   }
 
@@ -198,10 +197,7 @@ let make = (host, pc) => {
   prog->appendChild(progName)
   progName->onMouse(#click, _ => openProgramMenu())
   progName->onMouse(#dblclick, _ => renameProgram())
-  progName->onMouse(#mouseenter, _ =>
-    status->Status.show("Click to pick a program, double-click to rename it")
-  )
-  progName->onMouse(#mouseleave, _ => status->Status.clear)
+  status->Status.hover(progName, () => "Click to pick a program, double-click to rename it")
   button(prog, ">", "Next program", () =>
     programs->ProgramStore.select(programs.current + 1)
   )->ignore

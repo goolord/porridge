@@ -114,7 +114,7 @@ let envName = prefix =>
   }
 
 let curveIds = prefix =>
-  ["Attack", "Decay", "Release"]->Array.map(stage => PorridgeParams.curveId(envName(prefix), stage))
+  PorridgeParams.stageNames->Array.map(((stage, _)) => PorridgeParams.curveId(envName(prefix), stage))
 
 // Attack, hold, decay 1 to the breakpoint, decay 2 to sustain, release. The amp envelope
 // is drawn in dB like its readouts; the others are linear, like their percentages.

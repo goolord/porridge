@@ -239,7 +239,7 @@ let toJson = (p, ~header=true) => {
   fields->Dict.set("params", JSON.Object(params))
 
   let value = id => p.values->Map.get(id)->Option.getOr(0.)
-  let modulations = Array.fromInitializer(~length=ModMatrix.slots, i => i + 1)->Array.filterMap(k => {
+  let modulations = ModMatrix.slotNumbers->Array.filterMap(k => {
     let source = ModMatrix.sources[Float.toInt(value(ModMatrix.sourceId(k)))]
     let target = ModMatrix.targets[Float.toInt(value(ModMatrix.targetId(k)))]
     switch (source, target) {
