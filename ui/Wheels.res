@@ -8,9 +8,11 @@ open! Web
 
 let signal = Str("var(--signal)")
 
-// Where the wheels were left, so they keep their place when the page is rebuilt.
+// Where the wheels were left, so they keep their place when the page is rebuilt, and every
+// drawing of them (the Synth page and the Arp / XY page each have a pair), to move them together.
 let bend = ref(0.)
 let modWheel = ref(0.)
+let drawings: array<unit => unit> = []
 
 let send = (ctx: Ctx.t, status, data1, data2) =>
   ctx.pc->PatchConnection.sendEventOrValue("midiIn", {"message": status * 65536 + data1 * 256 + data2})
@@ -89,7 +91,7 @@ let wheel = (ctx: Ctx.t, parent, box, kind) => {
     if v != value.contents {
       value := v
       kind == Pitch ? sendBend(ctx, v) : sendMod(ctx, v)
-      draw()
+      drawings->Array.forEach(fn => fn())
     }
   }
 
@@ -121,12 +123,12 @@ let wheel = (ctx: Ctx.t, parent, box, kind) => {
     })
   }
   s->suppressContextMenu
+  drawings->Array.push(draw)
   draw()
 }
 
-// Both wheels side by side in the box.
-let make = (ctx, parent, box) => {
-  let gap = 12.
+// Both wheels side by side in the box, this far apart.
+let make = (ctx, parent, box, ~gap=12.) => {
   let w = (box.w - gap) / 2.
   wheel(ctx, parent, {...box, w}, Pitch)
   wheel(ctx, parent, {...box, x: box.x + w + gap, w}, Mod)

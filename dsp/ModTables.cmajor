@@ -6,7 +6,7 @@
 namespace porridge::mods
 {
     let numSlots = 16;
-    let numSources = 26;
+    let numSources = 27;
     let numTargets = 101;
     let tableSize = 257;
 
@@ -150,6 +150,7 @@ namespace porridge::mods::src
     let cc5 = 23;
     let cc6 = 24;
     let slide = 25;
+    let noise = 26;
 }
 
 /// Target indices

@@ -134,13 +134,17 @@ type t = {
 // parameter (`like` finds it).
 let porridgeDef = (index, spec: PorridgeParams.spec, ~like: string => t) =>
   switch spec.kind {
-  | Like(first) =>
+  | Like(first) | LikeWithDefault(first, _) =>
     let d = like(first)
     {
       ...d,
       id: spec.id,
       index,
       name: spec.name,
+      init: switch spec.kind {
+      | LikeWithDefault(_, init) => d.clamp(Math.fround(init))
+      | _ => d.init
+      },
       longText: x => `${spec.name}: ${d.valueText(x)}`,
     }
   | Float({min, max, init, text, ?read}) =>

@@ -69,6 +69,12 @@ let sources = [
     bipolar: false,
     help: "MPE: the note's slide (controller 74), 0..1",
   },
+  {
+    key: "noise",
+    label: "noise",
+    bipolar: true,
+    help: "white noise at the control rate: a new random value for each voice every 64 samples, -1..1",
+  },
 ]
 
 // The sources, grouped for the mod page, by key (a source left out here is shown in a last
@@ -77,7 +83,7 @@ let sourceGroups = [
   ("lfos & envelopes", ["lfo1", "lfo2", "modEnv1", "modEnv2", "ampEnv", "filterEnv"]),
   (
     "note & performance",
-    ["velocity", "key", "aftertouch", "bend", "slide", "modWheel", "random", "x", "y"],
+    ["velocity", "key", "aftertouch", "bend", "slide", "modWheel", "random", "noise", "x", "y"],
   ),
   ("macros", ["macro1", "macro2", "macro3", "macro4"]),
   ("controllers", ["cc1", "cc2", "cc3", "cc4", "cc5", "cc6"]),

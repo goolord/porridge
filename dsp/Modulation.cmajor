@@ -26,15 +26,25 @@ namespace porridge
     /// its decay 1 curve, which came later (slot::Curve_Amp_Decay1 ...).
     EnvCoefs makeEnvCoefs (const float[numSlots]& P, int attackSlot, int curveSlot, int decay1CurveSlot, float64 sr, float timeScale)
     {
+        return makeEnvCoefsFrom (P, attackSlot, attackSlot + 1, attackSlot + 2, attackSlot + 3, attackSlot + 4,
+                                 attackSlot + 10, attackSlot + 12, curveSlot, decay1CurveSlot, sr, timeScale);
+    }
+
+    /// The same from Porridge's own parameters (the oscillator envelopes), which aren't laid
+    /// out as Oatmeal's blocks: each stage's slot, then the curves' as above.
+    EnvCoefs makeEnvCoefsFrom (const float[numSlots]& P, int attackSlot, int holdSlot, int decay1Slot, int decay2Slot,
+                               int releaseSlot, int breakpointSlot, int sustainSlot, int curveSlot, int decay1CurveSlot,
+                               float64 sr, float timeScale)
+    {
         EnvCoefs c;
         let kill    = 4.0 * float64 (timeScale);        // 'kill' fade time: always 4 ms in Oatmeal (not a parameter)
         let attack  = float64 (P.at (attackSlot) * timeScale);
-        let hold    = float64 (P.at (attackSlot + 1) * timeScale);
-        let d1      = float64 (P.at (attackSlot + 2) * timeScale);
-        let d2      = float64 (P.at (attackSlot + 3) * timeScale);
-        let release = float64 (P.at (attackSlot + 4) * timeScale);
-        var bp  = P.at (attackSlot + 10);
-        var sus = P.at (attackSlot + 12);
+        let hold    = float64 (P.at (holdSlot) * timeScale);
+        let d1      = float64 (P.at (decay1Slot) * timeScale);
+        let d2      = float64 (P.at (decay2Slot) * timeScale);
+        let release = float64 (P.at (releaseSlot) * timeScale);
+        var bp  = P.at (breakpointSlot);
+        var sus = P.at (sustainSlot);
 
         if (bp  > 0.998f) bp  = 1.0f;
         if (sus > 0.998f) sus = 1.0f;

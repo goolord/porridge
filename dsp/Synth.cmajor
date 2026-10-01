@@ -110,6 +110,7 @@ namespace porridge
 
         // per-block values computed by the voice manager for all voices
         EnvCoefs ampC, filtC, filt2C, mod1C, mod2C;
+        EnvCoefs[2] oscEnvC;
         PitchEnvCoefs penvC;
         float lnOct, octave;
         float[2] gv, gLfoPitch, gLfoPan, gLfoRaw;      // the global LFOs, by LFO
@@ -147,6 +148,12 @@ namespace porridge
         float[mods::numTargets] modBase, modBaseNorm, modSum;
         float bendNormTarget, bendNorm, wheel;
         Lcg modRng;
+
+        // the modulation matrix's noise source: whether a connection uses it, its own random
+        // numbers, and its value for the global targets
+        bool noiseLive;
+        Lcg noiseRng;
+        float noiseGlobal;
 
         // Porridge's own randomness (drift, unison phases), apart from Oatmeal's rng
         Lcg driftRng;
@@ -303,6 +310,7 @@ namespace porridge
             allNotesOff();
             walkT = 0;
             modRng.state = 12345;
+            noiseRng.state = 24680;
             driftRng.state = 54321;
             gLfo1Slew = -1.0f;
             gLfo2Slew = -1.0f;
@@ -670,6 +678,7 @@ namespace porridge
             for (wrap<2> k) v.lfo[k].resetPhase (rng, P);
             v.fenv = Env[4]();
             v.ampEnv = Env(); v.modEnv1 = Env(); v.modEnv2 = Env();
+            v.oscEnv = Env[2]();
             v.vel = 1.0f;
             v.randAmp = 1.0f;
             v.velGainTarget = 1.0f;
@@ -680,6 +689,7 @@ namespace porridge
             v.lfoRaw = float[2]();
             v.ampLast = 0;
             v.modRand = 0;
+            v.modNoise = 0;
             v.modGain = 1.0f;
             v.chan = 0;
         }
@@ -746,6 +756,7 @@ namespace porridge
             for (wrap<4> k) v.fenv[k].release (fenvCoefs (k), true);
             v.modEnv1.release (mod1C, true);
             v.modEnv2.release (mod2C, true);
+            for (wrap<2> k) v.oscEnv[k].release (oscEnvC[k], true);
             v.penvStage = penvStage::release;
         }
 
@@ -873,6 +884,9 @@ namespace porridge
 
                 v.modEnv1.trigger (mod1C, true);
                 v.modEnv2.trigger (mod2C, true);
+
+                // (from where they are, as the amp envelope does: no dip on a retrigger)
+                for (wrap<2> k) v.oscEnv[k].trigger (oscEnvC[k], false);
             }
             else
             {
@@ -884,6 +898,7 @@ namespace porridge
                 retriggerEnded (v.fenv[1], filt2C, true);
                 retriggerEnded (v.modEnv1, mod1C, true);
                 retriggerEnded (v.modEnv2, mod2C, true);
+                for (wrap<2> k) retriggerEnded (v.oscEnv[k], oscEnvC[k], false);
             }
 
             // glide
@@ -1733,6 +1748,12 @@ namespace porridge
                 filt2C = makeEnvCoefs (P, slot::F_Attack, slot::Curve_Filter_Attack, slot::Curve_Filter_Decay1, sampleRate, fr > 0 ? fr : 1.0f);
                 mod1C  = makeEnvCoefs (P, slot::M1_Attack, slot::Curve_Mod1_Attack, slot::Curve_Mod1_Decay1, sampleRate, 1.0f);
                 mod2C  = makeEnvCoefs (P, slot::M2_Attack, slot::Curve_Mod2_Attack, slot::Curve_Mod2_Decay1, sampleRate, 1.0f);
+                oscEnvC[0] = makeEnvCoefsFrom (P, slot::OE1_Attack, slot::OE1_Hold, slot::OE1_Decay1, slot::OE1_Decay2, slot::OE1_Release,
+                                               slot::OE1_Breakpoint, slot::OE1_Sustain, slot::Curve_Osc1_Attack, slot::Curve_Osc1_Decay1,
+                                               sampleRate, 1.0f);
+                oscEnvC[1] = makeEnvCoefsFrom (P, slot::OE2_Attack, slot::OE2_Hold, slot::OE2_Decay1, slot::OE2_Decay2, slot::OE2_Release,
+                                               slot::OE2_Breakpoint, slot::OE2_Sustain, slot::Curve_Osc2_Attack, slot::Curve_Osc2_Decay1,
+                                               sampleRate, 1.0f);
                 penvC  = makePitchEnvCoefs (P, float64 (srInt));
             }
 
@@ -1824,6 +1845,9 @@ namespace porridge
         bool renderVoices (int pos, int n)
         {
             let X = curX, Y = curY;
+
+            if (noiseLive)
+                noiseGlobal = noiseRng.nextSigned();
 
             if (numLive > 0)
             {
@@ -1917,6 +1941,9 @@ namespace porridge
 
                 if (numLive > 0)
                 {
+                    if (noiseLive)
+                        voices.at (vi).modNoise = noiseRng.nextSigned();
+
                     evalMods (vi);
                     applyMods();
                     semisArg += modPitch();
@@ -1947,6 +1974,7 @@ namespace porridge
 
             numLive = 0;
             numLiveTargets = 0;
+            noiseLive = false;
 
             for (int k = 0; k < mods::numSlots; ++k)
             {
@@ -1962,6 +1990,7 @@ namespace porridge
                 liveTgt.at (numLive) = t;
                 liveAmt.at (numLive) = a;
                 liveVia.at (numLive) = (via > 0 && via < mods::numSources) ? via : 0;
+                noiseLive = noiseLive || s == mods::src::noise || via == mods::src::noise;
                 ++numLive;
 
                 if (! targetLive.at (t))
@@ -1991,6 +2020,7 @@ namespace porridge
 
             if (vi < 0)
             {
+                if (s == mods::src::noise)      return noiseGlobal;
                 if (s == mods::src::lfo1)       return gLfoRaw[0];
                 if (s == mods::src::lfo2)       return gLfoRaw[1];
                 if (s == mods::src::aftertouch) return pressureSmooth;
@@ -2013,6 +2043,7 @@ namespace porridge
             if (s == mods::src::filterEnv) return voices.at (vi).fenv[0].L;
             if (s == mods::src::velocity)  return min (voices.at (vi).vel, 1.0f);
             if (s == mods::src::random)    return voices.at (vi).modRand;
+            if (s == mods::src::noise)     return voices.at (vi).modNoise;
             if (s == mods::src::key)       return clamp (float ((voices.at (vi).key & 0x7f) - 60) * (1.0f / 60.0f), -1.0f, 1.0f);
 
             if (s == mods::src::aftertouch)
@@ -2497,6 +2528,11 @@ namespace porridge
                 if (stereo) v.noise.renderNoise (rng, P, Rg, at, ampN, noiseResMod, sampleRate, bufNZ, n);
                 else        v.noise.renderNoise (rng, P, Rg, at, ampN, noiseResMod, sampleRate, bufM, n);
             }
+
+            // each oscillator's own envelope, while it's on: its level follows it, at the amp
+            // envelope's speed (the oscillator ramps to it across the block)
+            if (P[slot::OE1_On] != 0) amp1 *= v.oscEnv[0].renderBlock (oscEnvC[0], ampSpeed * v.envSpeed, sustainDown, n);
+            if (P[slot::OE2_On] != 0) amp2 *= v.oscEnv[1].renderBlock (oscEnvC[1], ampSpeed * v.envSpeed, sustainDown, n);
 
             // oscillator parameters
             let atGain = aftertouchGain (at, P[slot::OscAftertouch]);

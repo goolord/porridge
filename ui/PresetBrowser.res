@@ -1,9 +1,11 @@
-// The preset browser: searches the programs in the bank, the banks bundled with the plugin
-// and any files opened in it, by name, category, tags, author and description (Library.res).
-// Clicking a preset plays it (unless preview is off) without storing it anywhere; Load
-// puts it into the current program, or goes to it if it is one of the bank's, and Cancel
-// puts back what was playing. The browser keeps its search, filters and opened files for as
-// long as the view is open.
+// The preset browser: searches the programs in the bank, the banks bundled with the plugin,
+// the banks in the user's bank folders and any files opened in it, by name, category, tags,
+// author and description (Library.res). Clicking a preset plays it (unless preview is off)
+// without storing it anywhere; Load puts it into the current program, or goes to it if it is
+// one of the bank's, and Cancel puts back what was playing. The browser keeps its search and
+// filters for as long as the view is open. In the plugin, the bank folders' banks and the opened
+// files are kept by the plugin (BankLibrary), so they're there the next time the window opens;
+// elsewhere opened files last as long as the view.
 
 open! Web
 
@@ -17,6 +19,12 @@ type t = {
   settings: Settings.t,
   bank: Library.source,
   bundled: array<Library.source>,
+  // the plugin's bank library, and a source for each of its banks (by "lib:" and its id), with
+  // the version it holds; files kept while the plugin hasn't listed them yet
+  library: BankLibrary.t,
+  mutable cached: array<(Library.source, string)>,
+  keeping: Set.t<string>,
+  mutable reading: bool,
   mutable opened: array<Library.source>,
   mutable text: string,
   mutable filters: Library.filters,
@@ -27,24 +35,100 @@ type t = {
   mutable addFiles: option<array<file> => unit>,
 }
 
-let make = (ctx: Ctx.t, stage, settings) => {
-  ctx,
-  stage,
-  settings,
-  bank: Library.makeSource(~id="bank", ~name="This bank", ~kind=Bank),
-  bundled: Library.bundled->Array.map(((id, name, _)) => Library.makeSource(~id, ~name, ~kind=Bundled)),
-  opened: [],
-  text: "",
-  filters: Library.noFilters,
-  bundledRead: false,
-  nextFileId: 0,
-  refresh: None,
-  addFiles: None,
-}
-
 let isOpen = t => t.refresh != None
 
-let sources = t => [t.bank, ...t.bundled, ...t.opened]
+let sources = t => [t.bank, ...t.bundled, ...t.cached->Array.map(((s, _)) => s), ...t.opened]
+
+let refresh = t => t.refresh->Option.forEach(fn => fn())
+
+let libraryId = (bank: BankLibrary.bank) => "lib:" ++ bank.id
+
+// The library bank a source shows.
+let bankOf = (t, source: Library.source) => t.library.banks->Array.find(b => libraryId(b) == source.id)
+
+// Reads the library's banks that aren't read yet, one at a time.
+let rec readLibrary = t =>
+  if !t.reading {
+    t.cached
+    ->Array.find(((s, _)) => s.status == Loading)
+    ->Option.forEach(((source, _)) =>
+      switch bankOf(t, source) {
+      | Some(bank) =>
+        t.reading = true
+        t.library
+        ->BankLibrary.presets(bank)
+        ->Promise.thenResolve(result => {
+          t.reading = false
+          switch result {
+          | Ok(presets) =>
+            source.presets = presets
+            source.status = Ready
+          | Error(e) => source.status = Failed(e)
+          }
+          refresh(t)
+          readLibrary(t)
+        })
+        ->Promise.ignore
+      | None => ()
+      }
+    )
+  }
+
+// A source for each of the library's banks, kept while its version stays (so a selection in it
+// stays too), and the files being kept until the library lists them.
+let syncLibrary = t => {
+  let listed = t.library.banks->Array.map(bank => {
+    let id = libraryId(bank)
+    let version = BankLibrary.versionKey(bank)
+    t.keeping->Set.delete(bank.id)->ignore
+    switch t.cached->Array.find(((s, v)) => s.id == id && v == version) {
+    | Some(kept) => kept
+    | None =>
+      let source = Library.makeSource(~id, ~name=bank.name, ~kind=Cached)
+      switch BankLibrary.parsed->Map.get(version) {
+      | Some(Ok(presets)) =>
+        source.presets = presets
+        source.status = Ready
+      | Some(Error(e)) => source.status = Failed(e)
+      | None => ()
+      }
+      (source, version)
+    }
+  })
+  let pending = t.cached->Array.filter(((s, _)) =>
+    t.keeping->Set.has(s.id->String.slice(~start=4)) && !(listed->Array.some(((l, _)) => l.id == s.id))
+  )
+  // the folders' banks first, then the opened files
+  let isOpened = ((s, _)) => bankOf(t, s)->Option.mapOr(true, b => b.origin == Opened)
+  t.cached = [...listed->Array.filter(x => !isOpened(x)), ...listed->Array.filter(isOpened), ...pending]
+  readLibrary(t)
+  refresh(t)
+}
+
+let make = (ctx: Ctx.t, stage, settings) => {
+  let t = {
+    ctx,
+    stage,
+    settings,
+    bank: Library.makeSource(~id="bank", ~name="This bank", ~kind=Bank),
+    bundled: Library.bundled->Array.map(((id, name, _)) => Library.makeSource(~id, ~name, ~kind=Bundled)),
+    library: BankLibrary.make(ctx.pc, settings),
+    cached: [],
+    keeping: Set.make(),
+    reading: false,
+    opened: [],
+    text: "",
+    filters: Library.noFilters,
+    bundledRead: false,
+    nextFileId: 0,
+    refresh: None,
+    addFiles: None,
+  }
+  t.library->BankLibrary.listen(() => syncLibrary(t))
+  t
+}
+
+let dispose = t => t.library->BankLibrary.dispose
 
 let readBundled = t =>
   if !t.bundledRead {
@@ -66,19 +150,34 @@ let readBundled = t =>
     })
   }
 
-let baseName = name =>
-  switch name->String.lastIndexOf(".") {
-  | i if i > 0 => name->String.slice(~start=0, ~end=i)
-  | _ => name
-  }
+// The extension a file is kept under in the library: Porridge's own JSON as .porridge.
+let keptExtension = name => {
+  let ext = name->String.toLowerCase->String.slice(~start=String.length(baseName(name)))
+  ext == ".json" || ext == "" ? ".porridge" : ext
+}
 
-// Reads files into sources of their own; returns the ones that could be read.
+// Reads files into sources of their own (in the plugin, kept in its library); returns the ones
+// that could be read.
 let readFiles = async (t, files: array<file>) => {
   let added = []
   for i in 0 to Array.length(files) - 1 {
     let file = files->Array.getUnsafe(i)
-    switch (await readBytes(file))->Result.flatMap(Preset.parseForLoading(_, file->fileName)) {
-    | Ok({presets}) =>
+    let bytes = await readBytes(file)
+    switch (bytes, bytes->Result.flatMap(Preset.parseForLoading(_, file->fileName))) {
+    | (Ok(bytes), Ok({presets})) if t.library.available =>
+      let name = baseName(file->fileName)
+      let id = t.library->BankLibrary.keep(~name, ~ext=keptExtension(file->fileName), bytes, presets)
+      let sourceId = "lib:" ++ id
+      let source = switch t.cached->Array.find(((s, _)) => s.id == sourceId) {
+      | Some((s, _)) => s
+      | None =>
+        let s = Library.makeSource(~id=sourceId, ~name, ~kind=Cached, ~presets)
+        t.keeping->Set.add(id)
+        t.cached = [...t.cached, (s, id)]
+        s
+      }
+      added->Array.push(source)
+    | (_, Ok({presets})) =>
       t.nextFileId = t.nextFileId + 1
       let source = Library.makeSource(
         ~id="file" ++ Int.toString(t.nextFileId),
@@ -88,7 +187,7 @@ let readFiles = async (t, files: array<file>) => {
       )
       t.opened = [...t.opened, source]
       added->Array.push(source)
-    | Error(e) => t.ctx.toast(e)
+    | (_, Error(e)) => t.ctx.toast(e)
     }
   }
   added
@@ -106,6 +205,7 @@ let show = t => {
   let programs = ctx.programs
   ctx.menu->Menu.close
   readBundled(t)
+  t.library->BankLibrary.refresh
 
   // the current program as it is, live edits included: what Cancel puts back
   let kept = programs->ProgramStore.captureCurrent
@@ -187,7 +287,7 @@ let show = t => {
       | Bank =>
         programs->ProgramStore.keep(kept)
         programs->ProgramStore.select(e.index, ~keepEdits=false)
-      | Bundled | File =>
+      | Bundled | Cached | File =>
         programs->ProgramStore.loadIntoCurrent(e.preset)
         ctx.toast(`Loaded "${Preset.name(e.preset)}" into program ${ProgramStore.number(programs.current)}`)
       }
@@ -353,20 +453,29 @@ let show = t => {
       | Failed(_) => "–"
       | Ready => Int.toString(countIn(Some(s)))
       }
-      let r = row(s.name, n, ~on=t.filters.source == Some(s.id), ~cls=s.kind == File ? " file" : "", () =>
+      let bank = s.kind == Cached ? bankOf(t, s) : None
+      let opened = s.kind == File || s.kind == Cached && bank->Option.mapOr(true, b => b.origin == Opened)
+      let r = row(s.name, n, ~on=t.filters.source == Some(s.id), ~cls=opened ? " file" : "", () =>
         setFilters({...t.filters, source: Some(s.id)})
       )
-      switch s.status {
-      | Failed(e) =>
+      switch (s.status, bank) {
+      | (Failed(e), _) =>
         r->addClass("bad")
         r->setAttribute("title", Str(`Couldn't read it: ${e}`))
+      | (_, Some({origin: Folder, path})) => r->setAttribute("title", Str(path))
+      | (_, _) if s.kind == Cached => r->setAttribute("title", Str("Opened here before; the plugin keeps it"))
       | _ => ()
       }
-      if s.kind == File {
+      if opened {
         let x = el("span", ~cls="brw-srm", ~text="✕", ~parent=r)
+        x->setAttribute("title", Str(s.kind == Cached ? "Forget this file" : "Close this file"))
         x->onMouse(#click, ev => {
           ev->stopPropagation
           t.opened = t.opened->Array.filter(o => o !== s)
+          if s.kind == Cached {
+            t.cached = t.cached->Array.filter(((c, _)) => c !== s)
+            bank->Option.forEach(b => t.library->BankLibrary.remove(b.id))
+          }
           if t.filters.source == Some(s.id) {
             t.filters = {...t.filters, source: None}
           }
@@ -381,6 +490,49 @@ let show = t => {
     })
     let add = el("div", ~cls="brw-srow brw-open", ~text="+ open files…", ~parent=side)
     add->onMouse(#click, _ => openFiles())
+
+    // the folders the plugin looks in for banks
+    let library = t.library
+    if library.available {
+      heading("bank folders")
+      library
+      ->BankLibrary.folders
+      ->Array.forEach(folder => {
+        let r = el("div", ~cls="brw-srow brw-folder", ~parent=side)
+        let name = folder->String.split("/")->Array.flatMap(String.split(_, "\\"))->Array.findLast(p => p != "")
+        el("span", ~cls="brw-slabel", ~text=name->Option.getOr(folder), ~parent=r)->ignore
+        r->setAttribute("title", Str(folder))
+        let x = el("span", ~cls="brw-srm", ~text="✕", ~parent=r)
+        x->setAttribute("title", Str("Stop looking in this folder"))
+        x->onMouse(#click, ev => {
+          ev->stopPropagation
+          library->BankLibrary.removeFolder(folder)
+        })
+      })
+      let folderInput = el("input", ~cls="brw-addfolder", ~parent=side)
+      folderInput->setPlaceholder("+ add a folder: paste its path")
+      folderInput->setSpellcheck(false)
+      folderInput->onKeyDown(k => {
+        k->stopPropagation
+        switch k->key {
+        | "Enter" =>
+          library->BankLibrary.addFolder(folderInput->value)
+          folderInput->setValue("")
+        | "Escape" => folderInput->setValue("")
+        | _ => ()
+        }
+      })
+      if library->BankLibrary.folders != [] {
+        let rescan = el(
+          "div",
+          ~cls="brw-srow brw-open",
+          ~text=library.scanning ? "looking for banks…" : "↻ look again",
+          ~parent=side,
+        )
+        rescan->setAttribute("title", Str("Look through the folders for new and changed banks"))
+        rescan->onMouse(#click, _ => library->BankLibrary.scan)
+      }
+    }
 
     let facet = (title, which: Library.facet, picked) => {
       let values = Library.facetCounts(all, q, t.filters, which)

@@ -16,6 +16,7 @@ import * as Preset from "../../ui/Preset.res.mjs";
 import * as Bank from "../../ui/Bank.res.mjs";
 import * as OatmealFormat from "../../ui/oatmeal/OatmealFormat.res.mjs";
 import * as Scala from "../../ui/Scala.res.mjs";
+import * as FxRack from "../../ui/FxRack.res.mjs";
 import { root, checker } from "./lib.mjs";
 
 const { fail, done } = checker ();
@@ -70,13 +71,25 @@ if (! legacy || ! legacy.every ((p, i) => sameValues (presets[i].values, p.value
 
 // missing fields take their defaults
 const sparse = Preset.parseFile (new TextEncoder().encode (`{"porridge":"preset","version":1,"name":"x","params":{"Cutoff":0.25}}`));
-const init = Preset.make ("Init");
 if (sparse.TAG !== "Ok") fail ("sparse preset didn't parse");
 else
 {
     const p = sparse._0.presets[0];
     if (p.values.get ("Cutoff") !== 0.25) fail ("sparse: Cutoff");
-    if (! [...init.values].every (([id, x]) => id === "Cutoff" || p.values.get (id) === x)) fail ("sparse: defaults");
+    if (! [...Preset.defaultValues()].every (([id, x]) => id === "Cutoff" || p.values.get (id) === x)) fail ("sparse: defaults");
+}
+
+// Init's rack is empty, and Oatmeal programs leave their idle effects out of it (but keep their
+// settings, and export as they were)
+{
+    const init = Preset.make ("Init");
+    if (! [1, 2, 3, 4, 5, 6, 7, 8].every (k => init.values.get ("FX_Rack_" + k) === 0)) fail ("Init's rack isn't empty");
+    if (! programs.every ((p, i) =>
+    {
+        const preset = Preset.fromOatmeal (p.bytes);
+        const rack = FxRack.read (id => preset.values.get (id) ?? 0);
+        return rack.every (e => ! FxRack.isFirst (e) || FxRack.isOn (e, id => preset.values.get (id) ?? 0));
+    })) fail ("an Oatmeal program keeps an idle effect in the rack");
 }
 
 // modulations are written by key and fill the matrix slots in order
@@ -106,6 +119,7 @@ else
 // list values Porridge added become Oatmeal's nearest on export, and are reported
 {
     const p = Preset.make ("extended");
+    [1, 2, 3, 4].forEach (k => p.values.set ("FX_Rack_" + k, k));   // Oatmeal's four, in FX_Order's order
     p.values.set ("O1_Waveform", 7); p.values.set ("Filter", 21); p.values.set ("OscMix", 5); p.values.set ("FX_Order", 3);
     const v = Bank.programValues (Preset.toOatmeal (p));
     if (v.get ("O1_Waveform") !== 2 || v.get ("Filter") !== 9 || v.get ("OscMix") !== 0)

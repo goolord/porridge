@@ -13,6 +13,8 @@ type t = {
   changeListeners: array<unit => unit>,
   mutable current: int,
   mutable programs: array<Preset.t>,
+  // what the bank calls itself (saved with it, and the name of its file), or ""
+  mutable bankName: string,
   mutable shapes: tables,
   // whether the patch is known to hold `shapes` (until then a program sends all its tables)
   mutable shapesKnown: bool,
@@ -36,6 +38,7 @@ let make = (pc, model, ~onMessage) => {
     changeListeners: [],
     current: 0,
     programs,
+    bankName: "",
     shapes: Preset.copyTables((programs->Array.getUnsafe(0)).tables),
     shapesKnown: false,
     tuning: None,
@@ -63,8 +66,9 @@ let onState = (t, {key, value}: PatchConnection.storedStateEvent) =>
   switch (StoredState.keyOf(key), value) {
   | (Some(key), String(s)) if t.stored->Map.get(key) == Some(s) => ()
   | (Some(StoredState.Bank), String(bank)) if StoredState.isBank(bank) =>
-    Preset.decodeBank(bank)->Option.forEach(presets => {
+    Preset.decodeNamedBank(bank)->Option.forEach(((name, presets)) => {
       t.programs = Preset.fillBank(presets)
+      t.bankName = name
       changed(t)
     })
   | (Some(StoredState.Program), Number(i)) if Float.isFinite(i) =>
@@ -169,7 +173,7 @@ let captureCurrent = (t): Preset.t => {
 // keeps the live edits in the current program
 let keepCurrent = t => t.programs->Array.setUnsafe(t.current, captureCurrent(t))
 
-let storeBank = t => store(t, StoredState.Bank, Preset.encodeBank(t.programs))
+let storeBank = t => store(t, StoredState.Bank, Preset.encodeBank(t.programs, ~name=t.bankName))
 
 let bankChanged = t => {
   storeBank(t)
@@ -302,7 +306,19 @@ let preview = (t, p) => apply(t, p)
 let restore = (t, kept: Preset.t) => apply(t, kept)
 let keep = (t, kept: Preset.t) => t.programs->Array.setUnsafe(t.current, kept)
 
-let initCurrent = t => loadIntoCurrent(t, Preset.make("Init"))
+// Init keeps the program's author, for someone writing a bank.
+let initCurrent = t => {
+  let init = Preset.make("Init")
+  loadIntoCurrent(t, {...init, meta: {...init.meta, author: meta(t).author}})
+}
+
+// A bank of Init programs to start writing one: its name, and the author of every program.
+let newBank = (t, ~name, ~author) => {
+  t.programs = Preset.fillBank([])->Array.map(p => {...p, meta: {...Preset.emptyMeta("Init"), author}})
+  t.bankName = name
+  select(t, 0, ~keepEdits=false)
+  t.message(`New bank${name == "" ? "" : ` "${name}"`}: ${Int.toString(bankPrograms)} Init programs`)
+}
 
 let panic = t => t.pc->PatchConnection.sendEventOrValue("panic", 1)
 
@@ -318,8 +334,9 @@ let loadFile = (t, bytes, filename) =>
     | Ok({kind: Single, presets: [p]}) =>
       loadIntoCurrent(t, p)
       t.message(`Loaded "${Preset.name(p)}" into program ${Int.toString(t.current + 1)}`)
-    | Ok({presets: programs}) =>
+    | Ok({presets: programs, name}) =>
       t.programs = Preset.fillBank(programs)
+      t.bankName = name != "" ? name : Web.baseName(filename)
       select(t, 0, ~keepEdits=false)
       t.message(`Loaded bank ${filename} (${Int.toString(Array.length(programs))} programs)`)
     }
@@ -357,9 +374,11 @@ let downloadProgram = t => {
   download(Preset.writePreset(p), safeName(Preset.name(p)) ++ ".porridge")
 }
 
+let bankFileName = t => t.bankName == "" ? "porridge bank" : safeName(t.bankName)
+
 let downloadBank = t => {
   keepCurrent(t)
-  download(Preset.writeBank(t.programs), "porridge bank.porridge")
+  download(Preset.writeBank(t.programs, ~name=t.bankName), bankFileName(t) ++ ".porridge")
 }
 
 let warnOatmeal = (t, presets) => {
@@ -382,7 +401,7 @@ let exportOatmealProgram = t => {
 let exportOatmealBank = t => {
   keepCurrent(t)
   warnOatmeal(t, t.programs)
-  download(writeBankChunk(t.programs->Array.map(Preset.toOatmeal)), "porridge bank.omb")
+  download(writeBankChunk(t.programs->Array.map(Preset.toOatmeal)), bankFileName(t) ++ ".omb")
 }
 
 let learn = (t, ccId) => {

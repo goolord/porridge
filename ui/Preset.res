@@ -69,9 +69,26 @@ let emptyMeta = name => {
   macroNames: Array.make(~length=ModMatrix.macros, ""),
 }
 
+// Leaves Oatmeal's chorus, delay, reverb and EQ out of the rack where they do nothing: switched
+// off, or for the EQ, with every band off. Oatmeal always runs all four, so its programs (and
+// Init, which starts from its defaults) would otherwise carry idle effects in the chain. The
+// effects' settings stay, for when one is put back in the rack.
+let withoutIdleEffects = (values: Bank.values) => {
+  let get = id => values->Map.get(id)->Option.getOr(0.)
+  let idle = (e: FxRack.effect) =>
+    FxRack.isFirst(e) &&
+    (!FxRack.isOn(e, get) || e.kind == #eq && FxRack.eqBandTypes(e)->Array.every(id => get(id) == 0.))
+  let rack = FxRack.read(get)
+  if rack->Array.some(idle) {
+    FxRack.values(rack->Array.filter(e => !idle(e)))->Array.forEach(((id, x)) => values->Map.set(id, x))
+  }
+  values
+}
+
+// Init: the defaults, with an empty effects rack.
 let make = name => {
   meta: emptyMeta(name),
-  values: defaultValues(),
+  values: withoutIdleEffects(defaultValues()),
   tables: copyTables(Lazy.get(defaultTables)),
   tuning: None,
   impulses: Impulse.none(),
@@ -114,7 +131,13 @@ let fromOatmeal = (bytes: Uint8Array.t) => {
   Bank.programValues(bytes)->Map.forEachWithKey((x, id) =>
     clampValue(id, x)->Option.forEach(x => values->Map.set(id, x))
   )
-  {meta: emptyMeta(getName(bytes)), values, tables: extractTables(bytes), tuning: None, impulses: Impulse.none()}
+  {
+    meta: emptyMeta(getName(bytes)),
+    values: withoutIdleEffects(values),
+    tables: extractTables(bytes),
+    tuning: None,
+    impulses: Impulse.none(),
+  }
 }
 
 let valueOf = (p, id) =>
@@ -156,6 +179,7 @@ let porridgeOnly = p => {
       Some(`the rack's extra effects (${copies->Array.map(e => FxRack.kindName(e.kind))->Array.join(", ")})`)
     },
     changed(Curves) || changed(Decay1Curves) ? Some("the envelope curves") : None,
+    changed(OscEnvs) ? Some("the oscillator envelopes") : None,
     changed(LfoExtras) ? Some("the LFO delay, slew, steps and one-shot") : None,
     changed(UnisonExtras) ? Some("the unison extras") : None,
     extended(["Sat_Type"]) ? Some("the custom distortion shape (exported as soft clipping)") : None,
@@ -403,7 +427,8 @@ let bankToJson = (presets, ~name="") =>
 
 type kind = Single | Many
 
-type parsed = {kind: kind, presets: array<t>, warnings: array<string>}
+// name: a bank file's name for itself, or ""
+type parsed = {kind: kind, presets: array<t>, warnings: array<string>, name: string}
 
 let parseJson = (text): result<parsed, string> =>
   switch JSON.parseOrThrow(text) {
@@ -417,7 +442,7 @@ let parseJson = (text): result<parsed, string> =>
         ? ["this file is from a newer Porridge; some settings may be missing"]
         : []
     switch d->Dict.get("porridge") {
-    | Some(String("preset")) => Ok({kind: Single, presets: [fromJsonObject(d)], warnings})
+    | Some(String("preset")) => Ok({kind: Single, presets: [fromJsonObject(d)], warnings, name: ""})
     | Some(String("bank")) =>
       let presets = switch d->Dict.get("presets") {
       | Some(Array(items)) =>
@@ -429,7 +454,7 @@ let parseJson = (text): result<parsed, string> =>
         )
       | _ => []
       }
-      Ok({kind: Many, presets, warnings})
+      Ok({kind: Many, presets, warnings, name: getString(d, "name")})
     | _ => Error("not a Porridge preset or bank")
     }
   | _ => Error("not a Porridge preset or bank")
@@ -467,6 +492,7 @@ let parseFile = (bytes): result<parsed, string> =>
           kind: kind == Program ? Single : Many,
           presets: programs->Array.map(p => fromOatmeal(p.bytes)),
           warnings,
+          name: "",
         })
       | Error(e) => Error(e)
       }
@@ -505,9 +531,9 @@ let encodePreset = p =>
     json
   }
 
-let encodeBank = presets => {
+let encodeBank = (presets, ~name="") => {
   // the bank's fields, ending in "presets":[]}
-  let empty = JSON.stringify(bankToJson([]))
+  let empty = JSON.stringify(bankToJson([], ~name))
   String.slice(empty, ~start=0, ~end=-2) ++
   presets->Array.map(encodePreset)->Array.join(",") ++ "]}"
 }
@@ -544,13 +570,15 @@ let decodeFirst = s =>
   | exception _ => None
   }
 
-// Older sessions stored the bank as base64 Oatmeal chunks.
-let decodeBank = s =>
+// The bank's name and presets. Older sessions stored the bank as base64 Oatmeal chunks.
+let decodeNamedBank = s =>
   if String.startsWith(String.trim(s), "{") {
     switch parseJson(s) {
-    | Ok({presets}) => Some(presets)
+    | Ok({presets, name}) => Some((name, presets))
     | Error(_) => None
     }
   } else {
-    Some(Bank.decodeBank(s)->Array.map(fromOatmeal))
+    Some(("", Bank.decodeBank(s)->Array.map(fromOatmeal)))
   }
+
+let decodeBank = s => decodeNamedBank(s)->Option.map(((_, presets)) => presets)

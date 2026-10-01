@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { programSize, bankHeaderSize } from "../../ui/oatmeal/OatmealFormat.res.mjs";
 import { rackEntries } from "../../ui/PorridgeParams.res.mjs";
 import * as FilterTypes from "../../ui/FilterTypes.res.mjs";
+import * as ModMatrix from "../../ui/ModMatrix.res.mjs";
 import { root, outDir, render, checker } from "./lib.mjs";
 
 const dir = outDir ("smoke");
@@ -65,6 +66,33 @@ for (let m = 0; m < 5; ++m)
     sounds (`algo reverb model ${m}`, { FX_Rack_5: 33, Rv_On: 1, Rv_Model: m, Rv_Decay: 0.4 }, { tail: true });
 for (let k = 0; k < 11; ++k)
     sounds (`convolve impulse ${k}`, { FX_Rack_5: 37, Cv_On: 1, Cv_Impulse: k, Cv_Mix: 0.5 }, { tail: true });
+
+// the oscillators' own envelopes: with a short decay to silence, the chord dies away under the
+// amp envelope's sustain; switched on at their defaults (a gate), it sounds as before
+{
+    const rms = (name, sets, from, to) =>
+    {
+        const [l, r] = render ({ program: prog, events, frames: rate, rate, sets, out: join (dir, name + ".f32") });
+        let sum = 0;
+        for (let i = Math.floor (from * rate); i < Math.floor (to * rate); ++i) sum += l[i] * l[i] + r[i] * r[i];
+        return Math.sqrt (sum / ((to - from) * rate));
+    };
+    const quiet = { N_Amp: 0 };
+    const base = rms ("osc_env_off", quiet, 0.5, 0.9);
+    const decayed = rms ("osc_env_decay", { ...quiet, OE1_On: 1, OE2_On: 1, OE1_Sustain: 0, OE2_Sustain: 0,
+                                             OE1_Decay2: 60, OE2_Decay2: 60 }, 0.5, 0.9);
+    const gate = rms ("osc_env_gate", { ...quiet, OE1_On: 1, OE2_On: 1 }, 0.5, 0.9);
+    const early = rms ("osc_env_decay", { ...quiet, OE1_On: 1, OE2_On: 1, OE1_Sustain: 0, OE2_Sustain: 0,
+                                           OE1_Decay2: 60, OE2_Decay2: 60 }, 0, 0.02);
+    check (base > 1e-3 && decayed < base * 0.01 && early > 1e-3,
+           `osc envelopes decay      ${base.toFixed (4)} -> ${decayed.toExponential (2)} (first 20 ms ${early.toFixed (4)})`);
+    check (Math.abs (gate - base) < base * 0.05, `osc envelopes as a gate  ${base.toFixed (4)} vs ${gate.toFixed (4)}`);
+}
+
+// the noise source, on the pitch and on the cutoff
+const noise = ModMatrix.sourceIndex ("noise");
+sounds ("noise > pitch", { Mod1_Source: noise, Mod1_Target: ModMatrix.targetIndex ("finePitch"), Mod1_Amount: 0.5 }, { tail: false });
+sounds ("noise > cutoff", { Mod1_Source: noise, Mod1_Target: ModMatrix.targetIndex ("Cutoff"), Mod1_Amount: 0.3 }, { tail: false });
 
 // Porridge's filter types, at a mid cutoff with some resonance
 for (let t = FilterTypes.firstPorridge; t < FilterTypes.all.length; ++t)

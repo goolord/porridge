@@ -10,6 +10,8 @@ type kind =
   | Choice({names: array<string>, init: int})
   // the same range, knob law and text as an Oatmeal parameter (a second effect's copy of it)
   | Like(string)
+  // ... with a default of its own
+  | LikeWithDefault(string, float)
 
 type spec = {id: string, name: string, kind: kind}
 
@@ -582,6 +584,37 @@ let copySpecsOf = kinds => kinds->Array.flatMap(k =>
 let copySpecs = copySpecsOf(rackKinds->Array.filter(k => !k.firstInRack))
 let newCopySpecs = copySpecsOf(rackKinds->Array.filter(k => k.firstInRack))
 
+// Each oscillator's own envelope: while it's on, the oscillator's level follows it (under the
+// amp envelope, which still ends the note). Its stages are like the amp envelope's, with curves
+// of their own; it runs once per 64-sample block, as the mod envelopes do, and the oscillator
+// ramps its level between blocks.
+let oscEnvPrefix = n => `OE${Int.toString(n)}_`
+let oscEnvName = n => `Osc${Int.toString(n)}`
+
+let oscEnvSpecs = [1, 2]->Array.flatMap(n => {
+  let id = k => oscEnvPrefix(n) ++ k
+  let name = `Osc ${Int.toString(n)} env`
+  let env = oscEnvName(n)
+  [
+    {id: id("On"), name, kind: Choice({names: onOff, init: 0})},
+    {id: id("Attack"), name: name ++ " attack", kind: Like("Attack")},
+    {id: id("Hold"), name: name ++ " hold", kind: Like("Hold")},
+    // (decay 2's range and text: decay 1's text reads the amp envelope's breakpoint)
+    {id: id("Decay1"), name: name ++ " decay 1", kind: Like("Decay2")},
+    {id: id("Breakpoint"), name: name ++ " breakpoint", kind: Like("Breakpoint")},
+    {id: id("Decay2"), name: name ++ " decay 2", kind: Like("Decay2")},
+    // (at the top, so that switching it on leaves the level as it was: a gate)
+    {id: id("Sustain"), name: name ++ " sustain", kind: LikeWithDefault("Sustain", 1.)},
+    {id: id("Release"), name: name ++ " release", kind: Like("Release")},
+    ...stageNames->Array.map(((stage, stageName)) => {
+      id: curveId(env, stage),
+      name: `${name} ${stageName} curve`,
+      kind: curveKind,
+    }),
+    {id: decay1CurveId(env), name: `${name} decay 1 curve`, kind: curveKind},
+  ]
+})
+
 type feature =
   | Macros
   | Modulations
@@ -601,6 +634,7 @@ type feature =
   | FilterDrive
   | RackEffects
   | Decay1Curves
+  | OscEnvs
 
 let groups = [
   (Macros, macroSpecs),
@@ -622,6 +656,7 @@ let groups = [
   // Porridge's own effects, then their copies
   (RackEffects, Array.concat(newKindSpecs->Array.flat, newCopySpecs)),
   (Decay1Curves, decay1CurveSpecs),
+  (OscEnvs, oscEnvSpecs),
 ]
 
 let all = groups->Array.flatMap(((_, specs)) => specs)

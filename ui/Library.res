@@ -1,5 +1,6 @@
 // What the preset browser searches: the programs in the bank, the banks bundled with the
-// plugin (presets/), and files opened in the browser. Searching and filtering live here,
+// plugin (presets/), the banks the plugin keeps (BankLibrary: from the user's bank folders, and
+// files opened before), and files opened in the browser. Searching and filtering live here,
 // apart from the browser's elements, so tools/test/library.mjs can check them.
 //
 // A search is words and field filters: every word must appear in the name, category, tags,
@@ -7,7 +8,8 @@
 // "author:porridge", "name:keys"; quotes keep spaces: tag:"per-voice pan"). On top of that,
 // the browser's facets pick categories (any of them), tags (all of them) and authors (any).
 
-type kind = Bank | Bundled | File
+// Cached: in the plugin's bank library
+type kind = Bank | Bundled | Cached | File
 
 type status = Loading | Ready | Failed(string)
 

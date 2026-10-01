@@ -272,9 +272,27 @@ let make = (host, pc) => {
   button(head, "Info", "Name, author, category, tags and description of this program", () =>
     InfoDialog.show(ctx, stage)
   )->ignore
-  button(head, "Init", "Reset this program to the Init patch", () =>
-    programs->ProgramStore.initCurrent
-  )->ignore
+  let init = ref(None)
+  let initButton = button(head, "Init ▾", "Reset this program to the Init patch, or start a new bank of Init programs", () =>
+    init.contents->Option.forEach(open_ => open_())
+  )
+  init :=
+    Some(
+      () =>
+        menu->Menu.show(
+          initButton,
+          [
+            {Menu.label: "Init this program", value: 0},
+            {Menu.label: `New bank of ${Int.toString(OatmealFormat.bankPrograms)} Init programs…`, value: 1},
+          ],
+          -1,
+          i =>
+            switch i {
+            | 0 => programs->ProgramStore.initCurrent
+            | _ => NewBankDialog.show(ctx, stage)
+            },
+        ),
+    )
   button(head, "Panic", "Stop all notes and clear effect tails", () =>
     programs->ProgramStore.panic
   )->ignore
@@ -373,6 +391,7 @@ let make = (host, pc) => {
       restoreBrowserChrome()
       settings->Settings.dispose
       hostMenu->HostMenu.dispose
+      browser->PresetBrowser.dispose
       model->ParamModel.dispose
       programs->ProgramStore.dispose
     },

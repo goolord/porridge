@@ -54,7 +54,70 @@ class MockPatchConnection
 
             if (key.startsWith ("porridge:host?"))
                 this.answerHost (key.slice ("porridge:host?".length));
+
+            if (key.startsWith ("porridge:library?"))
+                this.answerLibrary (key.slice ("porridge:library?".length));
         }, 0);
+    }
+    // Stands in for the plugin's bank library (tools/clap/PorridgeLibrary.h), in memory for as long
+    // as the page: every folder "holds" the bundled banks (presets/), so scanning any path finds them.
+    async answerLibrary (request)
+    {
+        const lib = this.library ??= { banks: [], files: new Map(), parts: new Map() };
+        const reply = value => this.stateListeners.forEach (f => f ({ key: "porridge:library", value }));
+        const list = () => reply ({ banks: lib.banks });
+        const toBase64 = bytes =>
+        {
+            let s = "";
+            for (let i = 0; i < bytes.length; i += 32768) s += String.fromCharCode (...bytes.subarray (i, i + 32768));
+            return btoa (s);
+        };
+        const fromBase64 = s => Uint8Array.from (atob (s), c => c.charCodeAt (0));
+        const hash = s => [...s].reduce ((h, c) => Math.imul (h ^ c.charCodeAt (0), 16777619) >>> 0, 2166136261).toString (16);
+
+        if (request.startsWith ("scan="))
+        {
+            const found = [];
+            for (const folder of JSON.parse (request.slice (5)))
+                for (const name of ["vanilla.porridge", "oatmealprs.dat"])
+                {
+                    const id = "f" + hash (folder + "/" + name);
+                    if (! lib.files.has (id))
+                        lib.files.set (id, new Uint8Array (await (await fetch ("../../presets/" + name)).arrayBuffer()));
+                    found.push ({ id, name: name.replace (/\.[^.]*$/, ""), origin: "folder", path: folder + "/" + name, folder,
+                                  size: lib.files.get (id).length, modified: 1 });
+                }
+            lib.banks = [...found, ...lib.banks.filter (b => b.origin === "opened")];
+            return list();
+        }
+        if (request.startsWith ("read="))
+        {
+            const { id, part } = JSON.parse (request.slice (5));
+            const bytes = lib.files.get (id), size = 512 * 1024;
+            if (! bytes) return reply ({ read: { id, error: "not in the library" } });
+            const parts = Math.max (1, Math.ceil (bytes.length / size));
+            return reply ({ read: { id, part, parts, data: toBase64 (bytes.subarray (part * size, (part + 1) * size)) } });
+        }
+        if (request.startsWith ("put="))
+        {
+            const { id, name, part, parts, data } = JSON.parse (request.slice (4));
+            const got = [...(part === 0 ? [] : lib.parts.get (id) ?? []), fromBase64 (data)];
+            lib.parts.set (id, got);
+            if (part + 1 < parts) return;
+            const bytes = new Uint8Array (got.reduce ((n, p) => n + p.length, 0));
+            got.reduce ((at, p) => (bytes.set (p, at), at + p.length), 0);
+            lib.parts.delete (id);
+            lib.files.set (id, bytes);
+            lib.banks = [...lib.banks.filter (b => b.id !== id), { id, name, origin: "opened", path: "", folder: "", size: bytes.length, modified: 1 }];
+            return list();
+        }
+        if (request.startsWith ("remove="))
+        {
+            const id = request.slice (7);
+            lib.banks = lib.banks.filter (b => ! (b.id === id && b.origin === "opened"));
+            return list();
+        }
+        list();
     }
     // Stands in for the host's parameter menu: the requests are kept in hostMenus.
     answerHost (request)

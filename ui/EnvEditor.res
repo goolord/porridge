@@ -101,6 +101,9 @@ type shape = {
   // a zero line
   zero: option<frame => float>,
   dimmed: unit => bool,
+  // the parameter that scales what the envelope does (the filter's env mod, -1..1), drawn as
+  // the envelope at that depth with a label for it, and the label
+  depth: option<(string, unit => string)>,
 }
 
 let handleIds = h => [h.time, h.level, h.curve]->Array.filterMap(id => id)
@@ -130,7 +133,16 @@ let envName = prefix =>
   | "" => "Amp"
   | "F_" => "Filter"
   | "M1_" => "Mod1"
+  | "OE1_" => PorridgeParams.oscEnvName(1)
+  | "OE2_" => PorridgeParams.oscEnvName(2)
   | _ => "Mod2"
+  }
+
+// An oscillator's own envelope (PorridgeParams.oscEnvSpecs): its switch.
+let switchOf = prefix =>
+  switch prefix {
+  | "OE1_" | "OE2_" => Some(prefix ++ "On")
+  | _ => None
   }
 
 // attack, decay 1, decay 2 and release
@@ -140,8 +152,9 @@ let curveIds = prefix => {
   [curve("Attack"), PorridgeParams.decay1CurveId(env), curve("Decay"), curve("Release")]
 }
 
-// Attack, hold, decay 1 to the breakpoint, decay 2 to sustain, release. The amp envelope
-// is drawn in dB like its readouts; the others are linear, like their percentages.
+// Attack, hold, decay 1 to the breakpoint, decay 2 to sustain, release. The amp envelope (and
+// the oscillators', which are like it) is drawn in dB like its readouts; the others are
+// linear, like their percentages.
 let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
   let model = ctx.model
   let id = k => prefix ++ k
@@ -152,7 +165,7 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
   }
   let curve = c => model->ParamModel.get(c)
   let levelDef = model->ParamModel.def(id("Sustain"))
-  let decibels = prefix == ""
+  let decibels = prefix == "" || switchOf(prefix) != None
   let (top, bottom) = (margin, bottomOf(h))
   let yOf = v => {
     let f = decibels ? levelDef.toNorm(v) : v
@@ -262,17 +275,33 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
       model->ParamModel.set(l, l == id("Breakpoint") && fractionAt(y) > 0.985 ? 1. : levelAt(y))
     )
 
+  // the filter envelope moves the cutoff by its env mod at the top (up to 8 octaves either way)
+  let depth = switch prefix {
+  | "F_" =>
+    Some((
+      "F_EnvMod",
+      () =>
+        model->ParamModel.get("F_EnvMod") == 0.
+          ? "env mod 0: the cutoff stays put"
+          : "env mod " ++ model->ParamModel.shortText("F_EnvMod"),
+    ))
+  | _ => None
+  }
+
   {
     ids: [
       ...["Attack", "Hold", "Decay1", "Breakpoint", "Decay2", "Sustain", "Release"]->Array.map(id),
       ...curveIds(prefix),
+      ...depth->Option.mapOr([], ((id, _)) => [id]),
+      ...switchOf(prefix)->Option.mapOr([], id => [id]),
     ],
     fit,
     layout,
     setTime,
     setLevel,
     zero: None,
-    dimmed: () => false,
+    dimmed: () => switchOf(prefix)->Option.mapOr(false, id => model->ParamModel.get(id) == 0.),
+    depth,
   }
 }
 
@@ -387,6 +416,7 @@ let pitch = (ctx: Ctx.t, ~w, ~h): shape => {
     setLevel,
     zero: Some(f => yOf(0., f)),
     dimmed: () => get("PEnv_On") == 0.,
+    depth: None,
   }
 }
 
@@ -401,6 +431,9 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
   let fill = FxGraph.path(ed.g.under, ~cls="fill")
   let ticks = FxGraph.group(ed.g.under)
   let curve = FxGraph.path(ed.g.under, ~cls="curve")
+  // the envelope at its depth: rising from the bottom, or for a negative depth hanging from the top
+  let depthCurve = FxGraph.path(ed.g.under, ~cls="curve depth")
+  let depthLabel = svgEl(ed.g.under, "text", [("class", Str("tick depth")), ("text-anchor", Str("end"))])
   fields->Array.forEachWithIndex(((id, label), i) => ed.values->Grid.param(id, mod(i, 4), i / 4, label))
 
   let frame = ref(shape.fit())
@@ -490,6 +523,21 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
         Str(`${d}L${Float.toString(xb)} ${base}L${Float.toString(xa)} ${base}Z`),
       )
     | _ => fill->setAttribute("d", Str(""))
+    }
+    switch shape.depth {
+    | Some((id, label)) =>
+      let amount = Float.clamp(model->ParamModel.get(id), ~min=-1., ~max=1.)
+      let (top, bottom) = (margin, bottomOf(box.h))
+      let scaled = points->Array.map(((x, y)) => {
+        let f = (bottom - y) / (bottom - top) * Math.abs(amount)
+        (x, amount >= 0. ? bottom - f * (bottom - top) : top + f * (bottom - top))
+      })
+      depthCurve->setAttribute("d", Str(Plots.pathFrom(scaled)))
+      // (at the top, left of the "values" switch)
+      depthLabel->setAttribute("x", Num(amount < 0. ? box.w - 6. : box.w - 58.))
+      depthLabel->setAttribute("y", Num(amount < 0. ? bottomOf(box.h) - 4. : margin + 9.))
+      depthLabel->setTextContent(label())
+    | None => ()
     }
     switch shape.zero {
     | Some(y) =>

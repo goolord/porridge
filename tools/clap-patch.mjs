@@ -13,6 +13,10 @@
 //    { settings: <the file's object>, zoom: <this window's size> }. Nothing is stored in
 //    the plugin's state. See ui/Settings.res. The code is in tools/clap/PorridgeBridge.h, which
 //    is copied next to the wrapper.
+//  - The bank library: the preset browser's bank folders, scanned and cached, and the files
+//    opened in it, kept in <settings folder>/banks. The view asks with keys that start with
+//    "porridge:library?" and the plugin answers with "porridge:library" values; see
+//    tools/clap/PorridgeLibrary.h and ui/BankLibrary.res.
 //  - The host's menu for a parameter (CLAP's context-menu extension; in FL Studio it has
 //    Create automation clip, Link to controller and so on), which a double right-click on a
 //    control opens. The view asks through the same bridge, with keys that start with
@@ -157,7 +161,8 @@ if (open(join(project, "include", "choc", "choc", "javascript", "choc_javascript
 
 if (!open(join(project, "helpers", "clap", "cmaj_CLAPPlugin.h"))) process.exit(0);
 
-copyFileSync(join(root, "tools", "clap", "PorridgeBridge.h"), join(project, "helpers", "clap", "PorridgeBridge.h"));
+for (const header of ["PorridgeBridge.h", "PorridgeLibrary.h"])
+  copyFileSync(join(root, "tools", "clap", header), join(project, "helpers", "clap", header));
 
 insertBefore(
   `#include "cmajor/helpers/cmaj_PluginHelpers.h"\n`,
@@ -170,8 +175,11 @@ insertBefore(
 `,
 );
 
-insertAfter(`#include "choc/gui/choc_DesktopWindow.h"\n`, `#include "choc/text/choc_Files.h"\n#include "choc/text/choc_JSON.h"\n`);
-insertAfter(`#include <algorithm>\n`, `#include <cmath>\n#include <cstdlib>\n`);
+insertAfter(
+  `#include "choc/gui/choc_DesktopWindow.h"\n`,
+  `#include "choc/text/choc_Files.h"\n#include "choc/text/choc_JSON.h"\n#include "choc/memory/choc_Base64.h"\n`,
+);
+insertAfter(`#include <algorithm>\n`, `#include <cmath>\n#include <cstdlib>\n#include <fstream>\n`);
 
 //==============================================================================
 insertAfter(
@@ -262,6 +270,7 @@ insertAfter(
     void handleViewRequest (std::string_view);
     void handleSettingsRequest (std::string_view);
     void sendSettingsToView();
+    void handleLibraryRequest (std::string_view);
 
     ${marker} the host's menu for a parameter, which the view asks for and on_main_thread shows
     struct HostMenuRequest
@@ -362,6 +371,22 @@ inline void Plugin::Impl::handleViewRequest (std::string_view key)
         handleSettingsRequest (key.substr (porridge::requestPrefix.size()));
     else if (choc::text::startsWith (key, porridge::hostRequestPrefix))
         handleHostRequest (key.substr (porridge::hostRequestPrefix.size()));
+    else if (choc::text::startsWith (key, porridge::library::requestPrefix))
+        handleLibraryRequest (key.substr (porridge::library::requestPrefix.size()));
+}
+
+${marker} the bank library's requests (tools/clap/PorridgeLibrary.h); some parts aren't answered
+inline void Plugin::Impl::handleLibraryRequest (std::string_view request)
+{
+    if (! editor)
+        return;
+
+    auto reply = porridge::bankLibrary().handle (request);
+
+    if (! reply.isVoid())
+        editor->getPatchWebView().sendMessage (
+            choc::json::create ("type", "state_key_value",
+                                "message", choc::json::create ("key", porridge::library::replyKey, "value", reply)));
 }
 
 ${marker} ?get answers with the settings; ?zoom=<factor> asks the host to resize the window;

@@ -30,7 +30,9 @@ ui/                     patch view (ReScript)
   Index.res               entry point; View.res builds the pages
   Preset.res              Porridge's preset format; PorridgeParams.res and ModMatrix.res
                           list the parameters and modulation sources/targets Oatmeal doesn't have
-  PresetBrowser.res       the preset browser; Library.res searches and filters for it
+  PresetBrowser.res       the preset browser; Library.res searches and filters for it, and
+                          BankLibrary.res asks the plugin for the banks it keeps
+  NewBankDialog.res       starts a new bank of Init programs, for someone writing one
   FilterTypes.res         the filter types; FilterGraph.res their response pictures, with a
                           point to drag for cutoff and resonance
   FxPanels.res            the tabs of Porridge's own effects (CompEditor.res: the compressor's);
@@ -47,6 +49,9 @@ tools/
   gen.mjs                 regenerates ParamStore/Slots/ModTables from the parameter tables, and
                           the test host's field table and manifest
   bundle.mjs              bundles the compiled view and worker into bundle/
+  clap/                   the C++ clap-patch.mjs adds: PorridgeBridge.h (settings, the host's
+                          menu, the view's requests), PorridgeLibrary.h (the bank library:
+                          bank folders scanned and copied, files opened in the browser kept)
   clap-patch.mjs          patches the generated CLAP wrapper: aspect-locked resizing, the
                           interface size setting, the host's parameter menu, the
                           64-sample latency, and a faster start (a QuickJS worker, one
@@ -58,7 +63,8 @@ tools/
                           golden.mjs (bit-exact factory renders, in Oat mode), presets.mjs
                           (format round trips), library.mjs (the preset browser's search),
                           smoke.mjs (Porridge's own effects and filter types sound, stay
-                          bounded and fall silent), oneshot.mjs (one-shot LFOs hold their
+                          bounded and fall silent; the oscillator envelopes and the noise
+                          source), banklibrary.cpp (the plugin's bank library on real files), oneshot.mjs (one-shot LFOs hold their
                           end), levels.mjs (the Vanilla bank's gains, levels and motion);
                           lib.mjs has what they share
   vanilla-bank.mjs        builds presets/vanilla.porridge

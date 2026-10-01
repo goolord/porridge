@@ -17,6 +17,26 @@ let shapes = [
 
 let clipboard = ref(None)
 
+// The parameter that plays a shape, and its "User" value: drawing a shape switches its
+// oscillator or LFO to it (a "User PWM" waveform stays as it is).
+let player = (table: OatmealFormat.table) =>
+  switch table {
+  | Wave1 => Some(("O1_Waveform", 4.))
+  | Wave2 => Some(("O2_Waveform", 4.))
+  | LfoShape1 => Some(("LFO_1_Shape", 6.))
+  | LfoShape2 => Some(("LFO_2_Shape", 6.))
+  | VelocityCurve | AftertouchCurve => None
+  }
+
+let useShape = (ctx: Ctx.t, table) =>
+  player(table)->Option.forEach(((id, user)) => {
+    let now = ctx.model->ParamModel.get(id)
+    let isUser = id->String.endsWith("Waveform") ? now == 4. || now == 5. : now == user
+    if !isUser {
+      ctx.model->ParamModel.gestureSet(id, user)
+    }
+  })
+
 type t = {
   select: OatmealFormat.table => unit,
   // redraws from the program store
@@ -70,6 +90,12 @@ let build = (ctx: Ctx.t, page) => {
   let waveBox = {x: 10., y: 54., w: width, h: 232.}
   let lfoHeight = 446.
 
+  // every edit goes through here, so that the shape being edited is the one that plays
+  let setShape = (data, ~commit) => {
+    useShape(ctx, shape().table)
+    ctx.programs->ProgramStore.setShape(shape().table, data, ~commit)
+  }
+
   let harmonicsRef = ref(None)
   let withHarmonics = f =>
     if shape().bipolar {
@@ -85,12 +111,12 @@ let build = (ctx: Ctx.t, page) => {
     ~bipolar=true,
     ~grid=16,
     ~onEdit=d => {
-      ctx.programs->ProgramStore.setShape(shape().table, d, ~commit=false)
+      setShape(d, ~commit=false)
       // (measured once a frame while drawing)
       withHarmonics(HarmonicEditor.refreshSoon)
     },
     ~onCommit=d => {
-      ctx.programs->ProgramStore.setShape(shape().table, d, ~commit=true)
+      setShape(d, ~commit=true)
       refreshHarmonics()
     },
   )
@@ -100,8 +126,8 @@ let build = (ctx: Ctx.t, page) => {
     editor,
     ~levels={x: 10., y: 292., w: width, h: 128.},
     ~phases={x: 10., y: 426., w: width, h: 76.},
-    ~onEdit=() => ctx.programs->ProgramStore.setShape(shape().table, editor.data, ~commit=false),
-    ~onCommit=() => ctx.programs->ProgramStore.setShape(shape().table, editor.data, ~commit=true),
+    ~onEdit=() => setShape(editor.data, ~commit=false),
+    ~onCommit=() => setShape(editor.data, ~commit=true),
   )
   harmonicsRef := Some(harmonics)
 
@@ -122,7 +148,7 @@ let build = (ctx: Ctx.t, page) => {
   let setFromSample = (a: WaveImport.analysis, ~commit) => {
     editor.data->ShapeEditor.blit(a.wave)
     editor->ShapeEditor.draw
-    ctx.programs->ProgramStore.setShape(shape().table, editor.data, ~commit)
+    setShape(editor.data, ~commit)
     refreshHarmonics()
   }
   let stripRef = ref(None)
@@ -143,7 +169,7 @@ let build = (ctx: Ctx.t, page) => {
             }
           )
         ),
-      ~onEnd=() => ctx.programs->ProgramStore.setShape(shape().table, editor.data, ~commit=true),
+      ~onEnd=() => setShape(editor.data, ~commit=true),
     )
     stripRef := Some(s)
     s

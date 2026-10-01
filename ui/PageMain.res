@@ -157,7 +157,7 @@ let build = (ctx: Ctx.t, page) => {
   // sources
   let osc = Panel.make(
     page,
-    ~tabs=["osc 1", "osc 2", "noise", "unison", "phase"],
+    ~tabs=["osc 1", "osc 2", "noise", "unison", "phase", "osc envs"],
     ~x=x0,
     ~y=y0,
     ~w=columnWidth,
@@ -186,6 +186,32 @@ let build = (ctx: Ctx.t, page) => {
   unison->Grid.param("Drift_Cutoff", 1, 2, "drift cutoff")
   unison->Grid.param("Drift_Rate", 2, 2, "drift rate")
 
+  // each oscillator's own envelope, beside its switch
+  let envs = osc->Panel.body(5)
+  let envGrid = Grid.make(ctx, envs)
+  let envHeight = (rowHeight - Grid.padTop - 10.) / 2.
+  [1, 2]->Array.forEach(n => {
+    let prefix = PorridgeParams.oscEnvPrefix(n)
+    let name = `osc ${Int.toString(n)}`
+    let row = 4 * (n - 1)
+    envGrid->Grid.toggle(prefix ++ "On", 0, row, name ++ " env")
+    envGrid
+    ->Grid.note(`${name}'s level follows it, under the amp envelope`, 0, row + 1, ~rows=2)
+    ->ignore
+    envelope(
+      ctx,
+      envs,
+      prefix,
+      {
+        x: envGrid->Grid.cx(1) + 4.,
+        y: envGrid->Grid.cy(row) + 2.,
+        w: columnWidth - Grid.columnWidth - 16.,
+        h: envHeight - 6.,
+      },
+      ~name=`Osc ${Int.toString(n)} envelope`,
+    )
+  })
+
   let phase = Grid.make(ctx, osc->Panel.body(4))
   [("Osc", "osc"), ("PWM", "pwm"), ("LFO", "lfo")]->Array.forEachWithIndex(((id, label), r) => {
     phase->Grid.param(id ++ "Phase", 0, r, label)
@@ -196,6 +222,7 @@ let build = (ctx: Ctx.t, page) => {
   //==============================================================================
   // filter
   let refreshResponse = ref(() => ())
+  let refreshPreview = ref(() => ())
   let filterEl = ref(None)
   let filter = Panel.make(
     page,
@@ -203,8 +230,10 @@ let build = (ctx: Ctx.t, page) => {
     ~onSelect=i => {
       // the response covers the filter envelope
       filterEl.contents->Option.forEach(e => e->Web.toggleClass("responding", i == 1))
-      if i == 1 {
-        refreshResponse.contents()
+      switch i {
+      | 0 => refreshPreview.contents()
+      | 1 => refreshResponse.contents()
+      | _ => ()
       }
     },
     ~x=x1,
@@ -220,19 +249,23 @@ let build = (ctx: Ctx.t, page) => {
   main->Grid.param("F_EnvMod", 1, 1, "env mod")
   main->Grid.param("F_VeloSens", 2, 1, "velocity")
   main->Grid.param("F_Aftertouch", 3, 1, "touch")
-  main->Grid.param("F_Morph", 0, 2, "morph")
-  main->Grid.param("F_Drive", 1, 2, "drive")
-  // what morph and drive do for this type
-  let morphNote = main->Grid.note("", 2, 2, ~span=2)
+  let knob = (id, c, label) =>
+    main->Grid.at(c, 2, id, b => Controls.paramControl(ctx, filter->Panel.body(0), id, ~x=b.x, ~y=b.y, ~w=b.w, ~label))
+  let morphKnob = knob("F_Morph", 0, "morph")
+  let driveKnob = knob("F_Drive", 1, "drive")
+  // morph and drive are dimmed for the types they do nothing for
+  let get = id => ctx.model->ParamModel.get(id)
+  let filterType = () => Float.toInt(get("Filter"))
   let describe = () => {
-    let t = Float.toInt(ctx.model->ParamModel.get("Filter"))
-    let morph = FilterTypes.morphText(t)->Option.mapOr("morph: —", m => "morph: " ++ m)
-    morphNote->Web.setTextContent(FilterTypes.hasDrive(t) ? morph : morph ++ " · no drive")
+    let t = filterType()
+    morphKnob->Web.toggleClass("dim", FilterTypes.morphText(t) == None)
+    driveKnob->Web.toggleClass("dim", !FilterTypes.hasDrive(t))
   }
   ctx.model->ParamModel.listen("Filter", describe)
   describe()
+
   // the response: the type with its cutoff and resonance, as a curve with a point to drag
-  // (covering the envelope while it shows)
+  // (covering the envelope while it shows), and a small picture of it beside morph and drive
   filterEl := Some(filter.el)
   let response = filter->Panel.body(1)
   response->Web.addClass("cover")
@@ -240,37 +273,53 @@ let build = (ctx: Ctx.t, page) => {
   resp->Grid.choice("Filter", 0, 0, "type", ~span=2)
   resp->Grid.param("Cutoff", 2, 0, "cutoff")
   resp->Grid.param("Resonance", 3, 0, "reso")
-  let get = id => ctx.model->ParamModel.get(id)
   let graphTop = Grid.padTop + Grid.rowHeight + 4.
-  let filterType = () => Float.toInt(get("Filter"))
+  let source: FilterGraph.source = {
+    typeOf: filterType,
+    cutoff: "Cutoff",
+    toHz: c => FilterTypes.cutoffHz(~filterType=filterType(), c),
+    ofHz: hz => FilterTypes.cutoffOfHz(~filterType=filterType(), hz),
+    res: "Resonance",
+    morph: "F_Morph",
+    drive: "F_Drive",
+    mix: None,
+    spread: None,
+    // filter 2, when doubling: its type (or filter 1's) an octave up per half of the split
+    second: () => {
+      let t1 = filterType()
+      let t2 = Float.toInt(get("Filter2"))
+      get("F_Double") == 0.
+        ? None
+        : Some((
+            t2 == 0 ? t1 : t2,
+            FilterTypes.cutoffHz(~filterType=t1, get("Cutoff")) * Math.pow(2., ~exp=2. * get("F_Split")),
+          ))
+    },
+    alsoIds: ["Filter", "Filter2", "F_Double", "F_Split"],
+  }
   refreshResponse :=
     FilterGraph.make(
       ctx,
       response,
       {x: 8., y: graphTop, w: columnWidth - 18., h: rowHeight - graphTop - 10.},
-      {
-        typeOf: filterType,
-        cutoff: "Cutoff",
-        toHz: c => FilterTypes.cutoffHz(~filterType=filterType(), c),
-        ofHz: hz => FilterTypes.cutoffOfHz(~filterType=filterType(), hz),
-        res: "Resonance",
-        morph: "F_Morph",
-        drive: "F_Drive",
-        mix: None,
-        spread: None,
-        // filter 2, when doubling: its type (or filter 1's) an octave up per half of the split
-        second: () => {
-          let t1 = filterType()
-          let t2 = Float.toInt(get("Filter2"))
-          get("F_Double") == 0.
-            ? None
-            : Some((
-                t2 == 0 ? t1 : t2,
-                FilterTypes.cutoffHz(~filterType=t1, get("Cutoff")) * Math.pow(2., ~exp=2. * get("F_Split")),
-              ))
+      source,
+    )
+  refreshPreview :=
+    main->Grid.at(2, 2, ~span=2, "the filter preview", box =>
+      FilterGraph.mini(
+        ctx,
+        filter->Panel.body(0),
+        box,
+        source,
+        ~status=() => {
+          let t = filterType()
+          let morph = FilterTypes.morphText(t)->Option.mapOr("", m => " · morph: " ++ m)
+          `${ctx.model->ParamModel.shortText("Filter")}${morph}${FilterTypes.hasDrive(t)
+              ? ""
+              : " · no drive"}. Click for the response, to drag the cutoff and resonance.`
         },
-        alsoIds: ["Filter", "Filter2", "F_Double", "F_Split"],
-      },
+        ~onClick=() => filter->Panel.select(1),
+      )
     )
   let dual = Grid.make(ctx, filter->Panel.body(2))
   dual->Grid.choice("Filter2", 0, 0, "filter 2", ~span=2)
@@ -355,10 +404,12 @@ let build = (ctx: Ctx.t, page) => {
     "Oat mode keeps Oatmeal's MIDI timing: notes, controllers and arpeggiator steps start on the next 64-sample block instead of on their own sample.",
     0,
     4,
-    ~span=4,
+    ~span=3,
     ~rows=2,
   )
   ->ignore
+  // the pitch and mod wheels, as on the Arp / XY page, side by side in the last column
+  v->Grid.at(3, 4, ~rows=4, "the wheels", box => Wheels.make(ctx, voice->Panel.body(0), box, ~gap=Grid.columnGap))
 
   let tuning = Grid.make(ctx, voice->Panel.body(1))
   tuning->Grid.param("Tune_Main", 0, 0, "tune")

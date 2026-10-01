@@ -291,6 +291,11 @@ let css = `
 .plot path.fill { fill: var(--signal-soft); stroke: none; }
 .plot path.axis, .plot line.axis { stroke: rgba(31,26,14,0.28); stroke-width: 1; fill: none; }
 .plot.off { opacity: 0.4; }
+.plot.mini { cursor: pointer; }
+.plot path.curve.depth { stroke: var(--mod); stroke-width: 1.2; stroke-dasharray: 4 3; }
+.plot text.tick.depth { fill: var(--mod); }
+.plot.mini line.mark { stroke-dasharray: 2 2; stroke-width: 1; }
+.plot.mini:hover rect.bg { stroke: var(--signal); }
 .plot rect.bg { fill: rgba(236, 227, 196, 0.35); stroke: var(--edge); stroke-width: 1; }
 .plot path.curve.faint { stroke-width: 1; stroke-dasharray: 3 2; opacity: 0.7; }
 .plot path.curve.dim { stroke-width: 1; opacity: 0.45; }
@@ -588,6 +593,8 @@ let css = `
 .brw-srm { display: none; font-size: 11px; padding: 0 2px; }
 .brw-srow:hover .brw-srm { display: inline; }
 .brw-open { font-size: 12.5px; color: var(--ink-soft); }
+.brw-addfolder { display: block; box-sizing: border-box; width: calc(100% - 12px); margin: 2px 6px 4px; height: 22px;
+  font-size: 12px; }
 .brw-n { font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
 .on > .brw-n { color: inherit; opacity: 0.75; }
 .brw-facet { display: flex; flex-direction: column; }

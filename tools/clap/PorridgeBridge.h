@@ -1,10 +1,13 @@
 // Porridge's additions to Cmajor's CLAP wrapper: user settings shared by every instance, the
-// host's parameter menu, and the bridge the view reaches them through. tools/clap-patch.mjs
-// copies this next to helpers/clap/cmaj_CLAPPlugin.h and includes it inside that file's
-// cmaj::plugin::clap::detail namespace, after the headers it needs (choc's files and JSON,
-// <cmath>, <cstdlib>), so it has no includes of its own.
+// host's parameter menu, the bank library (PorridgeLibrary.h), and the bridge the view reaches
+// them through. tools/clap-patch.mjs copies this and PorridgeLibrary.h next to
+// helpers/clap/cmaj_CLAPPlugin.h and includes it inside that file's cmaj::plugin::clap::detail
+// namespace, after the headers it needs (choc's files, JSON and base64, <cmath>, <cstdlib>,
+// <fstream>), so it has no includes of its own but that one.
 
 #pragma once
+
+#include "PorridgeLibrary.h"
 
 namespace porridge
 {
@@ -80,6 +83,13 @@ namespace porridge
         catch (...) {}
     }
 
+    /// The bank library, beside the settings file.
+    inline library::Library bankLibrary()
+    {
+        auto file = settingsFile();
+        return { file.empty() ? std::filesystem::path() : file.parent_path() / "banks" };
+    }
+
     inline double zoomSetting (const choc::value::ValueView& settings)
     {
         return clampZoom (settings.isObject() ? settings["zoom"].getWithDefault<double> (1.0) : 1.0);
@@ -99,8 +109,8 @@ namespace porridge
         return nullptr;
     }
 
-    /// Listens to what the patch sends its views, and passes on the settings and host requests
-    /// (the whole key).
+    /// Listens to what the patch sends its views, and passes on the settings, host and library
+    /// requests (the whole key).
     struct RequestBridge  : public cmaj::PatchView
     {
         RequestBridge (cmaj::Patch& p, std::function<void(std::string_view)> handleToUse)
@@ -119,7 +129,8 @@ namespace porridge
 
             auto key = message["key"].toString();
 
-            if (choc::text::startsWith (key, requestPrefix) || choc::text::startsWith (key, hostRequestPrefix))
+            if (choc::text::startsWith (key, requestPrefix) || choc::text::startsWith (key, hostRequestPrefix)
+                 || choc::text::startsWith (key, library::requestPrefix))
                 handle (key);
         }
 

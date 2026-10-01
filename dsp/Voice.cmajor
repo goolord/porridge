@@ -27,6 +27,7 @@ namespace porridge
         Distortion[2] dist;             // left (or mono), right
 
         Env ampEnv, modEnv1, modEnv2;
+        Env[2] oscEnv;                  // the oscillators' own envelopes (OE1_On, OE2_On)
         LFO[2] lfo;
         float lfo2Prev;
 
@@ -40,6 +41,7 @@ namespace porridge
         // modulation matrix sources from the last block, and the volume target's gain
         float[2] lfoRaw;
         float ampLast, modRand, modGain;
+        float modNoise;                 // the noise source: a new value each block it's used
 
         // MPE: the MIDI channel the note came from (0 = the master channel)
         int chan;

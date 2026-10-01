@@ -227,6 +227,13 @@ type file
 type fileList
 type dataTransfer
 @get external fileName: file => string = "name"
+
+// A file name without its extension.
+let baseName = name =>
+  switch name->String.lastIndexOf(".") {
+  | i if i > 0 => name->String.slice(~start=0, ~end=i)
+  | _ => name
+  }
 @send external arrayBuffer: file => promise<ArrayBuffer.t> = "arrayBuffer"
 @send @return(nullable) external item: (fileList, int) => option<file> = "item"
 @val external filesToArray: fileList => array<file> = "Array.from"
