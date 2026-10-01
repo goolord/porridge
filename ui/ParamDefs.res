@@ -148,6 +148,63 @@ type t = {
 
 let pw32 = 4294967296.
 
+// A Porridge parameter (PorridgeParams): plain linear knobs and lists.
+let porridgeDef = (index, spec: PorridgeParams.spec) =>
+  switch spec.kind {
+  | Float({min, max, init, text}) =>
+    let clamp = x => Float.isFinite(x) ? Math.max(min, Math.min(max, x)) : init
+    {
+      id: spec.id,
+      index,
+      name: spec.name,
+      kind: F32,
+      isInt: false,
+      names: None,
+      shortNames: None,
+      init,
+      min,
+      max,
+      bipolar: min < 0. && max > 0.,
+      clamp,
+      toNorm: x => (x - min) / (max - min),
+      fromNorm: v => min + (max - min) * v,
+      longText: x => `${spec.name}: ${text(x)}`,
+      valueText: text,
+      shortText: x => compact(text(x)),
+      parse: s => {
+        let x = Float.parseFloat(s)
+        Float.isFinite(x) ? Some(clamp(String.includes(text(init), "%") ? x / 100. : x)) : None
+      },
+    }
+  | Choice({names, init}) =>
+    let last = Int.toFloat(Array.length(names) - 1)
+    let clamp = x => Float.isFinite(x) ? Math.max(0., Math.min(last, Math.round(x))) : Int.toFloat(init)
+    let valueText = x => names[Float.toInt(clamp(x))]->Option.getOr("")
+    {
+      id: spec.id,
+      index,
+      name: spec.name,
+      kind: I32,
+      isInt: true,
+      names: Some(names),
+      shortNames: None,
+      init: Int.toFloat(init),
+      min: 0.,
+      max: last,
+      bipolar: false,
+      clamp,
+      toNorm: x => last > 0. ? x / last : 0.,
+      fromNorm: v => Math.round(v * last),
+      longText: x => `${spec.name}: ${valueText(x)}`,
+      valueText,
+      shortText: valueText,
+      parse: s =>
+        names
+        ->Array.findIndex(n => String.toLowerCase(n) == String.toLowerCase(String.trim(s)))
+        ->(i => i >= 0 ? Some(Int.toFloat(i)) : None),
+    }
+  }
+
 // context supplies the program that status texts read other fields from (octave size,
 // tuning, breakpoint, targets...); Init values without one.
 let makeDefs = (~context=() => None) => {
@@ -245,5 +302,9 @@ let makeDefs = (~context=() => None) => {
       shortText: x => compact(valueText(x)),
       parse,
     }
-  })
+  })->Array.concat(
+    PorridgeParams.all->Array.mapWithIndex((spec, i) =>
+      porridgeDef(OatmealParams.paramCount + i, spec)
+    ),
+  )
 }

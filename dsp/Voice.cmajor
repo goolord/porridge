@@ -31,6 +31,9 @@ namespace porridge
         float envSpeed, mix, m1Last, m2Last;
         float penvR;
         int penvStage;
+
+        // modulation matrix sources from the last block, and the volume target's gain
+        float lfo1Raw, lfo2Raw, ampLast, modRand, modGain;
     }
 
     /// The voice's current amp level (used for stealing and re-strike velocity).

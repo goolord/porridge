@@ -83,6 +83,18 @@ namespace porridge
         bool firstNote, subFlag;
         float64 arpPhase;
 
+        // modulation matrix (dsp/ModTables.cmajor): the connections that are on this block,
+        // the targets they reach, and the values those targets had before modulation
+        int[mods::numSlots] liveSrc, liveTgt, liveVia;
+        float[mods::numSlots] liveAmt;
+        int numLive;
+        int[mods::numTargets] liveTargets;
+        int numLiveTargets;
+        bool[mods::numTargets] targetLive;
+        float[mods::numTargets] modBase, modBaseNorm, modSum;
+        float gLfo1Raw, gLfo2Raw, bendNormTarget, bendNorm, wheel;
+        int64 modRngState;
+
         // MIDI arriving during a block is handled at the start of the next one
         std::midi::Message[256] midiQueue;
         int midiCount;
@@ -177,6 +189,7 @@ namespace porridge
             numActive = 0;
             allNotesOff();
             walkT = 0;
+            modRngState = 12345;
         }
 
         void resetEffects()
@@ -360,6 +373,11 @@ namespace porridge
             v.lfo2Prev = 0;
             v.penvR = 0;
             v.penvStage = 0;
+            v.lfo1Raw = 0;
+            v.lfo2Raw = 0;
+            v.ampLast = 0;
+            v.modRand = 0;
+            v.modGain = 1.0f;
         }
 
         int listPos (int vi)
@@ -470,6 +488,7 @@ namespace porridge
             let fresh = ! v.active;
             v.relCount = -1;
             v.vel = velc;
+            v.modRand = nextModRandom();
             v.randAmp = float (pow (10.0, float64 ((float (rng.next()) * (1.0f / 16384.0f) - 1.0f) * P[slot::RandomAmp] * 0.05f)));
 
             if (fresh)
@@ -1273,6 +1292,7 @@ namespace porridge
                 else if (type == 0xe0)
                 {
                     bendTarget = float ((d2 - 64) * 128 + d1) * P[slot::BendRange] * (1.0f / 8192.0f);
+                    bendNormTarget = float ((d2 - 64) * 128 + d1) * (1.0f / 8192.0f);
                 }
             }
 
@@ -1345,6 +1365,8 @@ namespace porridge
             walkT += float (float64 (blockSize) * float64 (P[slot::XY_Var_Rate]) / float64 (srInt));
 
             bendSmooth += (bendTarget - bendSmooth) * k64;
+            bendNorm += (bendNormTarget - bendNorm) * k64;
+            wheel += (rawCC[1] - wheel) * k64;
             pressureSmooth += (pressureTarget - pressureSmooth) * k64;
             xSmooth += (P[slot::XY_X] - xSmooth) * k64;
             ySmooth += (P[slot::XY_Y] - ySmooth) * k64;
@@ -1376,6 +1398,12 @@ namespace porridge
 
             let X = curX, Y = curY;
 
+            if (numLive > 0)
+            {
+                evalMods (-1);
+                applyMods();
+            }
+
             if (numActive == 0)
             {
                 gLfo1.step (tables, rng, P, lfoShape1, false, blockSize, xySum (8, X, Y), sampleRate, samplesPerBeat);
@@ -1402,8 +1430,10 @@ namespace porridge
 
             let g1n = int ((P[slot::LFO_2_1] * gLfo2Prev * 3.0f + gSpeed1) * float (blockSize) + 0.5f);
             gv1 = gLfo1.step (tables, rng, P, lfoShape1, false, g1n, xySum (8, Xg, Yg), sampleRate, samplesPerBeat);
+            gLfo1Raw = 2.0f * gv1 - 1.0f;
             let g2n = int ((P[slot::LFO_1_2] * gv1 * 3.0f + gSpeed2) * float (blockSize) + 0.5f);
             gv2 = gLfo2.step (tables, rng, P, lfoShape2, true, g2n, xySum (8, Xg, Yg) + xySum (9, Xg, Yg), sampleRate, samplesPerBeat);
+            gLfo2Raw = 2.0f * gv2 - 1.0f;
             gLfo2Prev = gv2;
 
             gLfo1Pitch = 0; gLfo1Pan = 0; gLfo2Pitch = 0; gLfo2Pan = 0;
@@ -1455,7 +1485,14 @@ namespace porridge
                 let vi = order.at (i);
                 let key = voices.at (vi).key;
                 let at = atMode == 0 ? 1.0f : (atMode == 1 ? pressureSmooth : perKeyAT.at (key & 0x7f));
-                let semisArg = P.at (slot::Tune_C + ((key & 0xff) % 12)) * 0.01f + P[slot::GlobalTranspose] * 12.0f + globalPitch;
+                var semisArg = P.at (slot::Tune_C + ((key & 0xff) % 12)) * 0.01f + P[slot::GlobalTranspose] * 12.0f + globalPitch;
+
+                if (numLive > 0)
+                {
+                    evalMods (vi);
+                    applyMods();
+                    semisArg += modPitch();
+                }
 
                 if (renderVoice (voices.at (vi), at, semisArg, X, Y))
                 {
@@ -1469,6 +1506,189 @@ namespace porridge
             }
 
             return any;
+        }
+
+        //==============================================================================
+        // modulation matrix
+
+        /// The connections that are on, and the knob position of every parameter they reach.
+        void prepareMods()
+        {
+            for (int i = 0; i < numLiveTargets; ++i)
+                targetLive.at (liveTargets.at (i)) = false;
+
+            numLive = 0;
+            numLiveTargets = 0;
+
+            for (int k = 0; k < mods::numSlots; ++k)
+            {
+                let s = int (P.at (slot::Mod1_Source + 4 * k));
+                let t = int (P.at (slot::Mod1_Target + 4 * k));
+                let a = P.at (slot::Mod1_Amount + 4 * k);
+                let via = int (P.at (slot::Mod1_Via + 4 * k));
+
+                if (s <= 0 || s >= mods::numSources || t <= 0 || t >= mods::numTargets || a == 0)
+                    continue;
+
+                liveSrc.at (numLive) = s;
+                liveTgt.at (numLive) = t;
+                liveAmt.at (numLive) = a;
+                liveVia.at (numLive) = (via > 0 && via < mods::numSources) ? via : 0;
+                ++numLive;
+
+                if (! targetLive.at (t))
+                {
+                    targetLive.at (t) = true;
+                    liveTargets.at (numLiveTargets) = t;
+                    ++numLiveTargets;
+
+                    if (mods::targetKind.at (t) == mods::knob)
+                    {
+                        let base = P.at (mods::targetSlot.at (t));
+                        modBase.at (t) = base;
+                        modBaseNorm.at (t) = modInvert (t, base);
+                    }
+                }
+            }
+        }
+
+        /// A source's value for a voice; for vi = -1 (global targets) the newest voice's.
+        float modSource (int s, int vi)
+        {
+            if (s >= mods::src::macro1 && s <= mods::src::macro4) return P.at (slot::Macro_1 + (s - mods::src::macro1));
+            if (s >= mods::src::cc1 && s <= mods::src::cc6)       return ccSmooth.at (s - mods::src::cc1);
+            if (s == mods::src::modWheel)                         return wheel;
+            if (s == mods::src::bend)                             return bendNorm;
+            if (s == mods::src::x)                                return curX;
+            if (s == mods::src::y)                                return curY;
+
+            if (vi < 0)
+            {
+                if (s == mods::src::lfo1)       return gLfo1Raw;
+                if (s == mods::src::lfo2)       return gLfo2Raw;
+                if (s == mods::src::aftertouch) return pressureSmooth;
+                return 0;
+            }
+
+            if (s == mods::src::lfo1)      return voices.at (vi).lfo1Raw;
+            if (s == mods::src::lfo2)      return voices.at (vi).lfo2Raw;
+            if (s == mods::src::modEnv1)   return voices.at (vi).m1Last;
+            if (s == mods::src::modEnv2)   return voices.at (vi).m2Last;
+            if (s == mods::src::ampEnv)    return voices.at (vi).ampLast;
+            if (s == mods::src::filterEnv) return voices.at (vi).fenv1L.L;
+            if (s == mods::src::velocity)  return min (voices.at (vi).vel, 1.0f);
+            if (s == mods::src::random)    return voices.at (vi).modRand;
+            if (s == mods::src::key)       return clamp (float ((voices.at (vi).key & 0x7f) - 60) * (1.0f / 60.0f), -1.0f, 1.0f);
+
+            if (s == mods::src::aftertouch)
+                return int (P[slot::AftertouchMode]) == 2 ? perKeyAT.at (voices.at (vi).key & 0x7f) : pressureSmooth;
+
+            return 0;
+        }
+
+        /// Sums the connections into each target, for one voice (or -1: the global targets).
+        void evalMods (int voiceIndex)
+        {
+            let vi = voiceIndex >= 0 ? voiceIndex : (numActive > 0 ? order.at (0) : -1);
+
+            for (int i = 0; i < numLiveTargets; ++i)
+                modSum.at (liveTargets.at (i)) = 0;
+
+            for (int i = 0; i < numLive; ++i)
+            {
+                var m = modSource (liveSrc.at (i), vi) * liveAmt.at (i);
+
+                if (liveVia.at (i) > 0)
+                    m *= modSource (liveVia.at (i), vi);
+
+                let t = liveTgt.at (i);
+                modSum.at (t) = modSum.at (t) + m;
+            }
+        }
+
+        /// Moves the modulated parameters' knobs (restoreMods puts them back).
+        void applyMods()
+        {
+            for (int i = 0; i < numLiveTargets; ++i)
+            {
+                let t = liveTargets.at (i);
+
+                if (mods::targetKind.at (t) == mods::knob)
+                    P.at (mods::targetSlot.at (t)) = modLookup (t, clamp (modBaseNorm.at (t) + modSum.at (t), 0.0f, 1.0f));
+            }
+        }
+
+        void restoreMods()
+        {
+            for (int i = 0; i < numLiveTargets; ++i)
+            {
+                let t = liveTargets.at (i);
+
+                if (mods::targetKind.at (t) == mods::knob)
+                    P.at (mods::targetSlot.at (t)) = modBase.at (t);
+            }
+        }
+
+        /// The pitch targets' sum, in semitones.
+        float modPitch()
+        {
+            float s = 0;
+
+            for (int i = 0; i < numLiveTargets; ++i)
+            {
+                let t = liveTargets.at (i);
+
+                if (mods::targetKind.at (t) == mods::pitch)
+                    s += modSum.at (t) * mods::targetScale.at (t);
+            }
+
+            return s;
+        }
+
+        /// A target's knob law: internal value at knob position n (0..1).
+        float modLookup (int t, float n)
+        {
+            let row = mods::targetRow.at (t) * mods::tableSize;
+            let x = n * float (mods::tableSize - 1);
+            let i = clamp (int (x), 0, mods::tableSize - 2);
+            let a = mods::table.at (row + i);
+            let b = mods::table.at (row + i + 1);
+            return a + (b - a) * (x - float (i));
+        }
+
+        /// The inverse: the knob position of an internal value (the laws are monotonic).
+        float modInvert (int t, float value)
+        {
+            let row = mods::targetRow.at (t) * mods::tableSize;
+            let last = mods::tableSize - 1;
+            let first = mods::table.at (row);
+            let end = mods::table.at (row + last);
+            let up = end >= first;
+
+            if (up ? value <= first : value >= first) return 0.0f;
+            if (up ? value >= end : value <= end)     return 1.0f;
+
+            var lo = 0, hi = last;
+
+            while (hi - lo > 1)
+            {
+                let mid = (lo + hi) / 2;
+                let y = mods::table.at (row + mid);
+
+                if (up ? y <= value : y >= value) lo = mid;
+                else                              hi = mid;
+            }
+
+            let a = mods::table.at (row + lo);
+            let b = mods::table.at (row + lo + 1);
+            let f = b != a ? clamp ((value - a) / (b - a), 0.0f, 1.0f) : 0.0f;
+            return (float (lo) + f) / float (last);
+        }
+
+        float nextModRandom()
+        {
+            modRngState = (modRngState * 1103515245 + 12345) & 0x7fffffff;
+            return float (modRngState) * (1.0f / 1073741824.0f) - 1.0f;
         }
 
         //==============================================================================
@@ -1526,6 +1746,7 @@ namespace porridge
             {
                 let n1 = int ((P[slot::LFO_2_1] * v.lfo2Prev * lfo2DepthF * 3.0f + lfo1SpeedF) * float (n) + 0.5f);
                 v1 = v.lfo1.step (tables, rng, P, lfoShape1, false, n1, xySum (8, Xv, Yv), sampleRate, samplesPerBeat);
+                v.lfo1Raw = 2.0f * v1 - 1.0f;
                 let D1 = xySum (10, Xv, Yv);
                 var pd = 24.0f * float (pow (float64 (P[slot::LFO_1_Pitch]), 4.0));
                 var g = 1.0f;
@@ -1537,12 +1758,14 @@ namespace porridge
             else
             {
                 v1 = gv1; lfo1Pitch = gLfo1Pitch; lfo1Pan = gLfo1Pan;
+                v.lfo1Raw = gLfo1Raw;
             }
 
             if (perNote2)
             {
                 let n2 = int ((P[slot::LFO_1_2] * v1 * lfo1DepthF * 3.0f + lfo2SpeedF) * float (n) + 0.5f);
                 v2 = v.lfo2.step (tables, rng, P, lfoShape2, true, n2, xySum (8, Xv, Yv) + xySum (9, Xv, Yv), sampleRate, samplesPerBeat);
+                v.lfo2Raw = 2.0f * v2 - 1.0f;
                 let D2 = xySum (11, Xv, Yv);
                 var pd = 24.0f * float (pow (float64 (P[slot::LFO_2_Pitch]), 4.0));
                 var g = 1.0f;
@@ -1554,6 +1777,7 @@ namespace porridge
             else
             {
                 v2 = gv2; lfo2Pitch = gLfo2Pitch; lfo2Pan = gLfo2Pan;
+                v.lfo2Raw = gLfo2Raw;
             }
 
             v.lfo2Prev = v2;
@@ -1563,6 +1787,23 @@ namespace porridge
             {
                 v.active = false;
                 return false;
+            }
+
+            v.ampLast = bufE[n - 1];
+
+            if (numLive > 0 && targetLive.at (mods::tgt::volume))
+            {
+                let step = (max (0.0f, 1.0f + modSum.at (mods::tgt::volume)) - v.modGain) / float (n);
+
+                for (wrap<blockSize> i)
+                {
+                    v.modGain += step;
+                    bufE[i] *= v.modGain;
+                }
+            }
+            else
+            {
+                v.modGain = 1.0f;
             }
 
             // pitch envelope
@@ -1804,6 +2045,7 @@ namespace porridge
             // pan
             var p = v.basePan + freqPanOffset (Rg * fG);
             p += lfo1Pan * lfo1DepthF + lfo2Pan * lfo2DepthF + globalPan + panOffset;
+            if (numLive > 0 && targetLive.at (mods::tgt::pan)) p += 0.5f * modSum.at (mods::tgt::pan);
             p = clamp (p, 0.0f, 1.0f);
             let pg = panGains (p);
             let stepL = (pg[0] - v.panL) / float (n);
@@ -2160,9 +2402,18 @@ namespace porridge
             computeDerived();
             handleMidi();
             smoothControllers();
+            prepareMods();
 
             var active = renderVoices();
+            if (numLive > 0) restoreMods();
             arpTick();
+
+            // global targets (effects, output) follow the newest voice's sources
+            if (numLive > 0)
+            {
+                evalMods (-1);
+                applyMods();
+            }
 
             if (useTestInput)
             {
@@ -2187,6 +2438,8 @@ namespace porridge
 
             for (wrap<blockSize> i)
                 mix[i] = outputOn ? mix[i] * gain : float<2>();
+
+            if (numLive > 0) restoreMods();
         }
 
         void main()

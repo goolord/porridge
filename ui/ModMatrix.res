@@ -1,0 +1,158 @@
+// The modulation matrix: what can modulate (sources) and what can be modulated (targets).
+// Both lists are append-only: presets store sources and targets by key, the DSP and the
+// host parameters by index (tools/gen.mjs generates dsp/ModTables.cmajor from them).
+//
+// A connection adds  source × amount (× via source)  to its target. Parameter targets are
+// moved in knob space: amount 1 sweeps the whole knob, whatever the parameter's law. The
+// other targets act on the voice directly.
+
+let slots = 16
+
+type source = {key: string, label: string, bipolar: bool}
+
+let sources = [
+  {key: "none", label: "none", bipolar: false},
+  {key: "lfo1", label: "LFO 1", bipolar: true},
+  {key: "lfo2", label: "LFO 2", bipolar: true},
+  {key: "modEnv1", label: "mod env 1", bipolar: false},
+  {key: "modEnv2", label: "mod env 2", bipolar: false},
+  {key: "ampEnv", label: "amp env", bipolar: false},
+  {key: "filterEnv", label: "filter env", bipolar: false},
+  {key: "velocity", label: "velocity", bipolar: false},
+  {key: "key", label: "key", bipolar: true},
+  {key: "aftertouch", label: "aftertouch", bipolar: false},
+  {key: "modWheel", label: "mod wheel", bipolar: false},
+  {key: "bend", label: "pitch bend", bipolar: true},
+  {key: "x", label: "X", bipolar: true},
+  {key: "y", label: "Y", bipolar: true},
+  {key: "random", label: "random", bipolar: true},
+  {key: "macro1", label: "macro 1", bipolar: false},
+  {key: "macro2", label: "macro 2", bipolar: false},
+  {key: "macro3", label: "macro 3", bipolar: false},
+  {key: "macro4", label: "macro 4", bipolar: false},
+  {key: "cc1", label: "controller 1", bipolar: false},
+  {key: "cc2", label: "controller 2", bipolar: false},
+  {key: "cc3", label: "controller 3", bipolar: false},
+  {key: "cc4", label: "controller 4", bipolar: false},
+  {key: "cc5", label: "controller 5", bipolar: false},
+  {key: "cc6", label: "controller 6", bipolar: false},
+]
+
+let sourceHelp = key =>
+  switch key {
+  | "lfo1" | "lfo2" => "the LFO's shape, -1..1 (without its depth modulation)"
+  | "modEnv1" | "modEnv2" => "the mod envelope, with its velocity sensitivity"
+  | "ampEnv" => "the amp envelope level"
+  | "filterEnv" => "the filter envelope level"
+  | "velocity" => "note-on velocity, through the velocity curve"
+  | "key" => "the note: -1 at note 0, 0 at middle C (60), 1 at note 120 and above"
+  | "aftertouch" => "poly aftertouch in poly touch mode, channel pressure otherwise"
+  | "modWheel" => "controller 1"
+  | "bend" => "the pitch bend wheel, -1..1"
+  | "x" | "y" => "the XY pad, including its random walk"
+  | "random" => "a random value for every note, -1..1"
+  | "macro1" | "macro2" | "macro3" | "macro4" => "a macro knob on this page"
+  | _ => "an assignable controller from the MIDI page"
+  }
+
+type law =
+  // the parameter's knob, in knob space
+  | Knob(string)
+  // semitones at amount 1
+  | Pitch(float)
+  // linear gain 1 + m (silent at -1)
+  | Volume
+  // pan position offset, hard left/right at ±1 from the centre
+  | Pan
+
+type target = {key: string, label: string, group: string, law: law}
+
+let knob = (id, label, group) => {key: id, label, group, law: Knob(id)}
+
+let targets = [
+  {key: "none", label: "none", group: "", law: Volume},
+  {key: "pitch", label: "pitch ±24 st", group: "voice", law: Pitch(24.)},
+  {key: "finePitch", label: "pitch ±1 st", group: "voice", law: Pitch(1.)},
+  {key: "volume", label: "volume", group: "voice", law: Volume},
+  {key: "pan", label: "pan", group: "voice", law: Pan},
+  knob("O1_Amp", "osc 1 amp", "osc"),
+  knob("O1_PWM_W", "osc 1 pulsewidth", "osc"),
+  knob("O1_PWM_R", "osc 1 pwm rate", "osc"),
+  knob("O1_PWM_D", "osc 1 pwm depth", "osc"),
+  knob("O2_Amp", "osc 2 amp", "osc"),
+  knob("O2_PWM_W", "osc 2 pulsewidth", "osc"),
+  knob("O2_PWM_R", "osc 2 pwm rate", "osc"),
+  knob("O2_PWM_D", "osc 2 pwm depth", "osc"),
+  knob("Transpose", "osc 2 transpose", "osc"),
+  knob("Detune", "osc 2 detune", "osc"),
+  knob("N_Amp", "noise amp", "osc"),
+  knob("N_Resonance", "noise resonance", "osc"),
+  knob("N_Transpose", "noise transpose", "osc"),
+  knob("U_Detune", "unison detune", "osc"),
+  knob("U_Spread", "unison spread", "osc"),
+  knob("Cutoff", "cutoff", "filter"),
+  knob("Resonance", "resonance", "filter"),
+  knob("F_EnvMod", "filter env mod", "filter"),
+  knob("F_Track", "filter keytrack", "filter"),
+  knob("F_Split", "filter split", "filter"),
+  knob("F_Mix", "filter mix", "filter"),
+  knob("Sat_Pregain", "dist pregain", "filter"),
+  knob("Sat_Postgain", "dist postgain", "filter"),
+  knob("LFO_1_Speed", "LFO 1 rate", "lfo"),
+  knob("LFO_1_Pitch", "LFO 1 pitch", "lfo"),
+  knob("LFO_1_Cutoff_1", "LFO 1 cut 1", "lfo"),
+  knob("LFO_1_Pan", "LFO 1 pan", "lfo"),
+  knob("LFO_2_Speed", "LFO 2 rate", "lfo"),
+  knob("LFO_2_Pitch", "LFO 2 pitch", "lfo"),
+  knob("LFO_2_Cutoff_1", "LFO 2 cut 1", "lfo"),
+  knob("LFO_2_Pan", "LFO 2 pan", "lfo"),
+  knob("C_Rate", "chorus rate", "fx"),
+  knob("C_Depth", "chorus depth", "fx"),
+  knob("C_Feedback", "chorus feedback", "fx"),
+  knob("C_Mix", "chorus mix", "fx"),
+  knob("D_FeedbackL", "delay feedback L", "fx"),
+  knob("D_FeedbackR", "delay feedback R", "fx"),
+  knob("D_LP", "delay lowpass", "fx"),
+  knob("D_HP", "delay highpass", "fx"),
+  knob("D_Wet", "delay wet", "fx"),
+  knob("R_Dullness", "reverb dullness", "fx"),
+  knob("R_Brightness", "reverb brightness", "fx"),
+  knob("R_Wet", "reverb wet", "fx"),
+  knob("EQ_1_Amp", "EQ 1 gain", "eq"),
+  knob("EQ_2_Amp", "EQ 2 gain", "eq"),
+  knob("EQ_3_Amp", "EQ 3 gain", "eq"),
+  knob("EQ_4_Amp", "EQ 4 gain", "eq"),
+  knob("EQ_5_Amp", "EQ 5 gain", "eq"),
+  knob("EQ_1_Freq", "EQ 1 freq", "eq"),
+  knob("EQ_2_Freq", "EQ 2 freq", "eq"),
+  knob("EQ_3_Freq", "EQ 3 freq", "eq"),
+  knob("EQ_4_Freq", "EQ 4 freq", "eq"),
+  knob("EQ_5_Freq", "EQ 5 freq", "eq"),
+  knob("Gain", "output gain", "fx"),
+]
+
+let groups = [
+  ("voice", "voice"),
+  ("osc", "oscillators"),
+  ("filter", "filter & dist"),
+  ("lfo", "LFOs"),
+  ("fx", "effects"),
+  ("eq", "EQ"),
+]
+
+let sourceIndex = key => sources->Array.findIndex(s => s.key == key)
+let targetIndex = key => targets->Array.findIndex(t => t.key == key)
+
+// the target that moves this parameter's knob, if any
+let targetOfParam = id => targets->Array.findIndex(t => t.law == Knob(id))
+
+// The parameters of slot k (1-based).
+let sourceId = k => `Mod${Int.toString(k)}_Source`
+let targetId = k => `Mod${Int.toString(k)}_Target`
+let amountId = k => `Mod${Int.toString(k)}_Amount`
+let viaId = k => `Mod${Int.toString(k)}_Via`
+
+let isSlotParam = id => String.startsWith(id, "Mod") && String.includes(id, "_")
+
+let macros = 4
+let macroId = k => `Macro_${Int.toString(k)}`

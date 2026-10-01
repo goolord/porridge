@@ -136,6 +136,8 @@ int main (int argc, char** argv)
         bool isInt = false;
         for (auto& f : porridgeFields)
             if (id == f.id) isInt = (f.type == FieldType::i32 || f.type == FieldType::filter1 || f.type == FieldType::filter2);
+        for (auto& f : porridgeExtras)
+            if (id == f.id) isInt = f.isInt;
         if (isInt) sendInt (*patch, id.c_str(), atoi (val.c_str()));
         else sendFloat (*patch, id.c_str(), (float) atof (val.c_str()));
     }

@@ -13,6 +13,8 @@ type element = Dom.element
 @send external appendChild: (Dom.node_like<'a>, element) => unit = "appendChild"
 @send external remove: element => unit = "remove"
 @send external contains: (element, Dom.eventTarget) => bool = "contains"
+@send @return(nullable)
+external querySelector: (element, string) => option<element> = "querySelector"
 @get @return(nullable) external parentElement: element => option<element> = "parentElement"
 @set external setClassName: (element, string) => unit = "className"
 @set external setTextContent: (element, string) => unit = "textContent"

@@ -11,6 +11,8 @@ type rec t = {
   onChange: t => unit,
   message: string => unit,
   shapeListeners: array<unit => unit>,
+  // the current program or the bank changed
+  changeListeners: array<unit => unit>,
   mutable current: int,
   mutable programs: array<Preset.t>,
   mutable shapes: tables,
@@ -29,6 +31,7 @@ let make = (pc, model, ~onChange, ~onMessage) => {
     onChange,
     message: onMessage,
     shapeListeners: [],
+    changeListeners: [],
     current: 0,
     programs,
     shapes: Preset.copyTables((programs->Array.getUnsafe(0)).tables),
@@ -37,6 +40,13 @@ let make = (pc, model, ~onChange, ~onMessage) => {
     listeners: None,
   }
 }
+
+let changed = t => {
+  t.onChange(t)
+  t.changeListeners->Array.forEach(fn => fn())
+}
+
+let onChanged = (t, fn) => t.changeListeners->Array.push(fn)
 
 let fireShapes = t => t.shapeListeners->Array.forEach(fn => fn())
 
@@ -47,11 +57,11 @@ let onState = (t, {key, value}: PatchConnection.storedStateEvent) =>
       t.programs = Array.fromInitializer(~length=bankPrograms, i =>
         presets[i]->Option.getOr(Preset.make(`Init ${Int.toString(i)}`))
       )
-      t.onChange(t)
+      changed(t)
     })
   | ("program", Number(i)) if Float.isFinite(i) =>
     t.current = Math.Int.max(0, Math.Int.min(bankPrograms - 1, Float.toInt(i)))
-    t.onChange(t)
+    changed(t)
   | ("shapes", String(shapes)) =>
     Bank.decodeShapes(shapes)->Option.forEach(shapes => {
       t.shapes = shapes
@@ -144,7 +154,7 @@ let select = (t, i) => {
   apply(t, t.programs->Array.getUnsafe(i))
   t.pc->PatchConnection.sendStoredStateValue("program", i)
   storeBank(t)
-  t.onChange(t)
+  changed(t)
 }
 
 let rename = (t, i, name) => {
@@ -153,13 +163,21 @@ let rename = (t, i, name) => {
   }
   t.programs[i]->Option.forEach(p => t.programs->Array.setUnsafe(i, p->Preset.withName(name)))
   storeBank(t)
-  t.onChange(t)
+  changed(t)
 }
 
 let setMeta = (t, meta: Preset.meta) => {
   t.programs->Array.setUnsafe(t.current, {...captureCurrent(t), meta}->Preset.withName(meta.name))
   storeBank(t)
-  t.onChange(t)
+  changed(t)
+}
+
+let setMacroName = (t, i, name) => {
+  let meta = (t.programs->Array.getUnsafe(t.current)).meta
+  setMeta(t, {
+    ...meta,
+    macroNames: meta.macroNames->Array.mapWithIndex((n, k) => k == i ? String.trim(name) : n),
+  })
 }
 
 let initCurrent = t => {
@@ -167,7 +185,7 @@ let initCurrent = t => {
   t.programs->Array.setUnsafe(t.current, p)
   apply(t, p)
   storeBank(t)
-  t.onChange(t)
+  changed(t)
 }
 
 let panic = t => t.pc->PatchConnection.sendEventOrValue("panic", 1)
@@ -181,7 +199,7 @@ let loadFile = (t, bytes, filename) =>
     apply(t, p)
     t.message(`Loaded "${Preset.name(p)}" into program ${Int.toString(t.current + 1)}`)
     storeBank(t)
-    t.onChange(t)
+    changed(t)
   | Ok({presets: programs}) =>
     t.programs = Array.fromInitializer(~length=bankPrograms, i =>
       switch programs[i] {
@@ -194,7 +212,7 @@ let loadFile = (t, bytes, filename) =>
     t.pc->PatchConnection.sendStoredStateValue("program", 0)
     t.message(`Loaded bank ${filename} (${Int.toString(Array.length(programs))} programs)`)
     storeBank(t)
-    t.onChange(t)
+    changed(t)
   }
 
 let download = (bytes, filename) => {
@@ -227,14 +245,26 @@ let downloadBank = t => {
   download(Preset.writeBank(t.programs), "porridge bank.porridge")
 }
 
+let warnOatmeal = (t, presets) => {
+  let lost =
+    presets
+    ->Array.flatMap(Preset.porridgeOnly)
+    ->Array.reduce([], (acc, x) => acc->Array.includes(x) ? acc : [...acc, x])
+  if Array.length(lost) > 0 {
+    t.message("Oatmeal can't store " ++ lost->Array.join(", ") ++ "; they're left out")
+  }
+}
+
 let exportOatmealProgram = t => {
   let p = captureCurrent(t)
+  warnOatmeal(t, [p])
   t.programs->Array.setUnsafe(t.current, p)
   download(writeProgramChunk(Preset.toOatmeal(p)), safeName(Preset.name(p)) ++ ".omp")
 }
 
 let exportOatmealBank = t => {
   t.programs->Array.setUnsafe(t.current, captureCurrent(t))
+  warnOatmeal(t, t.programs)
   download(writeBankChunk(t.programs->Array.map(Preset.toOatmeal)), "porridge bank.omb")
 }
 

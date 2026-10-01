@@ -101,14 +101,44 @@ let editInPlace = (e, text, ~commit) => {
   input->onEvent(#blur, _ => finish(true))
 }
 
+// The knob range a parameter's modulation connections sweep, relative to its knob position
+// (bipolar sources swing both ways), or None if nothing modulates it.
+let modulationRange = (model, id) => {
+  let target = ModMatrix.targetOfParam(id)
+  if target < 0 {
+    None
+  } else {
+    let get = id => model->ParamModel.get(id)
+    let (lo, hi, any) = Array.fromInitializer(~length=ModMatrix.slots, i => i + 1)->Array.reduce(
+      (0., 0., false),
+      ((lo, hi, any), k) => {
+        let source = ModMatrix.sources[Float.toInt(get(ModMatrix.sourceId(k)))]
+        let amount = get(ModMatrix.amountId(k))
+        switch source {
+        | Some(source)
+          if source.key != "none" && Float.toInt(get(ModMatrix.targetId(k))) == target && amount != 0. =>
+          source.bipolar
+            ? (lo - Math.abs(amount), hi + Math.abs(amount), true)
+            : (lo + Math.min(amount, 0.), hi + Math.max(amount, 0.), true)
+        | _ => (lo, hi, any)
+        }
+      },
+    )
+    any ? Some((lo, hi)) : None
+  }
+}
+
 // A parameter row: label above-left, value right, position track underneath.
-let param = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
+let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
   let c = control(ctx, id)
   let e = el("div", ~cls="p", ~parent)->place(x, y, ~w)
   e->setTabIndex(0)
   el("span", ~cls="l", ~text=label->Option.getOr(c.def.name), ~parent=e)->ignore
   let v = el("span", ~cls="v", ~parent=e)
-  let fill = el("i", ~parent=el("span", ~cls="t", ~parent=e))
+  let track = el("span", ~cls="t", ~parent=e)
+  let fill = el("i", ~parent=track)
+  // the range modulation connections sweep, for parameters the matrix can reach
+  let modBar = ModMatrix.targetOfParam(id) >= 0 ? Some(el("em", ~parent=track)) : None
   hookStatus(c, e)
 
   let update = () => {
@@ -126,6 +156,16 @@ let param = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
       fill->setStyle("left", "0")
       fill->setStyle("width", Float.toString(n * 100.) ++ "%")
     }
+    modBar->Option.forEach(bar =>
+      switch modulationRange(ctx.model, id) {
+      | Some((lo, hi)) =>
+        let (a, b) = (clamp01(n + lo), clamp01(n + hi))
+        bar->setStyle("display", "block")
+        bar->setStyle("left", Float.toString(a * 100.) ++ "%")
+        bar->setStyle("width", Float.toString(Math.max(0.5, (b - a) * 100.)) ++ "%")
+      | None => bar->setStyle("display", "none")
+      }
+    )
     refreshStatus(c)
   }
 
@@ -215,8 +255,19 @@ let param = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
   })
 
   ctx.model->ParamModel.listen(id, update)
+  if modBar != None {
+    Array.fromInitializer(~length=ModMatrix.slots, i => i + 1)->Array.forEach(k =>
+      [ModMatrix.sourceId(k), ModMatrix.targetId(k), ModMatrix.amountId(k)]->Array.forEach(slotId =>
+        ctx.model->ParamModel.listen(slotId, update)
+      )
+    )
+  }
   update()
+  e
 }
+
+let param = (ctx, parent, id, ~x, ~y, ~w=?, ~label=?) =>
+  paramControl(ctx, parent, id, ~x, ~y, ~w?, ~label?)->ignore
 
 let namesOf = (def: ParamDefs.t) =>
   switch def.names {

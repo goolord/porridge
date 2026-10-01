@@ -4,8 +4,13 @@
 //     "porridge": "preset", "version": 1,
 //     "name": "Warm pad", "author": "", "category": "pad", "tags": ["slow"], "description": "",
 //     "params": { "Cutoff": 0.42, "O1_Waveform": 1, ... },   // endpoint id -> internal value
+//     "modulations": [ { "source": "lfo1", "target": "Cutoff", "amount": 0.25, "via": "modWheel" } ],
+//     "macros": ["brightness", "", "", ""],                    // macro knob names
 //     "tables": { "wave1": "<base64 float32 LE>", ... }       // only tables that differ from Init
 //   }
+//
+// The modulation matrix's slot parameters (Mod1_Source ...) are written as "modulations",
+// by source and target key (ModMatrix.res), not as parameters.
 //
 // A bank is { "porridge": "bank", "version": 1, "name": ..., "presets": [preset, ...] }.
 //
@@ -29,6 +34,7 @@ type meta = {
   category: string,
   tags: array<string>,
   description: string,
+  macroNames: array<string>,
 }
 
 type t = {
@@ -47,7 +53,14 @@ let defaultTables = Lazy.make(() => extractTables(makeDefaultProgram("Init")))
 
 let copyTables = tables => tablesFrom(table => tables->getTable(table)->TypedArray.copy)
 
-let emptyMeta = name => {name, author: "", category: "", tags: [], description: ""}
+let emptyMeta = name => {
+  name,
+  author: "",
+  category: "",
+  tags: [],
+  description: "",
+  macroNames: Array.make(~length=ModMatrix.macros, ""),
+}
 
 let make = name => {
   meta: emptyMeta(name),
@@ -86,6 +99,23 @@ let fromOatmeal = (bytes: Uint8Array.t) => {
   {meta: emptyMeta(getName(bytes)), values, tables: extractTables(bytes)}
 }
 
+// What an Oatmeal export of this preset loses.
+let porridgeOnly = p => {
+  let changed = PorridgeParams.all->Array.filter(spec =>
+    switch (p.values->Map.get(spec.id), Lazy.get(defsById)->Map.get(spec.id)) {
+    | (Some(x), Some(d)) => x != d.init
+    | _ => false
+    }
+  )
+  let modulated = changed->Array.some(spec => ModMatrix.isSlotParam(spec.id))
+  let macros = changed->Array.some(spec => String.startsWith(spec.id, "Macro"))
+  [
+    modulated ? Some("modulations") : None,
+    macros ? Some("macros") : None,
+    String.length(p.meta.name) > nameLength - 1 ? Some("the full name") : None,
+  ]->Array.filterMap(x => x)
+}
+
 // Parameters Oatmeal doesn't have are left out.
 let toOatmeal = p => {
   let bytes = makeDefaultProgram(p.meta.name)
@@ -109,10 +139,10 @@ let tableKey = table =>
 
 // The shortest decimal that reads back as the same parameter value, so files stay
 // readable ("0.3", not "0.30000001192092896").
-let shortNumber = (d, x) =>
+let shortNumberWith = (canonical, x) =>
   if !Float.isFinite(x) {
     0.
-  } else if canonical(d, x) != x {
+  } else if canonical(x) != x {
     x
   } else {
     let rec go = digits =>
@@ -120,10 +150,13 @@ let shortNumber = (d, x) =>
         x
       } else {
         let y = Float.parseFloat(x->Float.toPrecision(~digits))
-        canonical(d, y) == x ? y : go(digits + 1)
+        canonical(y) == x ? y : go(digits + 1)
       }
     go(1)
   }
+
+let shortNumber = (d, x) => shortNumberWith(canonical(d, _), x)
+let shortFloat = x => shortNumberWith(Math.fround, x)
 
 let sameTable = (a: Float32Array.t, b: Float32Array.t) =>
   TypedArray.length(a) == TypedArray.length(b) &&
@@ -164,9 +197,32 @@ let toJson = (p, ~header=true) => {
 
   let params = Dict.make()
   Lazy.get(defs)->Array.forEach(d =>
-    p.values->Map.get(d.id)->Option.forEach(x => params->Dict.set(d.id, num(shortNumber(d, x))))
+    if !ModMatrix.isSlotParam(d.id) {
+      p.values->Map.get(d.id)->Option.forEach(x => params->Dict.set(d.id, num(shortNumber(d, x))))
+    }
   )
   fields->Dict.set("params", JSON.Object(params))
+
+  let value = id => p.values->Map.get(id)->Option.getOr(0.)
+  let modulations = Array.fromInitializer(~length=ModMatrix.slots, i => i + 1)->Array.filterMap(k => {
+    let source = ModMatrix.sources[Float.toInt(value(ModMatrix.sourceId(k)))]
+    let target = ModMatrix.targets[Float.toInt(value(ModMatrix.targetId(k)))]
+    switch (source, target) {
+    | (Some(source), Some(target)) if source.key != "none" && target.key != "none" =>
+      let m = Dict.make()
+      m->Dict.set("source", str(source.key))
+      m->Dict.set("target", str(target.key))
+      m->Dict.set("amount", num(Math.fround(value(ModMatrix.amountId(k)))->shortFloat))
+      switch ModMatrix.sources[Float.toInt(value(ModMatrix.viaId(k)))] {
+      | Some(via) if via.key != "none" => m->Dict.set("via", str(via.key))
+      | _ => ()
+      }
+      Some(JSON.Object(m))
+    | _ => None
+    }
+  })
+  fields->Dict.set("modulations", JSON.Array(modulations))
+  fields->Dict.set("macros", JSON.Array(p.meta.macroNames->Array.map(str)))
 
   let tables = Dict.make()
   allTables->Array.forEach(table => {
@@ -209,6 +265,46 @@ let fromJsonObject = (d: dict<JSON.t>) => {
     }->Option.getOr(Lazy.get(defaultTables)->getTable(table)->TypedArray.copy)
   )
 
+  // modulations fill the matrix slots in order
+  let slot = ref(1)
+  switch d->Dict.get("modulations") {
+  | Some(Array(items)) =>
+    items->Array.forEach(item =>
+      switch item {
+      | Object(m) if slot.contents <= ModMatrix.slots =>
+        let source = ModMatrix.sourceIndex(getString(m, "source"))
+        let target = ModMatrix.targetIndex(getString(m, "target"))
+        let via = ModMatrix.sourceIndex(getString(m, "via"))
+        let amount = switch m->Dict.get("amount") {
+        | Some(Number(x)) => x
+        | _ => 0.
+        }
+        if source > 0 && target > 0 {
+          let k = slot.contents
+          let set = (id, x) => clampValue(id, x)->Option.forEach(x => values->Map.set(id, x))
+          set(ModMatrix.sourceId(k), Int.toFloat(source))
+          set(ModMatrix.targetId(k), Int.toFloat(target))
+          set(ModMatrix.amountId(k), amount)
+          set(ModMatrix.viaId(k), Int.toFloat(Math.Int.max(via, 0)))
+          slot := k + 1
+        }
+      | _ => ()
+      }
+    )
+  | _ => ()
+  }
+
+  let macroNames = Array.fromInitializer(~length=ModMatrix.macros, i =>
+    switch d->Dict.get("macros") {
+    | Some(Array(names)) =>
+      switch names[i] {
+      | Some(String(s)) => s
+      | _ => ""
+      }
+    | _ => ""
+    }
+  )
+
   let tags = switch d->Dict.get("tags") {
   | Some(Array(tags)) =>
     tags->Array.filterMap(t =>
@@ -227,6 +323,7 @@ let fromJsonObject = (d: dict<JSON.t>) => {
       category: getString(d, "category"),
       tags,
       description: getString(d, "description"),
+      macroNames,
     },
     values,
     tables,

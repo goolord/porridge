@@ -9,7 +9,7 @@ namespace porridge
         float value;
     }
 
-    let numSlots = 2600;
+    let numSlots = 2668;
 }
 
 /// Index of every parameter in the synth's mirror of the program struct.
@@ -357,4 +357,72 @@ namespace porridge::slot
     let CC6_Target_3 = 2579;
     let CC6_Target_4 = 2580;
     let OscMix = 2581;
+    let Macro_1 = 2600;
+    let Macro_2 = 2601;
+    let Macro_3 = 2602;
+    let Macro_4 = 2603;
+    let Mod1_Source = 2604;
+    let Mod1_Target = 2605;
+    let Mod1_Amount = 2606;
+    let Mod1_Via = 2607;
+    let Mod2_Source = 2608;
+    let Mod2_Target = 2609;
+    let Mod2_Amount = 2610;
+    let Mod2_Via = 2611;
+    let Mod3_Source = 2612;
+    let Mod3_Target = 2613;
+    let Mod3_Amount = 2614;
+    let Mod3_Via = 2615;
+    let Mod4_Source = 2616;
+    let Mod4_Target = 2617;
+    let Mod4_Amount = 2618;
+    let Mod4_Via = 2619;
+    let Mod5_Source = 2620;
+    let Mod5_Target = 2621;
+    let Mod5_Amount = 2622;
+    let Mod5_Via = 2623;
+    let Mod6_Source = 2624;
+    let Mod6_Target = 2625;
+    let Mod6_Amount = 2626;
+    let Mod6_Via = 2627;
+    let Mod7_Source = 2628;
+    let Mod7_Target = 2629;
+    let Mod7_Amount = 2630;
+    let Mod7_Via = 2631;
+    let Mod8_Source = 2632;
+    let Mod8_Target = 2633;
+    let Mod8_Amount = 2634;
+    let Mod8_Via = 2635;
+    let Mod9_Source = 2636;
+    let Mod9_Target = 2637;
+    let Mod9_Amount = 2638;
+    let Mod9_Via = 2639;
+    let Mod10_Source = 2640;
+    let Mod10_Target = 2641;
+    let Mod10_Amount = 2642;
+    let Mod10_Via = 2643;
+    let Mod11_Source = 2644;
+    let Mod11_Target = 2645;
+    let Mod11_Amount = 2646;
+    let Mod11_Via = 2647;
+    let Mod12_Source = 2648;
+    let Mod12_Target = 2649;
+    let Mod12_Amount = 2650;
+    let Mod12_Via = 2651;
+    let Mod13_Source = 2652;
+    let Mod13_Target = 2653;
+    let Mod13_Amount = 2654;
+    let Mod13_Via = 2655;
+    let Mod14_Source = 2656;
+    let Mod14_Target = 2657;
+    let Mod14_Amount = 2658;
+    let Mod14_Via = 2659;
+    let Mod15_Source = 2660;
+    let Mod15_Target = 2661;
+    let Mod15_Amount = 2662;
+    let Mod15_Via = 2663;
+    let Mod16_Source = 2664;
+    let Mod16_Target = 2665;
+    let Mod16_Amount = 2666;
+    let Mod16_Via = 2667;
 }

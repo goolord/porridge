@@ -23,6 +23,7 @@ let css = `
     --signal: #1c3c73;
     --signal-soft: rgba(28, 60, 115, 0.22);
     --paper: #ece3c4;
+    --mod: #a3501c;
 
     display: block;
     position: relative;
@@ -106,6 +107,8 @@ let css = `
 .p .t i {
     position: absolute; top: 0; bottom: 0; background: var(--signal);
 }
+/* the range modulation sweeps */
+.p .t em { position: absolute; top: -1px; bottom: -1px; background: var(--mod); opacity: 0.6; display: none; }
 .p.dim .v, .p.dim .l { opacity: 0.45; }
 
 /* choice: same footprint, click cycles, menu on right click */
@@ -237,6 +240,34 @@ let css = `
     display: none; max-width: 80%;
 }
 .toast.on { display: block; }
+
+/* mod page: the patch bay */
+.bay { position: absolute; }
+.bay .jl {
+    position: absolute; box-sizing: border-box; font-size: 11.5px; line-height: 19px; color: var(--ink-soft);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bay .jl:hover { color: var(--ink); }
+.bay .jl.src { text-align: right; padding-right: 2px; }
+.bay .jh { position: absolute; font-size: 11px; font-weight: 700; line-height: 19px; color: var(--ink-faint); text-transform: lowercase; }
+.cables { pointer-events: none; overflow: visible; }
+.cables .jack { fill: var(--paper); stroke: var(--ink); stroke-width: 1.4; pointer-events: all; cursor: crosshair; }
+.cables .jack:hover, .cables .jack.hot { fill: var(--signal-soft); stroke: var(--signal); stroke-width: 2; }
+.cables .jack.on { fill: var(--ink); }
+.cables .cable { fill: none; stroke-width: 3; stroke-linecap: round; opacity: 0.78; }
+.cables .cable.muted { stroke-dasharray: 4 4; opacity: 0.5; }
+.cables .cable.sel { stroke-width: 4.5; opacity: 1; }
+.cables .cable.drag { opacity: 0.9; stroke-dasharray: 6 3; }
+.cables .cablehit { fill: none; stroke: transparent; stroke-width: 10; pointer-events: stroke; cursor: pointer; }
+
+.mrow { position: absolute; display: none; }
+.mrow.sel { background: var(--panel-hi); border-radius: 2px; }
+.mrow .sw { position: absolute; left: 3px; top: 9px; width: 8px; height: 8px; border-radius: 50%; }
+.mrow .mname {
+    position: absolute; left: 15px; top: 0; width: 128px; height: 26px; line-height: 26px; font-size: 12px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+}
+.mrow .mdel { right: 2px; top: 3px; width: 20px; padding: 0; }
 
 /* dialogs */
 .shade { position: absolute; inset: 0; z-index: 80; background: rgba(31,26,14,0.35); display: flex; align-items: center; justify-content: center; }

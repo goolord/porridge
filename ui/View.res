@@ -3,11 +3,12 @@
 
 open! Web
 
-type page = [#main | #fx | #play | #shapes | #midi]
+type page = [#main | #mod | #fx | #play | #shapes | #midi]
 
 let hintFor = (page: page) =>
   switch page {
   | #main => PageMain.hint
+  | #mod => PageMod.hint
   | #fx => PageFx.hint
   | #play => PagePlay.hint
   | #shapes => PageShapes.hint
@@ -59,6 +60,7 @@ let make = (host, pc) => {
 
   let pages: array<(page, element)> = [
     (#main, el("div", ~cls="pv-page on", ~parent=stage)),
+    (#mod, el("div", ~cls="pv-page", ~parent=stage)),
     (#fx, el("div", ~cls="pv-page", ~parent=stage)),
     (#play, el("div", ~cls="pv-page", ~parent=stage)),
     (#shapes, el("div", ~cls="pv-page", ~parent=stage)),
@@ -94,6 +96,7 @@ let make = (host, pc) => {
   pages->Array.forEach(((page, e)) =>
     switch page {
     | #main => PageMain.build(ctx, e)
+    | #mod => PageMod.build(ctx, e)
     | #fx => PageFx.build(ctx, e)
     | #play => PagePlay.build(ctx, e)
     | #midi => PageMidi.build(ctx, e)
@@ -116,6 +119,7 @@ let make = (host, pc) => {
   let pagesBar = el("div", ~cls="pages", ~parent=head)
   [
     (#main, "Synth", "Oscillators, filter, envelopes, LFOs and voice settings"),
+    (#mod, "Mod", "The modulation matrix: connect sources to targets, and the macro knobs"),
     (#fx, "FX", "Distortion, chorus, delay, reverb and EQ"),
     (#play, "Arp / XY", "Arpeggiator pattern and the XY pad"),
     (#shapes, "Shapes", "Draw oscillator waveforms and LFO shapes"),

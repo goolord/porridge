@@ -59,5 +59,29 @@ else
     if (! [...init.values].every (([id, x]) => id === "Cutoff" || p.values.get (id) === x)) fail ("sparse: defaults");
 }
 
+// modulations are written by key and fill the matrix slots in order
+{
+    const p = Preset.make ("mods");
+    const set = (id, x) => p.values.set (id, x);
+    set ("Mod3_Source", 1); set ("Mod3_Target", 20); set ("Mod3_Amount", 0.3); set ("Mod3_Via", 10);
+    set ("Mod7_Source", 15); set ("Mod7_Target", 3); set ("Mod7_Amount", -1);
+    set ("Macro_1", 0.5);
+    const text = new TextDecoder().decode (Preset.writePreset ({ ...p, meta: { ...p.meta, macroNames: ["tone", "", "", ""] } }));
+    const doc = JSON.parse (text);
+    if (JSON.stringify (doc.modulations) !== JSON.stringify ([
+            { source: "lfo1", target: "Cutoff", amount: 0.3, via: "modWheel" },
+            { source: "macro1", target: "volume", amount: -1 } ]))
+        fail ("modulations written as " + JSON.stringify (doc.modulations));
+    if ("Mod3_Source" in doc.params) fail ("slot parameters written as parameters");
+    const back = Preset.parseFile (new TextEncoder().encode (text))._0.presets[0];
+    const want = { Mod1_Source: 1, Mod1_Target: 20, Mod1_Amount: Math.fround (0.3), Mod1_Via: 10,
+                   Mod2_Source: 15, Mod2_Target: 3, Mod2_Amount: -1, Mod2_Via: 0, Mod3_Source: 0, Macro_1: 0.5 };
+    for (const [id, x] of Object.entries (want))
+        if (back.values.get (id) !== x) fail (`modulations: ${id} = ${back.values.get (id)}, want ${x}`);
+    if (back.meta.macroNames[0] !== "tone") fail ("macro names");
+    if (Preset.porridgeOnly (back).join () !== "modulations,macros") fail ("porridgeOnly: " + Preset.porridgeOnly (back));
+    if (Preset.porridgeOnly (presets[0]).length !== 0) fail ("factory program reported as Porridge-only");
+}
+
 console.log (failures === 0 ? `ok: ${programs.length} programs round-trip` : `${failures} failures`);
 process.exit (failures === 0 ? 0 : 1);

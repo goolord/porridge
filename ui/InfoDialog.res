@@ -59,6 +59,7 @@ let show = (ctx: Ctx.t, stage) => {
   let close = () => shade->remove
   let save = () => {
     ctx.programs->ProgramStore.setMeta({
+      ...meta,
       name: name->value->String.trim,
       author: author->value->String.trim,
       category: category->value->String.trim,
