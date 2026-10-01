@@ -5,22 +5,9 @@ import os, sys, struct, math, subprocess
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from vsthost import *
 
-HOST = os.path.join(REPO, "tools", "test", "build", "host.exe")
 os.makedirs(OUT, exist_ok=True)
 
 DETERMINISTIC = {112: 0.0, 113: 0.0, 114: 0.0, 116: 0.0, 119: 0.0, 122: 0.0}
-
-def load_f32(path):
-    with open(path, "rb") as f:
-        n, m = struct.unpack("<ii", f.read(8))
-        return [list(struct.unpack("<%df" % m, f.read(4 * m))) for _ in range(n)]
-
-def patch_chunk(chunk, fields):
-    c = bytearray(chunk)
-    for off, v in fields.items():
-        if isinstance(v, (list, tuple)): struct.pack_into("<i", c, int(off), v[1])
-        else: struct.pack_into("<f", c, int(off), v)
-    return bytes(c)
 
 def rms_windows(x, w=2205):
     return [math.sqrt(sum(v * v for v in x[i:i + w]) / w) for i in range(0, len(x) - w, w)]

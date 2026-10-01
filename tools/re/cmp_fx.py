@@ -5,27 +5,14 @@ import os, sys, struct, math, subprocess, json
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from vsthost import *
 
-HOST = os.path.join(REPO, "tools", "test", "build", "host.exe")
 os.makedirs(OUT, exist_ok=True)
-
-def load_f32(path):
-    with open(path, "rb") as f:
-        n, m = struct.unpack("<ii", f.read(8))
-        return [list(struct.unpack("<%df" % m, f.read(4 * m))) for _ in range(n)]
-
-def patch_chunk(h, fields):
-    c = bytearray(h.get_chunk(True))
-    for off, v in fields.items():
-        if isinstance(v, (list, tuple)): struct.pack_into("<i", c, int(off), v[1])
-        else: struct.pack_into("<f", c, int(off), v)
-    return bytes(c)
 
 def base():
     h = new_host()
     for p in (112, 113, 114, 116, 119): h.setp(p, 0.0)
     h.setp(0, 0.2)       # osc 1 saw
     base_fields = {8776: 1.0}
-    h.load_chunk(patch_chunk(h, base_fields))
+    h.load_chunk(patch_chunk(h.get_chunk(True), base_fields))
     return h
 
 EVENTS = [(0, 0x90, 57, 100), (9000, 0x90, 64, 90), (20000, 0x80, 57, 0), (26000, 0x80, 64, 0)]
@@ -39,7 +26,7 @@ def compare(name, cfg, frames=FRAMES):
     h = base()
     dry_chunk = h.get_chunk(True)
     dry = render(h, dry_chunk)
-    wet_chunk = patch_chunk(h, cfg)
+    wet_chunk = patch_chunk(h.get_chunk(True), cfg)
     wet = render(h, wet_chunk)
     dp = os.path.join(OUT, name + "_in.f32"); cp = os.path.join(OUT, name + ".bin"); op = os.path.join(OUT, name + "_out.f32")
     write_f32(dp, [[0.0] * 64 + dry[0], [0.0] * 64 + dry[1]])

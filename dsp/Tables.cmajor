@@ -45,10 +45,36 @@ namespace porridge
         float64[514] spectrum;          // scratch: one-sided spectrum (re, im) for up to 256 bins
         float[32768] source;            // scratch: T0 being built
         float[32769 * 4] lfo;           // LFO sine, saw, square, triangle
+
+        // FFT twiddles, cos and sin (2 pi m / fftMax), forward (-) and inverse (+): user
+        // waveforms are rebuilt on the audio thread
+        float64[fftMax / 2] twCosF, twSinF, twCosI, twSinI;
+        int[hqLevels] hqHarm;           // hqLevelHarmonics, by level
+    }
+
+    let fftMax = 32768;
+
+    /// The twiddles at the largest size. Every smaller power-of-two FFT uses every
+    /// (fftMax / len)-th one: its angle 2 pi / len is the same multiple of 2 pi / fftMax
+    /// exactly, so the products (and the cos / sin) are bit for bit those it would compute.
+    void buildTwiddles (WaveTables& this)
+    {
+        // the same expression the transform used: (direction * 2 pi) / length
+        let angF = -1.0 * twoPi / float64 (fftMax);
+        let angI = 1.0 * twoPi / float64 (fftMax);
+
+        for (int m = 0; m < fftMax / 2; ++m)
+        {
+            this.twCosF.at (m) = cos (angF * float64 (m));
+            this.twSinF.at (m) = sin (angF * float64 (m));
+            this.twCosI.at (m) = cos (angI * float64 (m));
+            this.twSinI.at (m) = sin (angI * float64 (m));
+        }
     }
 
     //==============================================================================
-    void fftInPlace (float64[65536]& a, int n, bool inverse)
+    /// In-place complex FFT of this.fft (interleaved), n a power of two up to fftMax.
+    void fftInPlace (WaveTables& this, int n, bool inverse)
     {
         var j = 0;
 
@@ -66,32 +92,30 @@ namespace porridge
 
             if (i < j)
             {
-                let tr = a.at (2 * i), ti = a.at (2 * i + 1);
-                a.at (2 * i) = a.at (2 * j);   a.at (2 * i + 1) = a.at (2 * j + 1);
-                a.at (2 * j) = tr;             a.at (2 * j + 1) = ti;
+                let tr = this.fft.at (2 * i), ti = this.fft.at (2 * i + 1);
+                this.fft.at (2 * i) = this.fft.at (2 * j);   this.fft.at (2 * i + 1) = this.fft.at (2 * j + 1);
+                this.fft.at (2 * j) = tr;                    this.fft.at (2 * j + 1) = ti;
             }
         }
-
-        let sgn = inverse ? 1.0 : -1.0;
 
         for (int len = 2; len <= n; len <<= 1)
         {
             let half = len >> 1;
-            let ang = sgn * twoPi / float64 (len);
+            let stride = fftMax / len;
 
             for (int k = 0; k < half; ++k)
             {
-                let wr = cos (ang * float64 (k));
-                let wi = sin (ang * float64 (k));
+                let wr = inverse ? this.twCosI.at (k * stride) : this.twCosF.at (k * stride);
+                let wi = inverse ? this.twSinI.at (k * stride) : this.twSinF.at (k * stride);
 
                 for (int i = 0; i < n; i += len)
                 {
                     let p = 2 * (i + k), q = 2 * (i + k + half);
-                    let xr = a.at (q) * wr - a.at (q + 1) * wi;
-                    let xi = a.at (q) * wi + a.at (q + 1) * wr;
-                    let ur = a.at (p), ui = a.at (p + 1);
-                    a.at (p) = ur + xr;      a.at (p + 1) = ui + xi;
-                    a.at (q) = ur - xr;      a.at (q + 1) = ui - xi;
+                    let xr = this.fft.at (q) * wr - this.fft.at (q + 1) * wi;
+                    let xi = this.fft.at (q) * wi + this.fft.at (q + 1) * wr;
+                    let ur = this.fft.at (p), ui = this.fft.at (p + 1);
+                    this.fft.at (p) = ur + xr;      this.fft.at (p + 1) = ui + xi;
+                    this.fft.at (q) = ur - xr;      this.fft.at (q + 1) = ui - xi;
                 }
             }
         }
@@ -108,7 +132,7 @@ namespace porridge
             this.fft.at (2 * i + 1) = 0;
         }
 
-        fftInPlace (this.fft, n, false);
+        this.fftInPlace (n, false);
 
         for (int k = 0; k <= n / 2; ++k)
         {
@@ -139,7 +163,7 @@ namespace porridge
             }
         }
 
-        fftInPlace (this.fft, n, true);
+        this.fftInPlace (n, true);
 
         let base = set * setSize + offset;
         let outN = n / decimate;
@@ -194,7 +218,7 @@ namespace porridge
             this.fft.at (2 * i + 1) = 0;
         }
 
-        fftInPlace (this.fft, 512, false);
+        this.fftInPlace (512, false);
 
         for (int k = 0; k <= 256; ++k)
         {
@@ -216,7 +240,7 @@ namespace porridge
             this.fft.at (2 * (32768 - k) + 1) = -im;
         }
 
-        fftInPlace (this.fft, 32768, true);
+        this.fftInPlace (32768, true);
 
         for (int i = 0; i < 32768; ++i)
             this.source.at (i) = float (this.fft.at (2 * i));
@@ -226,6 +250,11 @@ namespace porridge
 
     void buildStatic (WaveTables& this)
     {
+        this.buildTwiddles();
+
+        for (int level = 0; level < hqLevels; ++level)
+            this.hqHarm.at (level) = hqLevelHarmonics (level);
+
         for (int i = 0; i < 32768; ++i)
             this.sine.at (i) = float (sin (float64 (piF) * float64 (i) / 16384.0));
 
@@ -296,7 +325,7 @@ namespace porridge
             this.fft.at (2 * i + 1) = 0;
         }
 
-        fftInPlace (this.fft, 32768, false);
+        this.fftInPlace (32768, false);
 
         for (int k = 0; k < 1024; ++k)
         {
@@ -306,7 +335,7 @@ namespace porridge
 
         for (int level = 0; level < hqLevels; ++level)
         {
-            let K = hqLevelHarmonics (level);
+            let K = this.hqHarm.at (level);
 
             for (int i = 0; i < 2 * hqSize; ++i)
                 this.fft.at (i) = 0;
@@ -322,7 +351,7 @@ namespace porridge
                 this.fft.at (2 * (hqSize - k) + 1) = -im;
             }
 
-            fftInPlace (this.fft, hqSize, true);
+            this.fftInPlace (hqSize, true);
 
             let out = hqBase + set * hqSetSize + level * hqStride;
 
@@ -336,11 +365,11 @@ namespace porridge
     //==============================================================================
     /// Picks the HQ table of a set for a phase increment: the first level whose top harmonic
     /// stays below Nyquist.
-    TableChoice chooseHQ (int set, int64 inc)
+    TableChoice chooseHQ (const WaveTables& this, int set, int64 inc)
     {
         var level = 0;
 
-        while (level < hqLevels - 1 && float64 (hqLevelHarmonics (level)) * float64 (max (inc, 1i64)) >= 2147483648.0)
+        while (level < hqLevels - 1 && float64 (this.hqHarm.at (level)) * float64 (max (inc, 1i64)) >= 2147483648.0)
             ++level;
 
         return TableChoice (hqBase + set * hqSetSize + level * hqStride, 20);

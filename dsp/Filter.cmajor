@@ -47,6 +47,12 @@ namespace porridge
     void clearState (Filter& this)
     {
         this = Filter();
+        this.initDefaults();
+    }
+
+    /// The fields of a cleared filter that don't start at zero (the rest must be zero).
+    void initDefaults (Filter& this)
+    {
         this.first = true;
         this.c1 = 1.0f; this.c4 = 1.0f;
         this.f2 = 1.0f; this.q2 = 1.0f;
@@ -58,9 +64,18 @@ namespace porridge
         this.zFirst = true;
     }
 
+    /// The classic types' smoothing of their coefficients over an n-sample block; tabulated
+    /// for n = 0 .. blockSize in FxTables.filterSmooth.
+    float filterSmoothing (float64 sampleRate, int n)
+    {
+        let SR = max (float (sampleRate), 44100.0f);
+        return float (1.0 - pow (10.0, (-float64 (n) * 1.5) / float64 (SR * 0.02f)));
+    }
+
     bool filterIsHalfRate (int t)
     {
-        return t == 2 || t == 3 || t == 8 || t == 9 || t == 11 || t == 12;
+        return t == filterType::lp2 || t == filterType::lp4 || t == filterType::bpNarrow || t == filterType::bp4
+                || t == filterType::lp2Nonlinear || t == filterType::lp4Nonlinear;
     }
 
     /// Filters one block in place. hz = modulated cutoff (>= 5), res = 0..1, morph = 0..1 (the
@@ -68,10 +83,10 @@ namespace porridge
     void process (Filter& this, const FxTables& tables, int t, float hz, float res, float morph, float64 sampleRate,
                   float[blockSize]& buf, int n)
     {
-        if (t <= 0 || t > 21)
+        if (t <= filterType::off || t > filterType::formant)
             return;
 
-        if (t >= 16)
+        if (t >= filterType::svf)
         {
             this.processZdf (tables, t, hz, res, morph, sampleRate, buf, n);
             return;
@@ -86,17 +101,17 @@ namespace porridge
         if (w > piF * 0.98f)
             w = piF * 0.98f;
 
-        let ksm = float (1.0 - pow (10.0, (-float64 (n) * 1.5) / float64 (SR * 0.02f)));
+        let ksm = tables.filterSmooth.at (n);
         let invN = 1.0f / float (n);
         let first = this.first;
         this.first = false;
         let wd = float64 (w);
 
-        if (t == 1 || t == 4)
+        if (t == filterType::lp1 || t == filterType::hp1)
         {
             var c = (sin (wd) + cos (wd) - 1.0) / cos (wd) * 0.5;
-            if (t == 4) c = 1.0 - c;
-            var s = t == 1 ? this.c1 : this.c4;
+            if (t == filterType::hp1) c = 1.0 - c;
+            var s = t == filterType::lp1 ? this.c1 : this.c4;
             if (first) s = float (c);
             let tt = first ? c : (c - float64 (s)) * float64 (ksm) + float64 (s);
             let d = float ((tt - float64 (s)) / float64 (n));
@@ -107,7 +122,7 @@ namespace porridge
                 s = float (cc);
                 let x = buf.at (i);
 
-                if (t == 1)
+                if (t == filterType::lp1)
                 {
                     let y = float ((1.0 - 2.0 * cc) * float64 (this.y1) + cc * (float64 (x) + float64 (this.x1)));
                     this.x1 = x; this.y1 = y; buf.at (i) = y;
@@ -119,13 +134,13 @@ namespace porridge
                 }
             }
 
-            if (t == 1) this.c1 = s; else this.c4 = s;
+            if (t == filterType::lp1) this.c1 = s; else this.c4 = s;
             return;
         }
 
-        if (t == 7)
+        if (t == filterType::bpWide)
         {
-            let c = float ((sin (wd) + cos (wd) - 1.0) / cos (wd) * 0.5);
+            let c = bilinearK (wd);
             let r1 = 1.0f - res;
             let a1 = r1 * (1.0f - c) + c;
             let a2 = float64 (1.0f - c) + float64 (r1) * float64 (c);
@@ -146,7 +161,7 @@ namespace porridge
             return;
         }
 
-        if (t == 10)
+        if (t == filterType::notch)
         {
             let f = 2.0 * sin (wd * 0.5);
             let fN = f <= 1.2 ? float (f) : 1.2f;
@@ -167,9 +182,9 @@ namespace porridge
             return;
         }
 
-        if (t >= 13)
+        if (t >= filterType::phaser4)
         {
-            let N = t == 13 ? 4 : (t == 14 ? 12 : 36);
+            let N = t == filterType::phaser4 ? 4 : (t == filterType::phaser12 ? 12 : 36);
             let p = 2.0 / wd * float64 (piF) * float64 (float (2.0 / float64 (N)));
             let a = (1.0 - p) / (p + 1.0);
 
@@ -218,12 +233,12 @@ namespace porridge
 
         float fs, qs;
 
-        if (t == 2 || t == 11)      { fs = this.f2; qs = this.q2; }
-        else if (t == 3 || t == 12) { fs = this.f3; qs = this.q3; }
-        else if (t == 5)            { fs = this.f5; qs = this.q5; }
-        else if (t == 6)            { fs = this.f6; qs = this.q6; }
-        else if (t == 8)            { fs = this.f8; qs = this.q8; }
-        else                        { fs = this.f9; qs = this.q9; }
+        if (t == filterType::lp2 || t == filterType::lp2Nonlinear)      { fs = this.f2; qs = this.q2; }
+        else if (t == filterType::lp4 || t == filterType::lp4Nonlinear) { fs = this.f3; qs = this.q3; }
+        else if (t == filterType::hp2)                                  { fs = this.f5; qs = this.q5; }
+        else if (t == filterType::hp4)                                  { fs = this.f6; qs = this.q6; }
+        else if (t == filterType::bpNarrow)                             { fs = this.f8; qs = this.q8; }
+        else                                                            { fs = this.f9; qs = this.q9; }
 
         float64 fn, qn;
 
@@ -242,11 +257,11 @@ namespace porridge
         let dq = float ((qn - float64 (qs)) * float64 (invN));
         float64 G, dG;
 
-        if (t == 2 || t == 11)      { G = sqrt (1.0 / float64 (qs));       dG = float64 (float ((sqrt (1.0 / qn) - G) * float64 (invN))); }
-        else if (t == 5)            { G = sqrt (1.0 / float64 (qs)) * 0.5; dG = float64 (float ((sqrt (1.0 / qn) * 0.5 - G) * float64 (invN))); }
-        else if (t == 3 || t == 12) { G = 1.0 / float64 (qs);             dG = float64 (float ((1.0 / qn - G) * float64 (invN))); }
-        else if (t == 6)            { G = 0.5 / float64 (qs);             dG = float64 (float ((0.5 / qn - G) * float64 (invN))); }
-        else if (t == 8)
+        if (t == filterType::lp2 || t == filterType::lp2Nonlinear)      { G = sqrt (1.0 / float64 (qs));       dG = float64 (float ((sqrt (1.0 / qn) - G) * float64 (invN))); }
+        else if (t == filterType::hp2)                                  { G = sqrt (1.0 / float64 (qs)) * 0.5; dG = float64 (float ((sqrt (1.0 / qn) * 0.5 - G) * float64 (invN))); }
+        else if (t == filterType::lp4 || t == filterType::lp4Nonlinear) { G = 1.0 / float64 (qs);             dG = float64 (float ((1.0 / qn - G) * float64 (invN))); }
+        else if (t == filterType::hp4)                                  { G = 0.5 / float64 (qs);             dG = float64 (float ((0.5 / qn - G) * float64 (invN))); }
+        else if (t == filterType::bpNarrow)
         {
             G = sqrt (float64 (0.01f) / (float64 (fs) * float64 (qs))) * 0.5;
             dG = float64 (float ((sqrt (float64 (0.01f) / (float64 (float (fn)) * qn)) * 0.5 - G) * float64 (invN)));
@@ -264,21 +279,21 @@ namespace porridge
             G += dG;
             let x = float64 (buf.at (i));
 
-            if (t == 2 || t == 11)
+            if (t == filterType::lp2 || t == filterType::lp2Nonlinear)
             {
                 var lo = this.low2, ba = this.band2;
 
                 for (int it = 0; it < 2; ++it)
                 {
                     let v = fe * float64 (ba) + float64 (lo);
-                    lo = t == 11 ? tanhTable (tables, float (v)) : float (v);
+                    lo = t == filterType::lp2Nonlinear ? tanhTable (tables, float (v)) : float (v);
                     ba = float ((qe * x - float64 (lo) - qe * float64 (ba)) * fe + float64 (ba));
                 }
 
                 this.low2 = lo; this.band2 = ba;
                 buf.at (i) = float (G * float64 (lo));
             }
-            else if (t == 5)
+            else if (t == filterType::hp2)
             {
                 let lo = float (fe * float64 (this.band5) + float64 (this.low5));
                 let h = qe * x - float64 (lo) - qe * float64 (this.band5);
@@ -287,7 +302,7 @@ namespace porridge
                 buf.at (i) = float ((h + float64 (this.hp5)) * G);
                 this.hp5 = float (h);
             }
-            else if (t == 3 || t == 12)
+            else if (t == filterType::lp4 || t == filterType::lp4Nonlinear)
             {
                 var l1 = this.l31, b1 = this.b31, l2 = this.l32, b2 = this.b32;
 
@@ -296,14 +311,14 @@ namespace porridge
                     l1 = float (fe * float64 (b1) + float64 (l1));
                     b1 = float ((qe * x - float64 (l1) - qe * float64 (b1)) * fe + float64 (b1));
                     let v = fe * float64 (b2) + float64 (l2);
-                    l2 = t == 12 ? tanhTable (tables, float (v)) : float (v);
+                    l2 = t == filterType::lp4Nonlinear ? tanhTable (tables, float (v)) : float (v);
                     b2 = float ((qe * float64 (l1) - float64 (l2) - qe * float64 (b2)) * fe + float64 (b2));
                 }
 
                 this.l31 = l1; this.b31 = b1; this.l32 = l2; this.b32 = b2;
                 buf.at (i) = float (G * float64 (l2));
             }
-            else if (t == 6)
+            else if (t == filterType::hp4)
             {
                 let l1 = float (fe * float64 (this.b61) + float64 (this.l61));
                 let h1 = qe * x - float64 (l1) - qe * float64 (this.b61);
@@ -314,7 +329,7 @@ namespace porridge
                 buf.at (i) = float ((h2 + float64 (this.h6)) * G);
                 this.h6 = float (h2);
             }
-            else if (t == 8)
+            else if (t == filterType::bpNarrow)
             {
                 var lo = this.l8, ba = this.b8;
                 lo = float (fe * float64 (ba) + float64 (lo));
@@ -345,12 +360,12 @@ namespace porridge
             }
         }
 
-        if (t == 2 || t == 11)      { this.f2 = fs; this.q2 = qs; }
-        else if (t == 3 || t == 12) { this.f3 = fs; this.q3 = qs; }
-        else if (t == 5)            { this.f5 = fs; this.q5 = qs; }
-        else if (t == 6)            { this.f6 = fs; this.q6 = qs; }
-        else if (t == 8)            { this.f8 = fs; this.q8 = qs; }
-        else                        { this.f9 = fs; this.q9 = qs; }
+        if (t == filterType::lp2 || t == filterType::lp2Nonlinear)      { this.f2 = fs; this.q2 = qs; }
+        else if (t == filterType::lp4 || t == filterType::lp4Nonlinear) { this.f3 = fs; this.q3 = qs; }
+        else if (t == filterType::hp2)                                  { this.f5 = fs; this.q5 = qs; }
+        else if (t == filterType::hp4)                                  { this.f6 = fs; this.q6 = qs; }
+        else if (t == filterType::bpNarrow)                             { this.f8 = fs; this.q8 = qs; }
+        else                                                            { this.f9 = fs; this.q9 = qs; }
     }
 
     //==============================================================================
@@ -358,7 +373,7 @@ namespace porridge
     //  integrators solved together with their feedback, so they stay stable however fast the
     //  cutoff moves. The coefficients are worked out per block and ramped per sample.
 
-    bool isZdfFilter (int t)        { return t >= 16 && t <= 21; }
+    bool isZdfFilter (int t)        { return t >= filterType::svf && t <= filterType::formant; }
 
     /// 2 tanh (x / 2), from the table: soft saturation that leaves small signals alone.
     float softSat (const FxTables& t, float x)      { return 2.0f * tanhTable (t, 0.5f * x); }
@@ -434,12 +449,12 @@ namespace porridge
         this.zFirst = false;
         let invN = 1.0f / float (n);
 
-        if (t == 16 || t == 17)
+        if (t == filterType::svf || t == filterType::ladder)
         {
             // 16: state-variable filter, lowpass > bandpass > highpass; 17: Moog-style ladder
             // with the input to the stages saturated
             let g = prewarp (hz, sr);
-            let k = t == 16 ? 2.0f - 1.96f * res : res * 4.2f;
+            let k = t == filterType::svf ? 2.0f - 1.96f * res : res * 4.2f;
             let g0 = first ? g : this.zg;
             let k0 = first ? k : this.zk;
             let dg = (g - g0) * invN;
@@ -456,7 +471,7 @@ namespace porridge
                 kk += dk;
                 let x = buf.at (i);
 
-                if (t == 16)
+                if (t == filterType::svf)
                 {
                     let a1 = 1.0f / (1.0f + gg * (gg + kk));
                     let v1 = a1 * (s1 + gg * (x - s2));
@@ -486,19 +501,19 @@ namespace porridge
             return;
         }
 
-        if (t == 18 || t == 19)
+        if (t == filterType::diodeLadder || t == filterType::sallenKey)
         {
             // 18: diode ladder (saturated feedback); 19: Sallen-Key lowpass. Both are linear
             // systems y = M s + (g M b) u, solved per block and ramped per sample.
-            let N = t == 18 ? 4 : 2;
+            let N = t == filterType::diodeLadder ? 4 : 2;
             let K = 1.0f + 1.98f * res;                 // Sallen-Key gain: oscillates at 3
-            let A = t == 18 ? diodeA
+            let A = t == filterType::diodeLadder ? diodeA
                             : float[16] (-2.0f, 1.0f - 2.0f * K, 0.0f, 0.0f,
                                           1.0f, K - 1.0f, 0.0f, 0.0f,
                                           0.0f, 0.0f, 0.0f, 0.0f,
                                           0.0f, 0.0f, 0.0f, 0.0f);
-            let g = t == 18 ? prewarp (hz, sr) / diodePeak : prewarp (hz, sr);
-            let k = t == 18 ? res * diodeOsc * 1.02f : 0.0f;
+            let g = t == filterType::diodeLadder ? prewarp (hz, sr) / diodePeak : prewarp (hz, sr);
+            let k = t == filterType::diodeLadder ? res * diodeOsc * 1.02f : 0.0f;
             float[20] m;
             solveZdf (m, A, g, N);
 
@@ -527,7 +542,7 @@ namespace porridge
                 let x = buf.at (i);
                 var u = x;
 
-                if (t == 18)
+                if (t == filterType::diodeLadder)
                     u = softSat (tables, (x - kk * ms[3]) / (1.0f + kk * m0[19]));
 
                 for (wrap<4> r)
@@ -537,7 +552,7 @@ namespace porridge
                     ms[r] = y;
                 }
 
-                buf.at (i) = t == 18 ? ms[3] * (1.0f + 0.5f * kk) : ms[1];
+                buf.at (i) = t == filterType::diodeLadder ? ms[3] * (1.0f + 0.5f * kk) : ms[1];
             }
 
             this.zs = s;
@@ -546,7 +561,7 @@ namespace porridge
             return;
         }
 
-        if (t == 20)
+        if (t == filterType::comb)
         {
             // comb: a delay of one cutoff period fed back; morph turns the feedback from
             // positive (0) through none (0.5) to negative (1)
@@ -722,6 +737,12 @@ namespace porridge
     void clearState (Distortion& this)
     {
         this = Distortion();
+        this.initDefaults();
+    }
+
+    /// The fields of a cleared distortion that don't start at zero (the rest must be zero).
+    void initDefaults (Distortion& this)
+    {
         this.needsReset = true;
         this.preS = 1.0f;
         this.postS = 1.0f;
@@ -749,7 +770,7 @@ namespace porridge
         let pre = float (pow (10.0, float64 ((P[slot::Sat_Pregain] - lim) * 0.05f)));
         var post = float (pow (10.0, float64 ((lim + P[slot::Sat_Postgain] + dm) * 0.05f)));
 
-        if (int (P[slot::Sat_Mode]) == 3 && ! isGlobal)
+        if (int (P[slot::Sat_Mode]) == satMode::both && ! isGlobal)
             post = 1.0f;
 
         if (this.needsReset)

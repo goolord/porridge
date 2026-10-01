@@ -15,8 +15,6 @@ namespace porridge
         input event ParamChange paramIn;
         input event std::midi::Message midiIn;
         input event std::timeline::Tempo tempoIn;
-        input event std::timeline::TransportState transportIn;
-        input event std::timeline::Position positionIn;
         input event Shape shapeIn;
         input event Curve curveIn;
         input event Tuning tuningIn;
@@ -35,6 +33,7 @@ namespace porridge
 
         //==============================================================================
         float[numSlots] P;                          // program mirror, slot = chunk offset / 4
+        bool paramsChanged = true;                  // since the envelope coefficients were made
         float[512] wave1, wave2, lfoShape1, lfoShape2;
         float[64] velCurve, touchCurve;
         bool tuningOn;
@@ -44,6 +43,12 @@ namespace porridge
         float64 sampleRate, samplesPerBeat;
         float bpm = 120.0f;
         int srInt;
+
+        // coefficients that depend only on the sample rate (and the controller smoothing's on
+        // the length of the block)
+        float ampSmooth;
+        FmCoefs fmCoefs;
+        float[blockSize + 1] ctrlSmooth;
 
         Rand rng;
         WaveTables tables;
@@ -80,7 +85,10 @@ namespace porridge
         // controllers
         float bendTarget, bendSmooth, pressureTarget, pressureSmooth, xSmooth, ySmooth;
         float[128] rawCC;
+        bool[128] ccReported;                       // this block, on ccOut
         float[6] ccSmooth;
+        float[ccTgt::unisonSpread + 1] ccSum, ccSumBipolar;    // sumCcMods: per piece
+        float ccXyDepth, ccMe1Depth, ccMe2Depth, ccRes;
         bool sustainDown;
         float[4] walkX, walkY;
         float walkT;
@@ -88,7 +96,6 @@ namespace porridge
 
         // note object / arpeggiator
         int[128] heldKey, heldVel, heldStamp, heldSub;
-        float[128] heldOff;
         int heldCount, stampCounter;
         int prevCmd, dir, prevDir, stepIdx, curKey, arpPos, arpPrevPos, gSub, gSubPrev;
         bool firstNote, subFlag;
@@ -104,10 +111,10 @@ namespace porridge
         bool[mods::numTargets] targetLive;
         float[mods::numTargets] modBase, modBaseNorm, modSum;
         float gLfo1Raw, gLfo2Raw, bendNormTarget, bendNorm, wheel;
-        int64 modRngState;
+        Lcg modRng;
 
         // Porridge's own randomness (drift, unison phases), apart from Oatmeal's rng
-        int64 driftRngState;
+        Lcg driftRng;
 
         // MPE: each member channel's note bend (semitones), pressure and slide (CC 74), and
         // the channel each key last came from
@@ -117,13 +124,14 @@ namespace porridge
         // MIDI arriving during a block, and the sample it arrived on (now: the current frame)
         std::midi::Message[256] midiQueue;
         int64[256] midiTime;
-        int midiCount;
+        int midiHead, midiCount;                    // the messages not handled yet: [midiHead, midiCount)
         int64 now;
         bool panicPending;
 
         // Oat mode: the output a block late, for the same latency as sample-accurate MIDI
         float<2>[blockSize] lateMix;
         int xyReportSamples;
+        float xyReportedX, xyReportedY;
 
         // block buffers
         float<2>[blockSize] mix, testBuf, testNext;
@@ -137,14 +145,25 @@ namespace porridge
         event paramIn (ParamChange c)
         {
             P.at (c.slot) = c.value;
+            paramsChanged = true;
         }
 
         event shapeIn (Shape s)
         {
-            if (s.which == 0)      { wave1 = s.data; user1Dirty = true; }
-            else if (s.which == 1) { wave2 = s.data; user2Dirty = true; }
+            // a user waveform's tables are rebuilt (on the audio thread) only when it changes
+            if (s.which == 0)      { if (! sameShape (wave1, s.data)) { wave1 = s.data; user1Dirty = true; } }
+            else if (s.which == 1) { if (! sameShape (wave2, s.data)) { wave2 = s.data; user2Dirty = true; } }
             else if (s.which == 2) lfoShape1 = s.data;
             else if (s.which == 3) lfoShape2 = s.data;
+        }
+
+        bool sameShape (const float[512]& a, const float[512]& b)
+        {
+            for (wrap<512> i)
+                if (a[i] != b[i])
+                    return false;
+
+            return true;
         }
 
         event curveIn (Curve c)
@@ -160,8 +179,6 @@ namespace porridge
         }
 
         event tempoIn (std::timeline::Tempo t)          { if (t.bpm > 0) bpm = t.bpm; }
-        event transportIn (std::timeline::TransportState t) {}
-        event positionIn (std::timeline::Position p)    {}
         event panicIn (int x)                           { panicPending = true; }
         event testModeIn (int x)                        { useTestInput = x != 0; }
 
@@ -183,7 +200,14 @@ namespace porridge
             samplesPerBeat = 21000.0;
             rng.state = 1;
 
-            fxTables.build();
+            ampSmooth = ampSmoothing (sampleRate);
+            fmCoefs = makeFmCoefs (float64 (srInt));
+            let c = pow (10.0, -2.0 / (0.05 * float64 (srInt)));
+
+            for (int n = 0; n <= blockSize; ++n)
+                ctrlSmooth.at (n) = float (1.0 - pow (c, float64 (n)));
+
+            fxTables.build (sampleRate);
             distTables.build();
             tables.buildStatic();
 
@@ -206,17 +230,16 @@ namespace porridge
             user1Dirty = true;
             user2Dirty = true;
 
-            P[slot::Tune_Octave] = 2.0f;
-            P[slot::Tune_Main] = 440.0f;
-
-            for (wrap<porridgeSlots.size> i)
-                P.at (porridgeSlots[i]) = porridgeDefaults[i];
-
             globalDist.clearState();
             delay.prepare();
             reverb.prepare();
             eq.clearState();
+
+            // the chorus is set up while the program mirror is still all zero, so its
+            // irregular mode starts from zero delays and speeds (the reference renders rely on
+            // it); then every parameter gets its default
             chorus.clearState (rng, P, sampleRate);
+            P = slotDefaults;
 
             for (wrap<maxVoices> i)
                 constructVoice (voices[i]);
@@ -224,8 +247,8 @@ namespace porridge
             numActive = 0;
             allNotesOff();
             walkT = 0;
-            modRngState = 12345;
-            driftRngState = 54321;
+            modRng.state = 12345;
+            driftRng.state = 54321;
             gLfo1Slew = -1.0f;
             gLfo2Slew = -1.0f;
         }
@@ -240,7 +263,7 @@ namespace porridge
         }
 
         //==============================================================================
-        // helpers for the modulation matrix
+        // the X/Y pad's, mod envelopes' and controllers' modulation (Oatmeal's)
 
         float xySum (int target, float x, float y)
         {
@@ -255,21 +278,43 @@ namespace porridge
             return s;
         }
 
-        float ccDepthSum (int target, bool bipolar)
+        /// The controllers' modulation is the same for every voice: it is summed once per piece,
+        /// after the controllers move. ccSum[t] is controller * depth over the slots aimed at
+        /// target t, ccSumBipolar[t] the same with the controller as -1..1.
+        void sumCcMods()
         {
-            float s = 0;
+            ccSum = float[ccTgt::unisonSpread + 1]();
+            ccSumBipolar = float[ccTgt::unisonSpread + 1]();
 
             for (int c = 0; c < 6; ++c)
             {
                 let cc = ccSmooth.at (c);
-                let v = bipolar ? 2.0f * cc - 1.0f : cc;
+                let v = 2.0f * cc - 1.0f;
 
                 for (int k = 0; k < 4; ++k)
-                    if (int (P.at (slot::CC1_Target_1 + c * 9 + k)) == target)
-                        s += v * P.at (slot::CC1_Depth_1 + c * 9 + k);
+                {
+                    let t = int (P.at (slot::CC1_Target_1 + c * 9 + k));
+
+                    if (t > 0 && t <= ccTgt::unisonSpread)
+                    {
+                        let d = P.at (slot::CC1_Depth_1 + c * 9 + k);
+                        ccSum.at (t) = ccSum.at (t) + cc * d;
+                        ccSumBipolar.at (t) = ccSumBipolar.at (t) + v * d;
+                    }
+                }
             }
 
-            return s;
+            ccXyDepth = ccDbProduct (ccTgt::xyDepth);
+            ccMe1Depth = ccLinearProduct (ccTgt::me1Depth);
+            ccMe2Depth = ccLinearProduct (ccTgt::me2Depth);
+
+            // resonance() sums its controllers in this order (by slot, then controller)
+            ccRes = 0;
+
+            for (int k = 0; k < 4; ++k)
+                for (int c = 0; c < 6; ++c)
+                    if (int (P.at (slot::CC1_Target_1 + c * 9 + k)) == ccTgt::resonance)
+                        ccRes += ccSmooth.at (c) * P.at (slot::CC1_Depth_1 + c * 9 + k);
         }
 
         float ccDbProduct (int target)
@@ -352,22 +397,31 @@ namespace porridge
         //==============================================================================
         // voice pool
 
+        /// A new voice: everything zeroed once, then the parts that don't start at zero.
         void constructVoice (Voice& v)
         {
             v = Voice();
 
             for (wrap<maxUnison> k)
             {
-                v.osc1[k].construct();
-                v.osc2[k].construct();
+                v.osc1[k].initDefaults();
+                v.osc2[k].initDefaults();
             }
 
-            v.distL.clearState();
-            v.distR.clearState();
-            v.f1L.clearState(); v.f2L.clearState(); v.f1R.clearState(); v.f2R.clearState();
+            v.distL.initDefaults();
+            v.distR.initDefaults();
+            v.f1L.initDefaults(); v.f2L.initDefaults(); v.f1R.initDefaults(); v.f2R.initDefaults();
         }
 
+        /// A stolen voice: its filters are cleared, then it starts over as a new one does.
         void resetVoice (Voice& v)
+        {
+            v.f1L.clearState(); v.f2L.clearState(); v.f1R.clearState(); v.f2R.clearState();
+            prepareVoice (v);
+        }
+
+        /// The state a voice starts a note from (after constructVoice or resetVoice).
+        void prepareVoice (Voice& v)
         {
             v.relCount = -1;
             v.key = -1;
@@ -399,9 +453,10 @@ namespace porridge
                 v.panr[k] = float (rng.next()) * c - 1.0f;
             }
 
+            v.uniU = 0;     // new jitter: the detune ratios are due
+
             v.lfo1.resetPhase (rng, P);
             v.lfo2.resetPhase (rng, P);
-            v.f1L.clearState(); v.f2L.clearState(); v.f1R.clearState(); v.f2R.clearState();
             v.fenv1L = Env(); v.fenv2L = Env(); v.fenv1R = Env(); v.fenv2R = Env();
             v.ampEnv = Env(); v.modEnv1 = Env(); v.modEnv2 = Env();
             v.vel = 1.0f;
@@ -457,7 +512,7 @@ namespace porridge
                 if (listPos (vi) < 0)
                 {
                     constructVoice (voices.at (vi));
-                    resetVoice (voices.at (vi));
+                    prepareVoice (voices.at (vi));
 
                     for (int i = numActive; i > 0; --i)
                         order.at (i) = order.at (i - 1);
@@ -528,7 +583,7 @@ namespace porridge
             v.relCount = -1;
             v.age = 0;
             v.vel = velc;
-            v.modRand = nextModRandom();
+            v.modRand = modRng.nextSigned();
             v.chan = noteChan.at (key & 0x7f);
             v.randAmp = float (pow (10.0, float64 ((float (rng.next()) * (1.0f / 16384.0f) - 1.0f) * P[slot::RandomAmp] * 0.05f)));
 
@@ -617,11 +672,11 @@ namespace porridge
                 if (v.penvStage > 7 || v.penvStage < 2)
                     v.penvStage = 2;
 
-                if (v.ampEnv.stage == 0 || v.ampEnv.stage >= 8)   v.ampEnv.trigger (ampC, false);
-                if (v.fenv1L.stage == 0 || v.fenv1L.stage >= 8)   v.fenv1L.trigger (filtC, true);
-                if (v.fenv2L.stage == 0 || v.fenv2L.stage >= 8)   v.fenv2L.trigger (filt2C, true);
-                if (v.modEnv1.stage == 0 || v.modEnv1.stage >= 8) v.modEnv1.trigger (mod1C, true);
-                if (v.modEnv2.stage == 0 || v.modEnv2.stage >= 8) v.modEnv2.trigger (mod2C, true);
+                if (v.ampEnv.stage == envStage::off || v.ampEnv.stage >= envStage::release)   v.ampEnv.trigger (ampC, false);
+                if (v.fenv1L.stage == envStage::off || v.fenv1L.stage >= envStage::release)   v.fenv1L.trigger (filtC, true);
+                if (v.fenv2L.stage == envStage::off || v.fenv2L.stage >= envStage::release)   v.fenv2L.trigger (filt2C, true);
+                if (v.modEnv1.stage == envStage::off || v.modEnv1.stage >= envStage::release) v.modEnv1.trigger (mod1C, true);
+                if (v.modEnv2.stage == envStage::off || v.modEnv2.stage >= envStage::release) v.modEnv2.trigger (mod2C, true);
             }
 
             // glide
@@ -696,11 +751,7 @@ namespace porridge
             keyReleased.at (key & 0xff) = false;
             let voiceMode = int (P[slot::PolyMode]);
 
-            bool anyHeld = false;
-            for (int i = 0; i < numActive; ++i)
-                if (voices.at (order.at (i)).relCount < 0) anyHeld = true;
-
-            if (! (voiceMode == 2 && anyHeld))
+            if (! (voiceMode == 2 && anyVoiceHeld()))
             {
                 phantom1.trigger (mod1C, true);
                 phantom2.trigger (mod2C, true);
@@ -795,11 +846,7 @@ namespace porridge
                         voiceRelease (voices.at (vi));
                 }
 
-                bool anyHeld = false;
-                for (int i = 0; i < numActive; ++i)
-                    if (voices.at (order.at (i)).relCount < 0) anyHeld = true;
-
-                if (! anyHeld)
+                if (! anyVoiceHeld())
                 {
                     phantom1.release (mod1C, true);
                     phantom2.release (mod2C, true);
@@ -812,7 +859,7 @@ namespace porridge
             if (tuningOn && keySemitones.at (key & 0x7f) < -1000.0f)
                 return;
 
-            let x = float (vel) * 0.00787401572f * 64.0f;
+            let x = curveIndex (vel);
             let velc = curveLerp (false, x);
             let det = (float (rng.next()) * (1.0f / 16384.0f) - 1.0f) * P[slot::RandomFreq] * 0.01f;
             let semis = float (det + off);
@@ -844,6 +891,16 @@ namespace porridge
             dir = 1; prevDir = 1; curKey = -1; arpPos = -1; arpPrevPos = -1;
         }
 
+        /// Whether any voice's note is still held (not released).
+        bool anyVoiceHeld()
+        {
+            for (int i = 0; i < numActive; ++i)
+                if (voices.at (order.at (i)).relCount < 0)
+                    return true;
+
+            return false;
+        }
+
         bool keyHasHeldVoice (int k)
         {
             for (int i = 0; i < numActive; ++i)
@@ -855,7 +912,9 @@ namespace porridge
             return false;
         }
 
-        void heldInsert (int key, float off, int vel)
+        // heldInsert and heldRemove leave heldSub where it is, as Oatmeal does: the per-note
+        // subsequence counters belong to list positions, not notes (docs/internals/notes_arp.md 4.2)
+        void heldInsert (int key, int vel)
         {
             if (key < 0 || heldCount >= 128) return;
 
@@ -879,7 +938,6 @@ namespace porridge
             if (arpPrevPos >= i) ++arpPrevPos;
 
             heldKey.at (i) = key;
-            heldOff.at (i) = off;
             heldVel.at (i) = vel;
             heldSub.at (i) = 0;
             heldStamp.at (i) = stampCounter;
@@ -979,9 +1037,9 @@ namespace porridge
             return c;
         }
 
-        void handleNote (int key, float off, int vel)
+        void handleNote (int key, int vel)
         {
-            if (vel > 0) heldInsert (key, off, vel);
+            if (vel > 0) heldInsert (key, vel);
             else         heldRemove (key);
 
             if (vel > 0 && heldCount == 1)
@@ -995,7 +1053,7 @@ namespace porridge
 
             if (mode == 0)
             {
-                voiceNote (key, vel, off);
+                voiceNote (key, vel, 0.0f);
                 return;
             }
 
@@ -1010,18 +1068,18 @@ namespace porridge
 
             if (mode == 4)
             {
-                voiceNote (key, vel, off);
+                voiceNote (key, vel, 0.0f);
 
                 for (int j = 1; j <= 7; ++j)
                     if (arpNoteOn (j))
-                        voiceNote (key + 256 * j, vel, off + arpShift (j));
+                        voiceNote (key + 256 * j, vel, arpShift (j));
             }
             else
             {
                 gSub = advanceSub (gSub);
 
                 if (gSub <= 0) voiceNote (key, vel, 0.0f);
-                else           voiceNote (key + (gSub << 8), vel, off + arpShift (gSub));
+                else           voiceNote (key + (gSub << 8), vel, arpShift (gSub));
             }
         }
 
@@ -1033,13 +1091,13 @@ namespace porridge
                 s = (3.0 * s >= 2.0) ? float64 (int (s + 0.5)) : 1.0 / float64 (int (1.0 / s + 0.5));
 
             let unit = int (P[slot::Arp_Unit]);
-            let beats = float64[15] (0.1, 1.0 / 12.0, 0.125, 0.2, 1.0 / 6.0, 0.25, 0.4, 1.0 / 3.0, 0.5, 0.8, 2.0 / 3.0, 1.0, 1.6, 4.0 / 3.0, 2.0);
             float64 L;
 
+            // the arpeggiator's note lengths are half the LFO's (exactly: halving is exact)
             if (unit == 0)      L = s * float64 (srInt) * 0.001;
             else if (unit == 1) L = s * float64 (srInt) * 0.01;
             else if (unit == 2) L = s * float64 (srInt);
-            else                L = s * samplesPerBeat * beats.at (clamp (unit - 3, 0, 14));
+            else                L = s * samplesPerBeat * (lfoUnitBeats (unit) * 0.5);
 
             return max (L, 1.0);
         }
@@ -1137,11 +1195,11 @@ namespace porridge
                 {
                     for (int i = 0; i < heldCount; ++i)
                     {
-                        voiceNote (heldKey.at (i), heldVel.at (i), heldOff.at (i));
+                        voiceNote (heldKey.at (i), heldVel.at (i), 0.0f);
 
                         for (int j = 1; j <= 7; ++j)
                             if (arpNoteOn (j))
-                                voiceNote (heldKey.at (i) + 256 * j, heldVel.at (i), heldOff.at (i) + arpShift (j));
+                                voiceNote (heldKey.at (i) + 256 * j, heldVel.at (i), arpShift (j));
                     }
                 }
 
@@ -1158,8 +1216,8 @@ namespace porridge
 
                 for (int i = 0; i < heldCount; ++i)
                 {
-                    if (gSub == 0) voiceNote (heldKey.at (i), heldVel.at (i), heldOff.at (i));
-                    else           voiceNote (heldKey.at (i) + (gSub << 8), heldVel.at (i), heldOff.at (i) + arpShift (gSub));
+                    if (gSub == 0) voiceNote (heldKey.at (i), heldVel.at (i), 0.0f);
+                    else           voiceNote (heldKey.at (i) + (gSub << 8), heldVel.at (i), arpShift (gSub));
                 }
             }
 
@@ -1250,15 +1308,15 @@ namespace porridge
 
                     if (mode == 3)
                     {
-                        voiceNote (key, heldVel.at (p), heldOff.at (p));
+                        voiceNote (key, heldVel.at (p), 0.0f);
 
                         for (int j = 1; j <= 7; ++j)
                             if (arpNoteOn (j))
-                                voiceNote (key + 256 * j, heldVel.at (p), heldOff.at (p) + arpShift (j));
+                                voiceNote (key + 256 * j, heldVel.at (p), arpShift (j));
                     }
                     else
                     {
-                        voiceNote (key, heldVel.at (p), shift + heldOff.at (p));
+                        voiceNote (key, heldVel.at (p), shift);
                     }
                 }
 
@@ -1315,19 +1373,35 @@ namespace porridge
         //==============================================================================
         // MIDI
 
-        /// Handles the first `count` queued messages and drops them from the queue.
+        /// Handles the next `count` queued messages.
         void handleMidi (int count)
         {
             for (int i = 0; i < count; ++i)
-                handleMessage (midiQueue.at (i).message);
+                handleMessage (midiQueue.at (midiHead + i).message);
 
-            for (int i = count; i < midiCount; ++i)
+            midiHead += count;
+
+            if (midiHead == midiCount)
             {
-                midiQueue.at (i - count) = midiQueue.at (i);
-                midiTime.at (i - count) = midiTime.at (i);
+                midiHead = 0;
+                midiCount = 0;
+            }
+        }
+
+        /// Moves the messages not yet handled to the front of the queue, once per block.
+        void compactMidi()
+        {
+            if (midiHead == 0)
+                return;
+
+            for (int i = midiHead; i < midiCount; ++i)
+            {
+                midiQueue.at (i - midiHead) = midiQueue.at (i);
+                midiTime.at (i - midiHead) = midiTime.at (i);
             }
 
-            midiCount -= count;
+            midiCount -= midiHead;
+            midiHead = 0;
         }
 
         void handleMessage (int m)
@@ -1335,87 +1409,94 @@ namespace porridge
             // MPE (lower zone): channel 1 is the master channel and plays like any other; notes on
             // channels 2-16 get the bend, pressure and slide of their own channel
             let mpe = P[slot::MPE_On] != 0;
+            let status = (m >> 16) & 0xff;
+            let type = status & 0xf0;
+            let ch = status & 15;
+            let d1 = (m >> 8) & 0x7f;
+            let d2 = m & 0x7f;
 
+            if (! mpe && P.at (slot::MIDI_Channel_1 + ch) == 0)
+                return;
+
+            let member = mpe && ch != 0;
+
+            if (member && type == 0xd0)
             {
-                let status = (m >> 16) & 0xff;
-                let type = status & 0xf0;
-                let ch = status & 15;
-                let d1 = (m >> 8) & 0x7f;
-                let d2 = m & 0x7f;
+                chPressureTarget.at (ch) = curveLerp (true, curveIndex (d1));
+                return;
+            }
 
-                if (! mpe && P.at (slot::MIDI_Channel_1 + ch) == 0)
+            if (member && type == 0xe0)
+            {
+                chBendTarget.at (ch) = float (bend14 (d1, d2)) * P[slot::MPE_BendRange] * (1.0f / 8192.0f);
+                return;
+            }
+
+            if (member && type == 0xb0 && d1 == 74)
+            {
+                chSlideTarget.at (ch) = float (d2) / 127.0f;
+                return;
+            }
+
+            if (type == 0x90 && d2 > 0)
+            {
+                noteChan.at (d1) = mpe ? ch : 0;
+                let at = curveLerp (true, curveIndex (d2));
+                pressureTarget = at;
+                perKeyAT.at (d1) = at;
+                handleNote (d1, d2);
+            }
+            else if (type == 0x80 || type == 0x90)
+            {
+                handleNote (d1, 0);
+            }
+            else if (type == 0xb0)
+            {
+                if (d1 >= 123)
+                {
+                    allNotesOff();
                     return;
-
-                let member = mpe && ch != 0;
-
-                if (member && type == 0xd0)
-                {
-                    chPressureTarget.at (ch) = curveLerp (true, float (d1) * 0.00787401572f * 64.0f);
-                    return;
                 }
 
-                if (member && type == 0xe0)
-                {
-                    chBendTarget.at (ch) = float ((d2 - 64) * 128 + d1) * P[slot::MPE_BendRange] * (1.0f / 8192.0f);
-                    return;
-                }
+                if (d1 == 64)
+                    sustainDown = P[slot::SustainPedal] != 0 && d2 >= 63;
 
-                if (member && type == 0xb0 && d1 == 74)
+                if (d1 > 0)
                 {
-                    chSlideTarget.at (ch) = float (d2) / 127.0f;
-                    return;
-                }
+                    rawCC.at (d1) = float (d2) / 127.0f;
 
-                if (type == 0x90 && d2 > 0)
-                    noteChan.at (d1) = mpe ? ch : 0;
-
-                if (type == 0x90 && d2 > 0)
-                {
-                    let x = float (d2) * 0.00787401572f * 64.0f;
-                    let at = curveLerp (true, x);
-                    pressureTarget = at;
-                    perKeyAT.at (d1) = at;
-                    handleNote (d1, 0.0f, d2);
-                }
-                else if (type == 0x80 || type == 0x90)
-                {
-                    handleNote (d1, 0.0f, 0);
-                }
-                else if (type == 0xb0)
-                {
-                    if (d1 >= 123)
+                    // the interface only needs to see a controller move (MIDI learn), so once
+                    // per block is plenty
+                    if (! ccReported.at (d1))
                     {
-                        allNotesOff();
-                        return;
-                    }
-
-                    if (d1 == 64)
-                        sustainDown = P[slot::SustainPedal] != 0 && d2 >= 63;
-
-                    if (d1 > 0)
-                    {
-                        rawCC.at (d1) = float (d2) / 127.0f;
+                        ccReported.at (d1) = true;
                         ccOut <- d1;
-
-                        if (int (P[slot::XY_H_CC]) == d1) P[slot::XY_X] = 2.0f * float (d2) / 127.0f - 1.0f;
-                        if (int (P[slot::XY_V_CC]) == d1) P[slot::XY_Y] = 2.0f * float (d2) / 127.0f - 1.0f;
                     }
-                }
-                else if (type == 0xa0)
-                {
-                    perKeyAT.at (d1) = curveLerp (true, float (d2) * 0.00787401572f * 64.0f);
-                }
-                else if (type == 0xd0)
-                {
-                    pressureTarget = curveLerp (true, float (d1) * 0.00787401572f * 64.0f);
-                }
-                else if (type == 0xe0)
-                {
-                    bendTarget = float ((d2 - 64) * 128 + d1) * P[slot::BendRange] * (1.0f / 8192.0f);
-                    bendNormTarget = float ((d2 - 64) * 128 + d1) * (1.0f / 8192.0f);
+
+                    if (int (P[slot::XY_H_CC]) == d1) P[slot::XY_X] = 2.0f * float (d2) / 127.0f - 1.0f;
+                    if (int (P[slot::XY_V_CC]) == d1) P[slot::XY_Y] = 2.0f * float (d2) / 127.0f - 1.0f;
                 }
             }
+            else if (type == 0xa0)
+            {
+                perKeyAT.at (d1) = curveLerp (true, curveIndex (d2));
+            }
+            else if (type == 0xd0)
+            {
+                pressureTarget = curveLerp (true, curveIndex (d1));
+            }
+            else if (type == 0xe0)
+            {
+                bendTarget = float (bend14 (d1, d2)) * P[slot::BendRange] * (1.0f / 8192.0f);
+                bendNormTarget = float (bend14 (d1, d2)) * (1.0f / 8192.0f);
+            }
         }
+
+        /// A 7-bit MIDI value as a position on a 64-point response curve.
+        float curveIndex (int d)        { return float (d) * 0.00787401572f * 64.0f; }
+
+        /// A pitch bend's 14-bit value, centred: -8192 .. 8191.
+        int bend14 (int lsb, int msb)   { return (msb - 64) * 128 + lsb; }
 
         //==============================================================================
         // per-block preparation: derived coefficients, controller smoothing, XY walk
@@ -1434,13 +1515,19 @@ namespace porridge
             if (octave < 1.001f) octave = 2.0f;
             lnOct = float (log (float64 (octave)));
 
-            let fr = P[slot::F_Speed];
-            ampC   = makeEnvCoefs (P, 8232 / 4, slot::Curve_Amp_Attack, sampleRate, 1.0f);
-            filtC  = makeEnvCoefs (P, 8300 / 4, slot::Curve_Filter_Attack, sampleRate, 1.0f);
-            filt2C = makeEnvCoefs (P, 8300 / 4, slot::Curve_Filter_Attack, sampleRate, fr > 0 ? fr : 1.0f);
-            mod1C  = makeEnvCoefs (P, 9312 / 4, slot::Curve_Mod1_Attack, sampleRate, 1.0f);
-            mod2C  = makeEnvCoefs (P, 9408 / 4, slot::Curve_Mod2_Attack, sampleRate, 1.0f);
-            penvC  = makePitchEnvCoefs (P, float64 (srInt));
+            // the envelope coefficients follow only parameters (which the modulation matrix
+            // never moves outside a block), so they wait for a parameter change
+            if (paramsChanged)
+            {
+                paramsChanged = false;
+                let fr = P[slot::F_Speed];
+                ampC   = makeEnvCoefs (P, slot::Attack, slot::Curve_Amp_Attack, sampleRate, 1.0f);
+                filtC  = makeEnvCoefs (P, slot::F_Attack, slot::Curve_Filter_Attack, sampleRate, 1.0f);
+                filt2C = makeEnvCoefs (P, slot::F_Attack, slot::Curve_Filter_Attack, sampleRate, fr > 0 ? fr : 1.0f);
+                mod1C  = makeEnvCoefs (P, slot::M1_Attack, slot::Curve_Mod1_Attack, sampleRate, 1.0f);
+                mod2C  = makeEnvCoefs (P, slot::M2_Attack, slot::Curve_Mod2_Attack, sampleRate, 1.0f);
+                penvC  = makePitchEnvCoefs (P, float64 (srInt));
+            }
 
             if (user1Dirty) { tables.buildUserSet (setUser1, wave1); user1Dirty = false; }
             if (user2Dirty) { tables.buildUserSet (setUser2, wave2); user2Dirty = false; }
@@ -1458,8 +1545,7 @@ namespace porridge
             if (abs (xSmooth - P[slot::XY_X]) < 0.001f) xSmooth = P[slot::XY_X];
             if (abs (ySmooth - P[slot::XY_Y]) < 0.001f) ySmooth = P[slot::XY_Y];
 
-            let c = pow (10.0, -2.0 / (0.05 * float64 (srInt)));
-            let k64 = float (1.0 - pow (c, float64 (n)));
+            let k64 = ctrlSmooth.at (n);
 
             // XY random walk (Catmull-Rom through random points inside the radius)
             if (walkT >= 1.0f)
@@ -1514,7 +1600,13 @@ namespace porridge
             if (xyReportSamples >= 8 * blockSize)
             {
                 xyReportSamples = 0;
-                xyOut <- float<2> (curX, curY);
+
+                if (curX != xyReportedX || curY != xyReportedY)
+                {
+                    xyReportedX = curX;
+                    xyReportedY = curY;
+                    xyOut <- float<2> (curX, curY);
+                }
             }
         }
 
@@ -1534,34 +1626,34 @@ namespace porridge
 
             if (numActive == 0)
             {
-                gLfo1.step (tables, rng, P, lfoShape1, false, n, xySum (8, X, Y), sampleRate, samplesPerBeat);
-                gLfo2.step (tables, rng, P, lfoShape2, true, n, xySum (8, X, Y) + xySum (9, X, Y), sampleRate, samplesPerBeat);
+                gLfo1.step (tables, rng, P, lfoShape1, false, n, xySum (xyTgt::lfo1Speed, X, Y), sampleRate, samplesPerBeat);
+                gLfo2.step (tables, rng, P, lfoShape2, true, n, xySum (xyTgt::lfo1Speed, X, Y) + xySum (xyTgt::lfo2Speed, X, Y), sampleRate, samplesPerBeat);
                 return false;
             }
 
             // global XY depth from the phantom envelopes of the previous block
-            let f = meDbProduct (28, phantom1Val, phantom2Val) * ccDbProduct (28);
+            let f = meDbProduct (meTgt::xyDepth, phantom1Val, phantom2Val) * ccXyDepth;
             let Xg = clamp (f * X, -2.0f, 2.0f);
             let Yg = clamp (f * Y, -2.0f, 2.0f);
 
-            let Sm = xySum (30, Xg, Yg) + ccDepthSum (31, false);
+            let Sm = xySum (xyTgt::modEnvelopeSpeed, Xg, Yg) + ccSum[ccTgt::modEnvelopeSpeed];
             let phSpeed = Sm != 0 ? pow2 (2.0f * Sm) : 1.0f;
-            let me1Fac = xyLinearProduct (26, Xg, Yg) * ccLinearProduct (26);
-            let me2Fac = xyLinearProduct (27, Xg, Yg) * ccLinearProduct (27);
+            let me1Fac = xyLinearProduct (xyTgt::me1Depth, Xg, Yg) * ccMe1Depth;
+            let me2Fac = xyLinearProduct (xyTgt::me2Depth, Xg, Yg) * ccMe2Depth;
             phantom1Val = phantom1.renderBlock (mod1C, phSpeed, sustainDown, n) * me1Fac;
             phantom2Val = phantom2.renderBlock (mod2C, phSpeed, sustainDown, n) * me2Fac;
 
-            let A = meSum (18, phantom1Val, phantom2Val) + ccDepthSum (8, false);
+            let A = meSum (meTgt::lfo1Speed, phantom1Val, phantom2Val) + ccSum[ccTgt::lfo1Speed];
             let gSpeed1 = abs (A) > 0.001f ? pow2 (2.0f * A) : 1.0f;
-            let B = meSum (19, phantom1Val, phantom2Val) + ccDepthSum (9, false);
+            let B = meSum (meTgt::lfo2Speed, phantom1Val, phantom2Val) + ccSum[ccTgt::lfo2Speed];
             let gSpeed2 = abs (B) > 0.001f ? pow2 (2.0f * B) : 1.0f;
 
             let g1n = int ((P[slot::LFO_2_1] * gLfo2Prev * 3.0f + gSpeed1) * float (n) + 0.5f);
-            gv1 = slewLfo (gLfo1Slew, gLfo1.step (tables, rng, P, lfoShape1, false, g1n, xySum (8, Xg, Yg), sampleRate, samplesPerBeat),
+            gv1 = slewLfo (gLfo1Slew, gLfo1.step (tables, rng, P, lfoShape1, false, g1n, xySum (xyTgt::lfo1Speed, Xg, Yg), sampleRate, samplesPerBeat),
                            P[slot::LFO_1_Slew], n);
             gLfo1Raw = 2.0f * gv1 - 1.0f;
             let g2n = int ((P[slot::LFO_1_2] * gv1 * 3.0f + gSpeed2) * float (n) + 0.5f);
-            gv2 = slewLfo (gLfo2Slew, gLfo2.step (tables, rng, P, lfoShape2, true, g2n, xySum (8, Xg, Yg) + xySum (9, Xg, Yg), sampleRate, samplesPerBeat),
+            gv2 = slewLfo (gLfo2Slew, gLfo2.step (tables, rng, P, lfoShape2, true, g2n, xySum (xyTgt::lfo1Speed, Xg, Yg) + xySum (xyTgt::lfo2Speed, Xg, Yg), sampleRate, samplesPerBeat),
                            P[slot::LFO_2_Slew], n);
             gLfo2Raw = 2.0f * gv2 - 1.0f;
             gLfo2Prev = gv2;
@@ -1570,34 +1662,30 @@ namespace porridge
 
             if (P[slot::LFO_1_Sync] > 0)
             {
-                let D1 = xySum (10, Xg, Yg) + ccDepthSum (10, false);
-                var pd = 24.0f * float (pow (float64 (P[slot::LFO_1_Pitch]), 4.0));
-                var g = 1.0f;
-                if (abs (D1) > 0.005f) { pd *= float (pow (float64 (octave), 4.0 * float64 (D1))); g = pow2 (4.0f * D1); }
-                gLfo1Pitch = (2.0f * gv1 - 1.0f) * pd;
-                gLfo1Pan = (2.0f * gv1 - 1.0f) * P[slot::LFO_1_Pan] * g;
-                gv1 *= g;
+                let D1 = xySum (xyTgt::lfo1Depth, Xg, Yg) + ccSum[ccTgt::lfo1Depth];
+                let s = lfoSwing (gv1, D1, 4.0, P[slot::LFO_1_Pitch], P[slot::LFO_1_Pan]);
+                gLfo1Pitch = s.pitch;
+                gLfo1Pan = s.pan;
+                gv1 *= s.gain;
             }
 
             if (P[slot::LFO_2_Sync] > 0)
             {
-                let D2 = xySum (11, Xg, Yg) + ccDepthSum (11, false);
-                var pd = 24.0f * float (pow (float64 (P[slot::LFO_2_Pitch]), 4.0));
-                var g = 1.0f;
-                if (abs (D2) > 0.005f) { pd *= float (pow (float64 (octave), 4.0 * float64 (D2))); g = pow2 (4.0f * D2); }
-                gLfo2Pitch = (2.0f * gv2 - 1.0f) * pd;
-                gLfo2Pan = (2.0f * gv2 - 1.0f) * P[slot::LFO_2_Pan] * g;
-                gv2 *= g;
+                let D2 = xySum (xyTgt::lfo2Depth, Xg, Yg) + ccSum[ccTgt::lfo2Depth];
+                let s = lfoSwing (gv2, D2, 4.0, P[slot::LFO_2_Pitch], P[slot::LFO_2_Pan]);
+                gLfo2Pitch = s.pitch;
+                gLfo2Pan = s.pan;
+                gv2 *= s.gain;
             }
 
-            globalPitch = bendSmooth + xySum (5, Xg, Yg) * 24.0f + ccDepthSum (5, true) * 24.0f;
-            globalPan = xySum (6, Xg, Yg) + ccDepthSum (6, true);
-            pwMod1 = int64 (float64 (xySum (12, Xg, Yg) + ccDepthSum (12, false)) * two32 + 0.5) & u32;
-            pwmRateMod1 = xySum (13, Xg, Yg) + ccDepthSum (13, false);
-            pwmDepthMod1 = xySum (14, Xg, Yg) + ccDepthSum (14, false);
-            pwMod2 = int64 (float64 (xySum (15, Xg, Yg) + ccDepthSum (15, false)) * two32 + 0.5) & u32;
-            pwmRateMod2 = xySum (16, Xg, Yg) + ccDepthSum (16, false);
-            pwmDepthMod2 = xySum (17, Xg, Yg) + ccDepthSum (17, false);
+            globalPitch = bendSmooth + xySum (xyTgt::pitch, Xg, Yg) * 24.0f + ccSumBipolar[ccTgt::pitch] * 24.0f;
+            globalPan = xySum (xyTgt::pan, Xg, Yg) + ccSumBipolar[ccTgt::pan];
+            pwMod1 = int64 (float64 (xySum (xyTgt::osc1Pulsewidth, Xg, Yg) + ccSum[ccTgt::osc1Pulsewidth]) * two32 + 0.5) & u32;
+            pwmRateMod1 = xySum (xyTgt::osc1PwmRate, Xg, Yg) + ccSum[ccTgt::osc1PwmRate];
+            pwmDepthMod1 = xySum (xyTgt::osc1PwmDepth, Xg, Yg) + ccSum[ccTgt::osc1PwmDepth];
+            pwMod2 = int64 (float64 (xySum (xyTgt::osc2Pulsewidth, Xg, Yg) + ccSum[ccTgt::osc2Pulsewidth]) * two32 + 0.5) & u32;
+            pwmRateMod2 = xySum (xyTgt::osc2PwmRate, Xg, Yg) + ccSum[ccTgt::osc2PwmRate];
+            pwmDepthMod2 = xySum (xyTgt::osc2PwmDepth, Xg, Yg) + ccSum[ccTgt::osc2PwmDepth];
 
             let maxPoly = clamp (int (P[slot::Voices]), 1, maxVoices);
             let atMode = int (P[slot::AftertouchMode]);
@@ -1854,21 +1942,45 @@ namespace porridge
             return min (1.0f, ms / fade);
         }
 
-        /// -1..1, from Porridge's own generator.
-        float nextDriftRandom()
+        /// Scales an LFO's outputs by its delay and fade-in (when it has either).
+        void fadeLfo (int age, float delay, float fade, float& value, float& pitch, float& pan, float& raw)
         {
-            driftRngState = (driftRngState * 1103515245 + 12345) & 0x7fffffff;
-            return float (driftRngState) * (1.0f / 1073741824.0f) - 1.0f;
+            if (delay > 0 || fade > 0)
+            {
+                let F = lfoFade (age, delay, fade);
+                value *= F; pitch *= F; pan *= F; raw *= F;
+            }
+        }
+
+        /// An LFO's pitch swing (semitones) and pan swing at value v (0..1), with the depth
+        /// modulation D: the pitch depth follows it by kPitch octaves per unit, and gain (which
+        /// also scales the pan, and which the caller applies to v) by 4.
+        struct LfoSwing
+        {
+            float pitch, pan, gain;
+        }
+
+        LfoSwing lfoSwing (float v, float D, float64 kPitch, float pitchKnob, float panKnob)
+        {
+            var pd = 24.0f * float (pow (float64 (pitchKnob), 4.0));
+            var g = 1.0f;
+            if (abs (D) > 0.005f) { pd *= float (pow (float64 (octave), kPitch * float64 (D))); g = pow2 (4.0f * D); }
+
+            LfoSwing s;
+            s.pitch = (2.0f * v - 1.0f) * pd;
+            s.pan = (2.0f * v - 1.0f) * panKnob * g;
+            s.gain = g;
+            return s;
         }
 
         void startDrift (Voice& v)
         {
             for (wrap<2 * maxUnison + 1> g)
             {
-                v.drift[g].a = nextDriftRandom();
-                v.drift[g].b = nextDriftRandom();
-                v.drift[g].phase = 0.5f + 0.5f * nextDriftRandom();
-                v.drift[g].rate = 1.0f + 0.3f * nextDriftRandom();
+                v.drift[g].a = driftRng.nextSigned();
+                v.drift[g].b = driftRng.nextSigned();
+                v.drift[g].phase = 0.5f + 0.5f * driftRng.nextSigned();
+                v.drift[g].rate = 1.0f + 0.3f * driftRng.nextSigned();
             }
         }
 
@@ -1885,7 +1997,7 @@ namespace porridge
                 {
                     v.drift[g].phase -= float (int (v.drift[g].phase));
                     v.drift[g].a = v.drift[g].b;
-                    v.drift[g].b = nextDriftRandom();
+                    v.drift[g].b = driftRng.nextSigned();
                 }
             }
         }
@@ -1908,15 +2020,9 @@ namespace porridge
         {
             for (int k = 1; k < maxUnison; ++k)
             {
-                v.osc1.at (k).phase = int64 ((nextDriftRandom() * 0.5f + 0.5f) * float (two32)) & u32;
-                v.osc2.at (k).phase = int64 ((nextDriftRandom() * 0.5f + 0.5f) * float (two32)) & u32;
+                v.osc1.at (k).phase = int64 ((driftRng.nextSigned() * 0.5f + 0.5f) * float (two32)) & u32;
+                v.osc2.at (k).phase = int64 ((driftRng.nextSigned() * 0.5f + 0.5f) * float (two32)) & u32;
             }
-        }
-
-        float nextModRandom()
-        {
-            modRngState = (modRngState * 1103515245 + 12345) & 0x7fffffff;
-            return float (modRngState) * (1.0f / 1073741824.0f) - 1.0f;
         }
 
         //==============================================================================
@@ -1932,15 +2038,15 @@ namespace porridge
                 v.relCount += n;
 
             // XY depth for this voice (mod env values of the previous block)
-            let fxy = meDbProduct (28, v.m1Last, v.m2Last) * ccDbProduct (28);
+            let fxy = meDbProduct (meTgt::xyDepth, v.m1Last, v.m2Last) * ccXyDepth;
             let Xv = clamp (fxy * X, -2.0f, 2.0f);
             let Yv = clamp (fxy * Y, -2.0f, 2.0f);
 
             // envelope speeds
-            let Sa = xySum (28, Xv, Yv) + ccDepthSum (29, false);
-            let Sf = xySum (29, Xv, Yv) + ccDepthSum (30, false);
-            let Smd = xySum (30, Xv, Yv) + ccDepthSum (31, false);
-            let Sp = xySum (31, Xv, Yv) + ccDepthSum (32, false);
+            let Sa = xySum (xyTgt::ampEnvelopeSpeed, Xv, Yv) + ccSum[ccTgt::ampEnvelopeSpeed];
+            let Sf = xySum (xyTgt::filterEnvelopeSpeed, Xv, Yv) + ccSum[ccTgt::filterEnvelopeSpeed];
+            let Smd = xySum (xyTgt::modEnvelopeSpeed, Xv, Yv) + ccSum[ccTgt::modEnvelopeSpeed];
+            let Sp = xySum (xyTgt::pitchEnvelopeSpeed, Xv, Yv) + ccSum[ccTgt::pitchEnvelopeSpeed];
             let ampSpeed = Sa != 0 ? pow2 (2.0f * Sa) : 1.0f;
             let filterSpeed = Sf != 0 ? pow2 (2.0f * Sf) : 1.0f;
             let modSpeed = Smd != 0 ? pow2 (2.0f * Smd) : 1.0f;
@@ -1951,14 +2057,14 @@ namespace porridge
             var me2 = v.modEnv2.renderBlock (mod2C, modSpeed, sustainDown, n);
             me1 *= velScale (v.vel, P[slot::M1_VeloSens]);
             me2 *= velScale (v.vel, P[slot::M2_VeloSens]);
-            me1 *= xyLinearProduct (26, Xv, Yv) * ccLinearProduct (26);
-            me2 *= xyLinearProduct (27, Xv, Yv) * ccLinearProduct (27);
+            me1 *= xyLinearProduct (xyTgt::me1Depth, Xv, Yv) * ccMe1Depth;
+            me2 *= xyLinearProduct (xyTgt::me2Depth, Xv, Yv) * ccMe2Depth;
 
             // LFOs
-            let S1d = meSum (20, me1, me2) + ccDepthSum (10, false);
-            let S2d = meSum (21, me1, me2) + ccDepthSum (11, false);
-            let S1s = meSum (18, me1, me2) + ccDepthSum (8, false);
-            let S2s = meSum (19, me1, me2) + ccDepthSum (9, false);
+            let S1d = meSum (meTgt::lfo1Depth, me1, me2) + ccSum[ccTgt::lfo1Depth];
+            let S2d = meSum (meTgt::lfo2Depth, me1, me2) + ccSum[ccTgt::lfo2Depth];
+            let S1s = meSum (meTgt::lfo1Speed, me1, me2) + ccSum[ccTgt::lfo1Speed];
+            let S2s = meSum (meTgt::lfo2Speed, me1, me2) + ccSum[ccTgt::lfo2Speed];
             let lfo1DepthF = abs (S1d) > 0.001f ? pow2 (3.0f * S1d) : 1.0f;
             let lfo2DepthF = abs (S2d) > 0.001f ? pow2 (3.0f * S2d) : 1.0f;
             let lfo1SpeedF = abs (S1s) > 0.001f ? pow2 (2.0f * S1s) : 1.0f;
@@ -1972,16 +2078,13 @@ namespace porridge
             if (perNote1)
             {
                 let n1 = int ((P[slot::LFO_2_1] * v.lfo2Prev * lfo2DepthF * 3.0f + lfo1SpeedF) * float (n) + 0.5f);
-                v1 = slewLfo (v.lfo1Slew, v.lfo1.step (tables, rng, P, lfoShape1, false, n1, xySum (8, Xv, Yv), sampleRate, samplesPerBeat),
+                v1 = slewLfo (v.lfo1Slew, v.lfo1.step (tables, rng, P, lfoShape1, false, n1, xySum (xyTgt::lfo1Speed, Xv, Yv), sampleRate, samplesPerBeat),
                               P[slot::LFO_1_Slew], n);
                 v.lfo1Raw = 2.0f * v1 - 1.0f;
-                let D1 = xySum (10, Xv, Yv);
-                var pd = 24.0f * float (pow (float64 (P[slot::LFO_1_Pitch]), 4.0));
-                var g = 1.0f;
-                if (abs (D1) > 0.005f) { pd *= float (pow (float64 (octave), kPitch * float64 (D1))); g = pow2 (4.0f * D1); }
-                lfo1Pitch = (2.0f * v1 - 1.0f) * pd;
-                lfo1Pan = (2.0f * v1 - 1.0f) * P[slot::LFO_1_Pan] * g;
-                v1 *= g;
+                let s = lfoSwing (v1, xySum (xyTgt::lfo1Depth, Xv, Yv), kPitch, P[slot::LFO_1_Pitch], P[slot::LFO_1_Pan]);
+                lfo1Pitch = s.pitch;
+                lfo1Pan = s.pan;
+                v1 *= s.gain;
             }
             else
             {
@@ -1990,25 +2093,18 @@ namespace porridge
             }
 
             // LFO delay and fade-in, from the voice's note-on (global LFOs too)
-            if (P[slot::LFO_1_Delay] > 0 || P[slot::LFO_1_Fade] > 0)
-            {
-                let F = lfoFade (v.age, P[slot::LFO_1_Delay], P[slot::LFO_1_Fade]);
-                v1 *= F; lfo1Pitch *= F; lfo1Pan *= F; v.lfo1Raw *= F;
-            }
+            fadeLfo (v.age, P[slot::LFO_1_Delay], P[slot::LFO_1_Fade], v1, lfo1Pitch, lfo1Pan, v.lfo1Raw);
 
             if (perNote2)
             {
                 let n2 = int ((P[slot::LFO_1_2] * v1 * lfo1DepthF * 3.0f + lfo2SpeedF) * float (n) + 0.5f);
-                v2 = slewLfo (v.lfo2Slew, v.lfo2.step (tables, rng, P, lfoShape2, true, n2, xySum (8, Xv, Yv) + xySum (9, Xv, Yv), sampleRate, samplesPerBeat),
+                v2 = slewLfo (v.lfo2Slew, v.lfo2.step (tables, rng, P, lfoShape2, true, n2, xySum (xyTgt::lfo1Speed, Xv, Yv) + xySum (xyTgt::lfo2Speed, Xv, Yv), sampleRate, samplesPerBeat),
                               P[slot::LFO_2_Slew], n);
                 v.lfo2Raw = 2.0f * v2 - 1.0f;
-                let D2 = xySum (11, Xv, Yv);
-                var pd = 24.0f * float (pow (float64 (P[slot::LFO_2_Pitch]), 4.0));
-                var g = 1.0f;
-                if (abs (D2) > 0.005f) { pd *= float (pow (float64 (octave), kPitch * float64 (D2))); g = pow2 (4.0f * D2); }
-                lfo2Pitch = (2.0f * v2 - 1.0f) * pd;
-                lfo2Pan = (2.0f * v2 - 1.0f) * P[slot::LFO_2_Pan] * g;
-                v2 *= g;
+                let s = lfoSwing (v2, xySum (xyTgt::lfo2Depth, Xv, Yv), kPitch, P[slot::LFO_2_Pitch], P[slot::LFO_2_Pan]);
+                lfo2Pitch = s.pitch;
+                lfo2Pan = s.pan;
+                v2 *= s.gain;
             }
             else
             {
@@ -2016,18 +2112,12 @@ namespace porridge
                 v.lfo2Raw = gLfo2Raw;
             }
 
-            if (P[slot::LFO_2_Delay] > 0 || P[slot::LFO_2_Fade] > 0)
-            {
-                let F = lfoFade (v.age, P[slot::LFO_2_Delay], P[slot::LFO_2_Fade]);
-                v2 *= F; lfo2Pitch *= F; lfo2Pan *= F; v.lfo2Raw *= F;
-            }
-
+            fadeLfo (v.age, P[slot::LFO_2_Delay], P[slot::LFO_2_Fade], v2, lfo2Pitch, lfo2Pan, v.lfo2Raw);
             v.age += n;
-
             v.lfo2Prev = v2;
 
             // amp envelope
-            if (! v.ampEnv.renderAmp (ampC, ampSpeed * v.envSpeed, sustainDown, sampleRate, bufE, n))
+            if (! v.ampEnv.renderAmp (ampC, ampSpeed * v.envSpeed, sustainDown, ampSmooth, bufE, n))
             {
                 v.active = false;
                 return false;
@@ -2084,33 +2174,33 @@ namespace porridge
                 let me = isME2 ? me2 : me1;
                 let sus = isME2 ? P[slot::M2_Sustain] : P[slot::M1_Sustain];
 
-                if (t == 0) continue;
+                if (t == meTgt::none) continue;
 
-                if (t == 1)       cutSemis1 += (me - sus) * d * 48.0f;
-                else if (t == 2)  cutSemis2 += (me - sus) * d * 48.0f;
-                else if (t == 23) cutSemis1 += me * d * 24.0f;
-                else if (t == 24) cutSemis2 += me * d * 24.0f;
-                else if (t == 7)  pitch1 += (me - sus) * d * 48.0f;
-                else if (t == 8)  pitch2 += (me - sus) * d * 48.0f;
-                else if (t == 9)  pitchN += (me - sus) * d * 48.0f;
-                else if (t == 25) pitch1 += me * d * 24.0f;
-                else if (t == 26) pitch2 += me * d * 24.0f;
-                else if (t == 27) pitchN += me * d * 24.0f;
-                else if (t == 4)  amp1 *= dbFactor (me, d);
-                else if (t == 5)  amp2 *= dbFactor (me, d);
-                else if (t == 6)  ampN *= dbFactor (me, d);
-                else if (t == 16) panOffset += (me - sus) * d * 2.0f;
-                else if (t == 3)  resMod += me * d;
-                else if (t == 17) noiseResMod += me * d;
-                else if (t == 22) mixMod += me * d;
-                else if (t == 10) pw1 = (pw1 + int64 (float64 (me * d) * two32 + 0.5)) & u32;
-                else if (t == 13) pw2 = (pw2 + int64 (float64 (me * d) * two32 + 0.5)) & u32;
-                else if (t == 11) pwmRate1 += me * d;
-                else if (t == 14) pwmRate2 += me * d;
-                else if (t == 12) pwmDepth1 += me * d;
-                else if (t == 15) pwmDepth2 += me * d;
-                else if (t == 29) D += abs (d) * d * me * 1200.0f;
-                else if (t == 30) spread += me * d;
+                if (t == meTgt::cutoff1)                 cutSemis1 += (me - sus) * d * 48.0f;
+                else if (t == meTgt::cutoff2)            cutSemis2 += (me - sus) * d * 48.0f;
+                else if (t == meTgt::cutoff1Unipolar)    cutSemis1 += me * d * 24.0f;
+                else if (t == meTgt::cutoff2Unipolar)    cutSemis2 += me * d * 24.0f;
+                else if (t == meTgt::osc1Pitch)          pitch1 += (me - sus) * d * 48.0f;
+                else if (t == meTgt::osc2Pitch)          pitch2 += (me - sus) * d * 48.0f;
+                else if (t == meTgt::noisePitch)         pitchN += (me - sus) * d * 48.0f;
+                else if (t == meTgt::osc1PitchUnipolar)  pitch1 += me * d * 24.0f;
+                else if (t == meTgt::osc2PitchUnipolar)  pitch2 += me * d * 24.0f;
+                else if (t == meTgt::noisePitchUnipolar) pitchN += me * d * 24.0f;
+                else if (t == meTgt::osc1Amp)            amp1 *= dbFactor (me, d);
+                else if (t == meTgt::osc2Amp)            amp2 *= dbFactor (me, d);
+                else if (t == meTgt::noiseAmp)           ampN *= dbFactor (me, d);
+                else if (t == meTgt::pan)                panOffset += (me - sus) * d * 2.0f;
+                else if (t == meTgt::resonance)          resMod += me * d;
+                else if (t == meTgt::noiseResonance)     noiseResMod += me * d;
+                else if (t == meTgt::filterMix)          mixMod += me * d;
+                else if (t == meTgt::osc1Pulsewidth)     pw1 = (pw1 + int64 (float64 (me * d) * two32 + 0.5)) & u32;
+                else if (t == meTgt::osc2Pulsewidth)     pw2 = (pw2 + int64 (float64 (me * d) * two32 + 0.5)) & u32;
+                else if (t == meTgt::osc1PwmRate)        pwmRate1 += me * d;
+                else if (t == meTgt::osc2PwmRate)        pwmRate2 += me * d;
+                else if (t == meTgt::osc1PwmDepth)       pwmDepth1 += me * d;
+                else if (t == meTgt::osc2PwmDepth)       pwmDepth2 += me * d;
+                else if (t == meTgt::unisonDetune)       D += abs (d) * d * me * 1200.0f;
+                else if (t == meTgt::unisonSpread)       spread += me * d;
             }
 
             for (int k = 0; k < 8; ++k)
@@ -2121,16 +2211,16 @@ namespace porridge
                 let d = P.at ((isY ? slot::XY_V_Depth_1 : slot::XY_H_Depth_1) + s);
                 let x = isY ? Yv : Xv;
 
-                if (t == 21)      pitch1 += x * d * 24.0f;
-                else if (t == 22) pitch2 += x * d * 24.0f;
-                else if (t == 23) pitchN += x * d * 24.0f;
-                else if (t == 18) amp1 *= float (pow (10.0, 3.0 * float64 (x * d)));
-                else if (t == 19) amp2 *= float (pow (10.0, 3.0 * float64 (x * d)));
-                else if (t == 20) ampN *= float (pow (10.0, 3.0 * float64 (x * d)));
-                else if (t == 24) mixMod += x * d;
-                else if (t == 25) noiseResMod += x * d;
-                else if (t == 32) D += abs (d) * d * x * 1200.0f;
-                else if (t == 33) spread += x * d;
+                if (t == xyTgt::osc1Pitch)           pitch1 += x * d * 24.0f;
+                else if (t == xyTgt::osc2Pitch)      pitch2 += x * d * 24.0f;
+                else if (t == xyTgt::noisePitch)     pitchN += x * d * 24.0f;
+                else if (t == xyTgt::osc1Amp)        amp1 *= float (pow (10.0, 3.0 * float64 (x * d)));
+                else if (t == xyTgt::osc2Amp)        amp2 *= float (pow (10.0, 3.0 * float64 (x * d)));
+                else if (t == xyTgt::noiseAmp)       ampN *= float (pow (10.0, 3.0 * float64 (x * d)));
+                else if (t == xyTgt::filterMix)      mixMod += x * d;
+                else if (t == xyTgt::noiseResonance) noiseResMod += x * d;
+                else if (t == xyTgt::unisonDetune)   D += abs (d) * d * x * 1200.0f;
+                else if (t == xyTgt::unisonSpread)   spread += x * d;
             }
 
             for (int c = 0; c < 6; ++c)
@@ -2142,16 +2232,16 @@ namespace porridge
                     let t = int (P.at (slot::CC1_Target_1 + c * 9 + k));
                     let d = P.at (slot::CC1_Depth_1 + c * 9 + k);
 
-                    if (t == 21)      pitch1 += cc * d * 24.0f;
-                    else if (t == 22) pitch2 += cc * d * 24.0f;
-                    else if (t == 23) pitchN += cc * d * 24.0f;
-                    else if (t == 18) amp1 *= dbFactor (cc, d);
-                    else if (t == 19) amp2 *= dbFactor (cc, d);
-                    else if (t == 20) ampN *= dbFactor (cc, d);
-                    else if (t == 24) mixMod += cc * d;
-                    else if (t == 25) noiseResMod += cc * d;
-                    else if (t == 33) D += abs (d) * d * cc * 1200.0f;
-                    else if (t == 34) spread += cc * d;
+                    if (t == ccTgt::osc1Pitch)           pitch1 += cc * d * 24.0f;
+                    else if (t == ccTgt::osc2Pitch)      pitch2 += cc * d * 24.0f;
+                    else if (t == ccTgt::noisePitch)     pitchN += cc * d * 24.0f;
+                    else if (t == ccTgt::osc1Amp)        amp1 *= dbFactor (cc, d);
+                    else if (t == ccTgt::osc2Amp)        amp2 *= dbFactor (cc, d);
+                    else if (t == ccTgt::noiseAmp)       ampN *= dbFactor (cc, d);
+                    else if (t == ccTgt::filterMix)      mixMod += cc * d;
+                    else if (t == ccTgt::noiseResonance) noiseResMod += cc * d;
+                    else if (t == ccTgt::unisonDetune)   D += abs (d) * d * cc * 1200.0f;
+                    else if (t == ccTgt::unisonSpread)   spread += cc * d;
                 }
             }
 
@@ -2170,39 +2260,14 @@ namespace porridge
 
             let pitchDrift = P[slot::Drift_Pitch] > 0;
 
-            // unison detune ratios; the detune curve bunches the copies near the centre and keeps
-            // the outer ones out (supersaw-style)
+            // unison detune ratios, worked out again only when what they follow changes
             let J = P[slot::U_PitchJitter];
             let dc = P[slot::U_DetuneCurve];
 
-            if (U <= 1)
+            if (U != v.uniU || D != v.uniD || J != v.uniJ || dc != v.uniCurve || octave != v.uniOct)
             {
-                v.ratio[0] = 1.0f;
-            }
-            else if ((U & 1) != 0)
-            {
-                v.ratio[0] = J > 0 ? float (pow (float64 (octave), float64 (J * v.jit[0] * D * (1.0f / 1200.0f)))) : 1.0f;
-                let h = (U - 1) / 2;
-                let inv = 1.0f / (float (h) * 1200.0f);
-
-                for (int k = 1; k < U; ++k)
-                {
-                    let m = detuneStep ((k + 1) >> 1, h, dc);
-                    let sg = (k & 1) != 0 ? -D : D;
-                    v.ratio.at (k) = float (pow (float64 (octave), float64 ((float (m) * inv * (1.0f - J) + J * v.jit.at (k)) * sg)));
-                }
-            }
-            else
-            {
-                let h = U / 2;
-                let inv = 1.0f / (float (h) * 1200.0f);
-
-                for (int k = 0; k < U; ++k)
-                {
-                    let m = detuneStep ((k >> 1) + 1, h, dc);
-                    let sg = (k & 1) != 0 ? -D : D;
-                    v.ratio.at (k) = float (pow (float64 (octave), float64 ((float (m) * inv * (1.0f - J) + J * v.jit.at (k)) * sg)));
-                }
+                v.uniU = U; v.uniD = D; v.uniJ = J; v.uniCurve = dc; v.uniOct = octave;
+                v.updateDetuneRatios (U, D, J, dc, octave);
             }
 
             // pitch ratios
@@ -2249,10 +2314,7 @@ namespace porridge
             }
 
             // oscillator parameters
-            var atGain = 1.0f;
-            let oat = P[slot::OscAftertouch];
-            if (oat > 0.01f)       atGain = float (pow (10.0, float64 ((at - 1.0f) * oat * 0.05f)));
-            else if (oat < -0.01f) atGain = float (pow (10.0, float64 (at * oat * 0.05f)));
+            let atGain = aftertouchGain (at, P[slot::OscAftertouch]);
 
             setOscParams (v.osc1[0], int (P[slot::O1_Waveform]), amp1 * P[slot::O1_Amp] * atGain, P[slot::O1_PWM_W],
                           pw1 + pwMod1, pwmDepth1 + pwmDepthMod1 + P[slot::O1_PWM_D], pwmRate1 + pwmRateMod1, P[slot::O1_PWM_R]);
@@ -2265,19 +2327,13 @@ namespace porridge
             let detune = float64 (P[slot::Detune]);
             let toHz = float64 (srInt) / two32;
 
-            if (oscMix < 3)
+            if (oscMix < oscMixMode::pm2to1)
             {
                 for (int k = 1; k < U; ++k)
                     v.osc1.at (k).copyShared (v.osc1[0]);
 
                 renderOsc (v.osc1[0], setUser1, oscMix, false, mult1 * v.ratio[0] * (pitchDrift ? driftRatio (v, 0, 0) : 1.0f), bufM, n);
-
-                v.osc2[0].base = int64 ((float64 (v.osc1[0].base) * toHz * o2ratio + detune) / toHz + 0.5) & u32;
-
-                if (v.osc1[0].glideOn)
-                    v.osc2[0].glideTo (int64 ((float64 (v.osc1[0].glideTarget) * toHz * o2ratio + detune) / toHz + 0.5) & u32, v.osc1[0].glideRem);
-                else
-                    v.osc2[0].glideOn = false;
+                followOsc1 (v, o2ratio, detune, toHz);
 
                 for (int k = 1; k < U; ++k)
                     v.osc2.at (k).copyShared (v.osc2[0]);
@@ -2286,13 +2342,8 @@ namespace porridge
 
                 for (int k = 1; k < U; ++k)
                 {
-                    if (stereo)
-                        for (int i = 0; i < n; ++i) bufTmp.at (i) = 0;
-                    else
-                        bufTmp = bufM;
-
-                    var m1 = oscMix == 0 ? mult1 * v.ratio.at (k) : mult1;
-                    var m2 = oscMix == 0 ? mult2 * v.ratio.at (k) : mult2;
+                    var m1 = oscMix == oscMixMode::normal ? mult1 * v.ratio.at (k) : mult1;
+                    var m2 = oscMix == oscMixMode::normal ? mult2 * v.ratio.at (k) : mult2;
 
                     if (pitchDrift)
                     {
@@ -2300,16 +2351,18 @@ namespace porridge
                         m2 *= driftRatio (v, 1, k);
                     }
 
-                    renderOsc (v.osc1.at (k), setUser1, oscMix, false, m1, bufTmp, n);
-                    v.osc2.at (k).base = int64 ((float64 (v.osc1.at (k).base) * toHz * o2ratio + detune) / toHz + 0.5) & u32;
-                    renderOsc (v.osc2.at (k), setUser2, oscMix, true, m2, bufTmp, n);
-
+                    // the oscillators only add into the buffer: mono copies go straight to bufM
                     if (stereo)
+                    {
+                        for (int i = 0; i < n; ++i) bufTmp.at (i) = 0;
+                        renderUnisonCopy (v, k, oscMix, m1, m2, o2ratio, detune, toHz, bufTmp, n);
                         for (int i = 0; i < n; ++i) bufV.at (k * blockSize + i) = bufTmp.at (i);
+                    }
                     else
-                        bufM = bufTmp;
+                    {
+                        renderUnisonCopy (v, k, oscMix, m1, m2, o2ratio, detune, toHz, bufM, n);
+                    }
                 }
-
             }
             else
             {
@@ -2394,18 +2447,11 @@ namespace porridge
             // distortion / filter / output
             let distOn = P[slot::Sat_Type] != 0;
             let distMode = int (P[slot::Sat_Mode]);
-            let distMod = xySum (7, Xv, Yv) + ccDepthSum (7, false);
+            let distMod = xySum (xyTgt::distortion, Xv, Yv) + ccSum[ccTgt::distortion];
 
-            if (distOn && (distMode == 2 || distMode == 3))
+            if (distOn && (distMode == satMode::beforeFilter || distMode == satMode::both))
             {
-                for (int i = 0; i < n; ++i)
-                {
-                    if (smoothGain) v.velGain = 0.002f * v.velGainTarget + 0.998f * v.velGain;
-                    let g = v.velGain * bufE.at (i);
-                    bufM.at (i) *= g;
-                    if (stereo) bufR.at (i) *= g;
-                }
-
+                applyVelocityGain (v, smoothGain, stereo, n);
                 v.distL.processMono (distTables, P, distMod, sampleRate, bufM, n);
                 if (stereo) v.distR.processMono (distTables, P, distMod, sampleRate, bufR, n);
             }
@@ -2429,23 +2475,23 @@ namespace porridge
                 filterChannel (v, true, v.vel, at, fG, Rg, Xv, Yv, v1 * lfo1DepthF, v2 * lfo2DepthF,
                                cutSemis1, cutSemis2, resMod, filterSpeed * v.envSpeed, bufR, n);
 
-            if (distOn && distMode == 1)
+            if (distOn && distMode == satMode::afterFilter)
             {
-                for (int i = 0; i < n; ++i)
-                {
-                    if (smoothGain) v.velGain = 0.002f * v.velGainTarget + 0.998f * v.velGain;
-                    let g = v.velGain * bufE.at (i);
-                    bufM.at (i) *= g;
-                    if (stereo) bufR.at (i) *= g;
-                }
-
+                applyVelocityGain (v, smoothGain, stereo, n);
                 v.distL.processMono (distTables, P, distMod, sampleRate, bufM, n);
                 if (stereo) v.distR.processMono (distTables, P, distMod, sampleRate, bufR, n);
             }
 
-            if (distOn && distMode != 0)
+            // a per-voice distortion has had the gain already; with the envelope below 1/16 its
+            // output is scaled by 16 * envelope, so that it still fades out
+            let voiceDist = distOn && distMode != satMode::global;
+
+            if (! voiceDist)
+                applyVelocityGain (v, smoothGain, stereo, n);
+
+            for (int i = 0; i < n; ++i)
             {
-                for (int i = 0; i < n; ++i)
+                if (voiceDist)
                 {
                     let e = bufE.at (i);
 
@@ -2454,37 +2500,17 @@ namespace porridge
                         bufM.at (i) = e * bufM.at (i) * 16.0f;
                         bufR.at (i) = e * bufR.at (i) * 16.0f;
                     }
-
-                    if (stereo)
-                    {
-                        mix.at (pos + i) += widen ? stereoWidth (bufM.at (i), bufR.at (i), width) : float<2> (bufM.at (i), bufR.at (i));
-                    }
-                    else
-                    {
-                        v.panL += stepL;
-                        v.panR += stepR;
-                        mix.at (pos + i) += float<2> (bufM.at (i) * v.panL, bufM.at (i) * v.panR);
-                    }
                 }
-            }
-            else
-            {
-                for (int i = 0; i < n; ++i)
-                {
-                    if (smoothGain) v.velGain = 0.002f * v.velGainTarget + 0.998f * v.velGain;
-                    let g = bufE.at (i) * v.velGain;
-                    let x = bufM.at (i) * g;
 
-                    if (stereo)
-                    {
-                        mix.at (pos + i) += widen ? stereoWidth (x, bufR.at (i) * g, width) : float<2> (x, bufR.at (i) * g);
-                    }
-                    else
-                    {
-                        v.panL += stepL;
-                        v.panR += stepR;
-                        mix.at (pos + i) += float<2> (x * v.panL, x * v.panR);
-                    }
+                if (stereo)
+                {
+                    mix.at (pos + i) += widen ? stereoWidth (bufM.at (i), bufR.at (i), width) : float<2> (bufM.at (i), bufR.at (i));
+                }
+                else
+                {
+                    v.panL += stepL;
+                    v.panR += stepR;
+                    mix.at (pos + i) += float<2> (bufM.at (i) * v.panL, bufM.at (i) * v.panR);
                 }
             }
 
@@ -2493,22 +2519,24 @@ namespace porridge
             return true;
         }
 
+        /// The amp envelope (bufE) times the velocity gain, which eases towards its target when
+        /// `smooth`, applied to bufM (and bufR in stereo).
+        void applyVelocityGain (Voice& v, bool smooth, bool stereo, int n)
+        {
+            for (int i = 0; i < n; ++i)
+            {
+                if (smooth) v.velGain = 0.002f * v.velGainTarget + 0.998f * v.velGain;
+                let g = v.velGain * bufE.at (i);
+                bufM.at (i) *= g;
+                if (stereo) bufR.at (i) *= g;
+            }
+        }
+
         float<2> stereoWidth (float l, float r, float w)
         {
             let m = 0.5f * (l + r);
             let d = 0.5f * w * (l - r);
             return float<2> (m + d, m - d);
-        }
-
-        /// Unison copy m's detune step (1 .. h, h the outermost): linear as in Oatmeal, or bent
-        /// towards (m / h)^2 by the detune curve.
-        float detuneStep (int m, int h, float curve)
-        {
-            if (curve <= 0)
-                return float (m);
-
-            let x = float (m) / float (h);
-            return float (h) * x * (1.0f - curve + curve * x);
         }
 
         void setOscParams (Osc& o, int waveform, float ampTarget, float pwFraction, int64 pwAdd, float depthSum, float rateMod, float baseRate)
@@ -2532,12 +2560,7 @@ namespace porridge
         void renderOscPair (Voice& v, int mode, int U, bool stereo, float mult1, float mult2, float64 o2ratio,
                             float64 detune, float64 toHz, bool pitchDrift, int n)
         {
-            v.osc2[0].base = int64 ((float64 (v.osc1[0].base) * toHz * o2ratio + detune) / toHz + 0.5) & u32;
-
-            if (v.osc1[0].glideOn)
-                v.osc2[0].glideTo (int64 ((float64 (v.osc1[0].glideTarget) * toHz * o2ratio + detune) / toHz + 0.5) & u32, v.osc1[0].glideRem);
-            else
-                v.osc2[0].glideOn = false;
+            followOsc1 (v, o2ratio, detune, toHz);
 
             for (int k = 1; k < U; ++k)
             {
@@ -2549,11 +2572,6 @@ namespace porridge
 
             for (int k = 0; k < U; ++k)
             {
-                let toV = stereo && k > 0;
-
-                if (toV)
-                    for (int i = 0; i < n; ++i) bufTmp.at (i) = 0;
-
                 var m1 = mult1 * v.ratio.at (k);
                 var m2 = mult2 * v.ratio.at (k);
 
@@ -2564,30 +2582,62 @@ namespace porridge
                 }
 
                 if (k > 0)
-                    v.osc2.at (k).base = int64 ((float64 (v.osc1.at (k).base) * toHz * o2ratio + detune) / toHz + 0.5) & u32;
+                    v.osc2.at (k).base = osc2Inc (v.osc1.at (k).base, o2ratio, detune, toHz);
 
-                if (mode == 4)
+                if (stereo && k > 0)
                 {
-                    if (toV) v.osc2.at (k).renderPlain (tables, setUser2, m2, bufTmp, n);
-                    else     v.osc2.at (k).renderPlain (tables, setUser2, m2, bufM, n);
+                    for (int i = 0; i < n; ++i) bufTmp.at (i) = 0;
+                    renderPairCopy (v, k, mode, m1, m2, feedback, bufTmp, n);
+                    for (int i = 0; i < n; ++i) bufV.at (k * blockSize + i) = bufTmp.at (i);
                 }
                 else
                 {
-                    v.osc2.at (k).renderRaw (tables, setUser2, m2, bufX, bufMod, n);
+                    renderPairCopy (v, k, mode, m1, m2, feedback, bufM, n);
                 }
-
-                if (toV) v.osc1.at (k).renderShaped (tables, setUser1, m1, bufTmp, bufX, bufMod, mode, feedback, n);
-                else     v.osc1.at (k).renderShaped (tables, setUser1, m1, bufM, bufX, bufMod, mode, feedback, n);
-
-                if (toV)
-                    for (int i = 0; i < n; ++i) bufV.at (k * blockSize + i) = bufTmp.at (i);
             }
+        }
+
+        /// One unison copy of an osc mix mode pair, added into buf.
+        void renderPairCopy (Voice& v, int k, int mode, float m1, float m2, float feedback, float[blockSize]& buf, int n)
+        {
+            if (mode == oscMixMode::pmFeedback)
+                v.osc2.at (k).renderPlain (tables, setUser2, m2, buf, n);
+            else
+                v.osc2.at (k).renderRaw (tables, setUser2, m2, bufX, bufMod, n);
+
+            v.osc1.at (k).renderShaped (tables, setUser1, m1, buf, bufX, bufMod, mode, feedback, n);
+        }
+
+        /// One unison copy (k > 0) of the normal, sync and FM modes, added into buf.
+        void renderUnisonCopy (Voice& v, int k, int oscMix, float m1, float m2, float64 o2ratio, float64 detune, float64 toHz,
+                               float[blockSize]& buf, int n)
+        {
+            renderOsc (v.osc1.at (k), setUser1, oscMix, false, m1, buf, n);
+            v.osc2.at (k).base = osc2Inc (v.osc1.at (k).base, o2ratio, detune, toHz);
+            renderOsc (v.osc2.at (k), setUser2, oscMix, true, m2, buf, n);
+        }
+
+        /// Osc 2's phase increment for osc 1's: o2ratio times the frequency, plus detune Hz.
+        int64 osc2Inc (int64 inc1, float64 o2ratio, float64 detune, float64 toHz)
+        {
+            return int64 ((float64 (inc1) * toHz * o2ratio + detune) / toHz + 0.5) & u32;
+        }
+
+        /// Osc 2 (copy 0) follows osc 1's pitch, and its glide.
+        void followOsc1 (Voice& v, float64 o2ratio, float64 detune, float64 toHz)
+        {
+            v.osc2[0].base = osc2Inc (v.osc1[0].base, o2ratio, detune, toHz);
+
+            if (v.osc1[0].glideOn)
+                v.osc2[0].glideTo (osc2Inc (v.osc1[0].glideTarget, o2ratio, detune, toHz), v.osc1[0].glideRem);
+            else
+                v.osc2[0].glideOn = false;
         }
 
         void renderOsc (Osc& o, int userSet, int oscMix, bool isOsc2, float mult, float[blockSize]& buf, int n)
         {
-            if (oscMix == 1)      o.renderSync (tables, userSet, mult, buf, isOsc2, syncBuf, n);
-            else if (oscMix == 2) o.renderFM (tables, userSet, mult, buf, isOsc2, fmBuf, float64 (srInt), n);
+            if (oscMix == oscMixMode::sync)    o.renderSync (tables, userSet, mult, buf, isOsc2, syncBuf, n);
+            else if (oscMix == oscMixMode::fm) o.renderFM (tables, userSet, mult, buf, isOsc2, fmBuf, fmCoefs, n);
             else                  o.renderPlain (tables, userSet, mult, buf, n);
         }
 
@@ -2598,11 +2648,7 @@ namespace porridge
         float cutoffHz (bool isF2, bool zdf, float envIn, float vel, float at, float keyFreq, float Rg, float X, float Y,
                         float lfo1, float lfo2, float semisMod)
         {
-            var env = envIn;
-            let vs = P[slot::F_VeloSens];
-            if (vs > 0.001f)       env *= float (pow (float64 (vel), 2.0 * float64 (vs)));
-            else if (vs < -0.001f) env *= 1.0f + vel * vs;
-
+            let env = envIn * velScale (vel, P[slot::F_VeloSens]);
             let c = float64 (P[slot::Cutoff]);
             var hz = float (c * c * c * (zdf ? 19980.0 : 10980.0) + 20.0);
             let ft = P[slot::F_Aftertouch];
@@ -2618,24 +2664,25 @@ namespace porridge
 
             var envmod = P[slot::F_EnvMod];
             float cutX = 0, cutY = 0, cutCC = 0;
-            let tgt = isF2 ? 2 : 1;
+            let xyCut = isF2 ? xyTgt::cutoff2 : xyTgt::cutoff1;
+            let ccCut = isF2 ? ccTgt::cutoff2 : ccTgt::cutoff1;
 
             for (int k = 0; k < 4; ++k)
             {
                 let tx = int (P.at (slot::XY_H_Target_1 + k)), dx = P.at (slot::XY_H_Depth_1 + k);
                 let ty = int (P.at (slot::XY_V_Target_1 + k)), dy = P.at (slot::XY_V_Depth_1 + k);
 
-                if (tx == 4) envmod += X * dx;
-                if (tx == tgt) cutX += dx;
-                if (ty == 4) envmod += Y * dy;
-                if (ty == tgt) cutY += dy;
+                if (tx == xyTgt::filterEnvMod) envmod += X * dx;
+                if (tx == xyCut) cutX += dx;
+                if (ty == xyTgt::filterEnvMod) envmod += Y * dy;
+                if (ty == xyCut) cutY += dy;
 
                 for (int cc = 0; cc < 6; ++cc)
                 {
                     let t = int (P.at (slot::CC1_Target_1 + cc * 9 + k));
                     let d = P.at (slot::CC1_Depth_1 + cc * 9 + k);
-                    if (t == 4) envmod += ccSmooth.at (cc) * d;
-                    if (t == tgt) cutCC += ccSmooth.at (cc) * d;
+                    if (t == ccTgt::filterEnvMod) envmod += ccSmooth.at (cc) * d;
+                    if (t == ccCut) cutCC += ccSmooth.at (cc) * d;
                 }
             }
 
@@ -2651,21 +2698,17 @@ namespace porridge
 
         float resonance (float X, float Y, float lfo1, float lfo2, float resMod)
         {
-            float resX = 0, resY = 0, resCC = 0;
+            float resX = 0, resY = 0;
 
             for (int k = 0; k < 4; ++k)
             {
-                if (int (P.at (slot::XY_H_Target_1 + k)) == 3) resX += P.at (slot::XY_H_Depth_1 + k);
-                if (int (P.at (slot::XY_V_Target_1 + k)) == 3) resY += P.at (slot::XY_V_Depth_1 + k);
-
-                for (int cc = 0; cc < 6; ++cc)
-                    if (int (P.at (slot::CC1_Target_1 + cc * 9 + k)) == 3)
-                        resCC += ccSmooth.at (cc) * P.at (slot::CC1_Depth_1 + cc * 9 + k);
+                if (int (P.at (slot::XY_H_Target_1 + k)) == xyTgt::resonance) resX += P.at (slot::XY_H_Depth_1 + k);
+                if (int (P.at (slot::XY_V_Target_1 + k)) == xyTgt::resonance) resY += P.at (slot::XY_V_Depth_1 + k);
             }
 
             let r0 = P[slot::Resonance];
             var res = (lfo1 * P[slot::LFO_1_Resonance] + lfo2 * P[slot::LFO_2_Resonance]) * (1.0f - r0) + r0;
-            let mods = float[4] (resX * X, resY * Y, resCC, resMod);
+            let mods = float[4] (resX * X, resY * Y, ccRes, resMod);
 
             for (wrap<4> k)
                 res += mods[k] > 0 ? (1.0f - r0) * mods[k] : r0 * mods[k];
@@ -2700,8 +2743,8 @@ namespace porridge
                             float lfo1, float lfo2, float cutSemis1, float cutSemis2, float resMod, float envSpeed,
                             float[blockSize]& buf, int n)
         {
-            let t1 = int (P[2594]);
-            let t2raw = int (P[2595]);
+            let t1 = int (P[slot::Filter]);
+            let t2raw = int (P[slot::Filter2]);
             let t2 = t2raw != 0 ? t2raw : t1;
             let dbl = int (P[slot::F_Double]);
             let speed = max (envSpeed, 0.01f);
@@ -2715,34 +2758,32 @@ namespace porridge
                 return;
             }
 
+            // buf: filter 1's output (a); bufX: the input, then filter 2's output (b)
             bufX = buf;
-            var a = buf;
 
             if (t1 != 0)
-                runFilter (v, right, false, t1, vel, at, keyFreq, Rg, X, Y, lfo1, lfo2, cutSemis1, res, speed, a, n);
+                runFilter (v, right, false, t1, vel, at, keyFreq, Rg, X, Y, lfo1, lfo2, cutSemis1, res, speed, buf, n);
 
             if (dbl == 1)
             {
-                var b = bufX;
-
                 if (t2 != 0)
-                    runFilter (v, right, true, t2, vel, at, keyFreq, Rg, X, Y, lfo1, lfo2, cutSemis2, res, speed, b, n);
+                    runFilter (v, right, true, t2, vel, at, keyFreq, Rg, X, Y, lfo1, lfo2, cutSemis2, res, speed, bufX, n);
 
                 for (int i = 0; i < n; ++i)
-                    buf.at (i) = (1.0f - bufMix.at (i)) * a.at (i) + bufMix.at (i) * b.at (i);
+                    buf.at (i) = (1.0f - bufMix.at (i)) * buf.at (i) + bufMix.at (i) * bufX.at (i);
             }
             else
             {
                 for (int i = 0; i < n; ++i)
-                    a.at (i) = a.at (i) + 8.0f * max (bufMix.at (i) - 0.5f, 0.0f) * bufX.at (i);
+                    buf.at (i) = buf.at (i) + 8.0f * max (bufMix.at (i) - 0.5f, 0.0f) * bufX.at (i);
 
-                var b = a;
+                bufX = buf;
 
                 if (t2 != 0)
-                    runFilter (v, right, true, t2, vel, at, keyFreq, Rg, X, Y, lfo1, lfo2, cutSemis2, res, speed, b, n);
+                    runFilter (v, right, true, t2, vel, at, keyFreq, Rg, X, Y, lfo1, lfo2, cutSemis2, res, speed, bufX, n);
 
                 for (int i = 0; i < n; ++i)
-                    buf.at (i) = b.at (i) + 8.0f * max (0.5f - bufMix.at (i), 0.0f) * a.at (i);
+                    buf.at (i) = bufX.at (i) + 8.0f * max (0.5f - bufMix.at (i), 0.0f) * buf.at (i);
             }
         }
 
@@ -2757,6 +2798,7 @@ namespace porridge
             }
 
             computeDerived();
+            ccReported = bool[128]();
 
             for (wrap<blockSize> i)
                 mix[i] = float<2>();
@@ -2786,7 +2828,7 @@ namespace porridge
                 {
                     var k = 0;
 
-                    while (k < due && int (midiTime.at (k) - start) <= pos)
+                    while (k < due && int (midiTime.at (midiHead + k) - start) <= pos)
                         ++k;
 
                     handleMidi (k);
@@ -2798,7 +2840,7 @@ namespace porridge
                     var end = min (blockSize, pos + arpSamplesToStep());
 
                     if (due > 0)
-                        end = min (end, max (int (midiTime.at (0) - start), pos + 1));
+                        end = min (end, max (int (midiTime.at (midiHead) - start), pos + 1));
 
                     let n = end - pos;
                     active = renderPiece (pos, n) || active;
@@ -2808,6 +2850,8 @@ namespace porridge
 
                     pos = end;
                 }
+
+                compactMidi();
             }
 
             // global targets (effects, output) follow the newest voice's sources
@@ -2827,25 +2871,17 @@ namespace porridge
             {
                 let mode = int (P[slot::Sat_Mode]);
 
-                if (mode == 0 || mode == 3)
-                    globalDist.processStereo (distTables, P, xySum (7, curX, curY) + ccDepthSum (7, false), sampleRate, mix);
+                if (mode == satMode::global || mode == satMode::both)
+                    globalDist.processStereo (distTables, P, xySum (xyTgt::distortion, curX, curY) + ccSum[ccTgt::distortion], sampleRate, mix);
             }
 
             // the effects in the program's order (Oatmeal's: chorus, delay, reverb, EQ); each one
             // says whether its output still sounds, and the last one's answer gates the output
-            var order = int (P[slot::FX_Order]);
-            int[4] left = (0, 1, 2, 3);
-            let place = int[4] (6, 2, 1, 1);
+            let order = clamp (int (P[slot::FX_Order]), 0, fxOrders.size / 4 - 1);
 
             for (wrap<4> k)
             {
-                // permutation `order` of 0..3 in lexicographic order (ui/PorridgeParams.res)
-                let i = clamp (order / place[k], 0, 3 - int (k));
-                order -= i * place[k];
-                let fx = left.at (i);
-
-                for (int j = i; j < 3; ++j)
-                    left.at (j) = left.at (j + 1);
+                let fx = fxOrders.at (order * 4 + k);
 
                 if (fx == 0)      { if (P[slot::C_Mode] != 0) active = chorus.process (fxTables, rng, mix, active, P, sampleRate); }
                 else if (fx == 1) { if (P[slot::D_On] != 0)   active = delay.process (fxTables, mix, active, P, sampleRate, samplesPerBeat); }
@@ -2866,6 +2902,7 @@ namespace porridge
         bool renderPiece (int pos, int n)
         {
             smoothControllers (n);
+            sumCcMods();
             prepareMods();
             let active = renderVoices (pos, n);
             if (numLive > 0) restoreMods();

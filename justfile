@@ -49,7 +49,7 @@ ui:
     npm install
     npm run build
 
-# Regenerate dsp/ParamStore.cmajor and dsp/Slots.cmajor from the parameter table
+# Regenerate dsp/ParamStore.cmajor, dsp/Slots.cmajor and dsp/ModTables.cmajor from the parameter tables
 gen: ui
     node "{{ root / "tools" / "gen.mjs" }}"
 

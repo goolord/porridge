@@ -1,13 +1,11 @@
-//  Global effects: chorus -> delay -> reverb -> EQ, as in Oatmeal.
+//  Global effects: chorus, delay, reverb and EQ, as in Oatmeal. Oatmeal runs them in that
+//  order; Porridge's FX_Order can rearrange them (the synth's renderBlock).
 //  Each effect works on the synth's 64-frame stereo block, recomputes its coefficients from
 //  the program mirror at the start of every block, and reports whether it still produced
 //  output (tails below the original's silence thresholds are cut to zero, as in the original).
 
 namespace porridge
 {
-    let blockSize = 64;
-    let piF = 3.14159274f;
-
     /// MSVCRT's rand(): the original draws all its randomness from it.
     struct Rand
     {
@@ -16,8 +14,22 @@ namespace porridge
 
     int next (Rand& this)
     {
-        this.state = (this.state * 214013 + 2531011) & 0xffffffffi64;
+        this.state = (this.state * 214013 + 2531011) & u32;
         return int ((this.state >> 16) & 0x7fff);
+    }
+
+    /// Porridge's own random numbers (drift, unison phases, the modulation matrix's random
+    /// source), kept apart from Oatmeal's rand() so that they don't change its sequence.
+    struct Lcg
+    {
+        int64 state;
+    }
+
+    /// The next value, -1..1.
+    float nextSigned (Lcg& this)
+    {
+        this.state = (this.state * 1103515245 + 12345) & 0x7fffffff;
+        return float (this.state) * (1.0f / 1073741824.0f) - 1.0f;
     }
 
     float bilinearK (float64 w)
@@ -32,10 +44,14 @@ namespace porridge
         float[4098] tanhTable;
         float[2050] window;
         float[32769] lfoSine, lfoRamp, lfoFM;
+        float[blockSize + 1] filterSmooth;      // the voice filters' filterSmoothing, by block length
     }
 
-    void build (FxTables& this)
+    void build (FxTables& this, float64 sampleRate)
     {
+        for (int n = 0; n <= blockSize; ++n)
+            this.filterSmooth.at (n) = filterSmoothing (sampleRate, n);
+
         for (wrap<4097> i)
             this.tanhTable[i] = float (tanh ((float64 (i) * (1.0 / 2048.0) - 1.0) * 8.0));
         this.tanhTable[4097] = 0.0f;
@@ -180,12 +196,12 @@ namespace porridge
         let target = P[slot::D_Rotation];
         let ramp = target != this.rotCur;
         let inc = ramp ? float ((target - this.rotCur) / float (blockSize)) : 0.0f;
-        var r = ramp ? this.rotCur : target;
-
-        var a = float (cos (r) * fbL);
-        var b = float (-sin (r) * fbR);
-        var c = float (sin (r) * fbL);
-        var d = float (cos (r) * fbR);
+        let r = ramp ? this.rotCur : target;
+        let rc0 = cos (r), rs0 = sin (r);
+        var a = float (rc0 * fbL);
+        var b = float (-rs0 * fbR);
+        var c = float (rs0 * fbL);
+        var d = float (rc0 * fbR);
 
         let panR = 2.0f * P[slot::D_InputPan];
         let panL = 2.0f - panR;
@@ -238,10 +254,11 @@ namespace porridge
             if (ramp)
             {
                 this.rotCur = inc + this.rotCur;
-                a = float (cos (this.rotCur) * fbL);
-                b = float (-sin (this.rotCur) * fbR);
-                c = float (sin (this.rotCur) * fbL);
-                d = float (cos (this.rotCur) * fbR);
+                let rc = cos (this.rotCur), rs = sin (this.rotCur);
+                a = float (rc * fbL);
+                b = float (-rs * fbR);
+                c = float (rs * fbL);
+                d = float (rc * fbR);
             }
         }
 
@@ -432,13 +449,13 @@ namespace porridge
 
     int64 chorusOffset (float64 x)
     {
-        return int64 (4294967296.0 * x * x + 0.5) & 0xffffffffi64;
+        return int64 (two32 * x * x + 0.5) & u32;
     }
 
     float chorusTap (const FxTables& t, const float[32769]& line, int mode, int64 offset, int64 phase,
                      int wpos, float minD, float range)
     {
-        let ph = (offset + phase) & 0xffffffffi64;
+        let ph = (offset + phase) & u32;
         let j = int (ph >> 17);
         let f = float64 (ph & 0x1ffff) * (1.0 / 131072.0);
         let a = float64 (lfoTable (t, mode, j));
@@ -451,7 +468,7 @@ namespace porridge
 
     float chorusRead (const float[32769]& line, int64 rp)
     {
-        let p = rp & 0xffffffffi64;
+        let p = rp & u32;
         let fr = float (p & 0x1ffff) * (1.0f / 131072.0f);
         let j = int (p >> 17);
         return (1.0f - fr) * line.at (j & 0x7fff) + fr * line.at ((j + 1) & 0x7fff);
@@ -460,7 +477,7 @@ namespace porridge
     void chorusStep (Chorus& this, Rand& rng, bool right, int v, int64 minF, int64 maxF, float r)
     {
         let vel = right ? this.velR.at (v) : this.velL.at (v);
-        let d = ((right ? this.dposR.at (v) : this.dposL.at (v)) + int64 (vel)) & 0xffffffffi64;
+        let d = ((right ? this.dposR.at (v) : this.dposL.at (v)) + int64 (vel)) & u32;
 
         if (d < minF)
         {
@@ -479,16 +496,35 @@ namespace porridge
         }
     }
 
+    /// Irregular mode: new random drift speeds for every voice (r: the speed scale).
+    void randomiseSpeeds (Chorus& this, Rand& rng, float r)
+    {
+        for (wrap<16> k)
+        {
+            this.velL[k] = int (float (rng.next() - 16384) * r * 8.0f + 0.5f);
+            this.velR[k] = int (float (rng.next() - 16384) * r * 8.0f + 0.5f);
+        }
+    }
+
+    /// The feedback path's DC blocker (x1, y1: its state).
+    float dcBlock (float x, float& x1, float& y1)
+    {
+        let y = 0.999f * (x - x1) + 0.998f * y1;
+        y1 = y;
+        x1 = x;
+        return y;
+    }
+
     bool process (Chorus& this, const FxTables& t, Rand& rng, float<2>[blockSize]& buf, bool active,
                   const float[numSlots]& P, float64 sr)
     {
         let speed = P[slot::C_Rate];
-        let inc = int64 (float64 (speed) / sr * 4294967296.0 + 0.5) & 0xffffffffi64;
+        let inc = int64 (float64 (speed) / sr * two32 + 0.5) & u32;
         let mode = int (P[slot::C_Mode]);
 
         if (mode == 0 || (this.idle && ! active))
         {
-            this.phase = (this.phase + inc * blockSize) & 0xffffffffi64;
+            this.phase = (this.phase + inc * blockSize) & u32;
             return mode == 0 ? active : false;
         }
 
@@ -556,12 +592,10 @@ namespace porridge
                     let w = norm * float (acc);
                     buf[i] = float<2> ((w - inL) * mix + inL, (w - inR) * mix + inR);
 
-                    this.phase = (this.phase + inc) & 0xffffffffi64;
+                    this.phase = (this.phase + inc) & u32;
                     this.wpos = (this.wpos + 1) & 0x7fff;
 
-                    let y = 0.999f * (float (acc) - this.x1L) + 0.998f * this.y1L;
-                    this.y1L = y;
-                    this.x1L = float (acc);
+                    let y = dcBlock (float (acc), this.x1L, this.y1L);
                     let s = sat10 (t, y * fb3 * norm + (inL + inR) * 0.5f);
                     this.bufR.at (this.wpos) = s;
                     this.bufL.at (this.wpos) = s;
@@ -579,13 +613,11 @@ namespace porridge
 
                     buf[i] = float<2> ((norm * float (aL) - inL) * mix + inL, (norm * float (aR) - inR) * mix + inR);
 
-                    this.phase = (this.phase + inc) & 0xffffffffi64;
+                    this.phase = (this.phase + inc) & u32;
                     this.wpos = (this.wpos + 1) & 0x7fff;
 
-                    let yL = 0.999f * (float (aL) - this.x1L) + 0.998f * this.y1L;
-                    this.y1L = yL; this.x1L = float (aL);
-                    let yR = 0.999f * (float (aR) - this.x1R) + 0.998f * this.y1R;
-                    this.y1R = yR; this.x1R = float (aR);
+                    let yL = dcBlock (float (aL), this.x1L, this.y1L);
+                    let yR = dcBlock (float (aR), this.x1R, this.y1R);
                     this.bufL.at (this.wpos) = sat10 (t, yL * fb3 * norm + inL);
                     this.bufR.at (this.wpos) = sat10 (t, yR * fb3 * norm + inR);
                 }
@@ -603,11 +635,7 @@ namespace porridge
             {
                 this.lastSpeed = speed;
 
-                for (wrap<16> k)
-                {
-                    this.velL[k] = int (float (rng.next() - 16384) * r * 8.0f + 0.5f);
-                    this.velR[k] = int (float (rng.next() - 16384) * r * 8.0f + 0.5f);
-                }
+                this.randomiseSpeeds (rng, r);
             }
 
             let phaseOld = this.phase;
@@ -648,36 +676,29 @@ namespace porridge
                 }
 
                 this.wpos = (this.wpos + 1) & 0x7fff;
-                wF = (wF + 131072) & 0xffffffffi64;
+                wF = (wF + 131072) & u32;
 
                 if (stereo == 0)
                 {
-                    let y = 0.999f * (aL - this.x1L) + 0.998f * this.y1L;
-                    this.y1L = y; this.x1L = aL;
+                    let y = dcBlock (aL, this.x1L, this.y1L);
                     let s = sat10 (t, y * fb3 + (inL + inR) * 0.5f);
                     this.bufR.at (this.wpos) = s;
                     this.bufL.at (this.wpos) = s;
                 }
                 else
                 {
-                    let yL = 0.999f * (aL - this.x1L) + 0.998f * this.y1L;
-                    this.y1L = yL; this.x1L = aL;
-                    let yR = 0.999f * (aR - this.x1R) + 0.998f * this.y1R;
-                    this.y1R = yR; this.x1R = aR;
+                    let yL = dcBlock (aL, this.x1L, this.y1L);
+                    let yR = dcBlock (aR, this.x1R, this.y1R);
                     this.bufL.at (this.wpos) = sat10 (t, yL * fb3 * norm + inL);
                     this.bufR.at (this.wpos) = sat10 (t, yR * fb3 * norm + inR);
                 }
 
-                this.phase = (this.phase + inc) & 0xffffffffi64;
+                this.phase = (this.phase + inc) & u32;
             }
 
             if (phaseOld > this.phase)
             {
-                for (wrap<16> k)
-                {
-                    this.velL[k] = int (float (rng.next() - 16384) * r * 8.0f + 0.5f);
-                    this.velR[k] = int (float (rng.next() - 16384) * r * 8.0f + 0.5f);
-                }
+                this.randomiseSpeeds (rng, r);
             }
         }
 
@@ -869,6 +890,13 @@ namespace porridge
         let ome = 1.0f - e;
         let wet = P[slot::R_Wet], dry = P[slot::R_Dry];
         let dc = this.dc;
+        int[8] tapL, tapR;
+
+        for (wrap<8> k)
+        {
+            tapL[k] = erTap (srI, false, k);
+            tapR[k] = erTap (srI, true, k);
+        }
 
         for (wrap<blockSize> i)
         {
@@ -879,8 +907,8 @@ namespace porridge
 
             for (wrap<8> k)
             {
-                erSumL += erGainL[k] * this.erL.at ((this.erPos - erTap (srI, false, k)) & 1023);
-                erSumR += erGainR[k] * this.erR.at ((this.erPos - erTap (srI, true, k)) & 1023);
+                erSumL += erGainL[k] * this.erL.at ((this.erPos - tapL[k]) & 1023);
+                erSumR += erGainR[k] * this.erR.at ((this.erPos - tapR[k]) & 1023);
             }
 
             let aL = ome * xL + e * erSumL;
@@ -938,8 +966,9 @@ namespace porridge
 
             if (wetDelay || dryDelay)
             {
-                this.pdW = (this.pdW + 1) % this.pdSize;
-                this.pdRd = (this.pdRd + 1) % this.pdSize;
+                // both stay in 0 .. pdSize - 1
+                this.pdW = this.pdW + 1 >= this.pdSize ? 0 : this.pdW + 1;
+                this.pdRd = this.pdRd + 1 >= this.pdSize ? 0 : this.pdRd + 1;
             }
 
             buf[i] = float<2> (wL * wet + dL * dry, wR * wet + dR * dry);
