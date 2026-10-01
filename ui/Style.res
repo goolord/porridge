@@ -37,8 +37,10 @@ let css = `
 
     display: block;
     position: relative;
-    width: 100%;
-    height: 100%;
+    /* important, because Cmajor sets the manifest's size on the view as an inline style, which
+       would pin it at the design size and stop the stage scaling with the window */
+    width: 100% !important;
+    height: 100% !important;
     overflow: hidden;
     background: var(--ground);
     font-family: Bahnschrift, "DIN Alternate", "DIN 2014", "Barlow", "Arial Narrow", sans-serif;
