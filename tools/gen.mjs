@@ -154,6 +154,8 @@ const choices = [
                 swell: "swell", noiseBloom: "noise bloom", file: "file" } },
     { ns: "reverbModel", param: "Rv_Model", doc: "The algorithmic reverb's models (Rv_Model).",
       values: { hall: "hall", plate: "plate", nitrous: "nitrous", basin: "basin", vintage: "vintage" } },
+    { ns: "ambienceModel", param: "Am_Model", doc: "The ambience's models (Am_Model).",
+      values: { room: "room", clearCoat: "clear coat", verbTiny: "verb tiny" } },
     { ns: "bodeMode", param: "Bd_Mode", doc: "The frequency shifter's modes (Bd_Mode).",
       values: { up: "up", down: "down", stereo: "stereo (L up, R down)", ring: "ring" } },
     { ns: "satMode", param: "Sat_Mode", doc: "Where the distortion sits (Sat_Mode).",

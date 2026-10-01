@@ -422,6 +422,27 @@ let utilitySpecs = [
   },
 ]
 
+// The ambience: very small spaces, for a little stereo and tone (dsp/Ambience.cmajor): Porridge's
+// room, and the Airwindows reverbs ClearCoat and VerbTiny. Size, time, predelay, high cut, width
+// and mix work on every model; density and the high and low times on the room's.
+let ambienceModels = ["room", "clear coat", "verb tiny"]
+
+let ambienceSpecs = [
+  onSpec("Am_On", "Ambience on"),
+  {id: "Am_Model", name: "Ambience model", kind: Choice({names: ambienceModels, init: 0})},
+  {id: "Am_Size", name: "Ambience size", kind: unit(0., 1., 0.2)},
+  {id: "Am_Time", name: "Ambience time", kind: unit(0., 1., 0.)},
+  {id: "Am_Density", name: "Ambience density", kind: unit(0., 1., 1.)},
+  {id: "Am_Predelay", name: "Ambience predelay", kind: Float({min: 0., max: 250., init: 0., text: msText})},
+  {id: "Am_HighCut", name: "Ambience high cut", kind: hzKnob(9460.)},
+  {id: "Am_HighTime", name: "Ambience high time", kind: bipolar(0.)},
+  {id: "Am_HighFreq", name: "Ambience high freq", kind: hzKnob(6320.)},
+  {id: "Am_LowTime", name: "Ambience low time", kind: bipolar(0.)},
+  {id: "Am_LowFreq", name: "Ambience low freq", kind: hzKnob(200.)},
+  {id: "Am_Width", name: "Ambience width", kind: bipolar(0.)},
+  {id: "Am_Mix", name: "Ambience mix", kind: unit(0., 1., 0.3)},
+]
+
 let newKindSpecs = [flangerSpecs, phaserSpecs, compressorSpecs, spaceSpecs, convolveSpecs, bodeSpecs, filterFxSpecs, utilitySpecs]
 
 let rackParams = specs => specs->Array.map(s => (s.id, s.name))
@@ -435,6 +456,8 @@ let newKinds = [
   {key: "bode", name: "Bode", params: rackParams(bodeSpecs), copies: [2, 3, 4], firstInRack: true},
   {key: "filter", name: "Filter", params: rackParams(filterFxSpecs), copies: [2, 3, 4], firstInRack: true},
   {key: "utility", name: "Utility", params: rackParams(utilitySpecs), copies: [2, 3, 4], firstInRack: true},
+  // (after the others: rack values and parameters added later go at the end)
+  {key: "ambience", name: "Ambience", params: rackParams(ambienceSpecs), copies: [2, 3, 4], firstInRack: true},
 ]
 
 let rackKinds = [
@@ -580,9 +603,11 @@ let copySpecsOf = kinds => kinds->Array.flatMap(k =>
   )
 )
 
-// Oatmeal's effects' copies, and Porridge's own effects' copies (which come after them)
+// Oatmeal's effects' copies, and Porridge's own effects' copies (which come after them; the
+// ambience's are in its own group)
 let copySpecs = copySpecsOf(rackKinds->Array.filter(k => !k.firstInRack))
-let newCopySpecs = copySpecsOf(rackKinds->Array.filter(k => k.firstInRack))
+let newCopySpecs = copySpecsOf(rackKinds->Array.filter(k => k.firstInRack && k.key != "ambience"))
+let ambienceCopySpecs = copySpecsOf(rackKinds->Array.filter(k => k.key == "ambience"))
 
 // Each oscillator's own envelope: while it's on, the oscillator's level follows it (under the
 // amp envelope, which still ends the note). Its stages are like the amp envelope's, with curves
@@ -635,6 +660,7 @@ type feature =
   | RackEffects
   | Decay1Curves
   | OscEnvs
+  | Ambience
 
 let groups = [
   (Macros, macroSpecs),
@@ -657,6 +683,7 @@ let groups = [
   (RackEffects, Array.concat(newKindSpecs->Array.flat, newCopySpecs)),
   (Decay1Curves, decay1CurveSpecs),
   (OscEnvs, oscEnvSpecs),
+  (Ambience, Array.concat(ambienceSpecs, ambienceCopySpecs)),
 ]
 
 let all = groups->Array.flatMap(((_, specs)) => specs)

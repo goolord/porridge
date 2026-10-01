@@ -51,7 +51,7 @@ function sounds (name, sets, { tail })
 
 // every one of Porridge's own effects, in rack slot 5 after Oatmeal's chain
 const switches = { flanger: "Fl_On", phaser: "Ph_On", compressor: "Cp_On", space: "Rv_On", convolve: "Cv_On",
-                   bode: "Bd_On", filter: "Ff_On", utility: "Ut_On" };
+                   bode: "Bd_On", filter: "Ff_On", utility: "Ut_On", ambience: "Am_On" };
 rackEntries.forEach ((entry, value) =>
 {
     if (! entry || entry[1] !== 1 || ! switches[entry[0]]) return;
@@ -66,6 +66,11 @@ for (let m = 0; m < 5; ++m)
     sounds (`algo reverb model ${m}`, { FX_Rack_5: 33, Rv_On: 1, Rv_Model: m, Rv_Decay: 0.4 }, { tail: true });
 for (let k = 0; k < 11; ++k)
     sounds (`convolve impulse ${k}`, { FX_Rack_5: 37, Cv_On: 1, Cv_Impulse: k, Cv_Mix: 0.5 }, { tail: true });
+const ambience = rackEntries.findIndex (e => e && e[0] === "ambience" && e[1] === 1);
+for (let m = 0; m < 3; ++m)
+    for (const [size, time] of [[0, 0], [0.3, 0.3], [1, m === 2 ? 0.25 : 0.6]])     // (verb tiny is slower when big)
+        sounds (`ambience ${m} size ${size} time ${time}`, { FX_Rack_5: ambience, Am_On: 1, Am_Model: m, Am_Size: size, Am_Time: time,
+                                                            Am_HighTime: 0.5, Am_LowTime: -0.5, Am_Mix: 0.5 }, { tail: true });
 
 // the oscillators' own envelopes: with a short decay to silence, the chord dies away under the
 // amp envelope's sustain; switched on at their defaults (a gate), it sounds as before
