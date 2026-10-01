@@ -1,0 +1,1039 @@
+//  Ports of Airwindows plugins by Chris Johnson (MIT licence, github.com/airwindows/airwindows):
+//  the distortion's models, and the air rack effect (Air4).
+//
+//  The distortion's models are its types after Oatmeal's and the custom shape (Sat_Type
+//  satType::tube on). Each runs on one channel, sample by sample, where the distortion's curve
+//  would: after the pregain, inside the oversampling (at its rate) and before the postgain. Three
+//  knobs, Sat_Drive, Sat_Tone and Sat_Character, set each model's own controls (setup below);
+//  the plugins' input and output levels are the distortion's pregain and postgain, and their
+//  dry/wet its mix. They match the original code but for its dither, its denormal noise and the
+//  smoothing of a few controls over each buffer:
+//    tube           Tube: drive is its one control
+//    tape           Tape: drive its slam (input gain), tone its head bump
+//    saturate       Density: drive its density (-1 .. 4), character its highpass
+//    mixer drive    Mackity: the input stage of a small mixer; drive its input trim (+-24 dB)
+//    7-stage clip   Edge: seven clips with lowpasses between; drive its gain (squared), tone its
+//                   lowpass, character its highpass
+//    multiband      MultiBandDistortion: a highs and a lows band, each driven into a sine clip;
+//                   drive both bands' gain (0 .. +24 dB), tone the split, character the hardness
+//    wavefold       Fracture2: drive its drive (squared: x10 at the top), tone its threshold
+//                   (how far past the fold it folds back), character its fracture (up to 8 stages)
+//    bass amp       BassAmp: drive its high (the overdriven top), tone its dub (the bass bump),
+//                   character its sub (a sub octave)
+//    guitar amp     GrindAmp: a high-gain amp and a 4x12 cabinet; drive its gain, tone its tone
+//    bitcrush       Beam (16-bit): drive its derez, 15 bits down to 3 (1 - 4^-drive), tone its
+//                   focus
+//    lo-fi sampler  BitGlitter: drive its glitter (a lower sample rate), tone the size of its
+//                   quantizing steps (a quarter .. four times the original's, finer to the right)
+//  BassAmp's left side mixes the right side's state into one of its filters; here each side
+//  uses its own. BitGlitter's quantizer works out its steps directly instead of counting them,
+//  and Beam keeps its history as a ring.
+
+namespace porridge
+{
+    /// A biquad's coefficients, as Airwindows lays them out (y = a0 x + a1 x1 + a2 x2 - b1 y1 - b2 y2).
+    struct Bq
+    {
+        float64 a0, a1, a2, b1, b2;
+    }
+
+    /// A lowpass at freq (a fraction of the rate) with resonance reso (0.7071: Butterworth).
+    Bq lowpassBq (float64 freq, float64 reso)
+    {
+        let K = tan (pi * freq);
+        let norm = 1.0 / (1.0 + K / reso + K * K);
+        Bq b;
+        b.a0 = K * K * norm;
+        b.a1 = 2.0 * b.a0;
+        b.a2 = b.a0;
+        b.b1 = 2.0 * (K * K - 1.0) * norm;
+        b.b2 = (1.0 - K / reso + K * K) * norm;
+        return b;
+    }
+
+    /// A bandpass (Tape's head bump), with its a1 left at zero as Tape leaves it.
+    Bq bandpassBq (float64 freq, float64 reso)
+    {
+        let K = tan (pi * freq);
+        let norm = 1.0 / (1.0 + K / reso + K * K);
+        Bq b;
+        b.a0 = K / reso * norm;
+        b.a2 = -b.a0;
+        b.b1 = 2.0 * (K * K - 1.0) * norm;
+        b.b2 = (1.0 - K / reso + K * K) * norm;
+        return b;
+    }
+
+    /// A transposed biquad's state (Airwindows' "fixed" biquads).
+    struct BqState
+    {
+        float64 s1, s2;
+    }
+
+    float64 bqRun (BqState& s, const Bq& b, float64 x)
+    {
+        let y = x * b.a0 + s.s1;
+        s.s1 = x * b.a1 - y * b.b1 + s.s2;
+        s.s2 = x * b.a2 - y * b.b2;
+        return y;
+    }
+
+    /// A direct form I biquad's state (Mackity's).
+    struct Df1State
+    {
+        float64 x1, x2, y1, y2;
+    }
+
+    float64 df1Run (Df1State& s, const Bq& b, float64 x)
+    {
+        let y = b.a0 * x + b.a1 * s.x1 + b.a2 * s.x2 - b.b1 * s.y1 - b.b2 * s.y2;
+        s.x2 = s.x1;
+        s.x1 = x;
+        s.y2 = s.y1;
+        s.y1 = y;
+        return y;
+    }
+
+    /// Airwindows' xorshift noise, as a uint32 in an int64.
+    void xorshift (int64& fpd)
+    {
+        fpd = fpd ^ ((fpd << 13) & u32);
+        fpd = fpd ^ (fpd >> 17);
+        fpd = fpd ^ ((fpd << 5) & u32);
+    }
+
+    float64 clip1 (float64 x)       { return clamp (x, -1.0, 1.0); }
+
+    /// sin of |x|, at most 1 (at pi / 2), with x's sign
+    float64 sineClip (float64 x)
+    {
+        let s = sin (min (abs (x), 1.57079633));
+        return x > 0.0 ? s : -s;
+    }
+
+    /// Spiral, as Tape and BitGlitter use it: sin (x |x|) / |x|
+    float64 spiral (float64 x)
+    {
+        let a = abs (x);
+        return sin (x * a) / (a == 0.0 ? 1.0 : a);
+    }
+
+    //==============================================================================
+    // the distortion's models
+
+    let edgeResos = float64[7] (4.46570214, 1.51387132, 0.93979296, 0.70710678, 0.59051105, 0.52972649, 0.50316379);
+    let grindResos = float64[6] (4.46570214, 1.51387132, 0.93979296, 0.70710678, 0.52972649, 0.50316379);
+
+    /// GrindAmp's 4x12 cabinet: tap k (1 .. 83) adds the input k samples ago times
+    /// (cabA[k - 1] + cabB[k - 1] |input|).
+    let grindCabA = float64[83] (
+        1.29550481610475132, 1.42302569895462616, 1.28728195804197565, 0.88553784290822690, 0.37129054918432319,
+        -0.12150959412556320, -0.44900065463203775, -0.54058781908186482, -0.49361966401791391, -0.39819495093078133,
+        -0.31379279985435521, -0.30744359242808555, -0.33943170284673974, -0.33838775119286391, -0.30682305697961665,
+        -0.23408741339295336, -0.10411746814025019, 0.00133623776084696, 0.02461903992114161, 0.02086715842475373,
+        0.02761433637100917, 0.04475285369162533, 0.09447338372862381, 0.13445890343722280, 0.13872868945088121,
+        0.14915650097434549, 0.12766643217091783, 0.03675849788393101, -0.06307306864232835, -0.14947389348962944,
+        -0.25235266566401526, -0.33496344048679683, -0.36590030482175445, -0.35015197011464372, -0.26808437585665090,
+        -0.11624318543291220, 0.05617084165377551, 0.20540028692589385, 0.30455415003043818, 0.33810750937829476,
+        0.31936133365277430, 0.27388548321981876, 0.21454597517994098, 0.15001045817707717, 0.07283437284653138,
+        -0.03917872184241358, -0.16695932032148642, -0.27055854466909462, -0.33256357307578271, -0.33459770116834442,
+        -0.27156687236338090, -0.17197093288412094, -0.06738628195910543, 0.00222429218204290, 0.01346992803494091,
+        -0.02038911881377448, -0.08233579178189687, -0.15447855089824883, -0.20518281113362655, -0.22244686050232007,
+        -0.21849243134998034, -0.20256105734574054, -0.18604070054295399, -0.17222844322058231, -0.14447856616566443,
+        -0.10385520794251019, -0.07124435678265063, -0.05216857461197572, -0.05235381920184123, -0.07569701245553526,
+        -0.10320125382718826, -0.12122120969079088, -0.13438969117200902, -0.13534390437529981, -0.11424128854188388,
+        -0.08166894518596159, -0.04293976378555305, 0.00933076320644409, 0.06450430362918153, 0.10187400687649277,
+        0.11039763294094571, 0.08557960776024547, 0.02730881850805332);
+
+    let grindCabB = float64[83] (
+        0.19713872057074355, 0.30599505521284787, 0.23168333460446133, 0.14263256172918892, 0.00150040944205920,
+        -0.32776273620569107, -0.74101214925298819, -1.07821707459008387, -1.23540109014850508, -1.11247213730917749,
+        -0.80330360359638298, -0.42132528876858205, -0.09183418349389982, 0.06453051658561271, 0.09549380253249232,
+        0.08083404732361277, -0.00253651281245780, -0.04447267870865820, 0.07530671732655550, 0.22795860236804899,
+        0.26108320417844094, 0.19160705011061663, 0.03681550508743799, -0.13713036462146147, -0.22401242373298191,
+        -0.26718804981526367, -0.27745664795660430, -0.18338278173550679, -0.06089480869040766, -0.04642103054798480,
+        -0.08423062596460507, -0.09808328256677995, -0.10622650888958179, -0.08982043516016047, -0.00735561860229533,
+        0.07142484314510467, 0.11785854050350089, 0.20479174663329586, 0.29074864580096849, 0.29182307921316802,
+        0.26535537727394987, 0.19735049990538350, 0.06415909270247236, -0.03831118543404573, -0.09281952429543777,
+        -0.14306291461398810, -0.19138995946950504, -0.22531296466343192, -0.23305840475692102, -0.24091822618917569,
+        -0.24062938573512443, -0.19083085091993421, -0.10268609751019808, 0.01439664435720548, 0.15947137113534526,
+        0.26763170752416160, 0.29415931086406055, 0.26489186990840807, 0.16135382257522859, -0.00847180390247432,
+        -0.14460595245753741, -0.18932793221831667, -0.17250665610927965, -0.12992472027850357, -0.09089219002147308,
+        -0.08600465834570559, -0.09071532210549428, -0.06794061706070262, -0.02818101717909346, 0.00634228544764946,
+        0.02751486906644141, 0.05434007312178933, 0.09135218559713874, 0.10437672041458675, 0.08693450726462598,
+        0.06949989431475120, 0.05718625137421843, 0.01728285211520138, -0.02492994833691022, -0.03578455940532403,
+        -0.03995523517573508, -0.03482514309492527, -0.00514750108411127);
+
+    /// BassAmp's FIR on its interpolated sample
+    let baK1 = -0.646;
+    let baK2 = 0.311;
+    let baK3 = 0.114;
+    let baK4 = 0.886;
+    let baK5 = 0.122;
+    let baK6 = -0.093;
+    let baK7 = 0.057;
+    let baK8 = -0.023;
+
+    /// The current model's controls for a block, at its rate.
+    struct DistCoefs
+    {
+        int type;
+        float64 scale;                          // the rate / 44.1 kHz (Airwindows' overallscale)
+        // 7-stage clip
+        Bq[7] edge;
+        float64 edgeTrim, edgeIir;
+        // mixer drive
+        Bq mkA, mkB;
+        float64 mkTrim, mkIirA, mkIirB;
+        // multiband
+        float64 mbIir, mbGain, mbThresh, mbHard, mbOutH, mbOutL, mbOutD, mbOut;
+        // bitcrush
+        float64 beamScale, beamOutScale, beamSonority;
+        int beamDepth;
+        // lo-fi sampler
+        float64 bgRateA, bgRateB, bgRezA, bgRezB;
+        // tube
+        float64 tubeGain, tubeGainScaling, tubeOutScaling;
+        int tubePower;
+        // tape
+        Bq tapeBump, tapeSig;
+        float64 tapeGain, tapeBumpGain, tapeBumpFreq, tapeRoll;
+        // bass amp
+        float64 baDrive, baOut, baIir, baBassGain, baBumpFreq, baBassOut, baSubGain, baSubFreq, baSubOut, baHp;
+        // saturate
+        float64 dnDensity, dnBlend, dnIir;
+        // wavefold
+        float64 frDensity, frThresh;
+        int frStages;
+        // guitar amp
+        Bq[6] ga;
+        float64 gaIn, gaEq, gaBassEq, gaTone, gaBassDrive, gaOut;
+        int gaCycleEnd;
+    }
+
+    /// One channel of every model (only the current type's part is used).
+    struct DistModel
+    {
+        // 7-stage clip
+        BqState[7] edge;
+        float64 edgeIir;
+        // mixer drive
+        Df1State mkA, mkB;
+        float64 mkIirA, mkIirB;
+        // multiband
+        float64 mbLast1, mbLast2, mbLast3, mbA, mbB, mbIirA, mbIirB;
+        bool mbFlip;
+        // bitcrush: its last output levels, newest at beamPos
+        float[128] beamLast;
+        int beamPos;
+        // lo-fi sampler
+        float64 bgLast, bgHeldA, bgHeldB, bgPosA, bgPosB, bgLastOut;
+        // tube
+        float64 tubeA, tubeC;
+        // tape: head bump bandpasses A and B, the signal's C and D (each runs every other sample)
+        BqState[4] tape;
+        float64 tapeRollA, tapeRollB, tapeBumpA, tapeBumpB, tapeLast;
+        bool tapeFlip;
+        // bass amp
+        float64[6] baLast;
+        float64 baDiff;
+        float64[6] baDrive;
+        float64[3] baHead, baSub;
+        float64[26] baHp;
+        bool baWasNegative, baSubOctave, baFlip;
+        int baTurn;
+        // saturate
+        float64 dnIirA, dnIirB;
+        bool dnFlip;
+        // guitar amp: the biquads, the averaging stages A .. K, the bass's one-poles, the cabinet
+        BqState[6] ga;
+        float64[11] gaSmooth, gaSecond, gaThird;
+        float64[9] gaIir;
+        float64 gaStore, gaCabA, gaCabB, gaLastCab;
+        float64[128] gaCab;
+        int gaCabPos, gaCycle;
+        float64[9] gaRef;
+        // the noise BassAmp and GrindAmp draw from
+        int64 fpd;
+    }
+
+    /// The models' controls from the distortion's knobs (0 .. 1), for a rate of sr.
+    void setupModel (DistCoefs& c, int type, float64 drive, float64 tone, float64 character, float64 sr)
+    {
+        c.type = type;
+        c.scale = sr / 44100.0;
+        let scale = c.scale;
+
+        if (type == satType::sevenStage)
+        {
+            // Edge: gain A, lowpass B, highpass C
+            let A = drive * drive;
+            c.edgeTrim = A * 4.0 + 0.5;
+            let cutoff = clamp (tone * 25000.0 / sr, 0.001, 0.49);
+            c.edgeIir = max (pow (character, 3.0) * 0.5, 0.00000001) / scale;
+
+            for (wrap<7> k)
+                c.edge[k] = lowpassBq (cutoff, edgeResos[k]);
+        }
+        else if (type == satType::mixerDrive)
+        {
+            c.mkTrim = pow (10.0, (drive * 48.0 - 24.0) / 20.0);
+            c.mkIirA = 0.001860867 / scale;
+            c.mkIirB = 0.000287496 / scale;
+            c.mkA = lowpassBq (19160.0 / sr, 0.431684981684982);
+            c.mkB = lowpassBq (19160.0 / sr, 1.1582298);
+        }
+        else if (type == satType::multiband)
+        {
+            // MultiBandDistortion: freq A, both gains B and C, both hardnesses D and E; the band
+            // levels F and G and the stable H at 1 and the output I at 0.75 (its defaults)
+            c.mbIir = pow (tone, 3.0) / scale;
+            c.mbGain = pow (10.0, drive * 24.0 / 20.0);
+            c.mbThresh = character;
+            c.mbHard = character < 1.0 ? 1.0 / (1.0 - character) : 999999999999999999999.0;
+            let trim = 1.0 + 1.0 + 0.597;
+            c.mbOutH = trim;
+            c.mbOutL = trim;
+            c.mbOutD = 0.597 * trim;
+            c.mbOut = pow (10.0, (0.75 - 1.0) * 48.0 / 20.0);
+        }
+        else if (type == satType::bitcrush)
+        {
+            // Beam at 16 bits: derez C, focus B
+            c.beamSonority = tone * 1.618033988749894848204586;
+            c.beamDepth = clamp (int (17.0 * scale), 3, 98);
+            var s = 32768.0;
+            let derez = 1.0 - pow (4.0, -drive);
+            if (derez > 0.0) s *= pow (1.0 - derez, 6.0);
+            c.beamScale = max (s, 0.0001);
+            c.beamOutScale = max (c.beamScale, 8.0);
+        }
+        else if (type == satType::lofi)
+        {
+            // BitGlitter: glitter B; its rez scaled by tone; input, output and dry/wet at their defaults
+            let B = drive * drive;
+            let factor = pow (B + 1.0, 7.0) + 2.0;
+            let divvy = max (1, int (factor * scale));
+            c.bgRateA = 1.0 / float64 (divvy);
+            c.bgRateB = 1.61803398875 / float64 (divvy);
+            let rez = pow (4.0, 1.0 - 2.0 * tone);
+            c.bgRezA = 0.0016666666666667 * rez;
+            c.bgRezB = 0.0026666666666667 * rez;
+        }
+        else if (type == satType::tube)
+        {
+            c.tubeGain = 1.0 + drive * 0.2246161992650486;
+            c.tubePower = int (5.0 * (1.0 - drive) + 1.0);
+            c.tubeGainScaling = 1.0 / float64 (c.tubePower + 1);
+            c.tubeOutScaling = 1.0 + 1.0 / float64 (c.tubePower);
+        }
+        else if (type == satType::tape)
+        {
+            c.tapeGain = pow (10.0, (drive - 0.5) * 24.0 / 20.0);
+            c.tapeBumpGain = tone * 0.1;
+            c.tapeBumpFreq = 0.12 / scale;
+            c.tapeRoll = (1.0 - 0.618033988749894848204586) / scale;
+            c.tapeBump = bandpassBq (0.0072 / scale, 0.0009);
+            c.tapeSig = bandpassBq (0.032 / scale, 0.0007);
+        }
+        else if (type == satType::bassAmp)
+        {
+            // BassAmp: high A (0.75 at half drive), dub C (0.75 at half tone), sub D; dry B at 0
+            let high = pow (drive, 0.415);
+            let dub = pow (tone, 0.415) * 1.3;
+            let sub = character / 2.0;
+            c.baDrive = pow (high * 3.0, 2.0);
+            c.baOut = high;
+            c.baIir = 0.344 / scale;
+            c.baBassGain = dub * 0.1;
+            c.baBumpFreq = (c.baBassGain + 0.0001) / scale;
+            c.baBassOut = dub * 0.2;
+            c.baSubGain = sub * 0.1;
+            c.baSubFreq = (c.baSubGain + 0.0001) / scale;
+            c.baSubOut = sub * 0.3;
+            c.baHp = 0.0000014 / scale;
+        }
+        else if (type == satType::saturate)
+        {
+            // Density: density A, highpass B; output C at 1
+            let d = drive * 5.0 - 1.0;
+            c.dnDensity = d * abs (d);
+            var blend = abs (d);
+            while (blend > 1.0) blend -= 1.0;
+            c.dnBlend = blend;
+            c.dnIir = pow (character, 3.0) / scale;
+        }
+        else if (type == satType::wavefold)
+        {
+            // Fracture2: drive A, fracture B, threshold C; output D at 1
+            c.frDensity = drive * drive * 10.0;
+            c.frStages = int (character * 8.0);
+            c.frThresh = tone;
+        }
+        else if (type == satType::guitarAmp)
+        {
+            // GrindAmp: gain A, tone B; output C at its default 0.8
+            c.gaIn = drive * drive;
+            var trimEq = 1.1 - tone;
+            c.gaTone = trimEq / 1.2;
+            trimEq = trimEq / 50.0 + 0.165;
+            c.gaEq = ((trimEq - c.gaTone / 6.1) / sr) * 22050.0;
+            c.gaBassEq = ((trimEq + c.gaTone / 2.1) / sr) * 22050.0;
+            c.gaOut = 0.8;
+            c.gaBassDrive = 1.57079633 * (2.5 - c.gaTone);
+            let cutoff = clamp ((18000.0 + tone * 1000.0) / sr, 0.001, 0.49);
+
+            for (wrap<6> k)
+                c.ga[k] = lowpassBq (cutoff, grindResos[k]);
+
+            c.gaCycleEnd = clamp (int (floor (scale)), 1, 4);
+        }
+    }
+
+    /// One sample through the current model.
+    float64 runModel (DistModel& m, const DistCoefs& c, float64 x)
+    {
+        let type = c.type;
+
+        if (type == satType::tube)          return m.tube (c, x);
+        if (type == satType::tape)          return m.tape (c, x);
+        if (type == satType::saturate)      return m.saturate (c, x);
+        if (type == satType::mixerDrive)    return m.mixerDrive (c, x);
+        if (type == satType::sevenStage)    return m.sevenStage (c, x);
+        if (type == satType::multiband)     return m.multiband (c, x);
+        if (type == satType::wavefold)      return wavefold (c, x);
+        if (type == satType::bassAmp)       return m.bassAmp (c, x);
+        if (type == satType::guitarAmp)     return m.guitarAmp (c, x);
+        if (type == satType::bitcrush)      return m.bitcrush (c, x);
+        if (type == satType::lofi)          return m.lofi (c, x);
+        return x;
+    }
+
+    float64 tube (DistModel& m, const DistCoefs& c, float64 xin)
+    {
+        var x = xin;
+
+        if (c.scale > 1.9)
+        {
+            let stored = x;
+            x = (x + m.tubeA) * 0.5;
+            m.tubeA = stored;
+        }
+
+        x = clip1 (x * c.tubeGain);
+        var factor = x;
+
+        for (int k = 0; k < c.tubePower; ++k)
+            factor *= x;
+
+        if ((c.tubePower % 2) == 1 && x != 0.0)
+            factor = (factor / x) * abs (x);
+
+        x = (x - factor * c.tubeGainScaling) * c.tubeOutScaling;
+
+        if (c.scale > 1.9)
+        {
+            let stored = x;
+            x = (x + m.tubeC) * 0.5;
+            m.tubeC = stored;
+        }
+
+        return x;
+    }
+
+    float64 tape (DistModel& m, const DistCoefs& c, float64 xin)
+    {
+        let dry = xin;
+        var x = xin;
+        float64 highs;
+
+        if (m.tapeFlip)
+        {
+            m.tapeRollA = m.tapeRollA * (1.0 - c.tapeRoll) + x * c.tapeRoll;
+            highs = x - m.tapeRollA;
+            m.tapeBumpA += x * 0.05;
+            m.tapeBumpA -= m.tapeBumpA * m.tapeBumpA * m.tapeBumpA * c.tapeBumpFreq;
+            m.tapeBumpA = asin (clip1 (bqRun (m.tape[0], c.tapeBump, sin (m.tapeBumpA))));
+            x = asin (clip1 (bqRun (m.tape[2], c.tapeSig, sin (x))));
+        }
+        else
+        {
+            m.tapeRollB = m.tapeRollB * (1.0 - c.tapeRoll) + x * c.tapeRoll;
+            highs = x - m.tapeRollB;
+            m.tapeBumpB += x * 0.05;
+            m.tapeBumpB -= m.tapeBumpB * m.tapeBumpB * m.tapeBumpB * c.tapeBumpFreq;
+            m.tapeBumpB = asin (clip1 (bqRun (m.tape[1], c.tapeBump, sin (m.tapeBumpB))));
+            x = asin (clip1 (bqRun (m.tape[3], c.tapeSig, sin (x))));
+        }
+
+        m.tapeFlip = ! m.tapeFlip;
+        let ground = dry - x;
+
+        if (c.tapeGain != 1.0)
+            x *= c.tapeGain;
+
+        // soften the highs, by their polarity
+        let soften = 1.0 - cos (min (abs (highs) * 1.57079633, 1.57079633));
+        if (highs > 0.0) x -= soften;
+        if (highs < 0.0) x += soften;
+
+        x = spiral (clamp (x, -1.2533141373155, 1.2533141373155));
+
+        let suppress = (1.0 - abs (x)) * 0.00013;
+        if (m.tapeBumpA > suppress) m.tapeBumpA -= suppress;
+        if (m.tapeBumpA < -suppress) m.tapeBumpA += suppress;
+        if (m.tapeBumpB > suppress) m.tapeBumpB -= suppress;
+        if (m.tapeBumpB < -suppress) m.tapeBumpB += suppress;
+
+        x += ground + (m.tapeBumpA + m.tapeBumpB) * c.tapeBumpGain;
+
+        // ADClip
+        let softness = 0.618033988749894848204586;
+
+        if (m.tapeLast >= 0.99)
+            m.tapeLast = x < 0.99 ? 0.99 * softness + x * (1.0 - softness) : 0.99;
+
+        if (m.tapeLast <= -0.99)
+            m.tapeLast = x > -0.99 ? -0.99 * softness + x * (1.0 - softness) : -0.99;
+
+        if (x > 0.99)
+            x = m.tapeLast < 0.99 ? 0.99 * softness + m.tapeLast * (1.0 - softness) : 0.99;
+
+        if (x < -0.99)
+            x = m.tapeLast > -0.99 ? -0.99 * softness + m.tapeLast * (1.0 - softness) : -0.99;
+
+        m.tapeLast = x;
+        return clamp (x, -0.99, 0.99);
+    }
+
+    float64 saturate (DistModel& m, const DistCoefs& c, float64 xin)
+    {
+        var x = xin;
+
+        if (m.dnFlip)
+        {
+            m.dnIirA = m.dnIirA * (1.0 - c.dnIir) + x * c.dnIir;
+            x -= m.dnIirA;
+        }
+        else
+        {
+            m.dnIirB = m.dnIirB * (1.0 - c.dnIir) + x * c.dnIir;
+            x -= m.dnIirB;
+        }
+
+        m.dnFlip = ! m.dnFlip;
+
+        for (var count = c.dnDensity; count > 1.0; count -= 1.0)
+            x = sineClip (x * 1.57079633);
+
+        let r = min (abs (x) * 1.57079633, 1.57079633);
+        let shaped = c.dnDensity > 0.0 ? sin (r) : 1.0 - cos (r);
+        let out = c.dnBlend;
+        return x > 0.0 ? x * (1.0 - out) + shaped * out : x * (1.0 - out) - shaped * out;
+    }
+
+    float64 mixerDrive (DistModel& m, const DistCoefs& c, float64 xin)
+    {
+        var x = xin;
+        m.mkIirA = m.mkIirA * (1.0 - c.mkIirA) + x * c.mkIirA;
+        x -= m.mkIirA;
+
+        if (c.mkTrim != 1.0)
+            x *= c.mkTrim;
+
+        x = clip1 (df1Run (m.mkA, c.mkA, x));
+        x -= pow (x, 5.0) * 0.1768;
+        x = df1Run (m.mkB, c.mkB, x);
+        m.mkIirB = m.mkIirB * (1.0 - c.mkIirB) + x * c.mkIirB;
+        return x - m.mkIirB;
+    }
+
+    float64 sevenStage (DistModel& m, const DistCoefs& c, float64 xin)
+    {
+        m.edgeIir = m.edgeIir * (1.0 - c.edgeIir) + xin * c.edgeIir;
+        var x = xin - m.edgeIir;
+
+        for (wrap<6> k)
+            x = clip1 (bqRun (m.edge[k], c.edge[k], x) * c.edgeTrim);
+
+        return bqRun (m.edge[6], c.edge[6], x);
+    }
+
+    /// MultiBandDistortion's clip: past the threshold, a sine up to the hardness's limit.
+    float64 bandClip (float64 x, float64 thresh, float64 hard)
+    {
+        if (abs (x) <= thresh)
+            return x;
+
+        let r = sin (min ((abs (x) - thresh) * hard, 1.5707963267949)) / hard;
+        return x > 0.0 ? r + thresh : -(r + thresh);
+    }
+
+    float64 multiband (DistModel& m, const DistCoefs& c, float64 xin)
+    {
+        let tweak = 0.0414213562373095048801688;
+        let decay = 0.915965594177219015;
+        let dry = xin;
+        // the sample halfway to the last one
+        let halfDry = (xin + m.mbLast1 + (-m.mbLast2 + m.mbLast3) * tweak) / 2.0;
+        m.mbLast3 = m.mbLast2;
+        m.mbLast2 = m.mbLast1;
+        m.mbLast1 = xin;
+
+        m.mbIirA = m.mbIirA * (1.0 - c.mbIir) + halfDry * c.mbIir;
+        let halfway = bandClip ((halfDry - m.mbIirA) * c.mbGain, c.mbThresh, c.mbHard) * c.mbOutH
+                    + bandClip (m.mbIirA * c.mbGain, c.mbThresh, c.mbHard) * c.mbOutL;
+
+        m.mbIirB = m.mbIirB * (1.0 - c.mbIir) + xin * c.mbIir;
+        let raw = bandClip ((xin - m.mbIirB) * c.mbGain, c.mbThresh, c.mbHard) * c.mbOutH
+                + bandClip (m.mbIirB * c.mbGain, c.mbThresh, c.mbHard) * c.mbOutL;
+
+        // the antialiasing: each as its difference from the dry, through a decaying pair
+        var d = halfway - halfDry;
+
+        if (m.mbFlip) { m.mbA *= decay; m.mbB *= decay; m.mbA += d; m.mbB -= d; d = m.mbA; }
+        else          { m.mbB *= decay; m.mbA *= decay; m.mbB += d; m.mbA -= d; d = m.mbB; }
+
+        let halfDiff = d * decay;
+        d = raw - dry;
+
+        if (m.mbFlip) { m.mbA *= decay; m.mbB *= decay; m.mbA += d; m.mbB -= d; d = m.mbA; }
+        else          { m.mbB *= decay; m.mbA *= decay; m.mbB += d; m.mbA -= d; d = m.mbB; }
+
+        let diff = d * decay;
+        m.mbFlip = ! m.mbFlip;
+        return (dry * c.mbOutD + diff + halfDiff) * c.mbOut;
+    }
+
+    float64 wavefold (const DistCoefs& c, float64 xin)
+    {
+        var x = xin * c.frDensity;
+
+        for (int k = 0; k < c.frStages; ++k)
+            x *= abs (x) + 1.0;
+
+        if (x > 1.5707963267948966)  return sin (x) * c.frThresh + (1.0 - c.frThresh);
+        if (x < -1.5707963267948966) return sin (x) * c.frThresh - (1.0 - c.frThresh);
+        return sin (x);
+    }
+
+    /// BassAmp's drive: a highpass in three one-poles (the even or odd ones), the lows it
+    /// took out, then the clip, stacked for high drives.
+    float64 bassAmpDrive (DistModel& m, const DistCoefs& c, float64 x, float64& lows)
+    {
+        var t = x;
+        float64 correction = 0;
+        let first = m.baFlip ? 0 : 1;
+
+        for (int k = first; k < 6; k += 2)
+        {
+            m.baDrive.at (k) = m.baDrive.at (k) * (1.0 - c.baIir) + t * c.baIir;
+            t -= m.baDrive.at (k);
+            correction += m.baDrive.at (k);
+        }
+
+        var y = x - correction;
+        lows = x - y;
+        y = clip1 (y);
+        var drive = c.baDrive;
+
+        while (drive > 0.60)
+        {
+            drive -= 0.60;
+            y -= y * (abs (y) * 0.60) * (abs (y) * 0.60);
+            y *= 1.0 + 0.60;
+        }
+
+        y -= y * (abs (y) * drive) * (abs (y) * drive);
+        return y * (1.0 + drive);
+    }
+
+    float64 bassAmp (DistModel& m, const DistCoefs& c, float64 xin)
+    {
+        if (m.fpd == 0)
+            m.fpd = 0x9e3779b9i64;
+
+        let dry = xin;
+        var halfDry = (xin + m.baLast[0] + m.baLast[1] * baK1 + m.baLast[2] * baK2 + m.baLast[3] * baK6
+                       + m.baLast[4] * baK7 + m.baLast[5] * baK8) / 2.0;
+
+        for (int k = 5; k > 0; --k)
+            m.baLast.at (k) = m.baLast.at (k - 1);
+
+        m.baLast[0] = xin;
+
+        float64 halfLows, lows;
+        let halfway = m.bassAmpDrive (c, halfDry, halfLows);
+        var x = m.bassAmpDrive (c, xin, lows);
+
+        // the drive's change to the dry, from both samples
+        halfDry = dry * baK3 + halfDry * baK4;
+        let lastDiff = m.baDiff * baK5;
+        m.baDiff = (x - dry) / 2.0 + (halfway - halfDry) / 2.0 - lastDiff;
+        x = dry + m.baDiff;
+        lows += halfLows;
+
+        // the head bump and its sub octave: three resonant one-poles taking turns, a little
+        // of the others mixed in at random
+        let randy = (float64 (m.fpd) / 4294967295.0) * 0.0555;
+
+        if (m.baTurn >= 1)
+        {
+            let k = m.baTurn - 1;
+            let a = (k + 1) % 3;
+            let b = (k + 2) % 3;
+            var h = m.baHead.at (k) + lows * c.baBassGain;
+            h -= h * h * h * c.baBumpFreq;
+            m.baHead.at (k) = (1.0 - randy) * h + randy * 0.5 * m.baHead.at (a) + randy * 0.5 * m.baHead.at (b);
+        }
+
+        let head = m.baHead[0] + m.baHead[1] + m.baHead[2];
+        var sub = abs (head);
+
+        if (head > 0.0)
+        {
+            if (m.baWasNegative)
+                m.baSubOctave = ! m.baSubOctave;
+
+            m.baWasNegative = false;
+        }
+        else
+        {
+            m.baWasNegative = true;
+        }
+
+        if (! m.baSubOctave)
+            sub = -sub;
+
+        if (m.baTurn >= 1)
+        {
+            let k = m.baTurn - 1;
+            let a = (k + 1) % 3;
+            let b = (k + 2) % 3;
+            var s = m.baSub.at (k) + sub * c.baSubGain;
+            s -= s * s * s * c.baSubFreq;
+            m.baSub.at (k) = (1.0 - randy) * s + randy * 0.5 * m.baSub.at (a) + randy * 0.5 * m.baSub.at (b);
+        }
+
+        sub = m.baSub[0] + m.baSub[1] + m.baSub[2];
+        m.baFlip = ! m.baFlip;
+        m.baTurn = m.baTurn >= 3 ? 1 : m.baTurn + 1;
+
+        x = x * c.baOut + head * c.baBassOut + sub * c.baSubOut;
+
+        // a very slow highpass in 26 one-poles, as corrections
+        var t = x;
+        float64 correction = 0;
+
+        for (wrap<26> k)
+        {
+            m.baHp[k] = m.baHp[k] * (1.0 - c.baHp) + t * c.baHp;
+            t -= m.baHp[k];
+            correction += m.baHp[k];
+        }
+
+        xorshift (m.fpd);
+        return x - correction;
+    }
+
+    /// GrindAmp's averaging stage k: the input and the three before it, weighted by r.
+    float64 grindStage (DistModel& m, int k, float64 x, float64 r)
+    {
+        let inverse = (r + 1.0) / 2.0;
+        let y = m.gaSmooth.at (k) + m.gaSecond.at (k) * inverse + m.gaThird.at (k) * r + x;
+        m.gaThird.at (k) = m.gaSecond.at (k);
+        m.gaSecond.at (k) = m.gaSmooth.at (k);
+        m.gaSmooth.at (k) = x;
+        return y;
+    }
+
+    /// GrindAmp's bass path: one-pole k of the caught bass, driven into a sine clip.
+    float64 grindBass (DistModel& m, const DistCoefs& c, int k, float64 bass, float64& r)
+    {
+        m.gaIir.at (k) = m.gaIir.at (k) * (1.0 - c.gaBassEq) + bass * c.gaBassEq;
+        let b = m.gaIir.at (k) * c.gaBassDrive;
+        r = sin (min (abs (b), 1.57079633));
+        return b > 0.0 ? r : -r;
+    }
+
+    float64 guitarAmp (DistModel& m, const DistCoefs& c, float64 xin)
+    {
+        if (m.fpd == 0)
+            m.fpd = 0x9e3779b9i64;
+
+        // the preamp: two highpassed gain stages, then seven driven by the caught bass
+        var x = bqRun (m.ga[0], c.ga[0], xin) * c.gaIn;
+        m.gaIir[0] = m.gaIir[0] * (1.0 - c.gaEq) + x * c.gaEq;
+        x = clip1 (x - m.gaIir[0] * 0.92);
+        x = m.grindStage (0, x, abs (x));
+        var bass = x;
+
+        x = bqRun (m.ga[1], c.ga[1], x) * c.gaIn;
+        m.gaIir[1] = m.gaIir[1] * (1.0 - c.gaEq) + x * c.gaEq;
+        x = clip1 (x - m.gaIir[1] * 0.79);
+        x = m.grindStage (1, x, abs (x));
+
+        float64 r;
+
+        for (int k = 2; k < 9; ++k)
+        {
+            // the biquads C .. F come before stages D, E, G and I
+            if (k == 3) x = bqRun (m.ga[2], c.ga[2], x);
+            if (k == 4) x = bqRun (m.ga[3], c.ga[3], x);
+            if (k == 6) x = bqRun (m.ga[4], c.ga[4], x);
+            if (k == 8) x = bqRun (m.ga[5], c.ga[5], x);
+
+            bass = m.grindBass (c, k, bass, r);
+            x = m.grindStage (k, clip1 (x), r);
+        }
+
+        x = m.grindStage (9, x, abs (x));
+        x = m.grindStage (10, x, abs (x));
+
+        bass /= 2.0;
+        x = x * c.gaTone + bass;
+        x = sineClip (x * c.gaOut);
+        x = (x + bass) / (1.0 + c.gaTone);
+
+        var randy = (float64 (m.fpd) / 4294967295.0) * 0.061;
+        x = (x * (1.0 - randy) + m.gaStore * randy) * c.gaOut;
+        m.gaStore = x;
+
+        // the cabinet, at about 44.1 kHz
+        m.gaCycle += 1;
+
+        if (m.gaCycle >= c.gaCycleEnd)
+        {
+            var temp = (x + m.gaCabA) / 3.0;
+            m.gaCabA = x;
+            x = temp;
+
+            m.gaCabPos = (m.gaCabPos + 1) & 127;
+            m.gaCab.at (m.gaCabPos) = x;
+
+            for (wrap<83> k)
+            {
+                let b = m.gaCab.at ((m.gaCabPos - 1 - int (k)) & 127);
+                x += b * (grindCabA[k] + grindCabB[k] * abs (b));
+            }
+
+            temp = (x + m.gaCabB) / 3.0;
+            m.gaCabB = x;
+            x = temp / 4.0;
+
+            randy = (float64 (m.fpd) / 4294967295.0) * 0.044;
+            let cab = (x * (1.0 - randy) + m.gaLastCab * randy) * c.gaOut;
+            m.gaLastCab = x;
+            x = cab;
+
+            // the undersampled cabinet's output, spread over the samples until the next
+            let n = c.gaCycleEnd;
+
+            if (n == 4)
+            {
+                m.gaRef[0] = m.gaRef[4];
+                m.gaRef[2] = (m.gaRef[0] + x) / 2.0;
+                m.gaRef[1] = (m.gaRef[0] + m.gaRef[2]) / 2.0;
+                m.gaRef[3] = (m.gaRef[2] + x) / 2.0;
+                m.gaRef[4] = x;
+            }
+            else if (n == 3)
+            {
+                m.gaRef[0] = m.gaRef[3];
+                m.gaRef[2] = (m.gaRef[0] + m.gaRef[0] + x) / 3.0;
+                m.gaRef[1] = (m.gaRef[0] + x + x) / 3.0;
+                m.gaRef[3] = x;
+            }
+            else if (n == 2)
+            {
+                m.gaRef[0] = m.gaRef[2];
+                m.gaRef[1] = (m.gaRef[0] + x) / 2.0;
+                m.gaRef[2] = x;
+            }
+            else
+            {
+                m.gaRef[0] = x;
+            }
+
+            m.gaCycle = 0;
+        }
+
+        x = m.gaRef.at (m.gaCycle);
+
+        // averaging over the undersampled steps
+        if (c.gaCycleEnd >= 4) { m.gaRef[8] = x; x = (x + m.gaRef[7]) * 0.5; m.gaRef[7] = m.gaRef[8]; }
+        if (c.gaCycleEnd >= 3) { m.gaRef[8] = x; x = (x + m.gaRef[6]) * 0.5; m.gaRef[6] = m.gaRef[8]; }
+        if (c.gaCycleEnd >= 2) { m.gaRef[8] = x; x = (x + m.gaRef[5]) * 0.5; m.gaRef[5] = m.gaRef[8]; }
+
+        xorshift (m.fpd);
+        return x;
+    }
+
+    float64 bitcrush (DistModel& m, const DistCoefs& c, float64 xin)
+    {
+        let x = xin * c.beamScale;
+        let quantA = floor (x);
+        let quantB = floor (x + 1.0);
+        // the slew over the last depth samples (their differences add up to the ends')
+        let past = float64 (m.beamLast.at ((m.beamPos - c.beamDepth) & 127));
+        let slewA = float (past - quantA);
+        let slewB = float (past - quantB);
+        let target = abs (float (x)) < float (c.beamSonority) ? abs (float (x)) : float (c.beamSonority);
+        let testA = abs (abs (slewA) - target);
+        let testB = abs (abs (slewB) - target);
+        let y = testA < testB ? quantA : quantB;
+        m.beamPos = (m.beamPos + 1) & 127;
+        m.beamLast.at (m.beamPos) = float (y);
+        return y / c.beamOutScale;
+    }
+
+    /// BitGlitter's quantizer: away from zero to the next step, less one step's fraction;
+    /// below one step, nothing.
+    float64 glitterStep (float64 x, float64 rez)
+    {
+        var y = x;
+
+        if (x > 0.0)  y = ceil (x / rez) * rez;
+        if (x < 0.0)  y = -ceil (-x / rez) * rez;
+
+        y *= 1.0 - rez;
+        return abs (y) < rez ? 0.0 : y;
+    }
+
+    float64 lofi (DistModel& m, const DistCoefs& c, float64 xin)
+    {
+        let x = spiral (clip1 (xin) * 1.2533141373155);
+        let halfway = (x + m.bgLast) / 2.0;
+        m.bgLast = x;
+
+        // two sample-and-holds, one on the input, one on the halfway samples at 1.618 its rate
+        m.bgPosA += c.bgRateA;
+        var a = m.bgHeldA;
+
+        if (m.bgPosA > 1.0)
+        {
+            m.bgPosA -= 1.0;
+            m.bgHeldA = x * (1.0 - m.bgPosA);
+            a = a * 0.5 + m.bgHeldA * 0.5;
+        }
+
+        m.bgPosB += c.bgRateB;
+        var b = m.bgHeldB;
+
+        if (m.bgPosB > 1.0)
+        {
+            m.bgPosB -= 1.0;
+            m.bgHeldB = halfway * (1.0 - m.bgPosB);
+            b = b * 0.5 + m.bgHeldB * 0.5;
+        }
+
+        let y = (glitterStep (a, c.bgRezA) + glitterStep (b, c.bgRezB)) / 2.0;
+        let out = y * 0.5 + m.bgLastOut * 0.5;
+        m.bgLastOut = y;
+        return out;
+    }
+
+    //==============================================================================
+    /// The air effect: Airwindows Air4. A high band the plugin works out by extrapolating the
+    /// last samples, turned up or down (air) against the rest (body), then Sinew, a slew limit
+    /// that's tighter near full scale (dark freq), mixed in by darken.
+    struct AirSide
+    {
+        float64 a1, a2, a3, a4;         // the last outputs of the extrapolation (pvA1 .. pvA4)
+        float64 gain, groundAvg, last;
+    }
+
+    struct Air
+    {
+        AirSide left, right;
+        float64 air, ground, thresh, depth;     // this block's, gliding from the last's
+        bool fresh, idle;
+        int silentCount;
+    }
+
+    void clearState (Air& this)
+    {
+        this = Air();
+        this.fresh = true;
+    }
+
+    float64 airSide (AirSide& s, float64 dry, float64 scale, float64 airGain, float64 groundGain, float64 thresh, float64 depth)
+    {
+        let s4 = s.a4 - s.a3;
+        let s3 = s.a3 - s.a2;
+        let s2 = s.a2 - s.a1;
+        let s1 = s.a1 - dry;
+        let acc3 = s4 - s3;
+        let acc2 = s3 - s2;
+        let acc1 = s2 - s1;
+        let acc22 = acc3 - acc2;
+        let acc21 = acc2 - acc1;
+        let out = -(s.a1 + s3 + acc22 - ((acc22 + acc21) * 0.5));
+        s.gain = min (s.gain * 0.5 + abs (dry - out) * 0.5, 0.3 * sqrt (scale));
+        s.a4 = s.a3;
+        s.a3 = s.a2;
+        s.a2 = s.a1;
+        s.a1 = s.gain * out + dry;
+
+        var ground = dry - (out * 0.5 + dry * (0.457 - 0.017 * scale));
+        let avg = (ground + s.groundAvg) * 0.5;
+        s.groundAvg = ground;
+        ground = avg;
+        let x = (dry - ground) * airGain + ground * groundGain;
+
+        // Sinew
+        var t = clip1 (x);
+        let sinew = thresh * cos (s.last * s.last);
+        if (t - s.last > sinew) t = s.last + sinew;
+        if (-(t - s.last) > sinew) t = s.last - sinew;
+        s.last = clip1 (t);
+        return x * (1.0 - depth) + s.last * depth;
+    }
+
+    bool process (Air& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
+    {
+        if (! active && this.idle)
+            return false;
+
+        let scale = sr / 44100.0;
+        var air = float64 (clamp (P[slot::Ai_Air], 0.0f, 1.0f)) * 2.0;
+        if (air > 1.0) air = pow (air, 3.0 + sqrt (scale));
+        let ground = float64 (clamp (P[slot::Ai_Body], 0.0f, 1.0f)) * 2.0;
+        let thresh = pow (float64 (clamp (P[slot::Ai_DarkFreq], 0.0f, 1.0f)), 2.0) / scale;
+        let depth = float64 (clamp (P[slot::Ai_Darken], 0.0f, 1.0f));
+
+        if (this.fresh)
+        {
+            this.fresh = false;
+            this.air = air; this.ground = ground; this.thresh = thresh; this.depth = depth;
+        }
+
+        // the controls glide across the block
+        let n = float64 (blockSize);
+        let dAir = (air - this.air) / n, dGround = (ground - this.ground) / n;
+        let dThresh = (thresh - this.thresh) / n, dDepth = (depth - this.depth) / n;
+
+        for (wrap<blockSize> i)
+        {
+            this.air += dAir; this.ground += dGround; this.thresh += dThresh; this.depth += dDepth;
+            let x = buf[i];
+            let l = airSide (this.left, float64 (x[0]), scale, this.air, this.ground, this.thresh, this.depth);
+            let r = airSide (this.right, float64 (x[1]), scale, this.air, this.ground, this.thresh, this.depth);
+            buf[i] = float<2> (float (l), float (r));
+        }
+
+        this.air = air; this.ground = ground; this.thresh = thresh; this.depth = depth;
+
+        if (stillSounding (this.idle, this.silentCount, active || anyAbove (buf, 1e-8f)))
+            return true;
+
+        if (float (this.silentCount) > float (sr) * 0.1f)
+        {
+            this.idle = true;
+            this.left = AirSide();
+            this.right = AirSide();
+        }
+
+        return false;
+    }
+}

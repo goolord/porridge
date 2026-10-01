@@ -161,6 +161,11 @@ const choices = [
     { ns: "satMode", param: "Sat_Mode", doc: "Where the distortion sits (Sat_Mode).",
       values: { global: "global", afterFilter: "per voice, after filter", beforeFilter: "per voice, before filter",
                 both: "double (before filter and global)" } },
+    { ns: "satType", param: "Sat_Type", doc: "The distortion's types (Sat_Type): Oatmeal's curves, the custom shape, then the models (tube on).",
+      values: { off: "off", hardClip: "hard clip", softClip: "soft clip", sine: "sine", asymmetric: "asymmetric",
+                custom: "custom shape", tube: "tube", tape: "tape", saturate: "saturate", mixerDrive: "mixer drive",
+                sevenStage: "7-stage clip", multiband: "multiband", wavefold: "wavefold", bassAmp: "bass amp",
+                guitarAmp: "guitar amp", bitcrush: "bitcrush", lofi: "lo-fi sampler" } },
 ];
 
 function choiceConstants ({ ns: name, param, doc, values })

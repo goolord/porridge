@@ -201,6 +201,10 @@ let targets = [
   knob("Am_Size", "ambience size", "fx2"),
   knob("Am_Time", "ambience time", "fx2"),
   knob("Am_Mix", "ambience mix", "fx2"),
+  knob("Sat_Drive", "dist drive", "filter"),
+  knob("Sat_Tone", "dist tone", "filter"),
+  knob("Sat_Mix", "dist mix", "filter"),
+  knob("Ai_Air", "air amount", "fx2"),
 ]
 
 // The target groups, by the key in each target's group, with their titles.

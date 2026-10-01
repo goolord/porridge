@@ -60,7 +60,7 @@ let make = (host, pc) => {
   let head = el("div", ~cls="pv-head", ~parent=stage)
   let msg = el("div", ~cls="pv-status", ~parent=stage)
   let status = Status.make(msg)
-  let menu = Menu.make(stage)
+  let menu = Menu.make(stage, ~status)
   let scale = ref(1.)
 
   let toastEl = el("div", ~cls="toast")

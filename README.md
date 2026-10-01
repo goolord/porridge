@@ -54,6 +54,9 @@ dsp/                    Cmajor DSP
   Space.cmajor            the algo reverb (hall, plate, nitrous, basin, vintage)
   Ambience.cmajor         the ambience: very small spaces (room, and Airwindows' ClearCoat
                           and VerbTiny), for a little stereo and tone
+  Airwindows.cmajor       ports of Airwindows plugins: the distortion's model types (Tube,
+                          Tape, Density, Mackity, Edge, MultiBandDistortion, Fracture2,
+                          BassAmp, GrindAmp, Beam, BitGlitter) and the air rack effect (Air4)
   Convolve.cmajor         the convolver: zero-latency partitioned convolution, built-in impulses
 ui/                     patch view (ReScript)
   Index.res               entry point; View.res builds the pages
@@ -73,6 +76,9 @@ ui/                     patch view (ReScript)
   FxPanels.res            the tabs of Porridge's own effects (CompEditor.res: the compressor's);
                           Impulse.res the convolvers' impulse files; AmbienceSim.res runs the
                           ambience's models on an impulse for its graphs
+  DistTypes.res           the distortion's types: names, menu groups, what each model's knobs
+                          are; DistEditor.res its tab; AirwindowsSim.res runs the Airwindows
+                          models on a sine (and the air on sines) for their graphs
   oatmeal/                file formats, parameter table, value texts
   bindings/               Cmajor PatchConnection and browser API bindings
 worker/PatchWorker.res  restores shapes/curves and installs the factory bank
@@ -103,8 +109,9 @@ tools/
                           golden.mjs (bit-exact factory renders, in Oat mode), presets.mjs
                           (format round trips), library.mjs (the preset browser's search),
                           smoke.mjs (Porridge's own effects and filter types sound, stay
-                          bounded and fall silent, the ambience's models too; the oscillator
-                          envelopes and the noise source), banklibrary.cpp (the plugin's bank library on real files), oneshot.mjs (one-shot LFOs hold their
+                          bounded and fall silent, the ambience's models and the distortion's
+                          types too, and the distortion's mix lines up with oversampling; the
+                          oscillator envelopes and the noise source), banklibrary.cpp (the plugin's bank library on real files), oneshot.mjs (one-shot LFOs hold their
                           end), levels.mjs (the Vanilla bank's gains, levels and motion),
                           match.mjs (the sound matcher on programs from the banks);
                           lib.mjs has what they share
@@ -119,6 +126,8 @@ Oatmeal and its factory bank (`presets/oatmealprs.dat`) authored by Fuzzpilz.
 Porridge is not affiliated with Fuzzpilz.
 
 The ambience's clear coat and verb tiny models are ports of Airwindows ClearCoat and VerbTiny
-by Chris Johnson ([airwindows/airwindows](https://github.com/airwindows/airwindows), MIT licence).
+by Chris Johnson ([airwindows/airwindows](https://github.com/airwindows/airwindows), MIT licence),
+as are the distortion's model types (Tube, Tape, Density, Mackity, Edge, MultiBandDistortion,
+Fracture2, BassAmp, GrindAmp, Beam and BitGlitter, under plainer names) and the air effect (Air4).
 Its room model takes after the small settings of AIR Music Technology's AIR Reverb, with a
 design of its own; Porridge is not affiliated with either.

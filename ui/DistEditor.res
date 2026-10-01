@@ -1,6 +1,12 @@
 // The distortion tab: the curve from input to output, and a full-scale sine before and after,
-// with the drive, limit, output gain and the oversampling filters' gain in them. Drag the sine
-// up or down for the drive.
+// with the drive, limit, output gain, the mix and the oversampling filters' gain in them. Drag
+// the sine up or down for the drive.
+//
+// The model types (DistTypes) keep state, so they have no fixed curve: their graphs are a
+// 110 Hz sine run through the model (AirwindowsSim) until it has settled, its last cycle drawn
+// as output against input (a loop where the model's filters shift the output) and over time.
+// Their drive, tone and character knobs take the names of the controls they are for the type,
+// and are dimmed where it has none.
 //
 // With the custom shape (like Fruity WaveShaper) the curve is the shape itself, to edit: drag
 // a point, click between them to add one, right-click one to take it out, and drag the small
@@ -16,6 +22,10 @@ let shapeHint = "The custom shape: drag a point, click between points to add one
 
 let custom = 5.
 let maxPoints = PorridgeParams.shaperPoints
+
+// the sine a model's graphs run
+let modelHz = 110.
+let modelRate = 48000.
 
 // `id` maps Oatmeal's distortion's parameters to this one's; `placement` shows where Oatmeal's
 // sits.
@@ -53,20 +63,63 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement, ~w, ~h) => {
     })
   }
 
+  let kind = () => Float.toInt(get("Sat_Type"))
+  let isModel = () => DistTypes.isModel(kind())
   let distort = x =>
     FxDsp.distort(
-      ~kind=Float.toInt(get("Sat_Type")),
+      ~kind=kind(),
       ~oversample=Float.toInt(get("Sat_Oversample")),
       ~pregain=get("Sat_Pregain"),
       ~limit=get("Sat_Limit"),
       ~postgain=get("Sat_Postgain"),
+      ~mix=get("Sat_Mix"),
       ~custom=points(),
       x,
     )
+
+  // a model's last cycle of the sine (inputs, outputs), kept until its settings change
+  let cycleCache = ref(None)
+  let modelCycle = () => {
+    let key = [
+      get("Sat_Type"),
+      get("Sat_Oversample"),
+      get("Sat_Pregain"),
+      get("Sat_Limit"),
+      get("Sat_Postgain"),
+      get("Sat_Drive"),
+      get("Sat_Tone"),
+      get("Sat_Character"),
+      get("Sat_Mix"),
+    ]
+    switch cycleCache.contents {
+    | Some((k, v)) if k == key => v
+    | _ =>
+      let oversample = Float.toInt(get("Sat_Oversample"))
+      let os = FxDsp.oversampleGain(oversample)
+      // (the model runs at the oversampled rate, up to 4x here)
+      let sr = modelRate * Int.toFloat(Math.Int.min(4, Math.Int.max(1, [1, 2, 4, 8][oversample]->Option.getOr(1))))
+      let pre = Math.pow(10., ~exp=(get("Sat_Pregain") - get("Sat_Limit")) / 20.)
+      let post = Math.pow(10., ~exp=(get("Sat_Limit") + get("Sat_Postgain")) / 20.)
+      let mix = get("Sat_Mix")
+      let run = AirwindowsSim.model(kind(), ~drive=get("Sat_Drive"), ~tone=get("Sat_Tone"), ~character=get("Sat_Character"), ~sr)
+      let v = AirwindowsSim.sineCycle(
+        x => mix * os * run(x * pre * os) * post + (1. - mix) * x,
+        ~hz=modelHz,
+        ~sr,
+        ~amp=1.,
+        ~settle=0.1,
+        ~steps=240,
+      )
+      cycleCache := Some((key, v))
+      v
+    }
+  }
+
   let scale = ref(1.)
   let fit = () => {
-    let peak =
-      Array.fromInitializer(~length=201, k => Math.abs(distort(Int.toFloat(k) / 100. - 1.)))->Math.maxMany
+    let peak = isModel()
+      ? modelCycle()->Pair.second->Array.reduce(0., (m, y) => Math.max(m, Math.abs(y)))
+      : Array.fromInitializer(~length=201, k => Math.abs(distort(Int.toFloat(k) / 100. - 1.)))->Math.maxMany
     scale := Math.max(1., Math.ceil(peak * 1.1 * 4.) / 4.)
   }
 
@@ -147,14 +200,24 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement, ~w, ~h) => {
     FxGraph.text(grid, cx + 4., yOf(range) + 10., isCustom() ? "out" : `${f(range)} out`)
     // a straight line for comparison
     FxGraph.path(layer, ~cls="curve faint")->FxGraph.setPath(`M${f(xOf(-1.))} ${f(yOf(-1.))}L${f(xOf(1.))} ${f(yOf(1.))}`)
-    let curve = x => isCustom() ? FxDsp.customShape(points(), x) : distort(x)
-    let at = t => {
-      let x = t * 2. - 1.
-      (xOf(x), yOf(curve(x)))
+    if isModel() {
+      // the model's cycle, output against input
+      let (inputs, outputs) = modelCycle()
+      let path = inputs->Array.mapWithIndex((x, k) => (xOf(x), yOf(outputs->Array.getUnsafe(k))))
+      FxGraph.path(layer, ~cls="curve")->FxGraph.setPath(Plots.pathFrom(path))
+      DistTypes.info(kind()).source->Option.forEach(source =>
+        FxGraph.text(grid, ~anchor="end", g.w - m - 2., g.h - m - 4., `Airwindows ${source}`)
+      )
+    } else {
+      let curve = x => isCustom() ? FxDsp.customShape(points(), x) : distort(x)
+      let at = t => {
+        let x = t * 2. - 1.
+        (xOf(x), yOf(curve(x)))
+      }
+      let path = [at(0.)]
+      path->Plots.trace(at, ~steps=200)
+      FxGraph.path(layer, ~cls="curve")->FxGraph.setPath(Plots.pathFrom(path))
     }
-    let path = [at(0.)]
-    path->Plots.trace(at, ~steps=200)
-    FxGraph.path(layer, ~cls="curve")->FxGraph.setPath(Plots.pathFrom(path))
     shapeLayer.contents->Option.forEach(fn => fn(xOf, yOf))
   })
 
@@ -305,10 +368,19 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement, ~w, ~h) => {
     let input = [(xOf(0.), yOf(0.))]
     input->Plots.trace(t => (xOf(t), yOf(sine(t))), ~steps=64)
     FxGraph.path(layer, ~cls="curve faint")->FxGraph.setPath(Plots.pathFrom(input))
-    let output = [(xOf(0.), yOf(distort(0.)))]
-    output->Plots.trace(t => (xOf(t), yOf(distort(sine(t)))), ~steps=200)
-    FxGraph.path(layer, ~cls="curve")->FxGraph.setPath(Plots.pathFrom(output))
-    FxGraph.text(grid, m + 4., m + 10., "a full-scale sine in (dashed) and out: drag up or down for the drive")
+    if isModel() {
+      let (_, outputs) = modelCycle()
+      let n = Int.toFloat(Array.length(outputs) - 1)
+      let output = outputs->Array.mapWithIndex((y, k) => (xOf(Int.toFloat(k) / n), yOf(y)))
+      FxGraph.path(layer, ~cls="curve")->FxGraph.setPath(Plots.pathFrom(output))
+      FxGraph.text(grid, m + 4., m + 10., DistTypes.describe(kind()))
+      FxGraph.text(grid, m + 4., g.h - m - 4., `a full-scale ${Float.toString(modelHz)} Hz sine in (dashed) and out, once the model has settled`)
+    } else {
+      let output = [(xOf(0.), yOf(distort(0.)))]
+      output->Plots.trace(t => (xOf(t), yOf(distort(sine(t)))), ~steps=200)
+      FxGraph.path(layer, ~cls="curve")->FxGraph.setPath(Plots.pathFrom(output))
+      FxGraph.text(grid, m + 4., m + 10., kind() == 0 ? "a full-scale sine in (dashed) and out: drag up or down for the drive" : DistTypes.describe(kind()))
+    }
   })->ignore
 
   let ids = [
@@ -318,6 +390,7 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement, ~w, ~h) => {
     "Sat_Pregain",
     "Sat_Limit",
     "Sat_Postgain",
+    ...PorridgeParams.distModelParams->Array.map(((i, _)) => i),
     ...PorridgeParams.shaperParams->Array.map(((i, _)) => i),
   ]
   model->ParamModel.listenEach(ids->Array.map(id), request)
@@ -326,7 +399,7 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement, ~w, ~h) => {
   showReset()
 
   let settings = Panel.make(body, ~x=0., ~y=graphHeight + gap, ~w, ~h=settingsHeight)
-  let s = Grid.make(ctx, settings.el, ~y=Grid.padBottom, ~cw=Grid.fitColumns(w, 8))
+  let s = Grid.make(ctx, settings.el, ~y=Grid.padBottom, ~cw=Grid.fitColumns(w, 12))
   s->Grid.choice(id("Sat_Type"), 0, 0, "type", ~span=2)
   if placement {
     s->Grid.choice("Sat_Mode", 2, 0, "where", ~span=2)
@@ -337,6 +410,23 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement, ~w, ~h) => {
   s->Grid.param(id("Sat_Pregain"), 5, 0, "pregain")
   s->Grid.param(id("Sat_Limit"), 6, 0, "limit")
   s->Grid.param(id("Sat_Postgain"), 7, 0, "postgain")
+  // the model's knobs, named for the type (dimmed where it has no such control), and the mix
+  let modelKnob = (knob: DistTypes.knob, c, name) => {
+    let e = s->Grid.at(c, 0, id(name), b =>
+      Controls.paramControl(ctx, settings.el, id(name), ~x=b.x, ~y=b.y, ~w=b.w, ~label=(knob :> string))
+    )
+    (knob, e)
+  }
+  let knobs = [modelKnob(#drive, 8, "Sat_Drive"), modelKnob(#tone, 9, "Sat_Tone"), modelKnob(#character, 10, "Sat_Character")]
+  s->Grid.param(id("Sat_Mix"), 11, 0, "mix")
+  let nameKnobs = () =>
+    knobs->Array.forEach(((knob, e)) => {
+      let label = DistTypes.knobLabel(kind(), knob)
+      e->toggleClass("dim", label == None)
+      e->querySelector(".l")->Option.forEach(l => l->setTextContent(label->Option.getOr((knob :> string))))
+    })
+  model->ParamModel.listen(id("Sat_Type"), nameKnobs)
+  nameKnobs()
 
   () => graphs->Array.forEach(((_, r)) => r.now())
 }

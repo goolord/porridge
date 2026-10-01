@@ -72,7 +72,7 @@ the macros `Macro_1`..`Macro_4`, then four per modulation slot (`ModN_Source`, `
 | `Curve_Amp_Attack` ... `Curve_Mod2_Release` | a curve for the attack, decay 2 (`_Decay`) and release of the amp, filter, mod 1 and mod 2 envelopes, -1..1 |
 | `LFO_N_Delay`, `LFO_N_Fade`, `LFO_N_Slew`, `LFO_N_Steps`, `LFO_N_OneShot` | LFO delay and fade-in (ms), slew, sample & hold steps per cycle, one-shot |
 | `U_DetuneCurve`, `U_RandomPhase`, `U_Width` | unison detune curve, random phase per copy, stereo width |
-| `FX_Rack_1` ... `FX_Rack_8` | the effects rack, in the order it runs: each slot holds `empty`, one of Oatmeal's chorus, delay, reverb or EQ, a copy (`chorus 2`..`4`, `delay 2`..`4`, `reverb 2`..`4`, `EQ 2`..`4`, `distortion 2`..`5`), or one of Porridge's own effects (`Flanger`..`Flanger 4`, `Phaser`.., `Compressor`.., `Algo reverb`.., `Convolve`, `Convolve 2`, `Bode`.., `Filter`.., `Utility`.., `Ambience`..). Slots holding one of Oatmeal's four take them in `FX_Order`'s order; the default is Oatmeal's chain |
+| `FX_Rack_1` ... `FX_Rack_8` | the effects rack, in the order it runs: each slot holds `empty`, one of Oatmeal's chorus, delay, reverb or EQ, a copy (`chorus 2`..`4`, `delay 2`..`4`, `reverb 2`..`4`, `EQ 2`..`4`, `distortion 2`..`5`), or one of Porridge's own effects (`Flanger`..`Flanger 4`, `Phaser`.., `Compressor`.., `Algo reverb`.., `Convolve`, `Convolve 2`, `Bode`.., `Filter`.., `Utility`.., `Ambience`.., `Air`..). Slots holding one of Oatmeal's four take them in `FX_Order`'s order; the default is Oatmeal's chain |
 | `EQ_On` | switches Oatmeal's EQ (on by default) |
 | `Sat_Points`, `Sat_X1`..`Sat_X16`, `Sat_Y1`..`Sat_Y16`, `Sat_C1`..`Sat_C16` | the distortion's custom shape (type `custom shape`): the number of points less 2, then each point's input and output (-1..1) and the bend of the segment ending at it |
 | `C2_Mode` ... `Sat5_C16` | the rack's copies: each of Oatmeal's chorus (`C_`), delay (`D_`), reverb (`R_`), EQ (`EQ_`, with `EQ_On`) and distortion (`Sat_`, without `Sat_Mode`) parameters again, numbered (`D3_Wet` is delay copy 3's wet level) |
@@ -80,6 +80,8 @@ the macros `Macro_1`..`Macro_4`, then four per modulation slot (`ModN_Source`, `
 | `Fl_`, `Ph_`, `Cp_`, `Rv_`, `Cv_`, `Bd_`, `Ff_`, `Ut_` | Porridge's own rack effects, each with an `_On` switch: flanger, phaser, compressor (OTT-style, 1 or 3 bands), algo reverb (hall, plate, nitrous, basin, vintage), convolve (built-in impulses or a file), bode (frequency shifter and shifted delay), filter (any filter type) and utility (gain, pan, width, phase, bass mono). `Am_` is the ambience (very small spaces: room, clear coat, verb tiny), after the others Frequencies, rates and times hold their knob position 0..1 (the value is lo·(hi/lo)^v; the ranges are in `ui/PorridgeParams.res`) |
 | `Curve_Amp_Decay1`, `Curve_Filter_Decay1`, `Curve_Mod1_Decay1`, `Curve_Mod2_Decay1` | each envelope's decay 1 curve, -1..1. A file without them takes its `_Decay` curve, which bent both decays before |
 | `Fl2_Rate` ... `Ut4_BassMono` | their copies, numbered like Oatmeal's (convolve has one copy, the others three) |
+| `Sat_Drive`, `Sat_Tone`, `Sat_Character`, `Sat_Mix`, then `Sat2_Drive` ... `Sat5_Mix` | the distortion's knobs for its model types (each type takes them as controls of its own; `ui/DistTypes.res`), 0..1, and its mix with the dry sound, which every type has; then the rack copies' |
+| `Ai_On`, `Ai_Air`, `Ai_Body`, `Ai_DarkFreq`, `Ai_Darken`, then `Ai2_On` ... `Ai4_Darken` | the air rack effect (Airwindows Air4): the highs and the rest (0.5: as they were), and its darkening; then its copies |
 
 They are appended to, never reordered, and each one's default leaves the sound exactly as
 Oatmeal's, except `Oat_Mode` (off: MIDI is sample-accurate). **Export for Oatmeal** leaves
@@ -92,7 +94,9 @@ and `AM 2 > 1` (3..6), the filter types 16..59 for both filters (`SVF`, `ladder`
 L/N/H, B/P/B and N/P/N, the analog MG low 6/12/18/24, MG dirty, acid ladder, French LP, German LP,
 clean drive and PZ SVF, comb +/−, flanger, flanger +/−, phaser, phaser +/−, formant I/II/III,
 low/band/high EQ, ring mod, sample & hold, diffusor and reverb; the list is `ui/FilterTypes.res`),
-and the distortion type `custom shape` (5). An Oatmeal
+and the distortion types `custom shape` (5) and the models: `tube`, `tape`, `saturate`, `mixer drive`,
+`7-stage clip`, `multiband`, `wavefold`, `bass amp`, `guitar amp`, `bitcrush` and `lo-fi sampler`
+(6..16, ports of Airwindows plugins). An Oatmeal
 export writes the closest value Oatmeal has (the plain waveform, normal mix, a lowpass or
 bandpass, soft clipping) and says so. It also keeps Oatmeal's effects order, leaves the rack's
 copies and Porridge's own effects out, and switches off those of Oatmeal's effects that are out
