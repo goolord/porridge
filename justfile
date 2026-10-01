@@ -57,6 +57,11 @@ ui:
 gen: ui
     node "{{ root / "tools" / "gen.mjs" }}"
 
+# Build the sound matcher's engine, the synth as WebAssembly, into bundle/ (see tools/match-engine.mjs;
+# skipped while the DSP is unchanged)
+engine: gen
+    node "{{ root / "tools" / "match-engine.mjs" }}"
+
 # Fetch the CLAP headers (once per CLAP_VERSION)
 clap:
     {{ if path_exists(clap_dir / "include" / "clap" / "clap.h") == "true" { "cmake -E echo \"CLAP " + clap_version + " headers present\"" } else { "git clone --depth 1 --branch " + clap_version + " https://github.com/free-audio/clap \"" + clap_dir + "\"" } }}
@@ -64,7 +69,7 @@ clap:
 # Generate the CLAP C++/CMake project from the patch and patch its wrapper (see tools/clap-patch.mjs),
 # in a staging folder; only files that changed are copied into the project, so an unchanged
 # entry.cpp keeps its timestamp and isn't recompiled
-generate: gen clap
+generate: engine clap
     cmake -E rm -rf "{{ staging }}"
     {{ cmaj }} generate --target=clap "--clapIncludePath={{ clap_dir / "include" }}" "--output={{ staging }}" "{{ patch }}"
     node "{{ root / "tools" / "clap-patch.mjs" }}" "{{ staging }}"

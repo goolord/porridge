@@ -24,6 +24,20 @@ await build ({
 });
 console.log ("ui/Index.res.mjs -> bundle/view.js, worker/PatchWorker.res.mjs -> bundle/worker.js");
 
+// The sound matcher's worker: a plain script, which the view runs after the engine's class
+// (bundle/match-engine.js, from tools/match-engine.mjs) in one blob (ui/match/MatchPool.res).
+await build ({
+    entryPoints: { "match-worker": join (root, "ui", "match", "MatchWorker.res.mjs") },
+    outdir: join (root, "bundle"),
+    bundle: true,
+    format: "iife",
+    platform: "browser",
+    target: "es2020",
+    legalComments: "none",
+    logLevel: "warning",
+});
+console.log ("ui/match/MatchWorker.res.mjs -> bundle/match-worker.js");
+
 const Preset = await import (pathToFileURL (join (root, "ui", "Preset.res.mjs")).href);
 const factory = Preset.factoryBank (new Uint8Array (readFileSync (join (root, "presets", "oatmealprs.dat"))));
 writeFileSync (join (root, "bundle", "factory-bank.json"), Preset.encodeBank (factory));
