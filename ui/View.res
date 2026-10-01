@@ -1,13 +1,15 @@
-// The patch view: three pages on a fixed-size stage that is scaled to fit the window,
-// and a status bar with the program, file and page controls.
+// The patch view: pages on a fixed-size stage that is scaled to fit the window, a header
+// with the page tabs and the program and file controls, and a status line.
 
 open! Web
 
-type page = [#main | #shapes | #midi]
+type page = [#main | #fx | #play | #shapes | #midi]
 
 let hintFor = (page: page) =>
   switch page {
   | #main => PageMain.hint
+  | #fx => PageFx.hint
+  | #play => PagePlay.hint
   | #shapes => PageShapes.hint
   | #midi => PageMidi.hint
   }
@@ -33,7 +35,8 @@ let make = (host, pc) => {
   let shadow = host->attachShadow({mode: "open"})
   el("style", ~text=Style.css, ~parent=shadow)->ignore
   let stage = el("div", ~cls="pv-stage", ~parent=shadow)
-  let msg = el("div", ~cls="msg")
+  let head = el("div", ~cls="pv-head", ~parent=stage)
+  let msg = el("div", ~cls="pv-status", ~parent=stage)
   let status = Status.make(msg)
   let menu = Menu.make(stage)
   let scale = ref(1.)
@@ -56,8 +59,10 @@ let make = (host, pc) => {
 
   let pages: array<(page, element)> = [
     (#main, el("div", ~cls="pv-page on", ~parent=stage)),
-    (#midi, el("div", ~cls="pv-page", ~parent=stage)),
+    (#fx, el("div", ~cls="pv-page", ~parent=stage)),
+    (#play, el("div", ~cls="pv-page", ~parent=stage)),
     (#shapes, el("div", ~cls="pv-page", ~parent=stage)),
+    (#midi, el("div", ~cls="pv-page", ~parent=stage)),
   ]
   let pageButtons: array<(page, element)> = []
   let shapesPage = ref(None)
@@ -89,16 +94,15 @@ let make = (host, pc) => {
   pages->Array.forEach(((page, e)) =>
     switch page {
     | #main => PageMain.build(ctx, e)
+    | #fx => PageFx.build(ctx, e)
+    | #play => PagePlay.build(ctx, e)
     | #midi => PageMidi.build(ctx, e)
     | #shapes => shapesPage := Some(PageShapes.build(ctx, e))
     }
   )
 
   //==============================================================================
-  // status bar
-
-  let bar = el("div", ~cls="pv-status", ~parent=stage)
-  bar->appendChild(msg)
+  // header
 
   let button = (parent, text, title, onClick) => {
     let b = el("button", ~cls="btn", ~text, ~parent)
@@ -107,6 +111,20 @@ let make = (host, pc) => {
     b->onMouse(#mouseleave, _ => status->Status.clear)
     b
   }
+
+  el("div", ~cls="brand", ~text="porridge", ~parent=head)->ignore
+  let pagesBar = el("div", ~cls="pages", ~parent=head)
+  [
+    (#main, "Synth", "Oscillators, filter, envelopes, LFOs and voice settings"),
+    (#fx, "FX", "Distortion, chorus, delay, reverb and EQ"),
+    (#play, "Arp / XY", "Arpeggiator pattern and the XY pad"),
+    (#shapes, "Shapes", "Draw oscillator waveforms and LFO shapes"),
+    (#midi, "MIDI", "MIDI channels, controllers, velocity and aftertouch curves"),
+  ]->Array.forEach(((page, text, title)) =>
+    pageButtons->Array.push((page, button(pagesBar, text, title, () => showPage(page))))
+  )
+  pageButtons->Array.forEach(((page, b)) => b->toggleClass("on", page == #main))
+  el("div", ~cls="spacer", ~parent=head)->ignore
 
   let openProgramMenu = () =>
     menu->Menu.show(
@@ -147,7 +165,7 @@ let make = (host, pc) => {
     input->onEvent(#blur, _ => finish(true))
   }
 
-  let prog = el("div", ~cls="prog", ~parent=bar)
+  let prog = el("div", ~cls="prog", ~parent=head)
   button(prog, "<", "Previous program", () =>
     programs->ProgramStore.select(programs.current - 1)
   )->ignore
@@ -172,33 +190,37 @@ let make = (host, pc) => {
     }
 
   button(
-    bar,
+    head,
     "Load",
     "Load an Oatmeal program or bank (.omp, .omb, .fxp, .fxb, .dat). You can also drop the file onto the window.",
     () => fileInput->click,
   )->ignore
-  button(bar, "Save program", "Save this program as an Oatmeal .omp file", () =>
-    programs->ProgramStore.downloadProgram
-  )->ignore
-  button(bar, "Save bank", "Save all 64 programs as an Oatmeal .omb bank", () =>
-    programs->ProgramStore.downloadBank
-  )->ignore
-  button(bar, "Init", "Reset this program to the Init patch", () =>
+  let save = ref(None)
+  let saveButton = button(head, "Save ▾", "Save this program (.omp) or the whole bank (.omb)", () =>
+    save.contents->Option.forEach(open_ => open_())
+  )
+  save :=
+    Some(
+      () =>
+        menu->Menu.show(
+          saveButton,
+          [
+            {Menu.label: "Save program (.omp)", value: 0},
+            {Menu.label: "Save bank, all 64 programs (.omb)", value: 1},
+          ],
+          -1,
+          i =>
+            i == 0
+              ? programs->ProgramStore.downloadProgram
+              : programs->ProgramStore.downloadBank,
+        ),
+    )
+  button(head, "Init", "Reset this program to the Init patch", () =>
     programs->ProgramStore.initCurrent
   )->ignore
-  button(bar, "Panic", "Stop all notes and clear effect tails", () =>
+  button(head, "Panic", "Stop all notes and clear effect tails", () =>
     programs->ProgramStore.panic
   )->ignore
-
-  let pagesBar = el("div", ~cls="pages", ~parent=bar)
-  [
-    (#main, "Synth", "Synth page"),
-    (#shapes, "Shapes", "Draw oscillator waveforms and LFO shapes"),
-    (#midi, "MIDI", "MIDI channels, controllers, velocity and aftertouch curves"),
-  ]->Array.forEach(((page, text, title)) =>
-    pageButtons->Array.push((page, button(pagesBar, text, title, () => showPage(page))))
-  )
-  pageButtons->Array.forEach(((page, b)) => b->toggleClass("on", page == #main))
 
   stage->appendChild(fileInput)
   fileInput->setInputType("file")

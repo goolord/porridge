@@ -12,9 +12,14 @@ cmaj play Porridge.cmajorpatch
 
 ![Synth page](docs/screenshot.png)
 
-The interface is one 1344 × 732 panel, scaled to fit any window size. It has three pages:
+The interface is one 1100 × 580 panel, scaled to fit any window size, so that it fits on a
+1080p screen at 150 % scaling. The header switches between five pages:
 
-- **Synth**: every sound parameter, laid out in the same order as Oatmeal's default skin.
+- **Synth**: oscillators (with noise, unison and phase on tabs), the filter, the amp
+  envelope, the modulation sources (mod envelopes, pitch envelope and LFOs, on tabs), and
+  voice and tuning settings.
+- **FX**: distortion, chorus, delay, reverb and the EQ.
+- **Arp / XY**: the arpeggiator pattern and the XY pad with its targets.
 - **Shapes**: draw the two oscillator waveforms and the two LFO shapes. The editor shows the
   waveform's harmonics.
 - **MIDI**: channel filter, sustain pedal, velocity and aftertouch curves, and the six

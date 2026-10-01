@@ -21,8 +21,8 @@
     "view":
     {
         "src":       "bundle/view.js",
-        "width":     1344,
-        "height":    732,
+        "width":     1100,
+        "height":    580,
         "resizable": true
     }
 }

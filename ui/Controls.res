@@ -331,3 +331,17 @@ let button = (ctx: Ctx.t, parent, text, ~x, ~y, ~w, ~status=?, onClick) => {
   })
   e
 }
+
+// The corner switch of a graphical editor: swaps the graph for the raw values by toggling
+// the editor's "expanded" class.
+let expandSwitch = (ctx: Ctx.t, editor) => {
+  let e = el("button", ~cls="btn xbtn", ~text="values", ~parent=editor)
+  let expanded = ref(false)
+  e->onMouse(#click, _ => {
+    expanded := !expanded.contents
+    editor->toggleClass("expanded", expanded.contents)
+    e->setTextContent(expanded.contents ? "graph" : "values")
+  })
+  e->onMouse(#mouseenter, _ => ctx.status->Status.show("Switch between the graph and the raw values"))
+  e->onMouse(#mouseleave, _ => ctx.status->Status.clear)
+}

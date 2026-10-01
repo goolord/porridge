@@ -1,190 +1,242 @@
 // Visual language borrowed from the original Oatmeal default skin: khaki panels,
-// lowercase labels, bold lowercase block titles in the block corner, one ink colour
-// for everything that carries a value.
+// lowercase labels, bold lowercase block titles, one ink colour for everything that
+// carries a value.
 
-let designWidth = 1344.
-let designHeight = 732.
+let designWidth = 1100.
+let designHeight = 580.
+let headerHeight = 34.
+let statusHeight = 22.
+// the area pages lay their panels out in
+let pageHeight = designHeight - headerHeight - statusHeight
 
 let px = Web.px
 
-let css = `
-:host, porridge-view {
-    --ground: #978552;
-    --panel: #b9aa7b;
-    --panel-hi: #c9bc92;
-    --edge: #6f5f36;
-    --ink: #1f1a0e;
-    --ink-soft: #4c4127;
-    --ink-faint: #7a6c45;
-    --signal: #1c3c73;
-    --signal-soft: rgba(28, 60, 115, 0.22);
-    --paper: #ece3c4;
-
-    display: block;
-    position: relative;
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-    background: var(--ground);
-    font-family: Bahnschrift, "DIN Alternate", "DIN 2014", "Barlow", "Arial Narrow", sans-serif;
-    font-stretch: semi-condensed;
-    color: var(--ink);
-    user-select: none;
-    -webkit-user-select: none;
-    cursor: default;
-}
-
-.pv-stage {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: ${px(designWidth)};
-    height: ${px(designHeight)};
-    transform-origin: 0 0;
-}
-
-.pv-page { position: absolute; inset: 0 0 30px 0; display: none; }
-.pv-page.on { display: block; }
-
-.blk {
-    position: absolute;
-    box-sizing: border-box;
-    background: var(--panel);
-    border: 1px solid var(--edge);
-    border-radius: 3px;
-    padding: 4px 6px 5px 6px;
-}
-.blk > .ttl {
-    position: absolute;
-    right: 6px;
-    top: 2px;
-    font-weight: 700;
-    font-size: 14px;
-    letter-spacing: 0.01em;
-    color: var(--ink);
-    pointer-events: none;
-}
-.blk > .ttl.left { right: auto; left: 6px; }
-
-/* a parameter row: label left, value right, position track underneath */
-.p {
-    position: absolute;
-    box-sizing: border-box;
-    height: 26px;
-    padding: 1px 3px 0 3px;
-    border-radius: 2px;
-    cursor: ns-resize;
-}
-.p:hover, .p.drag { background: var(--panel-hi); }
-.p .l {
-    position: absolute; left: 3px; top: 1px;
-    font-size: 11px; color: var(--ink-soft); white-space: nowrap;
-}
-.p .v {
-    position: absolute; right: 3px; top: 10px;
-    font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap;
-}
-.p .t {
-    position: absolute; left: 3px; right: 3px; bottom: 1px; height: 2px;
-    background: rgba(31, 26, 14, 0.14);
-}
-.p .t i {
-    position: absolute; top: 0; bottom: 0; background: var(--signal);
-}
-.p.dim .v, .p.dim .l { opacity: 0.45; }
-
-/* choice: same footprint, click cycles, menu on right click */
-.p.ch { cursor: pointer; }
-.p.ch .v::after { content: ""; display: inline-block; width: 0; height: 0; margin-left: 4px;
-    border-left: 3px solid transparent; border-right: 3px solid transparent; border-top: 4px solid var(--ink-faint);
-    vertical-align: 2px; }
-
-/* toggle */
-.tg {
-    position: absolute; height: 18px; cursor: pointer; font-size: 11.5px; color: var(--ink-soft);
-    display: flex; align-items: center; gap: 5px; white-space: nowrap;
-}
-.tg b { width: 9px; height: 9px; border: 1px solid var(--ink); box-sizing: border-box; background: transparent; }
-.tg.on b { background: var(--signal); border-color: var(--signal); }
-.tg.on { color: var(--ink); }
-
-.btn {
-    position: absolute; height: 20px; box-sizing: border-box; padding: 0 8px;
-    border: 1px solid var(--edge); border-radius: 2px; background: var(--panel-hi);
-    font: inherit; font-size: 12px; color: var(--ink); cursor: pointer; line-height: 18px; text-align: center;
-}
-.btn:hover { background: var(--paper); }
-.btn:active { background: var(--signal); color: var(--paper); }
-.btn.on { background: var(--signal); color: var(--paper); border-color: var(--signal); }
-
-.plot { position: absolute; display: block; }
-.plot path.curve { fill: none; stroke: var(--signal); stroke-width: 1.4; }
-.plot path.fill { fill: var(--signal-soft); stroke: none; }
-.plot path.axis, .plot line.axis { stroke: rgba(31,26,14,0.28); stroke-width: 1; fill: none; }
-.plot.off { opacity: 0.4; }
-.plot rect.bg { fill: rgba(236, 227, 196, 0.35); stroke: var(--edge); stroke-width: 1; }
-
-.sep { position: absolute; height: 1px; background: rgba(31,26,14,0.2); }
-.note { position: absolute; font-size: 11px; color: var(--ink-faint); white-space: nowrap; }
-
-/* status bar */
-.pv-status {
-    position: absolute; left: 0; right: 0; bottom: 0; height: 30px;
-    display: flex; align-items: center; gap: 8px; padding: 0 8px; box-sizing: border-box;
-    background: var(--panel); border-top: 1px solid var(--edge);
-    font-size: 13px;
-}
-.pv-status .msg { flex: 1; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pv-status .msg.idle { color: var(--ink-faint); font-size: 12px; }
-.pv-status .prog { display: flex; align-items: center; gap: 4px; }
-.pv-status .prog .name {
-    min-width: 210px; padding: 1px 6px; border: 1px solid var(--edge); background: var(--paper);
-    font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden;
-}
-.pv-status .btn { position: static; height: 21px; }
-.pv-status .pages { display: flex; gap: 0; }
-.pv-status .pages .btn { border-radius: 0; margin-left: -1px; }
-
-/* menus */
-.menu {
-    position: absolute; z-index: 50; background: var(--paper); border: 1px solid var(--ink);
-    padding: 2px 0; font-size: 12.5px; max-height: 560px; overflow-y: auto; min-width: 120px;
-    box-shadow: 2px 2px 0 rgba(31,26,14,0.35);
-}
-.menu div { padding: 2px 12px 2px 10px; white-space: nowrap; cursor: pointer; }
-.menu div:hover { background: var(--signal); color: var(--paper); }
-.menu div.cur { font-weight: 700; }
-
-/* text entry */
-.entry {
-    position: absolute; z-index: 40; font: inherit; font-size: 12.5px; box-sizing: border-box;
-    border: 1px solid var(--signal); background: var(--paper); color: var(--ink); padding: 0 3px; outline: none;
-}
-
-/* arp pattern cells */
-.cell {
-    position: absolute; box-sizing: border-box; border: 1px solid var(--edge); background: var(--panel-hi);
-    font-size: 11px; text-align: center; cursor: pointer; line-height: 22px; color: var(--ink);
-}
-.cell.off { background: transparent; color: var(--ink-faint); }
-.cell.out { opacity: 0.35; }
-.cell:hover { outline: 1px solid var(--signal); outline-offset: -1px; }
-
-/* drawing surfaces */
-.draw { position: absolute; cursor: crosshair; }
-
-.drop {
-    position: absolute; inset: 0; z-index: 100; display: none; align-items: center; justify-content: center;
-    background: rgba(28, 60, 115, 0.55); color: var(--paper); font-size: 22px; font-weight: 700;
-}
-.drop.on { display: flex; }
-
-.toast {
-    position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); z-index: 90;
-    background: var(--ink); color: var(--paper); padding: 5px 12px; font-size: 13px; border-radius: 2px;
-    display: none; max-width: 80%;
-}
-.toast.on { display: block; }
-
-.p:focus-visible, .btn:focus-visible, .tg:focus-visible, .cell:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
+let css = `
+:host, porridge-view {
+    --ground: #978552;
+    --panel: #b9aa7b;
+    --panel-hi: #c9bc92;
+    --edge: #6f5f36;
+    --ink: #1f1a0e;
+    --ink-soft: #4c4127;
+    --ink-faint: #7a6c45;
+    --signal: #1c3c73;
+    --signal-soft: rgba(28, 60, 115, 0.22);
+    --paper: #ece3c4;
+
+    display: block;
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: var(--ground);
+    font-family: Bahnschrift, "DIN Alternate", "DIN 2014", "Barlow", "Arial Narrow", sans-serif;
+    font-stretch: semi-condensed;
+    color: var(--ink);
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+}
+
+.pv-stage {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: ${px(designWidth)};
+    height: ${px(designHeight)};
+    transform-origin: 0 0;
+}
+
+.pv-page { position: absolute; left: 0; right: 0; top: ${px(headerHeight)}; bottom: ${px(statusHeight)}; display: none; }
+.pv-page.on { display: block; }
+
+.blk {
+    position: absolute;
+    box-sizing: border-box;
+    background: var(--panel);
+    border: 1px solid var(--edge);
+    border-radius: 3px;
+    padding: 4px 6px 5px 6px;
+}
+.blk > .ttl {
+    position: absolute;
+    left: 7px;
+    top: 3px;
+    font-weight: 700;
+    font-size: 14px;
+    letter-spacing: 0.01em;
+    color: var(--ink);
+    pointer-events: none;
+}
+
+/* panel tabs: the active one is filled with the signal ink */
+.ptabs { position: absolute; left: 3px; top: 2px; display: flex; gap: 1px; z-index: 1; }
+.ptab {
+    padding: 0 7px; height: 18px; line-height: 18px; border-radius: 2px;
+    font-size: 13px; font-weight: 700; color: var(--ink-faint); cursor: pointer; white-space: nowrap;
+}
+.ptab:hover { color: var(--ink); background: var(--panel-hi); }
+.ptab.on { color: var(--paper); background: var(--signal); }
+.pbody { position: absolute; inset: 0; display: none; }
+.pbody.on { display: block; }
+.blk > .hdr { position: absolute; right: 6px; top: 1px; width: 40px; height: 18px; }
+
+/* a parameter row: label left, value right, position track underneath */
+.p {
+    position: absolute;
+    box-sizing: border-box;
+    height: 26px;
+    padding: 1px 3px 0 3px;
+    border-radius: 2px;
+    cursor: ns-resize;
+}
+.p:hover, .p.drag { background: var(--panel-hi); }
+.p .l {
+    position: absolute; left: 3px; top: 1px;
+    font-size: 11px; color: var(--ink-soft); white-space: nowrap;
+}
+.p .v {
+    position: absolute; right: 3px; top: 10px;
+    font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.p .t {
+    position: absolute; left: 3px; right: 3px; bottom: 1px; height: 2px;
+    background: rgba(31, 26, 14, 0.14);
+}
+.p .t i {
+    position: absolute; top: 0; bottom: 0; background: var(--signal);
+}
+.p.dim .v, .p.dim .l { opacity: 0.45; }
+
+/* choice: same footprint, click cycles, menu on right click */
+.p.ch { cursor: pointer; }
+.p.ch .v::after { content: ""; display: inline-block; width: 0; height: 0; margin-left: 4px;
+    border-left: 3px solid transparent; border-right: 3px solid transparent; border-top: 4px solid var(--ink-faint);
+    vertical-align: 2px; }
+
+/* toggle */
+.tg {
+    position: absolute; height: 18px; cursor: pointer; font-size: 11.5px; color: var(--ink-soft);
+    display: flex; align-items: center; gap: 5px; white-space: nowrap;
+}
+.tg b { width: 9px; height: 9px; border: 1px solid var(--ink); box-sizing: border-box; background: transparent; }
+.tg.on b { background: var(--signal); border-color: var(--signal); }
+.tg.on { color: var(--ink); }
+
+.btn {
+    position: absolute; height: 20px; box-sizing: border-box; padding: 0 8px;
+    border: 1px solid var(--edge); border-radius: 2px; background: var(--panel-hi);
+    font: inherit; font-size: 12px; color: var(--ink); cursor: pointer; line-height: 18px; text-align: center;
+}
+.btn:hover { background: var(--paper); }
+.btn:active { background: var(--signal); color: var(--paper); }
+.btn.on { background: var(--signal); color: var(--paper); border-color: var(--signal); }
+
+.plot { position: absolute; display: block; }
+.plot path.curve { fill: none; stroke: var(--signal); stroke-width: 1.4; }
+.plot path.fill { fill: var(--signal-soft); stroke: none; }
+.plot path.axis, .plot line.axis { stroke: rgba(31,26,14,0.28); stroke-width: 1; fill: none; }
+.plot.off { opacity: 0.4; }
+.plot rect.bg { fill: rgba(236, 227, 196, 0.35); stroke: var(--edge); stroke-width: 1; }
+.plot path.curve.faint { stroke-width: 1; stroke-dasharray: 3 2; opacity: 0.7; }
+.plot line.axis.faint { stroke: rgba(31,26,14,0.12); }
+.plot text.tick { font-size: 10px; fill: var(--ink-faint); }
+
+/* graphical editors (envelopes, EQ): drag the points; "values" swaps in the raw fields */
+.ed { position: absolute; }
+.ed .node { fill: var(--paper); stroke: var(--signal); stroke-width: 1.6; }
+.ed .node.hot { fill: var(--signal); }
+.ed .node.hollow { fill: var(--panel); stroke-dasharray: 2 1.5; }
+.ed .hit { fill: transparent; pointer-events: all; }
+.ed .band { fill: var(--paper); stroke: var(--signal); stroke-width: 1.6; }
+.ed .band.hot { fill: var(--signal); }
+.ed .band.off { fill: transparent; stroke: var(--ink-faint); stroke-dasharray: 2 2; }
+.ed .nodelabel { font-size: 10px; font-weight: 700; text-anchor: middle; fill: var(--signal); pointer-events: none; }
+.ed .nodelabel.hot { fill: var(--paper); }
+.ed .nodelabel.off { fill: var(--ink-faint); }
+.ed .readout {
+    font-size: 11.5px; fill: var(--ink); font-variant-numeric: tabular-nums; pointer-events: none;
+    paint-order: stroke; stroke: var(--paper); stroke-width: 3px; stroke-linejoin: round;
+}
+.ed .xbtn { position: absolute; right: 4px; top: 4px; z-index: 2; height: 17px; line-height: 15px; padding: 0 6px; font-size: 11px; opacity: 0.85; }
+.ed .xbtn:hover { opacity: 1; }
+.ed .vals { position: absolute; inset: 0; display: none; }
+.ed.expanded .vals { display: block; }
+.ed.expanded > svg { display: none; }
+
+.sep { position: absolute; height: 1px; background: rgba(31,26,14,0.2); }
+.note { position: absolute; font-size: 11px; color: var(--ink-faint); white-space: nowrap; }
+
+/* header: page tabs, then the program and file controls */
+.pv-head {
+    position: absolute; left: 0; right: 0; top: 0; height: ${px(headerHeight)};
+    display: flex; align-items: center; gap: 6px; padding: 0 6px; box-sizing: border-box;
+    background: var(--panel); border-bottom: 1px solid var(--edge);
+    font-size: 13px;
+}
+.pv-head .brand { font-weight: 700; font-size: 17px; letter-spacing: 0.02em; padding: 0 8px 0 4px; }
+.pv-head .btn { position: static; height: 22px; }
+.pv-head .pages { display: flex; }
+.pv-head .pages .btn { border-radius: 0; margin-left: -1px; min-width: 64px; font-size: 13px; }
+.pv-head .pages .btn:first-child { border-radius: 2px 0 0 2px; }
+.pv-head .pages .btn:last-child { border-radius: 0 2px 2px 0; }
+.pv-head .spacer { flex: 1; }
+.pv-head .prog { display: flex; align-items: center; gap: 3px; }
+.pv-head .prog .name {
+    width: 200px; height: 20px; line-height: 20px; padding: 0 6px; border: 1px solid var(--edge); background: var(--paper);
+    font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pv-head .prog .btn { width: 22px; padding: 0; }
+
+/* status line: hover texts, or a hint for the page */
+.pv-status {
+    position: absolute; left: 0; right: 0; bottom: 0; height: ${px(statusHeight)};
+    padding: 0 8px; box-sizing: border-box; line-height: ${px(statusHeight)};
+    background: var(--panel); border-top: 1px solid var(--edge);
+    font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pv-status.idle { color: var(--ink-faint); font-size: 12px; }
+
+/* menus */
+.menu {
+    position: absolute; z-index: 50; background: var(--paper); border: 1px solid var(--ink);
+    padding: 2px 0; font-size: 12.5px; max-height: 560px; overflow-y: auto; min-width: 120px;
+    box-shadow: 2px 2px 0 rgba(31,26,14,0.35);
+}
+.menu div { padding: 2px 12px 2px 10px; white-space: nowrap; cursor: pointer; }
+.menu div:hover { background: var(--signal); color: var(--paper); }
+.menu div.cur { font-weight: 700; }
+
+/* text entry */
+.entry {
+    position: absolute; z-index: 40; font: inherit; font-size: 12.5px; box-sizing: border-box;
+    border: 1px solid var(--signal); background: var(--paper); color: var(--ink); padding: 0 3px; outline: none;
+}
+
+/* arp pattern cells */
+.cell {
+    position: absolute; box-sizing: border-box; border: 1px solid var(--edge); background: var(--panel-hi);
+    font-size: 11px; text-align: center; cursor: pointer; line-height: 22px; color: var(--ink);
+}
+.cell.off { background: transparent; color: var(--ink-faint); }
+.cell.out { opacity: 0.35; }
+.cell:hover { outline: 1px solid var(--signal); outline-offset: -1px; }
+
+/* drawing surfaces */
+.draw { position: absolute; cursor: crosshair; }
+
+.drop {
+    position: absolute; inset: 0; z-index: 100; display: none; align-items: center; justify-content: center;
+    background: rgba(28, 60, 115, 0.55); color: var(--paper); font-size: 22px; font-weight: 700;
+}
+.drop.on { display: flex; }
+
+.toast {
+    position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); z-index: 90;
+    background: var(--ink); color: var(--paper); padding: 5px 12px; font-size: 13px; border-radius: 2px;
+    display: none; max-width: 80%;
+}
+.toast.on { display: block; }
+
+.p:focus-visible, .btn:focus-visible, .tg:focus-visible, .cell:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
 `

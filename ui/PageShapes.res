@@ -4,13 +4,13 @@ open! Web
 
 let hint = "Drag to draw, shift-click for a straight line, ctrl-drag to smooth. Right-click for tools."
 
-type shape = {table: OatmealFormat.table, title: string, tab: string, bipolar: bool}
+type shape = {table: OatmealFormat.table, tab: string, bipolar: bool}
 
 let shapes = [
-  {table: Wave1, title: "oscillator 1 waveform", tab: "oscillator 1", bipolar: true},
-  {table: Wave2, title: "oscillator 2 waveform", tab: "oscillator 2", bipolar: true},
-  {table: LfoShape1, title: "lfo 1 shape", tab: "lfo 1", bipolar: false},
-  {table: LfoShape2, title: "lfo 2 shape", tab: "lfo 2", bipolar: false},
+  {table: Wave1, tab: "osc 1 waveform", bipolar: true},
+  {table: Wave2, tab: "osc 2 waveform", bipolar: true},
+  {table: LfoShape1, tab: "lfo 1 shape", bipolar: false},
+  {table: LfoShape2, tab: "lfo 2 shape", bipolar: false},
 ]
 
 let clipboard = ref(None)
@@ -22,21 +22,23 @@ type t = {
 }
 
 let build = (ctx: Ctx.t, page) => {
-  let blk = Controls.block(
+  let selectRef = ref(_ => ())
+  let panel = Panel.make(
     page,
-    "",
+    ~tabs=shapes->Array.map(s => s.tab),
+    ~bodies=false,
+    ~onSelect=i => selectRef.contents(i),
     ~x=6.,
     ~y=6.,
     ~w=Style.designWidth - 12.,
-    ~h=Style.designHeight - 30. - 12.,
+    ~h=Style.pageHeight - 12.,
   )
+  let blk = panel.el
+  let width = panel.w - 22.
   let current = ref(0)
   let shape = () => shapes->Array.getUnsafe(current.contents)
 
-  let title = el("div", ~cls="ttl left", ~parent=blk)
-  title->setStyle("font-size", "16px")
-
-  let specBox = {x: 10., y: 520., w: 1310., h: 158.}
+  let specBox = {x: 10., y: 378., w: width, h: 122.}
   let spectrum = el("canvas", ~parent=blk)->placeBox(specBox)
   spectrum->setStyle("position", "absolute")
   spectrum->setCanvasWidth(specBox.w * 2.)
@@ -95,7 +97,7 @@ let build = (ctx: Ctx.t, page) => {
   let editor = ShapeEditor.make(
     ctx,
     blk,
-    {x: 10., y: 60., w: 1310., h: 430.},
+    {x: 10., y: 54., w: width, h: 300.},
     ~points=512,
     ~bipolar=true,
     ~grid=16,
@@ -108,7 +110,7 @@ let build = (ctx: Ctx.t, page) => {
   editorRef := Some(editor)
   blk->appendChild(spectrum)
   blk->appendChild(spectrumNote)
-  spectrumNote->place(12., 500.)->ignore
+  spectrumNote->place(12., 360.)->ignore
 
   let apply = f => {
     editor->ShapeEditor.pushUndo
@@ -151,13 +153,10 @@ let build = (ctx: Ctx.t, page) => {
   ]
   editor.menu = tools->Array.map(((label, f)) => {ShapeEditor.label, run: _ => f()})
 
-  let tabs = []
-
   let select = i => {
     current := i
+    panel->Panel.show(i)
     let s = shape()
-    title->setTextContent(s.title)
-    tabs->Array.forEachWithIndex((tab, k) => tab->toggleClass("on", k == i))
     editor.bipolar = s.bipolar
     editor.gridDivs = 16
     editor.undoStack = []
@@ -168,22 +167,16 @@ let build = (ctx: Ctx.t, page) => {
     drawSpectrum()
   }
 
-  shapes->Array.forEachWithIndex((s, i) =>
-    tabs->Array.push(
-      Controls.button(ctx, blk, s.tab, ~x=10. + Int.toFloat(i) * 112., ~y=28., ~w=106., () =>
-        select(i)
-      ),
-    )
-  )
+  selectRef := select
   let count = Int.toFloat(Array.length(tools))
   tools->Array.forEachWithIndex(((label, f), i) =>
     Controls.button(
       ctx,
       blk,
       label,
-      ~x=1320. - (count - Int.toFloat(i)) * 68.,
-      ~y=28.,
-      ~w=62.,
+      ~x=10. + width - (count - Int.toFloat(i)) * 64. + 4.,
+      ~y=27.,
+      ~w=60.,
       f,
     )->ignore
   )
