@@ -25,6 +25,11 @@ The interface is one 1100 × 580 panel, scaled to fit any window size, so that i
 - **MIDI**: channel filter, sustain pedal, velocity and aftertouch curves, and the six
   assignable controllers (with learn).
 
+Programs and banks are saved as `.porridge` files (JSON, see
+[docs/preset-format.md](docs/preset-format.md)), with a name, author, category, tags and
+description (**Info**). Oatmeal programs and banks load as they are, and **Save ▸ Export for
+Oatmeal** writes them back out for Oatmeal.
+
 ## Layout
 
 ```
@@ -46,7 +51,8 @@ docs/internals/         reverse-engineering notes on the original
 tools/
   gen.mjs                 regenerates ParamStore/Slots from ui/oatmeal/Fields.res
   bundle.mjs              bundles the compiled view and worker into bundle/
-  test/                   native C++ test host built from the patch (cmaj generate --target=cpp)
+  test/                   native C++ test host built from the patch (cmaj generate --target=cpp),
+                          golden.mjs (bit-exact factory renders), presets.mjs (format round trips)
   re/                     comparisons against Oatmeal.dll (32-bit Python) and data checks
   ui-preview/             runs the view in a browser with a mock PatchConnection
 ```

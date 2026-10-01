@@ -1,5 +1,5 @@
-// The 64-program bank, as the view sees it. Programs are v38 Oatmeal chunks; the bank
-// and the current program's shapes live in the patch's stored state so the host saves
+// The 64-program bank, as the view sees it. Programs are Porridge presets (Preset.res); the
+// bank and the current program's shapes live in the patch's stored state so the host saves
 // them with the session (parameters are saved by the host on their own).
 
 open OatmealFormat
@@ -12,7 +12,7 @@ type rec t = {
   message: string => unit,
   shapeListeners: array<unit => unit>,
   mutable current: int,
-  mutable programs: array<Uint8Array.t>,
+  mutable programs: array<Preset.t>,
   mutable shapes: tables,
   pendingSend: Set.t<table>,
   mutable learning: option<string>,
@@ -21,7 +21,7 @@ type rec t = {
 
 let make = (pc, model, ~onChange, ~onMessage) => {
   let programs = Array.fromInitializer(~length=bankPrograms, i =>
-    makeDefaultProgram(`Init ${Int.toString(i)}`)
+    Preset.make(`Init ${Int.toString(i)}`)
   )
   {
     pc,
@@ -31,7 +31,7 @@ let make = (pc, model, ~onChange, ~onMessage) => {
     shapeListeners: [],
     current: 0,
     programs,
-    shapes: programs->Array.getUnsafe(0)->extractTables,
+    shapes: Preset.copyTables((programs->Array.getUnsafe(0)).tables),
     pendingSend: Set.make(),
     learning: None,
     listeners: None,
@@ -43,8 +43,12 @@ let fireShapes = t => t.shapeListeners->Array.forEach(fn => fn())
 let onState = (t, {key, value}: PatchConnection.storedStateEvent) =>
   switch (key, value) {
   | ("bank", String(bank)) if String.length(bank) > 1000 =>
-    t.programs = Bank.decodeBank(bank)
-    t.onChange(t)
+    Preset.decodeBank(bank)->Option.forEach(presets => {
+      t.programs = Array.fromInitializer(~length=bankPrograms, i =>
+        presets[i]->Option.getOr(Preset.make(`Init ${Int.toString(i)}`))
+      )
+      t.onChange(t)
+    })
   | ("program", Number(i)) if Float.isFinite(i) =>
     t.current = Math.Int.max(0, Math.Int.min(bankPrograms - 1, Float.toInt(i)))
     t.onChange(t)
@@ -92,7 +96,8 @@ let dispose = t =>
     t.pc->PatchConnection.removeEndpointListener("ccOut", outListener)
   })
 
-let name = (t, i) => t.programs[i]->Option.mapOr("", getName)
+let name = (t, i) => t.programs[i]->Option.mapOr("", Preset.name)
+let meta = t => (t.programs->Array.getUnsafe(t.current)).meta
 
 let shape = (t, table) => t.shapes->getTable(table)
 let onShapes = (t, fn) => t.shapeListeners->Array.push(fn)
@@ -114,19 +119,19 @@ let setShape = (t, table, data, ~commit) => {
   }
 }
 
-// current program as a chunk, with the live parameter values and shapes folded in
-let captureCurrent = t => {
-  let bytes = t.programs->Array.getUnsafe(t.current)->TypedArray.copy
-  Bank.writeValues(bytes, t.model.values)
-  allTables->Array.forEach(table => writeTable(bytes, table, shape(t, table)))
-  bytes
+// the current program with the live parameter values and shapes
+let captureCurrent = (t): Preset.t => {
+  ...t.programs->Array.getUnsafe(t.current),
+  values: Map.fromArray(t.model.values->Map.entries->Array.fromIterator),
+  tables: Preset.copyTables(t.shapes),
 }
 
-let storeBank = t => t.pc->PatchConnection.sendStoredStateValue("bank", Bank.encodeBank(t.programs))
+let storeBank = t =>
+  t.pc->PatchConnection.sendStoredStateValue("bank", Preset.encodeBank(t.programs))
 
-let apply = (t, bytes) => {
-  t.model->ParamModel.setAll(Bank.programValues(bytes))
-  t.shapes = extractTables(bytes)
+let apply = (t, preset: Preset.t) => {
+  t.model->ParamModel.setAll(preset.values)
+  t.shapes = Preset.copyTables(preset.tables)
   Bank.sendShapes(t.pc, t.shapes)
   t.pc->PatchConnection.sendStoredStateValue("shapes", Bank.encodeShapes(t.shapes))
   fireShapes(t)
@@ -146,13 +151,19 @@ let rename = (t, i, name) => {
   if i == t.current {
     t.programs->Array.setUnsafe(i, captureCurrent(t))
   }
-  t.programs[i]->Option.forEach(p => setName(p, name->String.trim->String.slice(~start=0, ~end=23)))
+  t.programs[i]->Option.forEach(p => t.programs->Array.setUnsafe(i, p->Preset.withName(name)))
+  storeBank(t)
+  t.onChange(t)
+}
+
+let setMeta = (t, meta: Preset.meta) => {
+  t.programs->Array.setUnsafe(t.current, {...captureCurrent(t), meta}->Preset.withName(meta.name))
   storeBank(t)
   t.onChange(t)
 }
 
 let initCurrent = t => {
-  let p = makeDefaultProgram("Init")
+  let p = Preset.make("Init")
   t.programs->Array.setUnsafe(t.current, p)
   apply(t, p)
   storeBank(t)
@@ -162,21 +173,20 @@ let initCurrent = t => {
 let panic = t => t.pc->PatchConnection.sendEventOrValue("panic", 1)
 
 let loadFile = (t, bytes, filename) =>
-  switch parseFile(bytes) {
-  | Error(e) => t.message(`${filename} isn't an Oatmeal program or bank (${e})`)
-  | Ok({programs: []}) => t.message(`${filename} has no programs in it`)
-  | Ok({kind: Program, programs: [p]}) =>
-    let bytes = TypedArray.copy(p.bytes)
-    t.programs->Array.setUnsafe(t.current, bytes)
-    apply(t, bytes)
-    t.message(`Loaded "${getName(p.bytes)}" into program ${Int.toString(t.current + 1)}`)
+  switch Preset.parseFile(bytes) {
+  | Error(e) => t.message(`${filename} isn't a Porridge or Oatmeal program or bank (${e})`)
+  | Ok({presets: []}) => t.message(`${filename} has no programs in it`)
+  | Ok({kind: Single, presets: [p]}) =>
+    t.programs->Array.setUnsafe(t.current, p)
+    apply(t, p)
+    t.message(`Loaded "${Preset.name(p)}" into program ${Int.toString(t.current + 1)}`)
     storeBank(t)
     t.onChange(t)
-  | Ok({programs}) =>
+  | Ok({presets: programs}) =>
     t.programs = Array.fromInitializer(~length=bankPrograms, i =>
       switch programs[i] {
-      | Some(p) => TypedArray.copy(p.bytes)
-      | None => makeDefaultProgram(`Init ${Int.toString(i)}`)
+      | Some(p) => p
+      | None => Preset.make(`Init ${Int.toString(i)}`)
       }
     )
     t.current = 0
@@ -207,14 +217,25 @@ let safeName = s =>
   }
 
 let downloadProgram = t => {
-  let bytes = captureCurrent(t)
-  t.programs->Array.setUnsafe(t.current, bytes)
-  download(writeProgramChunk(bytes), safeName(getName(bytes)) ++ ".omp")
+  let p = captureCurrent(t)
+  t.programs->Array.setUnsafe(t.current, p)
+  download(Preset.writePreset(p), safeName(Preset.name(p)) ++ ".porridge")
 }
 
 let downloadBank = t => {
   t.programs->Array.setUnsafe(t.current, captureCurrent(t))
-  download(writeBankChunk(t.programs), "porridge bank.omb")
+  download(Preset.writeBank(t.programs), "porridge bank.porridge")
+}
+
+let exportOatmealProgram = t => {
+  let p = captureCurrent(t)
+  t.programs->Array.setUnsafe(t.current, p)
+  download(writeProgramChunk(Preset.toOatmeal(p)), safeName(Preset.name(p)) ++ ".omp")
+}
+
+let exportOatmealBank = t => {
+  t.programs->Array.setUnsafe(t.current, captureCurrent(t))
+  download(writeBankChunk(t.programs->Array.map(Preset.toOatmeal)), "porridge bank.omb")
 }
 
 let learn = (t, ccId) => {

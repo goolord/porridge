@@ -238,5 +238,23 @@ let css = `
 }
 .toast.on { display: block; }
 
+/* dialogs */
+.shade { position: absolute; inset: 0; z-index: 80; background: rgba(31,26,14,0.35); display: flex; align-items: center; justify-content: center; }
+.dlg {
+    width: 460px; box-sizing: border-box; padding: 10px 14px 12px 14px; background: var(--panel);
+    border: 1px solid var(--ink); border-radius: 3px; box-shadow: 3px 3px 0 rgba(31,26,14,0.35);
+}
+.dlg .dttl { font-weight: 700; font-size: 15px; margin-bottom: 8px; }
+.dlg .drow { display: flex; align-items: flex-start; gap: 8px; margin: 5px 0; font-size: 12px; color: var(--ink-soft); }
+.dlg .drow span { width: 74px; padding-top: 3px; }
+.dlg input, .dlg textarea {
+    flex: 1; font: inherit; font-size: 13px; color: var(--ink); background: var(--paper);
+    border: 1px solid var(--edge); padding: 2px 5px; outline: none; box-sizing: border-box;
+}
+.dlg input:focus, .dlg textarea:focus { border-color: var(--signal); }
+.dlg textarea { height: 84px; resize: none; }
+.dlg .dbtns { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+.dlg .btn { position: static; min-width: 64px; }
+
 .p:focus-visible, .btn:focus-visible, .tg:focus-visible, .cell:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
 `

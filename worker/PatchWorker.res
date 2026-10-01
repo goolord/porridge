@@ -87,18 +87,19 @@ let installFactoryBank = async pc => {
     }
   | None => []
   }
-  let factory = Array.length(factory) == 0 ? [OatmealFormat.makeDefaultProgram("Init")] : factory
   let all = Array.fromInitializer(~length=OatmealFormat.bankPrograms, i =>
-    factory[i]->Option.getOr(OatmealFormat.makeDefaultProgram(`Init ${Int.toString(i)}`))
+    switch factory[i] {
+    | Some(bytes) => Preset.fromOatmeal(bytes)
+    | None => Preset.make(i == 0 ? "Init" : `Init ${Int.toString(i)}`)
+    }
   )
 
   let first = all->Array.getUnsafe(0)
-  Bank.sendValues(pc, Bank.programValues(first))
-  let shapes = OatmealFormat.extractTables(first)
-  Bank.sendShapes(pc, shapes)
-  pc->sendStoredStateValue("shapes", Bank.encodeShapes(shapes))
+  Bank.sendValues(pc, first.values)
+  Bank.sendShapes(pc, first.tables)
+  pc->sendStoredStateValue("shapes", Bank.encodeShapes(first.tables))
   pc->sendStoredStateValue("program", 0)
-  pc->sendStoredStateValue("bank", Bank.encodeBank(all))
+  pc->sendStoredStateValue("bank", Preset.encodeBank(all))
 }
 
 let default = pc => {

@@ -141,7 +141,7 @@ let make = (host, pc) => {
     let input = el("input", ~cls="entry", ~parent=stage)
     let (x, y) = progName->offsetWithin(stage)
     input->place(x, y, ~w=progName->offsetWidth, ~h=progName->offsetHeight)->ignore
-    input->setMaxLength(23)
+    input->setMaxLength(Preset.maxNameLength)
     input->setValue(programs->ProgramStore.name(programs.current))
     input->select
     input->focus
@@ -192,11 +192,11 @@ let make = (host, pc) => {
   button(
     head,
     "Load",
-    "Load an Oatmeal program or bank (.omp, .omb, .fxp, .fxb, .dat). You can also drop the file onto the window.",
+    "Load a Porridge preset or bank (.porridge), or an Oatmeal program or bank (.omp, .omb, .fxp, .fxb, .dat). You can also drop the file onto the window.",
     () => fileInput->click,
   )->ignore
   let save = ref(None)
-  let saveButton = button(head, "Save ▾", "Save this program (.omp) or the whole bank (.omb)", () =>
+  let saveButton = button(head, "Save ▾", "Save this program or the whole bank, or export them for Oatmeal", () =>
     save.contents->Option.forEach(open_ => open_())
   )
   save :=
@@ -205,16 +205,24 @@ let make = (host, pc) => {
         menu->Menu.show(
           saveButton,
           [
-            {Menu.label: "Save program (.omp)", value: 0},
-            {Menu.label: "Save bank, all 64 programs (.omb)", value: 1},
+            {Menu.label: "Save program (.porridge)", value: 0},
+            {Menu.label: "Save bank, all 64 programs (.porridge)", value: 1},
+            {Menu.label: "Export program for Oatmeal (.omp)", value: 2},
+            {Menu.label: "Export bank for Oatmeal (.omb)", value: 3},
           ],
           -1,
           i =>
-            i == 0
-              ? programs->ProgramStore.downloadProgram
-              : programs->ProgramStore.downloadBank,
+            switch i {
+            | 0 => programs->ProgramStore.downloadProgram
+            | 1 => programs->ProgramStore.downloadBank
+            | 2 => programs->ProgramStore.exportOatmealProgram
+            | _ => programs->ProgramStore.exportOatmealBank
+            },
         ),
     )
+  button(head, "Info", "Name, author, category, tags and description of this program", () =>
+    InfoDialog.show(ctx, stage)
+  )->ignore
   button(head, "Init", "Reset this program to the Init patch", () =>
     programs->ProgramStore.initCurrent
   )->ignore
@@ -224,7 +232,7 @@ let make = (host, pc) => {
 
   stage->appendChild(fileInput)
   fileInput->setInputType("file")
-  fileInput->setAccept(".omp,.omb,.fxp,.fxb,.dat")
+  fileInput->setAccept(".porridge,.json,.omp,.omb,.fxp,.fxb,.dat")
   fileInput->setStyle("display", "none")
   fileInput->onEvent(#change, _ => {
     fileInput->files->Option.flatMap(item(_, 0))->Option.forEach(f => loadFile(f)->Promise.ignore)
@@ -236,7 +244,7 @@ let make = (host, pc) => {
   //==============================================================================
   // drop zone
 
-  let drop = el("div", ~cls="drop", ~text="Drop an Oatmeal program or bank", ~parent=stage)
+  let drop = el("div", ~cls="drop", ~text="Drop a Porridge or Oatmeal program or bank", ~parent=stage)
   let depth = ref(0)
   host->onDrag(#dragenter, e => {
     e->preventDefault
