@@ -10,21 +10,19 @@ let build = (ctx: Ctx.t, page) => {
 
   let arpHeight = 27. + 46. + 2. * Grid.rowHeight + Grid.padBottom
   let arp = Panel.make(page, ~title="arpeggiator", ~x=margin, ~y=margin, ~w=width, ~h=arpHeight)
-  let inner = width - 18.
-  ArpPattern.make(ctx, arp.el, {x: 8., y: 27., w: inner, h: 40.})
+  ArpPattern.make(ctx, arp.el, {x: 8., y: 27., w: width - 18., h: 40.})
   let g = Grid.make(ctx, arp.el, ~y=27. + 46.)
   g->Grid.choice("Arp_Mode", 0, 0, "mode", ~span=2)
   g->Grid.choice("Arp_Unit", 2, 0, "unit", ~span=2)
   g->Grid.param("Arp_Step", 4, 0, "step")
   g->Grid.toggle("Arp_Quantize", 5, 0, "quantize")
-  // the extra notes each pattern step plays, and their shifts
-  let noteWidth = inner / 7.
+  // the extra notes each pattern step plays, and their shifts: seven groups of four narrow
+  // columns, a switch in one and the shift across the other three
+  let notes = Grid.make(ctx, arp.el, ~y=g->Grid.cy(1), ~cw=Grid.fitColumns(width, 28))
   for k in 0 to 6 {
-    let x = Grid.padX + Int.toFloat(k) * noteWidth
-    let y = g->Grid.cy(1)
     let n = Int.toString(k + 1)
-    Controls.toggle(ctx, arp.el, `Arp_Add_${n}_On`, ~x=x + 2., ~y=y + 5., ~label=n)
-    Controls.param(ctx, arp.el, `Arp_Add_${n}_Shift`, ~x=x + 24., ~y, ~w=noteWidth - 32., ~label="shift")
+    notes->Grid.toggle(`Arp_Add_${n}_On`, 4 * k, 0, n)
+    notes->Grid.param(`Arp_Add_${n}_Shift`, 4 * k + 1, 0, `note ${n} shift`, ~span=3)
   }
 
   let xyY = arp.y + arp.h + Grid.gap

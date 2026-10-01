@@ -12,6 +12,8 @@
 //    replies to the editor with a "porridge:settings" state value
 //    { settings: <the file's object>, zoom: <this window's size> }. Nothing is stored in
 //    the plugin's state. See ui/Settings.res.
+//  - The latency is the synth's 64 samples (dsp/Synth.cmajor applies MIDI a block late, on
+//    its own sample). Cmajor's C++ generator reports 0 whatever the patch declares.
 //
 //   node tools/clap-patch.mjs [path to the generated project]
 
@@ -437,6 +439,13 @@ inline void Plugin::Impl::sendSettingsToView()
 
 inline void Plugin::Impl::resetIfRequestIsPending()
 {`,
+);
+
+//==============================================================================
+replace(
+  `    return static_cast<uint32_t> (patch.getFramesLatency());`,
+  `    ${marker} the synth's MIDI latency, one 64-sample block (see dsp/Synth.cmajor)
+    return static_cast<uint32_t> (std::max (patch.getFramesLatency(), 64.0));`,
 );
 
 writeFileSync(file, source);

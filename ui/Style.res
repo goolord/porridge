@@ -11,6 +11,11 @@ let pageHeight = designHeight - headerHeight - statusHeight
 
 let px = Web.px
 
+// Every control (parameter, list, switch, grid button) is one cell tall: this height, in a
+// grid row this much taller (Grid.rowHeight), so that neighbours never touch.
+let controlHeight = 26.
+let controlGap = 2.
+
 let groundColour = "#978552"
 
 let css = `
@@ -88,11 +93,27 @@ let css = `
 .pbody.on { display: block; }
 .blk > .hdr { position: absolute; right: 6px; top: 1px; width: 40px; height: 18px; }
 
+/* the effects order: a chain of chips in the title row, dragged sideways */
+.fxorder {
+    position: absolute; right: 6px; top: 1px; height: 18px; display: flex; align-items: center; gap: 3px;
+    font-size: 12px; color: var(--ink-faint); user-select: none;
+}
+.fxorder .lbl { margin-right: 2px; }
+.fxorder .arrow { font-weight: 700; }
+.fxorder .chip {
+    padding: 0 7px; height: 18px; line-height: 18px; border-radius: 2px; font-weight: 700;
+    color: var(--ink); background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge); cursor: grab;
+}
+.fxorder .chip:hover { background: var(--panel-hi); }
+.fxorder .chip.drag { color: var(--paper); background: var(--signal); position: relative; z-index: 1; cursor: grabbing; }
+.fxorder .chip.drop-before { box-shadow: inset 0 0 0 1px var(--tile-edge), -3px 0 0 var(--signal); }
+.fxorder .chip.drop-after { box-shadow: inset 0 0 0 1px var(--tile-edge), 3px 0 0 var(--signal); }
+
 /* a parameter row: label left, value right, position track underneath, on a tile */
 .p {
     position: absolute;
     box-sizing: border-box;
-    height: 26px;
+    height: ${px(controlHeight)};
     padding: 1px 3px 0 3px;
     border-radius: 2px;
     cursor: ns-resize;
@@ -125,16 +146,21 @@ let css = `
     border-left: 3px solid transparent; border-right: 3px solid transparent; border-top: 4px solid var(--ink-faint);
     vertical-align: 2px; }
 
-/* toggle */
+/* toggle: a switch on the same tile, and in the same footprint, as a parameter */
 .tg {
-    position: absolute; height: 18px; cursor: pointer; font-size: 11.5px; color: var(--ink-soft);
-    display: flex; align-items: center; gap: 5px; white-space: nowrap;
-    padding: 0 7px 0 5px; border-radius: 2px; background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge);
+    position: absolute; box-sizing: border-box; height: ${px(controlHeight)}; cursor: pointer;
+    font-size: 12px; color: var(--ink-soft); display: flex; align-items: center; gap: 5px;
+    white-space: nowrap; overflow: hidden; padding: 0 5px; border-radius: 2px;
+    background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge);
 }
 .tg:hover { background: var(--panel-hi); box-shadow: inset 0 0 0 1px var(--edge); }
-.tg b { width: 9px; height: 9px; border: 1px solid var(--ink); box-sizing: border-box; background: transparent; }
-.tg.on b { background: var(--signal); border-color: var(--signal); }
+.tg b { flex: none; width: 11px; height: 11px; border: 1.5px solid var(--ink); box-sizing: border-box; border-radius: 1px; background: transparent; }
+.tg.on b { background: var(--signal); border-color: var(--signal); box-shadow: inset 0 0 0 1.5px var(--paper); }
 .tg.on { color: var(--ink); }
+.tg span { overflow: hidden; text-overflow: ellipsis; }
+/* in a title row, a switch is as tall as the tabs */
+.hdr .tg { height: 18px; font-size: 11.5px; }
+.hdr .tg b { width: 9px; height: 9px; border-width: 1px; box-shadow: none; }
 
 .btn {
     position: absolute; height: 20px; box-sizing: border-box; padding: 0 8px;
@@ -144,6 +170,9 @@ let css = `
 .btn:hover { background: var(--paper); }
 .btn:active { background: var(--signal); color: var(--paper); }
 .btn.on { background: var(--signal); color: var(--paper); border-color: var(--signal); }
+/* a button in a grid cell */
+.btn.gc { height: ${px(controlHeight)}; line-height: ${px(controlHeight - 2.)}; padding: 0 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .plot { position: absolute; display: block; }
 .plot path.curve { fill: none; stroke: var(--signal); stroke-width: 1.4; }
@@ -160,6 +189,8 @@ let css = `
 .ed .node { fill: var(--paper); stroke: var(--signal); stroke-width: 1.6; }
 .ed .node.hot { fill: var(--signal); }
 .ed .node.hollow { fill: var(--panel); stroke-dasharray: 2 1.5; }
+.ed .node.bend { fill: var(--panel); stroke-width: 1.3; }
+.ed .node.bend.hot { fill: var(--signal); }
 .ed .hit { fill: transparent; pointer-events: all; }
 .ed .band { fill: var(--paper); stroke: var(--signal); stroke-width: 1.6; }
 .ed .band.hot { fill: var(--signal); }
@@ -180,7 +211,7 @@ let css = `
 .sep { position: absolute; height: 1px; background: rgba(31,26,14,0.2); }
 .note { position: absolute; font-size: 11px; color: var(--ink-faint); white-space: nowrap; }
 .note.wrap { white-space: normal; line-height: 1.35; }
-.scale { position: absolute; height: 20px; line-height: 20px; font-size: 12.5px; color: var(--ink-faint);
+.scale { position: absolute; height: ${px(controlHeight)}; line-height: ${px(controlHeight)}; font-size: 12.5px; color: var(--ink-faint);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .scale.on { color: var(--ink); font-weight: 700; }
 
@@ -224,6 +255,24 @@ let css = `
 .menu div { padding: 2px 12px 2px 10px; white-space: nowrap; cursor: pointer; }
 .menu div:hover { background: var(--signal); color: var(--paper); }
 .menu div.cur { font-weight: 700; }
+.menu.icons div { display: flex; align-items: center; }
+.menu.icons .icw { width: 38px; flex: none; }
+
+/* icons (Icons.res): strokes in the text colour */
+.ic { display: block; height: 14px; width: auto; flex: none; overflow: visible;
+    fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.ic .f { fill: currentColor; stroke: none; }
+.ic .dash { stroke-dasharray: 2 2; stroke-width: 1.2; }
+.ic text { fill: currentColor; stroke: none; font-size: 6.5px; font-weight: 700; text-anchor: middle; }
+.ic.bold { stroke-width: 2.1; height: 15px; }
+.icw { display: inline-flex; align-items: center; gap: 2px; vertical-align: middle; }
+.hq { font-size: 7.5px; font-weight: 700; line-height: 9px; padding: 0 2px; border-radius: 2px;
+    background: var(--signal); color: var(--paper); letter-spacing: 0.03em; }
+.menu div:hover .hq { background: var(--paper); color: var(--signal); }
+.p .v.withicon { display: flex; align-items: center; gap: 2px; top: 9px; max-width: calc(100% - 6px); }
+.p .v.withicon > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.p.ch .v.withicon::after { margin-left: 1px; flex: none; }
+.p .v .ic { height: 12px; color: var(--signal); }
 
 /* text entry */
 .entry {
@@ -234,8 +283,10 @@ let css = `
 /* arp pattern cells */
 .cell {
     position: absolute; box-sizing: border-box; border: 1px solid var(--edge); background: var(--panel-hi);
-    font-size: 11px; text-align: center; cursor: pointer; line-height: 22px; color: var(--ink);
+    font-size: 11px; cursor: pointer; color: var(--ink);
+    display: flex; align-items: center; justify-content: center;
 }
+.cell .icw { gap: 1px; }
 .cell.off { background: transparent; color: var(--ink-faint); }
 .cell.out { opacity: 0.35; }
 .cell:hover { outline: 1px solid var(--signal); outline-offset: -1px; }
@@ -258,35 +309,58 @@ let css = `
 }
 .toast.on { display: block; }
 
-/* mod page: the patch bay */
-.bay { position: absolute; }
-.bay .jl {
-    position: absolute; box-sizing: border-box; font-size: 11.5px; line-height: 19px; color: var(--ink-soft);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+/* mod page: source chips (with a jack on the right), target chips (jack on the left) */
+.src, .tgt {
+    position: absolute; box-sizing: border-box; height: ${px(controlHeight)}; border-radius: 2px;
+    background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge);
+    font-size: 13px; line-height: ${px(controlHeight)}; white-space: nowrap; color: var(--ink);
 }
-.bay .jl:hover { color: var(--ink); }
-.bay .jl.src { text-align: right; padding-right: 2px; }
-.bay .jh { position: absolute; font-size: 11px; font-weight: 700; line-height: 19px; color: var(--ink-faint); text-transform: lowercase; }
-.cables { pointer-events: none; overflow: visible; }
-.cables .jack { fill: var(--paper); stroke: var(--ink); stroke-width: 1.4; pointer-events: all; cursor: crosshair; }
-.cables .jack:hover, .cables .jack.hot { fill: var(--signal-soft); stroke: var(--signal); stroke-width: 2; }
-.cables .jack.on { fill: var(--ink); }
-.cables .cable { fill: none; stroke-width: 3; stroke-linecap: round; opacity: 0.78; }
-.cables .cable.muted { stroke-dasharray: 4 4; opacity: 0.5; }
-.cables .cable.sel { stroke-width: 4.5; opacity: 1; }
-.cables .cable.drag { opacity: 0.9; stroke-dasharray: 6 3; }
-.cables .cablehit { fill: none; stroke: transparent; stroke-width: 10; pointer-events: stroke; cursor: pointer; }
-
-.mrow { position: absolute; display: none; }
-.mrow.sel { background: var(--panel-hi); border-radius: 2px; }
-.mrow .sw { position: absolute; left: 3px; top: 9px; width: 8px; height: 8px; border-radius: 50%; }
-.mrow .mname {
-    position: absolute; left: 15px; top: 0; width: 128px; height: 26px; line-height: 26px; font-size: 12px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
-    box-sizing: border-box; padding: 0 4px; border-radius: 2px; background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge);
+.src { padding: 0 28px 0 13px; cursor: grab; }
+.tgt { padding: 0 6px 0 27px; cursor: pointer; }
+.src .sw { position: absolute; left: 4px; top: 5px; bottom: 5px; width: 4px; border-radius: 2px; }
+.src .lbl, .tgt .lbl { display: block; overflow: hidden; text-overflow: ellipsis; }
+.src .n { position: absolute; right: 25px; top: 6px; display: none; min-width: 14px; height: 14px; padding: 0 2px;
+    box-sizing: border-box; border-radius: 7px; background: var(--ink); color: var(--paper);
+    font-size: 10px; line-height: 14px; text-align: center; font-weight: 700; }
+.jk { position: absolute; top: 6px; width: 14px; height: 14px; box-sizing: border-box; border-radius: 50%;
+    border: 2px solid var(--ink); background: var(--paper); box-shadow: inset 0 0 0 2px var(--paper); }
+.src .jk { right: 6px; }
+.tgt .jk { left: 6px; }
+.jk.on { background: var(--ink); }
+.src:hover, .tgt:hover, .src.lit, .src:focus-visible, .tgt:focus-visible { background: var(--panel-hi); box-shadow: inset 0 0 0 1px var(--edge); }
+.src.sel { background: var(--paper); box-shadow: inset 0 0 0 1.5px var(--signal); }
+.src.plug { padding: 0; cursor: grab; }
+.tgt.on { font-weight: 700; }
+.tgt.on .jk { background: var(--ink); }
+.tgt.hot { background: var(--signal); color: var(--paper); box-shadow: none; }
+.tgt.hot .jk { border-color: var(--paper); box-shadow: inset 0 0 0 2px var(--signal); }
+.grp { position: absolute; font-size: 12px; font-weight: 700; line-height: 20px; color: var(--ink-faint); white-space: nowrap; }
+.mcount { position: absolute; right: 9px; top: 4px; font-size: 12px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.picker { display: none; z-index: 20; border-color: var(--signal); box-shadow: 3px 3px 0 rgba(31,26,14,0.3); }
+.picker.on { display: block; }
+.picker .btn { z-index: 1; }
+.wires { position: absolute; pointer-events: none; overflow: visible; z-index: 30; }
+.wirecell { position: absolute; pointer-events: none; overflow: visible; z-index: 1; }
+.wire { fill: none; stroke-width: 3.5; stroke-linecap: round; opacity: 0.9; }
+.wire.muted { stroke-dasharray: 5 4; opacity: 0.5; }
+.wire.drag { stroke-dasharray: 7 4; }
+.conn { position: absolute; left: 0; display: none; }
+.conn.on { display: block; }
+.conn .btn.gc { font-size: 17px; line-height: 22px; color: var(--ink-soft); }
+.conn .btn.gc:hover { color: var(--ink); }
+.conn:hover .src, .conn:hover .tgt { box-shadow: inset 0 0 0 1px var(--edge); }
+.addrow {
+    position: absolute; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 0 10px;
+    border: 1.5px dashed var(--edge); border-radius: 2px; font-size: 13px; color: var(--ink-soft); cursor: pointer;
 }
-.mrow .mname:hover { background: var(--panel-hi); }
-.mrow .mdel { right: 2px; top: 3px; width: 20px; padding: 0; }
+.addrow:hover, .addrow:focus-visible { background: var(--panel-hi); color: var(--ink); border-color: var(--ink); outline: none; }
+.addrow b { font-size: 17px; line-height: 1; }
+.addrow .sub { color: var(--ink-faint); font-size: 12px; margin-left: 6px; }
+.mempty { position: absolute; left: 20px; right: 20px; top: 92px; text-align: center; color: var(--ink-soft);
+    font-size: 13px; line-height: 1.45; }
+.mempty .big { font-size: 17px; font-weight: 700; color: var(--ink); margin-bottom: 6px; }
+.msw { display: block; width: 12px; height: 12px; border-radius: 50%; }
+.menu.icons .icw:has(.msw) { width: 20px; }
 
 /* dialogs */
 .shade { position: absolute; inset: 0; z-index: 80; background: rgba(31,26,14,0.35); display: flex; align-items: center; justify-content: center; }
@@ -311,5 +385,5 @@ let css = `
 .dlg .dnote { margin: 6px 0 6px 82px; font-size: 11.5px; line-height: 1.35; color: var(--ink-faint); }
 .dlg .dnote + .btn { margin-left: 82px; }
 
-.p:focus-visible, .btn:focus-visible, .tg:focus-visible, .cell:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
+.p:focus-visible, .btn:focus-visible, .tg:focus-visible, .cell:focus-visible, .src:focus-visible, .tgt:focus-visible, .addrow:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
 `

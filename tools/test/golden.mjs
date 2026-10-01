@@ -1,7 +1,7 @@
 // Regression check for the DSP: renders every factory program through the test host and
-// compares the output with a recording made earlier, sample for sample. Porridge-only
-// features are off in factory programs, so changes that keep them neutral must leave
-// every render bit-identical.
+// compares the output with a recording made earlier, sample for sample. The renders are in
+// Oat mode (Oatmeal's MIDI timing) and Porridge-only features are off in factory programs,
+// so changes that keep them neutral must leave every render bit-identical.
 //
 //   node tools/test/golden.mjs record     render and keep the result as the reference
 //   node tools/test/golden.mjs check      render and compare with the reference
@@ -47,7 +47,7 @@ for (let i = 0; i < 64; ++i)
     const prog = join (dir, `p${i}.bin`);
     writeFileSync (prog, bank.subarray (16 + i * programSize, 16 + (i + 1) * programSize));
     const out = join (dir, `p${i}.f32`);
-    execFileSync (host, ["--program", prog, "--events", eventsPath, "--frames", "100000", "--rate", "44100", "--out", out]);
+    execFileSync (host, ["--program", prog, "--events", eventsPath, "--frames", "100000", "--rate", "44100", "--set", "Oat_Mode=1", "--out", out]);
     hashes[i] = createHash ("sha256").update (readFileSync (out)).digest ("hex");
 }
 

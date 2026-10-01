@@ -114,19 +114,37 @@ let porridgeOnly = p => {
   let modulated = changed->Array.some(spec => ModMatrix.isSlotParam(spec.id))
   let macros = changed->Array.some(spec => String.startsWith(spec.id, "Macro"))
   let mpe = changed->Array.some(spec => String.startsWith(spec.id, "MPE"))
+  let some = prefixes =>
+    changed->Array.some(spec => prefixes->Array.some(prefix => String.startsWith(spec.id, prefix)))
+  // values Porridge added to Oatmeal's lists (HQ waveforms, osc mix modes, filter types)
+  let extended = ids =>
+    ids->Array.some(id =>
+      p.values->Map.get(id)->Option.mapOr(false, x => ParamDefs.oatmealValue(id, x) != x)
+    )
   [
     modulated ? Some("modulations") : None,
     macros ? Some("macros") : None,
     mpe ? Some("MPE settings") : None,
+    some(["Drift"]) ? Some("the analog drift") : None,
+    some(["FX_Order"]) ? Some("the effects order") : None,
+    some(["Curve_"]) ? Some("the envelope curves") : None,
+    some(["LFO_1_", "LFO_2_"]) ? Some("the LFO delay, slew, steps and one-shot") : None,
+    some(["U_DetuneCurve", "U_RandomPhase", "U_Width"]) ? Some("the unison extras") : None,
+    extended(["O1_Waveform", "O2_Waveform"]) ? Some("the HQ waveforms (exported as the plain ones)") : None,
+    extended(["OscMix"]) || some(["PM_Feedback"]) ? Some("the PM, ring and AM osc mix (exported as normal)") : None,
+    extended(["Filter", "Filter2"]) || some(["F_Morph"])
+      ? Some("the zero-delay-feedback filters (exported as the nearest Oatmeal type)")
+      : None,
     p.tuning != None ? Some("the microtuning") : None,
     String.length(p.meta.name) > nameLength - 1 ? Some("the full name") : None,
   ]->Array.filterMap(x => x)
 }
 
-// Parameters Oatmeal doesn't have are left out.
+// Parameters Oatmeal doesn't have are left out, and list values it doesn't have become the
+// closest ones it does.
 let toOatmeal = p => {
   let bytes = makeDefaultProgram(p.meta.name)
-  Bank.writeValues(bytes, p.values)
+  Bank.writeValues(bytes, p.values->Map.entries->Iterator.toArray->Array.map(((id, x)) => (id, ParamDefs.oatmealValue(id, x)))->Map.fromArray)
   allTables->Array.forEach(table => writeTable(bytes, table, p.tables->getTable(table)))
   bytes
 }

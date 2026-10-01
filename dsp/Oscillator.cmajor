@@ -1,5 +1,6 @@
 //  Oscillators and noise, following Oatmeal's per-block structure: pitch, amplitude and pulse
-//  width are set once per 64-sample block and ramped linearly within it. Phases are 32-bit
+//  width are set once per block (64 samples, or shorter where sample-accurate MIDI splits a
+//  block) and ramped linearly within it. Phases are 32-bit
 //  unsigned integers (a full cycle = 2^32), kept in int64 and masked.
 
 namespace porridge
@@ -27,6 +28,7 @@ namespace porridge
         float[32] ring;
         int ringIdx;
         float s1, s2, fx1, fy1;
+        float fb1, fb2;                 // PM feedback: the last two outputs
     }
 
     void construct (Osc& this)
@@ -52,6 +54,7 @@ namespace porridge
         this.ring = float[32]();
         this.ringIdx = 0;
         this.s1 = 0; this.s2 = 0; this.fx1 = 0; this.fy1 = 0;
+        this.fb1 = 0; this.fb2 = 0;
         this.first = true;
     }
 
@@ -108,6 +111,9 @@ namespace porridge
         this.pwmInc = src.pwmInc;
     }
 
+    /// Pulse, user PWM and HQ pulse: the difference of two phases of a waveform.
+    bool isPulse (int waveform)     { return waveform == 2 || waveform == 5 || waveform == 7; }
+
     struct OscBlock
     {
         int tableOffset, shift;
@@ -119,10 +125,9 @@ namespace porridge
         int64 pwStep;
     }
 
-    OscBlock beginBlock (Osc& this, const WaveTables& tables, int userSet, float mult, int64 extra, float64 sineMarker)
+    OscBlock beginBlock (Osc& this, const WaveTables& tables, int userSet, float mult, int64 extra, int n)
     {
         OscBlock b;
-        let n = blockSize;
 
         if (this.step == 0)
         {
@@ -149,6 +154,13 @@ namespace porridge
         {
             b.tableOffset = -1;
             b.shift = 17;
+        }
+        else if (this.waveform >= 6)
+        {
+            // HQ saw, pulse (two saws) and triangle
+            let c = chooseHQ (this.waveform == 8 ? setTri : setSaw, inc);
+            b.tableOffset = c.offset;
+            b.shift = c.shift;
         }
         else
         {
@@ -178,7 +190,7 @@ namespace porridge
 
         b.glideOn = this.glideOn;
         b.glideUp = this.glideTarget > this.base;
-        b.pulse = this.waveform == 2 || this.waveform == 5;
+        b.pulse = isPulse (this.waveform);
 
         if (b.pulse)
         {
@@ -253,22 +265,73 @@ namespace porridge
     }
 
     /// Plain oscillator: adds into out.
-    void renderPlain (Osc& this, const WaveTables& tables, int userSet, float mult, float[blockSize]& out)
+    void renderPlain (Osc& this, const WaveTables& tables, int userSet, float mult, float[blockSize]& out, int n)
     {
-        let b = this.beginBlock (tables, userSet, mult, 0, 0);
+        let b = this.beginBlock (tables, userSet, mult, 0, n);
 
-        for (wrap<blockSize> i)
+        for (int i = 0; i < n; ++i)
         {
             let amp = this.tickShared (b);
 
             if (b.pulse)
             {
-                out[i] = float (float64 (out[i]) + float64 (amp) * float64 (lookup (tables, b, this.phase)));
-                out[i] = float (float64 (out[i]) - float64 (amp) * float64 (lookup (tables, b, this.phase + this.pwCur)));
+                out.at (i) = float (float64 (out.at (i)) + float64 (amp) * float64 (lookup (tables, b, this.phase)));
+                out.at (i) = float (float64 (out.at (i)) - float64 (amp) * float64 (lookup (tables, b, this.phase + this.pwCur)));
             }
             else
             {
-                out[i] = float (float64 (out[i]) + float64 (amp) * float64 (lookup (tables, b, this.phase)));
+                out.at (i) = float (float64 (out.at (i)) + float64 (amp) * float64 (lookup (tables, b, this.phase)));
+            }
+
+            this.phase = (this.phase + this.base + this.offset) & u32;
+            this.offset = (this.offset + b.slope) & u32;
+        }
+    }
+
+    /// Writes the waveform (without amp) to wave and the amp ramp to amp: a modulator.
+    void renderRaw (Osc& this, const WaveTables& tables, int userSet, float mult, float[blockSize]& wave,
+                    float[blockSize]& amp, int n)
+    {
+        let b = this.beginBlock (tables, userSet, mult, 0, n);
+
+        for (int i = 0; i < n; ++i)
+        {
+            amp.at (i) = this.tickShared (b);
+            wave.at (i) = this.waveValue (tables, b, this.phase);
+            this.phase = (this.phase + this.base + this.offset) & u32;
+            this.offset = (this.offset + b.slope) & u32;
+        }
+    }
+
+    /// The carrier of Porridge's osc mix modes, added into out. mode 3: phase modulation by
+    /// wave * amp (amp 1 = +-pi), plus self-feedback; 4: self-feedback only; 5: ring
+    /// modulation, 6: amplitude modulation, both min (amp, 1) deep.
+    void renderShaped (Osc& this, const WaveTables& tables, int userSet, float mult, float[blockSize]& out,
+                       const float[blockSize]& wave, const float[blockSize]& amp, int mode, float feedback, int n)
+    {
+        let b = this.beginBlock (tables, userSet, mult, 0, n);
+        let pm = mode == 3 || mode == 4;
+        let fb = float64 (feedback) * 0.3;
+
+        for (int i = 0; i < n; ++i)
+        {
+            let a = this.tickShared (b);
+
+            if (pm)
+            {
+                var cycles = fb * 0.5 * float64 (this.fb1 + this.fb2);
+                if (mode == 3) cycles += 0.5 * float64 (wave.at (i) * amp.at (i));
+                let y = this.waveValue (tables, b, this.phase + (int64 (cycles * two32) & u32));
+                this.fb2 = this.fb1;
+                this.fb1 = y;
+                out.at (i) = out.at (i) + a * y;
+            }
+            else
+            {
+                let d = clamp (amp.at (i), 0.0f, 1.0f);
+                let y = this.waveValue (tables, b, this.phase);
+                let g = mode == 5 ? 1.0f - d + d * wave.at (i) : 1.0f - 0.5f * d + 0.5f * d * wave.at (i);
+                out.at (i) = out.at (i) + a * y * g;
             }
 
             this.phase = (this.phase + this.base + this.offset) & u32;
@@ -314,16 +377,16 @@ namespace porridge
     /// Hard-sync oscillator. The master writes sub-sample wrap positions to syncOut (1..32, 0 = none);
     /// the slave resets its phase there and smooths the jump with a 16-tap BLEP residual.
     void renderSync (Osc& this, const WaveTables& tables, int userSet, float mult, float[blockSize]& out,
-                     bool isSlave, int[blockSize]& sync)
+                     bool isSlave, int[blockSize]& sync, int n)
     {
-        let b = this.beginBlock (tables, userSet, mult, 0, 0);
+        let b = this.beginBlock (tables, userSet, mult, 0, n);
         var prevPhase = this.phase;
 
-        for (wrap<blockSize> i)
+        for (int i = 0; i < n; ++i)
         {
             let amp = this.tickShared (b);
             let y = this.waveValue (tables, b, this.phase);
-            out[i] = float (float64 (out[i]) + float64 (y + this.ring.at (this.ringIdx)) * float64 (amp));
+            out.at (i) = float (float64 (out.at (i)) + float64 (y + this.ring.at (this.ringIdx)) * float64 (amp));
             this.ring.at (this.ringIdx) = 0;
             this.ringIdx = (this.ringIdx + 1) & 31;
 
@@ -332,7 +395,7 @@ namespace porridge
 
             if (isSlave)
             {
-                let v = sync[i];
+                let v = sync.at (i);
 
                 if (v != 0)
                 {
@@ -362,11 +425,11 @@ namespace porridge
                         if (++v >= 32) break;
                     }
 
-                    sync[i] = v;
+                    sync.at (i) = v;
                 }
                 else
                 {
-                    sync[i] = 0;
+                    sync.at (i) = 0;
                 }
             }
 
@@ -378,7 +441,7 @@ namespace porridge
     /// FM: the modulator (osc 1) is silent and writes its band-passed output to fm[0..63]
     /// (fm[64] = block maximum); the carrier (osc 2) advances by inc * (1 + fm[i]).
     void renderFM (Osc& this, const WaveTables& tables, int userSet, float mult, float[blockSize]& out,
-                   bool isCarrier, float[65]& fm, float64 sr)
+                   bool isCarrier, float[65]& fm, float64 sr, int n)
     {
         float c1, c2;
 
@@ -395,21 +458,21 @@ namespace porridge
 
         let c3 = 2.0f * c2 - 1.0f;
         let extra = isCarrier ? int64 (float64 ((this.base + this.offset) & u32) * float64 (fm[64])) : 0;
-        let b = this.beginBlock (tables, userSet, mult, max (extra, 0i64), 0);
+        let b = this.beginBlock (tables, userSet, mult, max (extra, 0i64), n);
         var mx = 0.0f;
 
-        for (wrap<blockSize> i)
+        for (int i = 0; i < n; ++i)
         {
             let amp = this.tickShared (b);
 
             if (isCarrier)
-                this.phase = (this.phase + (int64 (float64 ((this.base + this.offset) & u32) * float64 (fm[i])) & u32)) & u32;
+                this.phase = (this.phase + (int64 (float64 ((this.base + this.offset) & u32) * float64 (fm.at (i))) & u32)) & u32;
 
             let y = this.waveValue (tables, b, this.phase) * amp;
 
             if (isCarrier)
             {
-                out[i] = out[i] + y;
+                out.at (i) = out.at (i) + y;
             }
             else
             {
@@ -418,7 +481,7 @@ namespace porridge
                 this.fx1 = y;
                 this.s1 = this.s1 + (this.fy1 - this.s1) * c1;
                 this.s2 = this.s2 + (this.s1 - this.s2) * c1;
-                fm[i] = this.s2;
+                fm.at (i) = this.s2;
                 mx = max (mx, this.s2);
             }
 
@@ -479,7 +542,7 @@ namespace porridge
 
     /// Writes one block of noise into buf (white, or resonant band-pass when N resonance > 0).
     void renderNoise (Noise& this, Rand& rng, const float[numSlots]& P, float Rg, float at, float ampMod, float resMod,
-                      float64 sr, float[blockSize]& buf)
+                      float64 sr, float[blockSize]& buf, int n)
     {
         var amp = ampMod * P[slot::N_Amp];
         let nat = P[slot::N_Aftertouch];
@@ -489,10 +552,10 @@ namespace porridge
 
         if (this.glideOn)
         {
-            if (this.glideRem > blockSize)
+            if (this.glideRem > n)
             {
-                this.glideRem -= blockSize;
-                this.freq += float (blockSize) * this.glideStep;
+                this.glideRem -= n;
+                this.freq += float (n) * this.glideStep;
             }
             else
             {
@@ -507,14 +570,14 @@ namespace porridge
 
         if (reso <= 0)
         {
-            for (wrap<blockSize> i)
-                buf[i] = (float (rng.next()) * (1.0f / 16384.0f) - 1.0f) * amp;
+            for (int i = 0; i < n; ++i)
+                buf.at (i) = (float (rng.next()) * (1.0f / 16384.0f) - 1.0f) * amp;
 
             return;
         }
 
-        for (wrap<blockSize> i)
-            buf[i] = float (rng.next()) * (1.0f / 16384.0f) - 1.0f;
+        for (int i = 0; i < n; ++i)
+            buf.at (i) = float (rng.next()) * (1.0f / 16384.0f) - 1.0f;
 
         let w = min (float64 (Rg) * float64 (this.freq) * 0.5 / sr * float64 (piF) * 2.0, float64 (piF * 0.98f));
         var F = float (2.0 * sin (w * 0.5));
@@ -540,18 +603,18 @@ namespace porridge
             }
         }
 
-        let dF = (F - this.F) / float (blockSize);
-        let dq = (q - this.q) / float (blockSize);
-        let dg = (g - this.g) / float (blockSize);
+        let dF = (F - this.F) / float (n);
+        let dq = (q - this.q) / float (n);
+        let dg = (g - this.g) / float (n);
 
-        for (wrap<blockSize> i)
+        for (int i = 0; i < n; ++i)
         {
             this.F += dF;
             this.q += dq;
             this.g += dg;
-            let a = this.noiseSvf (buf[i], this.F, this.q);
-            let b = this.noiseSvf (buf[i], this.F, this.q);
-            buf[i] = (a + b) * this.g;
+            let a = this.noiseSvf (buf.at (i), this.F, this.q);
+            let b = this.noiseSvf (buf.at (i), this.F, this.q);
+            buf.at (i) = (a + b) * this.g;
         }
     }
 }

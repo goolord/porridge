@@ -18,6 +18,10 @@ let envelopeFields = prefix => [
   (prefix ++ "Decay2", "decay 2"),
   (prefix ++ "Sustain", "sustain"),
   (prefix ++ "Release", "release"),
+  ...EnvEditor.curveIds(prefix)->Array.mapWithIndex((id, i) => (
+    id,
+    ["attack curve", "decay curve", "release curve"]->Array.getUnsafe(i),
+  )),
 ]
 
 let envelope = (ctx, parent, prefix, box: box, ~name) =>
@@ -58,6 +62,7 @@ let oscillator = (ctx: Ctx.t, body, n) => {
   }
   g->Grid.choice("OscMix", 0, 2, "mix", ~span=2)
   g->Grid.param("OscAftertouch", 2, 2, "touch > amp")
+  g->Grid.param("PM_Feedback", 3, 2, "pm feedback")
 }
 
 let modEnvelope = (ctx: Ctx.t, body, n, box) => {
@@ -98,13 +103,18 @@ let lfo = (ctx: Ctx.t, body, n, box: box) => {
   g->Grid.param(prefix ++ "Pitch", 0, 3, "pitch")
   g->Grid.param(prefix ++ "Pan", 1, 3, "pan")
   g->Grid.param(n == 1 ? "LFO_1_2" : "LFO_2_1", 2, 3, n == 1 ? "rate 2" : "rate 1")
+  g->Grid.param(prefix ++ "Delay", 0, 4, "delay")
+  g->Grid.param(prefix ++ "Fade", 1, 4, "fade in")
+  g->Grid.param(prefix ++ "Slew", 2, 4, "slew")
+  g->Grid.choice(prefix ++ "Steps", 0, 5, "s&h steps")
+  g->Grid.toggle(prefix ++ "OneShot", 1, 5, "one-shot")
 }
 
 // Microtuning: a Scala scale (and keyboard mapping) instead of the 12 notes above it.
 let scale = (ctx: Ctx.t, body, g: Grid.t) => {
-  let y = g->Grid.cy(4) + 6.
-  el("div", ~cls="sep", ~parent=body)->place(g->Grid.cx(0) + 3., y - 3., ~w=4. * g.cw - 8.)->ignore
-  let name = el("div", ~cls="scale", ~parent=body)->place(g->Grid.cx(0) + 3., y + 2., ~w=2. * g.cw - 6.)
+  el("div", ~cls="sep", ~parent=body)->place(g->Grid.cx(0) + 3., g->Grid.cy(4) - 1., ~w=4. * g.cw - 8.)->ignore
+  g->Grid.claim(0, 4, ~span=2, "the scale name")
+  let name = el("div", ~cls="scale", ~parent=body)->placeBox(g->Grid.cell(0, 4, ~span=2))
   let picker = el("input", ~parent=body)
   picker->setInputType("file")
   picker->setAccept(".scl,.kbm")
@@ -132,25 +142,17 @@ let scale = (ctx: Ctx.t, body, g: Grid.t) => {
     "load scale",
     2,
     4,
-    ~w=g.cw - 8.,
     ~status="Load a Scala scale (.scl) or keyboard mapping (.kbm); they're saved with the program",
-    ~dy=5.,
     () => picker->click,
   )
   g->Grid.button(
     "clear",
     3,
     4,
-    ~w=g.cw - 8.,
     ~status="Back to the 12-note tuning above",
-    ~dy=5.,
     () => ctx.programs->ProgramStore.setTuning(None),
   )
-  let help = el("div", ~cls="note wrap", ~parent=body)->place(
-    g->Grid.cx(0) + 3.,
-    y + 28.,
-    ~w=4. * g.cw - 8.,
-  )
+  let help = g->Grid.note("", 0, 5, ~span=4, ~rows=2)
   let update = () => {
     let scaleName = ctx.programs->ProgramStore.tuningName
     name->setTextContent(scaleName->Option.getOr("12 notes, as above"))
@@ -197,8 +199,15 @@ let build = (ctx: Ctx.t, page) => {
   unison->Grid.param("U_Voices", 0, 0, "voices")
   unison->Grid.param("U_Detune", 1, 0, "detune")
   unison->Grid.param("U_Spread", 2, 0, "spread")
+  unison->Grid.param("U_Width", 3, 0, "width")
   unison->Grid.param("U_PitchJitter", 0, 1, "pitch jitter")
   unison->Grid.param("U_PanJitter", 1, 1, "pan jitter")
+  unison->Grid.param("U_DetuneCurve", 2, 1, "detune curve")
+  unison->Grid.toggle("U_RandomPhase", 3, 1, "rand phase")
+  // analog drift: slow random pitch (per unison copy) and cutoff (per voice)
+  unison->Grid.param("Drift_Pitch", 0, 2, "drift pitch")
+  unison->Grid.param("Drift_Cutoff", 1, 2, "drift cutoff")
+  unison->Grid.param("Drift_Rate", 2, 2, "drift rate")
 
   let phase = Grid.make(ctx, osc->Panel.body(4))
   [("Osc", "osc"), ("PWM", "pwm"), ("LFO", "lfo")]->Array.forEachWithIndex(((id, label), r) => {
@@ -218,13 +227,15 @@ let build = (ctx: Ctx.t, page) => {
   main->Grid.param("F_EnvMod", 1, 1, "env mod")
   main->Grid.param("F_VeloSens", 2, 1, "velocity")
   main->Grid.param("F_Aftertouch", 3, 1, "touch")
+  main->Grid.param("F_Morph", 0, 2, "morph")
+  main->Grid.note("morph: SVF LP › BP › HP · comb + › − · formant vowel", 1, 2, ~span=3)->ignore
   let dual = Grid.make(ctx, filter->Panel.body(1))
   dual->Grid.choice("Filter2", 0, 0, "filter 2", ~span=2)
   dual->Grid.choice("F_Double", 2, 0, "double")
   dual->Grid.param("F_Split", 3, 0, "split")
   dual->Grid.param("F_Mix", 0, 1, "mix")
   dual->Grid.param("F_Speed", 1, 1, "speed ratio")
-  let top = Grid.padTop + 2. * Grid.rowHeight + 6.
+  let top = Grid.padTop + 3. * Grid.rowHeight + 6.
   envelope(
     ctx,
     filter.el,
@@ -295,6 +306,16 @@ let build = (ctx: Ctx.t, page) => {
   v->Grid.param("RandomAmp", 2, 2, "random amp")
   v->Grid.param("FreqPan", 3, 2, "freq > pan")
   v->Grid.choice("AftertouchMode", 0, 3, "touch")
+  v->Grid.toggle("Oat_Mode", 1, 3, "Oat mode", ~span=2)
+  v
+  ->Grid.note(
+    "Oat mode keeps Oatmeal's MIDI timing: notes, controllers and arpeggiator steps start on the next 64-sample block instead of on their own sample.",
+    0,
+    4,
+    ~span=4,
+    ~rows=2,
+  )
+  ->ignore
 
   let tuning = Grid.make(ctx, voice->Panel.body(1))
   tuning->Grid.param("Tune_Main", 0, 0, "tune")

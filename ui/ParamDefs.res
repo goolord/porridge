@@ -76,6 +76,37 @@ let shortNamesFor = id =>
   | _ => None
   }
 
+// Values Porridge adds after Oatmeal's last one (long names, compact names). Oatmeal programs
+// never hold them; an Oatmeal export maps them back (Preset.toOatmeal).
+let porridgeValuesFor = id =>
+  switch id {
+  | "O1_Waveform" | "O2_Waveform" =>
+    Some((["Saw HQ", "Pulse HQ", "Triangle HQ"], ["Saw HQ", "Pulse HQ", "Triangle HQ"]))
+  | "OscMix" =>
+    Some((["PM 2 > 1", "PM 1 feedback", "ring 1 × 2", "AM 2 > 1"], ["PM 2 > 1", "PM 1 fb", "ring 1×2", "AM 2 > 1"]))
+  | "Filter" | "Filter2" =>
+    Some((
+      ["SVF LP > BP > HP", "ladder", "diode ladder", "Sallen-Key", "comb", "formant"],
+      ["SVF morph", "ladder", "diode", "Sallen-Key", "comb", "formant"],
+    ))
+  | _ => None
+  }
+
+// The closest value Oatmeal has, for an export.
+let oatmealValue = (id, x) =>
+  switch id {
+  | "O1_Waveform" | "O2_Waveform" if x > 5. => x -. 5.
+  | "OscMix" if x > 2. => 0.
+  | "Filter" | "Filter2" if x > 15. =>
+    switch Float.toInt(x) {
+    | 16 | 19 => 2.
+    | 17 | 18 => 3.
+    | 21 => 9.
+    | _ => 0.
+    }
+  | _ => x
+  }
+
 let unitShort = word =>
   switch word {
   | "semitones" | "semitone" => "st"
@@ -205,6 +236,36 @@ let porridgeDef = (index, spec: PorridgeParams.spec) =>
     }
   }
 
+// A list with Porridge's values after Oatmeal's: Oatmeal's values read as before, the new
+// ones by name, and the knob steps through all of them evenly.
+let extend = (def, oatNames, extra, extraShort) => {
+  let oatMax = def.max
+  let names = Array.concat(oatNames, extra)
+  let short =
+    def.shortNames->Option.getOr(oatNames)->Array.slice(~start=0, ~end=Array.length(oatNames))
+  let max = oatMax +. Int.toFloat(Array.length(extra))
+  let clamp = x => Float.isFinite(x) ? Math.max(def.min, Math.min(max, Math.round(x))) : def.init
+  let isNew = x => x > oatMax
+  let newName = x => names[Float.toInt(clamp(x))]->Option.getOr("")
+  let newShort = x => extraShort[Float.toInt(clamp(x) -. oatMax -. 1.)]->Option.getOr("")
+  {
+    ...def,
+    names: Some(names),
+    shortNames: Some(Array.concat(short, extraShort)),
+    max,
+    clamp,
+    toNorm: x => (clamp(x) -. def.min) /. (max -. def.min),
+    fromNorm: v => clamp(def.min +. v *. (max -. def.min)),
+    longText: x => isNew(x) ? `${def.name}: ${newName(x)}` : def.longText(x),
+    valueText: x => isNew(x) ? newName(x) : def.valueText(x),
+    shortText: x => isNew(x) ? newShort(x) : def.shortText(x),
+    parse: s =>
+      names
+      ->Array.findIndex(n => String.toLowerCase(n) == String.toLowerCase(String.trim(s)))
+      ->(i => i >= 0 ? Some(Int.toFloat(i)) : def.parse(s)),
+  }
+}
+
 // context supplies the program that status texts read other fields from (octave size,
 // tuning, breakpoint, targets...); Init values without one.
 let makeDefs = (~context=() => None) => {
@@ -246,7 +307,16 @@ let makeDefs = (~context=() => None) => {
         : Math.max(min, Math.min(max, x))
     }
     let fromNorm = v => fromF(OatmealParams.toInternal(index, Math.max(0., Math.min(1., v))))
-    let valueText = x => OatmealParams.displayText(index, toF(x), ~prog=?context())
+    // with a zero-delay-feedback filter (16..21) the cutoff knob reaches 20 kHz instead of 11
+    let zdfCutoff = () =>
+      id == "Cutoff" &&
+        context()->Option.mapOr(false, prog =>
+          (prog->ByteView.getI32(OatmealParams.offFilter) &&& 0xffff) >= 16
+        )
+    let valueText = (x: float) =>
+      zdfCutoff()
+        ? Float.toFixed(x * x * x * 19980. + 20., ~digits=2) ++ " Hz"
+        : OatmealParams.displayText(index, toF(x), ~prog=?context())
 
     // Find the knob position whose displayed number matches.
     let parse = text => {
@@ -277,7 +347,7 @@ let makeDefs = (~context=() => None) => {
       }
     }
 
-    {
+    let def = {
       id,
       index,
       name,
@@ -293,14 +363,21 @@ let makeDefs = (~context=() => None) => {
       toNorm: x => OatmealParams.toNormalized(index, toF(x)),
       fromNorm,
       longText: x =>
-        OatmealParams.statusText(
-          index,
-          OatmealParams.textNormalized(index, toF(x)),
-          ~prog=?context(),
-        ),
+        zdfCutoff()
+          ? `Cutoff: ${valueText(x)}`
+          : OatmealParams.statusText(
+              index,
+              OatmealParams.textNormalized(index, toF(x)),
+              ~prog=?context(),
+            ),
       valueText,
       shortText: x => compact(valueText(x)),
       parse,
+    }
+
+    switch (porridgeValuesFor(id), def.names) {
+    | (Some((extra, extraShort)), Some(oatNames)) => extend(def, oatNames, extra, extraShort)
+    | _ => def
     }
   })->Array.concat(
     PorridgeParams.all->Array.mapWithIndex((spec, i) =>

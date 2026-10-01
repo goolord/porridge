@@ -3,7 +3,8 @@
 
 open! Web
 
-type item = {label: string, value: int}
+// An item may have an icon in front of its label (see Icons).
+type item = {label: string, value: int, icon?: element}
 
 type t = {
   root: element,
@@ -32,8 +33,18 @@ let show = (t, anchor, items, current, onPick) =>
     let m = el("div", ~cls="menu", ~parent=t.root)
     t.menu = Some(m)
     t.anchor = Some(anchor)
-    items->Array.forEach(({label, value}) => {
-      let row = el("div", ~cls=value == current ? "cur" : "", ~text=label, ~parent=m)
+    let withIcons = items->Array.some(item => item.icon != None)
+    if withIcons {
+      m->addClass("icons")
+    }
+    items->Array.forEach(({label, value, ?icon}) => {
+      let row = el("div", ~cls=value == current ? "cur" : "", ~parent=m)
+      switch icon {
+      | Some(icon) => row->appendChild(icon)
+      | None if withIcons => el("span", ~cls="icw", ~parent=row)->ignore
+      | None => ()
+      }
+      el("span", ~text=label, ~parent=row)->ignore
       row->onPointer(#pointerdown, ev => {
         ev->stopPropagation
         ev->preventDefault

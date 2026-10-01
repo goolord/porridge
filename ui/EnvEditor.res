@@ -1,4 +1,5 @@
-// Envelope editors, FL Studio style: drag the points to shape the envelope. A "values"
+// Envelope editors, FL Studio style: drag the points to shape the envelope, and the small
+// points in the middle of the attack, decay and release up or down to bend them. A "values"
 // switch in the corner swaps the graph for the raw parameter fields.
 //
 // Time runs left to right on a compressed (square-root) axis. Each segment is measured
@@ -12,7 +13,7 @@ let segmentGap = 12. // minimum segment width, so that points never sit on top o
 let fine = 0.1 // shift-drag factor
 
 let hintFor = name =>
-  name ++ ": drag the points to shape it, shift for fine steps. Scroll over a point to change its time, right-click to reset it."
+  name ++ ": drag the points to shape it, and the small middle points up or down to bend a stage; shift for fine steps. Scroll over a point to change it, right-click to reset it."
 
 // compressed seconds
 let units = ms => Math.sqrt(Math.max(0., ms) / 1000.)
@@ -27,7 +28,7 @@ let niceSpan = total =>
 let clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x))
 
 // A draggable point. Dragging it sideways sets `time` from the width of its segment (which
-// starts at x0); dragging it up and down sets `level`.
+// starts at x0); dragging it up and down sets `level`, or for a bend point, `curve`.
 type handle = {
   time: option<string>,
   level: option<string>,
@@ -36,6 +37,27 @@ type handle = {
   y: float,
   // drawn hollow when the stage it ends is skipped
   hollow: bool,
+  // a stage's curve (PorridgeParams.curveSpecs), and which way up bends it positive
+  curve: option<string>,
+  bendSign: float,
+}
+
+let point = (~time=?, ~level=?, ~hollow=false, x0, x, y) => {
+  time,
+  level,
+  x0,
+  x,
+  y,
+  hollow,
+  curve: None,
+  bendSign: 0.,
+}
+
+// A stage's bend point, at the middle of its segment.
+let bendPoint = (curve, (x, y), ~rising) => {
+  ...point(x, x, y),
+  curve: Some(curve),
+  bendSign: rising ? 1. : -1.,
 }
 
 // Scales held for the length of a drag.
@@ -60,7 +82,7 @@ type shape = {
   dimmed: unit => bool,
 }
 
-let handleIds = h => [h.time, h.level]->Array.filterMap(id => id)
+let handleIds = h => [h.time, h.level, h.curve]->Array.filterMap(id => id)
 
 //==============================================================================
 // Shapes
@@ -74,12 +96,35 @@ let envCubic = (l: float, lo: float, hi: float) =>
       6. * lo * hi * l +
       (lo + hi) * lo * hi) / ((hi - lo) * (hi - lo))
 
+// The DSP's stage curves: the distance left to a stage's end level, raised to 8^curve.
+let bend = (level: float, from: float, to: float, curve: float) =>
+  curve == 0. || from == to
+    ? level
+    : to + (from - to) * Math.pow(clamp((level - to) / (from - to), 0., 1.), ~exp=Math.pow(8., ~exp=curve))
+
+// The envelope a parameter prefix belongs to, as PorridgeParams names it.
+let envName = prefix =>
+  switch prefix {
+  | "" => "Amp"
+  | "F_" => "Filter"
+  | "M1_" => "Mod1"
+  | _ => "Mod2"
+  }
+
+let curveIds = prefix =>
+  ["Attack", "Decay", "Release"]->Array.map(stage => PorridgeParams.curveId(envName(prefix), stage))
+
 // Attack, hold, decay 1 to the breakpoint, decay 2 to sustain, release. The amp envelope
 // is drawn in dB like its readouts; the others are linear, like their percentages.
 let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
   let model = ctx.model
   let id = k => prefix ++ k
   let get = k => model->ParamModel.get(id(k))
+  let (attackCurve, decayCurve, releaseCurve) = switch curveIds(prefix) {
+  | [a, d, r] => (a, d, r)
+  | _ => ("", "", "")
+  }
+  let curve = c => model->ParamModel.get(c)
   let levelDef = model->ParamModel.def(id("Sustain"))
   let decibels = prefix == ""
   let (top, bottom) = (margin, h - margin)
@@ -115,37 +160,43 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
     let xr = after(xr0, "Release")
 
     let points = [(x0, yOf(0.))]
-    let sample = (xFrom: float, xTo: float, level) =>
+    // each sampled segment, and its middle point
+    let sample = (xFrom: float, xTo: float, level) => {
       for k in 1 to 24 {
         let t = Int.toFloat(k) / 24.
         points->Array.push((xFrom + (xTo - xFrom) * t, yOf(level(t))))
       }
-    sample(x0, xa, t => (2. - t) * t)
-    points->Array.push((xh, yOf(1.)))
-    if !skip {
-      sample(xh, xb, t => envCubic(Math.pow(bp, ~exp=t), bp, 1.))
+      ((xFrom + xTo) / 2., yOf(level(0.5)))
     }
+    let (ca, cd, cr) = (curve(attackCurve), curve(decayCurve), curve(releaseCurve))
+    let attackMid = sample(x0, xa, t => {
+      let a = bend(t, 0., 1., ca)
+      (2. - a) * a
+    })
+    points->Array.push((xh, yOf(1.)))
+    let decay1Mid = skip ? None : Some(sample(xh, xb, t => bend(envCubic(Math.pow(bp, ~exp=t), bp, 1.), 1., bp, cd)))
     let lo = Math.max(sus, 1e-4)
-    sample(xb, xs, t => envCubic(bp * Math.pow(lo / bp, ~exp=t), lo, bp))
+    let decay2Mid = sample(xb, xs, t => bend(envCubic(bp * Math.pow(lo / bp, ~exp=t), lo, bp), bp, lo, cd))
     points->Array.push((xr0, yOf(sus)))
-    sample(xr0, xr, t =>
-      sus <= 0.001 ? 0. : (sus * Math.pow(10., ~exp=-3. * t) - 0.001) * sus / (sus - 0.001)
+    let releaseMid = sample(xr0, xr, t =>
+      sus <= 0.001 ? 0. : bend((sus * Math.pow(10., ~exp=-3. * t) - 0.001) * sus / (sus - 0.001), sus, 0., cr)
     )
+    // the decay curve bends both decays; its point sits on whichever one has a drop
+    let (decayMid, decayRising) = switch decay1Mid {
+    | Some(mid) if Math.abs(bp - sus) < 0.02 => (mid, false)
+    | _ => (decay2Mid, sus > bp)
+    }
 
     let top = yOf(1.)
     let handles = [
-      {time: Some(id("Attack")), level: None, x0, x: xa, y: top, hollow: false},
-      {time: Some(id("Hold")), level: None, x0: xa, x: xh, y: top, hollow: false},
-      {
-        time: Some(id("Decay1")),
-        level: Some(id("Breakpoint")),
-        x0: xh,
-        x: xb,
-        y: yOf(bp),
-        hollow: skip,
-      },
-      {time: Some(id("Decay2")), level: Some(id("Sustain")), x0: xb, x: xs, y: yOf(sus), hollow: false},
-      {time: Some(id("Release")), level: None, x0: xr0, x: xr, y: yOf(0.), hollow: false},
+      point(~time=id("Attack"), x0, xa, top),
+      point(~time=id("Hold"), xa, xh, top),
+      point(~time=id("Decay1"), ~level=id("Breakpoint"), ~hollow=skip, xh, xb, yOf(bp)),
+      point(~time=id("Decay2"), ~level=id("Sustain"), xb, xs, yOf(sus)),
+      point(~time=id("Release"), xr0, xr, yOf(0.)),
+      bendPoint(attackCurve, attackMid, ~rising=true),
+      bendPoint(decayCurve, decayMid, ~rising=decayRising),
+      bendPoint(releaseCurve, releaseMid, ~rising=false),
     ]
     (points, handles)
   }
@@ -165,7 +216,10 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
     )
 
   {
-    ids: ["Attack", "Hold", "Decay1", "Breakpoint", "Decay2", "Sustain", "Release"]->Array.map(id),
+    ids: [
+      ...["Attack", "Hold", "Decay1", "Breakpoint", "Decay2", "Sustain", "Release"]->Array.map(id),
+      ...curveIds(prefix),
+    ],
     fit,
     layout,
     setTime,
@@ -237,31 +291,10 @@ let pitch = (ctx: Ctx.t, ~w, ~h): shape => {
     points->Array.push((xr, yOf(sustain + release, f)))
 
     let handles = [
-      {time: None, level: Some("PEnv_Start"), x0, x: x0, y: yOf(semitones(r0), f), hollow: false},
-      {
-        time: Some("PEnv_Attack"),
-        level: Some("PEnv_Peak"),
-        x0,
-        x: xp,
-        y: yOf(peak, f),
-        hollow: false,
-      },
-      {
-        time: Some("PEnv_Decay"),
-        level: Some("PEnv_Sustain"),
-        x0: xp,
-        x: xs,
-        y: yOf(sustain, f),
-        hollow: false,
-      },
-      {
-        time: None,
-        level: Some("PEnv_Release"),
-        x0: xs,
-        x: xr,
-        y: yOf(sustain + release, f),
-        hollow: false,
-      },
+      point(~level="PEnv_Start", x0, x0, yOf(semitones(r0), f)),
+      point(~time="PEnv_Attack", ~level="PEnv_Peak", x0, xp, yOf(peak, f)),
+      point(~time="PEnv_Decay", ~level="PEnv_Sustain", xp, xs, yOf(sustain, f)),
+      point(~level="PEnv_Release", xs, xr, yOf(sustain + release, f)),
     ]
     (points, handles)
   }
@@ -378,8 +411,12 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
           e->setAttribute("cy", Num(h.y))
         })
         let hot = hover.contents == Some(i) || dragging.contents == Some(i)
-        dot->setAttribute("class", Str("node" ++ (h.hollow ? " hollow" : "") ++ (hot ? " hot" : "")))
-        dot->setAttribute("r", Num(hot ? 5.5 : 4.))
+        let isBend = h.curve != None
+        dot->setAttribute(
+          "class",
+          Str("node" ++ (h.hollow ? " hollow" : "") ++ (isBend ? " bend" : "") ++ (hot ? " hot" : "")),
+        )
+        dot->setAttribute("r", Num(isBend ? (hot ? 4.5 : 3.) : hot ? 5.5 : 4.))
       })
     )
 
@@ -416,6 +453,7 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
       let k = box.w / (s->getBoundingClientRect).width
       let x = ref(h.x)
       let y = ref(h.y)
+      let curve0 = h.curve->Option.map(c => model->ParamModel.get(c))->Option.getOr(0.)
       let last = ref((ev->clientX, ev->clientY))
       hit->Controls.capturePointer(
         ev,
@@ -428,6 +466,10 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
           // the level first: it decides whether decay 1 is skipped
           shape.setLevel(h, y.contents, frame.contents)
           shape.setTime(h, x.contents - h.x0 - segmentGap, frame.contents)
+          // a bend point: up or down bends its stage, a full bend per 60 pixels
+          h.curve->Option.forEach(c =>
+            model->ParamModel.set(c, clamp(curve0 + h.bendSign * (h.y - y.contents) / 60., -1., 1.))
+          )
           draw()
         },
         ~onUp=() => {
@@ -476,6 +518,7 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
       handles.contents[i]->Option.forEach(h =>
         h.time
         ->Option.orElse(h.level)
+        ->Option.orElse(h.curve)
         ->Option.forEach(id => {
           let def = model->ParamModel.def(id)
           let d = (ev->deltaY < 0. ? 1. : -1.) / 100.
@@ -496,6 +539,8 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
     | (Some(_), None) => "ew-resize"
     | _ => "ns-resize"
     }
+    let isBend = h.curve != None
+    hit->setAttribute("r", Num(isBend ? 6. : 8.))
     hit->setAttribute("style", Str("cursor:" ++ cursor))
     (dot, hit)
   })

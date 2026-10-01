@@ -58,9 +58,28 @@ The presets in a bank have the same fields as a preset file, without `porridge` 
 
 Porridge's own parameters follow Oatmeal's 342 as host parameters (`ui/PorridgeParams.res`):
 the macros `Macro_1`..`Macro_4`, then four per modulation slot (`ModN_Source`, `ModN_Target`,
-`ModN_Amount`, `ModN_Via` for N = 1..16), then `MPE_On` and `MPE_BendRange`. They are appended to, never reordered, and each one's
-default leaves the sound exactly as Oatmeal's. **Export for Oatmeal** leaves them out and says
-so.
+`ModN_Amount`, `ModN_Via` for N = 1..16), then `MPE_On` and `MPE_BendRange`, then:
+
+| parameters | |
+|---|---|
+| `Oat_Mode` | Oatmeal's MIDI timing (each message at the next 64-sample block) instead of sample-accurate |
+| `Drift_Pitch`, `Drift_Cutoff`, `Drift_Rate` | analog drift: cents per unison copy, semitones of cutoff per voice, Hz |
+| `FX_Order` | the order of chorus, delay, reverb and EQ: the index of a permutation, in lexicographic order (0 is Oatmeal's) |
+| `PM_Feedback` | osc 1's self-feedback in the PM osc mix modes |
+| `F_Morph` | the zero-delay-feedback filters' morph (SVF lowpass › bandpass › highpass, comb polarity, formant vowel) |
+| `Curve_Amp_Attack` ... `Curve_Mod2_Release` | a curve for the attack, decays and release of the amp, filter, mod 1 and mod 2 envelopes, -1..1 |
+| `LFO_N_Delay`, `LFO_N_Fade`, `LFO_N_Slew`, `LFO_N_Steps`, `LFO_N_OneShot` | LFO delay and fade-in (ms), slew, sample & hold steps per cycle, one-shot |
+| `U_DetuneCurve`, `U_RandomPhase`, `U_Width` | unison detune curve, random phase per copy, stereo width |
+
+They are appended to, never reordered, and each one's default leaves the sound exactly as
+Oatmeal's, except `Oat_Mode` (off: MIDI is sample-accurate). **Export for Oatmeal** leaves
+them out and says so.
+
+Porridge also adds values after the last of some of Oatmeal's lists: the waveforms `Saw HQ`,
+`Pulse HQ` and `Triangle HQ` (6..8), the osc mix modes `PM 2 > 1`, `PM 1 feedback`, `ring 1 × 2`
+and `AM 2 > 1` (3..6), and the filter types `SVF`, `ladder`, `diode ladder`, `Sallen-Key`, `comb`
+and `formant` (16..21, for both filters). An Oatmeal export writes the closest value Oatmeal
+has (the plain waveform, normal mix, a lowpass or bandpass) and says so.
 
 ## Compatibility rules
 

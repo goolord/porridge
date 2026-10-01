@@ -4,6 +4,10 @@
 //  followed by band-limited 512- and 256-sample tables that keep fewer and fewer harmonics, so
 //  that the oscillator can pick, per block, the table whose harmonics all lie below Nyquist.
 //  Every table has one guard sample (t[N] = t[0]) for linear interpolation.
+//
+//  The HQ saw and triangle (Porridge's) are the same two waveforms without the aliasing:
+//  4096-sample tables every half octave, each keeping only the harmonics that stay below
+//  Nyquist for the highest note it plays. They follow the four sets in 'sets'.
 
 namespace porridge
 {
@@ -25,10 +29,18 @@ namespace porridge
     let setUser1 = 2;
     let setUser2 = 3;
 
+    let hqLevels = 21;      // 1023 harmonics, then half an octave fewer each level, down to 1
+    let hqSize = 4096;
+    let hqStride = hqSize + 1;
+    let hqHarmonics = 1023;
+    let hqBase = setSize * 4;
+    let hqSetSize = hqLevels * hqStride;
+
     struct WaveTables
     {
         float[32769] sine;
-        float[setSize * 4] sets;
+        float[setSize * 4 + 2 * hqLevels * hqStride] sets;
+        float64[2 * 1024] hqSpectrum;   // scratch: harmonics 0 .. 1023 of the waveform being built
         float64[65536] fft;             // scratch: interleaved complex, up to 32768 points
         float64[514] spectrum;          // scratch: one-sided spectrum (re, im) for up to 256 bins
         float[32768] source;            // scratch: T0 being built
@@ -251,6 +263,8 @@ namespace porridge
             this.source.at (i) = float (float64 (this.source.at (i)) * inv);
 
         this.buildSet (setTri);
+        this.buildHQ (setSaw);
+        this.buildHQ (setTri);
 
         // LFO tables: sine (starts at 0.5 rising), saw, square, triangle, all 0..1
         for (int i = 0; i < 32768; ++i)
@@ -265,7 +279,73 @@ namespace porridge
             this.lfo.at (t * 32769 + 32768) = this.lfo.at (t * 32769);
     }
 
+    /// The harmonics an HQ level keeps.
+    int hqLevelHarmonics (int level)
+    {
+        return max (1, int (float64 (hqHarmonics) * pow (2.0, -0.5 * float64 (level)) + 1e-9));
+    }
+
+    /// Builds the HQ tables of a set (saw or triangle) from its 32768-point table.
+    void buildHQ (WaveTables& this, int set)
+    {
+        let base = set * setSize + tabT0;
+
+        for (int i = 0; i < 32768; ++i)
+        {
+            this.fft.at (2 * i) = float64 (this.sets.at (base + i));
+            this.fft.at (2 * i + 1) = 0;
+        }
+
+        fftInPlace (this.fft, 32768, false);
+
+        for (int k = 0; k < 1024; ++k)
+        {
+            this.hqSpectrum.at (2 * k) = this.fft.at (2 * k) / 32768.0;
+            this.hqSpectrum.at (2 * k + 1) = this.fft.at (2 * k + 1) / 32768.0;
+        }
+
+        for (int level = 0; level < hqLevels; ++level)
+        {
+            let K = hqLevelHarmonics (level);
+
+            for (int i = 0; i < 2 * hqSize; ++i)
+                this.fft.at (i) = 0;
+
+            this.fft.at (0) = this.hqSpectrum.at (0);
+
+            for (int k = 1; k <= K; ++k)
+            {
+                let re = this.hqSpectrum.at (2 * k), im = this.hqSpectrum.at (2 * k + 1);
+                this.fft.at (2 * k) = re;
+                this.fft.at (2 * k + 1) = im;
+                this.fft.at (2 * (hqSize - k)) = re;
+                this.fft.at (2 * (hqSize - k) + 1) = -im;
+            }
+
+            fftInPlace (this.fft, hqSize, true);
+
+            let out = hqBase + set * hqSetSize + level * hqStride;
+
+            for (int i = 0; i < hqSize; ++i)
+                this.sets.at (out + i) = float (this.fft.at (2 * i));
+
+            this.sets.at (out + hqSize) = this.sets.at (out);
+        }
+    }
+
     //==============================================================================
+    /// Picks the HQ table of a set for a phase increment: the first level whose top harmonic
+    /// stays below Nyquist.
+    TableChoice chooseHQ (int set, int64 inc)
+    {
+        var level = 0;
+
+        while (level < hqLevels - 1 && float64 (hqLevelHarmonics (level)) * float64 (max (inc, 1i64)) >= 2147483648.0)
+            ++level;
+
+        return TableChoice (hqBase + set * hqSetSize + level * hqStride, 20);
+    }
+
     /// Picks the table for a phase increment (uint32 in an int64). Returns the absolute offset
     /// into 'sets' in .offset and the phase shift in .shift.
     struct TableChoice

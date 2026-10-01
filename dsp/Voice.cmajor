@@ -37,6 +37,20 @@ namespace porridge
 
         // MPE: the MIDI channel the note came from (0 = the master channel)
         int chan;
+
+        // LFO delay / fade-in: samples since the note started; LFO slew: the smoothed values
+        int age;
+        float lfo1Slew, lfo2Slew;
+
+        // analog drift: slow random values for each unison copy of both oscillators' pitch
+        // (0 .. 31) and the cutoff (32)
+        Drift[2 * maxUnison + 1] drift;
+    }
+
+    /// A slow random value, -1..1: eases from a to b, then picks a new b.
+    struct Drift
+    {
+        float a, b, phase, rate;
     }
 
     /// The voice's current amp level (used for stealing and re-strike velocity).

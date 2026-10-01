@@ -3,7 +3,8 @@
 //     parameters, tables and name;
 //   - the stored-state bank encoding reads back to the same presets;
 //   - a preset missing parameters and tables reads back with their defaults;
-//   - modulations, macro names and microtunings survive a round trip.
+//   - modulations, macro names and microtunings survive a round trip;
+//   - Porridge's extra list values export as Oatmeal's nearest, and are reported.
 //
 // run: node tools/test/presets.mjs
 
@@ -83,6 +84,18 @@ else
     if (back.meta.macroNames[0] !== "tone") fail ("macro names");
     if (Preset.porridgeOnly (back).join () !== "modulations,macros") fail ("porridgeOnly: " + Preset.porridgeOnly (back));
     if (Preset.porridgeOnly (presets[0]).length !== 0) fail ("factory program reported as Porridge-only");
+}
+
+// list values Porridge added become Oatmeal's nearest on export, and are reported
+{
+    const p = Preset.make ("extended");
+    p.values.set ("O1_Waveform", 7); p.values.set ("Filter", 21); p.values.set ("OscMix", 5); p.values.set ("FX_Order", 3);
+    const v = Bank.programValues (Preset.toOatmeal (p));
+    if (v.get ("O1_Waveform") !== 2 || v.get ("Filter") !== 9 || v.get ("OscMix") !== 0)
+        fail (`extended values exported as ${v.get ("O1_Waveform")}, ${v.get ("Filter")}, ${v.get ("OscMix")}`);
+    const lost = Preset.porridgeOnly (p).join ();
+    for (const what of ["HQ waveforms", "osc mix", "zero-delay-feedback", "effects order"])
+        if (! lost.includes (what)) fail ("porridgeOnly misses " + what + ": " + lost);
 }
 
 // a microtuning keeps its Scala text, and the Scala table follows the files

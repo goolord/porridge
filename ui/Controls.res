@@ -285,12 +285,24 @@ let choice = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=76., ~label=?, ~names=?) => {
   let e = el("div", ~cls="p ch", ~parent)->place(x, y, ~w)
   e->setTabIndex(0)
   el("span", ~cls="l", ~text=label->Option.getOr(c.def.name), ~parent=e)->ignore
-  let v = el("span", ~cls="v", ~parent=e)
+  let withIcons = Icons.has(id)
+  let v = el("span", ~cls=withIcons ? "v withicon" : "v", ~parent=e)
+  let icon = value => Icons.forValue(id, value, menuNames[value]->Option.getOr(""))
   hookStatus(c, e)
 
   let update = () => {
     let x = current(c)
-    v->setTextContent(names[Float.toInt(x)]->Option.getOr(Float.toString(x)))
+    let i = Float.toInt(x)
+    let text = names[i]->Option.getOr(Float.toString(x))
+    switch withIcons ? icon(i) : None {
+    | Some((mark, _)) =>
+      // the short name, less what the icon shows (e.g. "HQ")
+      let text = String.endsWith(text, " HQ") ? String.slice(text, ~start=0, ~end=String.length(text) - 3) : text
+      v->setTextContent("")
+      v->appendChild(mark)
+      el("span", ~text, ~parent=v)->ignore
+    | None => v->setTextContent(text)
+    }
     refreshStatus(c)
   }
 
@@ -299,7 +311,12 @@ let choice = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=76., ~label=?, ~names=?) => {
   let openMenu = () =>
     ctx.menu->Menu.show(
       e,
-      menuNames->Array.mapWithIndex((label, value) => {Menu.label, value}),
+      menuNames->Array.mapWithIndex((label, value) =>
+        switch withIcons ? icon(value) : None {
+        | Some((icon, label)) => {Menu.label, value, icon}
+        | None => {Menu.label, value}
+        }
+      ),
       Float.toInt(current(c)),
       i => gestureSet(c, Int.toFloat(i)),
     )
@@ -336,10 +353,11 @@ let choice = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=76., ~label=?, ~names=?) => {
   update()
 }
 
-// An on/off box with a label.
-let toggle = (ctx: Ctx.t, parent, id, ~x, ~y, ~label=?) => {
+// An on/off box with a label. With a width, it fills it (as in a grid cell); without, it
+// is as wide as its label.
+let toggle = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=?, ~label=?) => {
   let c = control(ctx, id)
-  let e = el("div", ~cls="tg", ~parent)->place(x, y)
+  let e = el("div", ~cls="tg", ~parent)->place(x, y, ~w?)
   e->setTabIndex(0)
   el("b", ~parent=e)->ignore
   el("span", ~text=label->Option.getOr(c.def.name), ~parent=e)->ignore
@@ -373,8 +391,8 @@ let toggle = (ctx: Ctx.t, parent, id, ~x, ~y, ~label=?) => {
   update()
 }
 
-let button = (ctx: Ctx.t, parent, text, ~x, ~y, ~w, ~status=?, onClick) => {
-  let e = el("button", ~cls="btn", ~text, ~parent)->place(x, y, ~w)
+let button = (ctx: Ctx.t, parent, text, ~x, ~y, ~w, ~h=?, ~cls="", ~status=?, onClick) => {
+  let e = el("button", ~cls=cls == "" ? "btn" : "btn " ++ cls, ~text, ~parent)->place(x, y, ~w, ~h?)
   e->onMouse(#click, _ => onClick())
   status->Option.forEach(status => {
     e->onMouse(#mouseenter, _ => ctx.status->Status.show(status))

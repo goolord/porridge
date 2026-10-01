@@ -1,5 +1,6 @@
-//  Voice filter (16 types) and distortion, following Oatmeal's per-64-sample-block structure:
-//  cutoff and resonance are computed once per block; smoothed coefficients ramp per sample.
+//  Voice filter (16 types, and Porridge's zero-delay-feedback types 16..21) and distortion, following Oatmeal's per-block structure: cutoff and
+//  resonance are computed once per block (64 samples, or shorter where sample-accurate MIDI
+//  splits a block); smoothed coefficients ramp per sample.
 
 namespace porridge
 {
@@ -27,7 +28,21 @@ namespace porridge
         float lN, bN;                              // notch
         float pa, pr, pfb;                         // phaser
         float[36] px, py;
+
+        // zero-delay-feedback types: last block's coefficients (each block ramps from them),
+        // integrator states, the diode ladder's and Sallen-Key's solved matrix, the comb's line
+        bool zFirst;
+        float zg, zk;
+        float[4] zs;
+        float[3] fg, fa;
+        float[6] fs;
+        float[20] zm;
+        float[combSize] comb;
+        int combPos;
+        float combD;
     }
+
+    let combSize = 2048;
 
     void clearState (Filter& this)
     {
@@ -40,6 +55,7 @@ namespace porridge
         this.f6 = 1.0f; this.q6 = 1.0f;
         this.f8 = 1e-4f; this.q8 = 1.0f;
         this.f9 = 1e-4f; this.q9 = 1.0f;
+        this.zFirst = true;
     }
 
     bool filterIsHalfRate (int t)
@@ -47,14 +63,20 @@ namespace porridge
         return t == 2 || t == 3 || t == 8 || t == 9 || t == 11 || t == 12;
     }
 
-    /// Filters one block in place. hz = modulated cutoff (>= 5), res = 0..1.
-    void process (Filter& this, const FxTables& tables, int t, float hz, float res, float64 sampleRate,
-                  float[blockSize]& buf)
+    /// Filters one block in place. hz = modulated cutoff (>= 5), res = 0..1, morph = 0..1 (the
+    /// zero-delay-feedback types).
+    void process (Filter& this, const FxTables& tables, int t, float hz, float res, float morph, float64 sampleRate,
+                  float[blockSize]& buf, int n)
     {
-        if (t <= 0 || t > 15)
+        if (t <= 0 || t > 21)
             return;
 
-        let n = blockSize;
+        if (t >= 16)
+        {
+            this.processZdf (tables, t, hz, res, morph, sampleRate, buf, n);
+            return;
+        }
+
         let SR = max (float (sampleRate), 44100.0f);
         var w = float (2.0 / float64 (SR) * float64 (piF) * float64 (hz));
 
@@ -79,21 +101,21 @@ namespace porridge
             let tt = first ? c : (c - float64 (s)) * float64 (ksm) + float64 (s);
             let d = float ((tt - float64 (s)) / float64 (n));
 
-            for (wrap<blockSize> i)
+            for (int i = 0; i < n; ++i)
             {
                 let cc = float64 (s) + float64 (d);
                 s = float (cc);
-                let x = buf[i];
+                let x = buf.at (i);
 
                 if (t == 1)
                 {
                     let y = float ((1.0 - 2.0 * cc) * float64 (this.y1) + cc * (float64 (x) + float64 (this.x1)));
-                    this.x1 = x; this.y1 = y; buf[i] = y;
+                    this.x1 = x; this.y1 = y; buf.at (i) = y;
                 }
                 else
                 {
                     let y = float ((2.0 * cc - 1.0) * float64 (this.hy1) + cc * (float64 (x) - float64 (this.hx1)));
-                    this.hx1 = x; this.hy1 = y; buf[i] = y;
+                    this.hx1 = x; this.hy1 = y; buf.at (i) = y;
                 }
             }
 
@@ -109,15 +131,15 @@ namespace porridge
             let a2 = float64 (1.0f - c) + float64 (r1) * float64 (c);
             var x1 = this.w7x1, y1 = this.w7y1, op = this.w7o;
 
-            for (wrap<blockSize> i)
+            for (int i = 0; i < n; ++i)
             {
-                let x = buf[i];
+                let x = buf.at (i);
                 let y = float ((1.0 - 2.0 * float64 (a1)) * float64 (y1) + float64 (a1) * (float64 (x) + float64 (x1)));
                 x1 = x;
                 let o = float ((2.0 * a2 - 1.0) * float64 (op) + a2 * (float64 (y) - float64 (y1)));
                 y1 = y;
                 op = o;
-                buf[i] = o;
+                buf.at (i) = o;
             }
 
             this.w7x1 = x1; this.w7y1 = y1; this.w7o = op;
@@ -132,13 +154,13 @@ namespace porridge
             let g = 1.0f / q;
             var lo = this.lN, ba = this.bN;
 
-            for (wrap<blockSize> i)
+            for (int i = 0; i < n; ++i)
             {
-                let x = buf[i];
+                let x = buf.at (i);
                 lo = ba * fN + lo;
                 let h = x * q - lo - ba * q;
                 ba = h * fN + ba;
-                buf[i] = (h + lo) * g;
+                buf.at (i) = (h + lo) * g;
             }
 
             this.lN = lo; this.bN = ba;
@@ -166,11 +188,11 @@ namespace porridge
             let dr = (res - this.pr) * invN;
             var pa = this.pa, pr = this.pr, fb = this.pfb;
 
-            for (wrap<blockSize> i)
+            for (int i = 0; i < n; ++i)
             {
                 pa = pa + da;
                 pr = pr + dr;
-                var v = buf[i] - tanhTable (tables, fb) * pr;
+                var v = buf.at (i) - tanhTable (tables, fb) * pr;
 
                 for (int k = 0; k < N; ++k)
                 {
@@ -181,7 +203,7 @@ namespace porridge
                 }
 
                 fb = v;
-                buf[i] = fb;
+                buf.at (i) = fb;
             }
 
             this.pa = pa; this.pr = pr; this.pfb = fb;
@@ -235,12 +257,12 @@ namespace porridge
             dG = float64 (float ((float64 (0.005f) / (float64 (float (fn)) * qn) - G) * float64 (invN)));
         }
 
-        for (wrap<blockSize> i)
+        for (int i = 0; i < n; ++i)
         {
             let fe = float64 (fs) + float64 (df); fs = float (fe);
             let qe = float64 (qs) + float64 (dq); qs = float (qe);
             G += dG;
-            let x = float64 (buf[i]);
+            let x = float64 (buf.at (i));
 
             if (t == 2 || t == 11)
             {
@@ -254,7 +276,7 @@ namespace porridge
                 }
 
                 this.low2 = lo; this.band2 = ba;
-                buf[i] = float (G * float64 (lo));
+                buf.at (i) = float (G * float64 (lo));
             }
             else if (t == 5)
             {
@@ -262,7 +284,7 @@ namespace porridge
                 let h = qe * x - float64 (lo) - qe * float64 (this.band5);
                 this.band5 = float (fe * h + float64 (this.band5));
                 this.low5 = lo;
-                buf[i] = float ((h + float64 (this.hp5)) * G);
+                buf.at (i) = float ((h + float64 (this.hp5)) * G);
                 this.hp5 = float (h);
             }
             else if (t == 3 || t == 12)
@@ -279,7 +301,7 @@ namespace porridge
                 }
 
                 this.l31 = l1; this.b31 = b1; this.l32 = l2; this.b32 = b2;
-                buf[i] = float (G * float64 (l2));
+                buf.at (i) = float (G * float64 (l2));
             }
             else if (t == 6)
             {
@@ -289,7 +311,7 @@ namespace porridge
                 let l2 = float (fe * float64 (this.b62) + float64 (this.l62));
                 let h2 = h1 * qe - float64 (l2) - qe * float64 (this.b62);
                 this.b62 = float (h2 * fe + float64 (this.b62)); this.l62 = l2;
-                buf[i] = float ((h2 + float64 (this.h6)) * G);
+                buf.at (i) = float ((h2 + float64 (this.h6)) * G);
                 this.h6 = float (h2);
             }
             else if (t == 8)
@@ -301,7 +323,7 @@ namespace porridge
                 lo = float (fe * float64 (ba) + float64 (lo));
                 ba = float ((qe * x - float64 (lo) - qe * float64 (ba)) * fe + float64 (ba));
                 this.l8 = lo; this.b8 = ba;
-                buf[i] = float ((float64 (ba) + float64 (bmid)) * G);
+                buf.at (i) = float ((float64 (ba) + float64 (bmid)) * G);
             }
             else
             {
@@ -319,7 +341,7 @@ namespace porridge
                 }
 
                 this.l91 = l1; this.b91 = b1; this.l92 = l2; this.b92 = b2;
-                buf[i] = float ((hLast + float64 (float (h0))) * G);
+                buf.at (i) = float ((hLast + float64 (float (h0))) * G);
             }
         }
 
@@ -329,6 +351,286 @@ namespace porridge
         else if (t == 6)            { this.f6 = fs; this.q6 = qs; }
         else if (t == 8)            { this.f8 = fs; this.q8 = qs; }
         else                        { this.f9 = fs; this.q9 = qs; }
+    }
+
+    //==============================================================================
+    //  Zero-delay-feedback filters (Zavalishin, The Art of VA Filter Design): trapezoidal
+    //  integrators solved together with their feedback, so they stay stable however fast the
+    //  cutoff moves. The coefficients are worked out per block and ramped per sample.
+
+    bool isZdfFilter (int t)        { return t >= 16 && t <= 21; }
+
+    /// 2 tanh (x / 2), from the table: soft saturation that leaves small signals alone.
+    float softSat (const FxTables& t, float x)      { return 2.0f * tanhTable (t, 0.5f * x); }
+
+    /// tan (pi f / sr), with f kept below 0.45 sr.
+    float prewarp (float hz, float64 sr)
+    {
+        return float (tan (float64 (piF) * min (float64 (hz), 0.45 * sr) / sr));
+    }
+
+    // the diode ladder's linear model: four coupled stages; it resonates at 0.7266 of its
+    // stage frequency and oscillates at a feedback of about 22
+    let diodeA = float[16] (-2.0f, 1.0f, 0.0f, 0.0f,
+                             0.5f, -1.0f, 0.5f, 0.0f,
+                             0.0f, 0.5f, -1.0f, 0.5f,
+                             0.0f, 0.0f, 0.5f, -0.5f);
+    let diodePeak = 0.7266f;
+    let diodeOsc = 22.1f;
+
+    /// Solves (I - g A) M = I and returns M (16) and g M b (4, b = the first unit vector) in m,
+    /// for an N-stage linear system (N = 2 or 4; A row-major, N x N in the top left of 4 x 4).
+    void solveZdf (float[20]& m, const float[16]& A, float g, int N)
+    {
+        float64[32] w;
+
+        for (int r = 0; r < 4; ++r)
+        {
+            for (int c = 0; c < 4; ++c)
+            {
+                let a = (r < N && c < N) ? float64 (A.at (r * 4 + c)) : 0.0;
+                w.at (r * 8 + c) = (r == c ? 1.0 : 0.0) - float64 (g) * a;
+                w.at (r * 8 + 4 + c) = r == c ? 1.0 : 0.0;
+            }
+        }
+
+        // Gauss-Jordan; the matrices are diagonally dominant, so no pivoting
+        for (int c = 0; c < 4; ++c)
+        {
+            let p = 1.0 / w.at (c * 8 + c);
+
+            for (int k = 0; k < 8; ++k)
+                w.at (c * 8 + k) = w.at (c * 8 + k) * p;
+
+            for (int r = 0; r < 4; ++r)
+            {
+                if (r == c) continue;
+                let f = w.at (r * 8 + c);
+
+                for (int k = 0; k < 8; ++k)
+                    w.at (r * 8 + k) = w.at (r * 8 + k) - f * w.at (c * 8 + k);
+            }
+        }
+
+        for (int r = 0; r < 4; ++r)
+        {
+            for (int c = 0; c < 4; ++c)
+                m.at (r * 4 + c) = float (w.at (r * 8 + 4 + c));
+
+            m.at (16 + r) = float (float64 (g) * w.at (r * 8 + 4));
+        }
+    }
+
+    // Formant table: (F1, F2, F3) Hz and their levels for A, E, I, O, U
+    let vowelF = float[15] (800.0f, 1150.0f, 2900.0f,  400.0f, 1600.0f, 2700.0f,  270.0f, 2140.0f, 2950.0f,
+                            450.0f, 800.0f, 2830.0f,  325.0f, 700.0f, 2530.0f);
+    let vowelA = float[15] (1.0f, 0.5f, 0.1f,  1.0f, 0.35f, 0.25f,  1.0f, 0.25f, 0.12f,
+                            1.0f, 0.4f, 0.04f,  1.0f, 0.2f, 0.03f);
+
+    void processZdf (Filter& this, const FxTables& tables, int t, float hz, float res, float morph, float64 sr,
+                     float[blockSize]& buf, int n)
+    {
+        let first = this.zFirst;
+        this.zFirst = false;
+        let invN = 1.0f / float (n);
+
+        if (t == 16 || t == 17)
+        {
+            // 16: state-variable filter, lowpass > bandpass > highpass; 17: Moog-style ladder
+            // with the input to the stages saturated
+            let g = prewarp (hz, sr);
+            let k = t == 16 ? 2.0f - 1.96f * res : res * 4.2f;
+            let g0 = first ? g : this.zg;
+            let k0 = first ? k : this.zk;
+            let dg = (g - g0) * invN;
+            let dk = (k - k0) * invN;
+            var gg = g0, kk = k0;
+            var s1 = this.zs[0], s2 = this.zs[1], s3 = this.zs[2], s4 = this.zs[3];
+            let lpW = max (0.0f, 1.0f - 2.0f * morph);
+            let hpW = max (0.0f, 2.0f * morph - 1.0f);
+            let bpW = 1.0f - lpW - hpW;
+
+            for (int i = 0; i < n; ++i)
+            {
+                gg += dg;
+                kk += dk;
+                let x = buf.at (i);
+
+                if (t == 16)
+                {
+                    let a1 = 1.0f / (1.0f + gg * (gg + kk));
+                    let v1 = a1 * (s1 + gg * (x - s2));
+                    let v2 = s2 + gg * v1;
+                    s1 = 2.0f * v1 - s1;
+                    s2 = 2.0f * v2 - s2;
+                    let hp = x - kk * v1 - v2;
+                    buf.at (i) = lpW * v2 + bpW * v1 + hpW * hp;
+                }
+                else
+                {
+                    let G = gg / (1.0f + gg);
+                    let H = 1.0f - G;
+                    let S = ((H * s1 * G + H * s2) * G + H * s3) * G + H * s4;
+                    let u = softSat (tables, (x - kk * S) / (1.0f + kk * G * G * G * G));
+                    let v1 = (u - s1) * G;  let y1 = v1 + s1;  s1 = y1 + v1;
+                    let v2 = (y1 - s2) * G; let y2 = v2 + s2;  s2 = y2 + v2;
+                    let v3 = (y2 - s3) * G; let y3 = v3 + s3;  s3 = y3 + v3;
+                    let v4 = (y3 - s4) * G; let y4 = v4 + s4;  s4 = y4 + v4;
+                    buf.at (i) = y4 * (1.0f + 0.5f * kk);       // half the passband the feedback costs
+                }
+            }
+
+            this.zs[0] = s1; this.zs[1] = s2; this.zs[2] = s3; this.zs[3] = s4;
+            this.zg = g;
+            this.zk = k;
+            return;
+        }
+
+        if (t == 18 || t == 19)
+        {
+            // 18: diode ladder (saturated feedback); 19: Sallen-Key lowpass. Both are linear
+            // systems y = M s + (g M b) u, solved per block and ramped per sample.
+            let N = t == 18 ? 4 : 2;
+            let K = 1.0f + 1.98f * res;                 // Sallen-Key gain: oscillates at 3
+            let A = t == 18 ? diodeA
+                            : float[16] (-2.0f, 1.0f - 2.0f * K, 0.0f, 0.0f,
+                                          1.0f, K - 1.0f, 0.0f, 0.0f,
+                                          0.0f, 0.0f, 0.0f, 0.0f,
+                                          0.0f, 0.0f, 0.0f, 0.0f);
+            let g = t == 18 ? prewarp (hz, sr) / diodePeak : prewarp (hz, sr);
+            let k = t == 18 ? res * diodeOsc * 1.02f : 0.0f;
+            float[20] m;
+            solveZdf (m, A, g, N);
+
+            var m0 = first ? m : this.zm;
+            float[20] dm;
+
+            for (wrap<20> j)
+                dm[j] = (m[j] - m0[j]) * invN;
+
+            let k0 = first ? k : this.zk;
+            let dk = (k - k0) * invN;
+            var kk = k0;
+            var s = this.zs;
+
+            for (int i = 0; i < n; ++i)
+            {
+                for (wrap<20> j)
+                    m0[j] += dm[j];
+
+                kk += dk;
+                float[4] ms;
+
+                for (wrap<4> r)
+                    ms[r] = m0.at (r * 4) * s[0] + m0.at (r * 4 + 1) * s[1] + m0.at (r * 4 + 2) * s[2] + m0.at (r * 4 + 3) * s[3];
+
+                let x = buf.at (i);
+                var u = x;
+
+                if (t == 18)
+                    u = softSat (tables, (x - kk * ms[3]) / (1.0f + kk * m0[19]));
+
+                for (wrap<4> r)
+                {
+                    let y = ms[r] + m0.at (16 + r) * u;
+                    s[r] = 2.0f * y - s[r];
+                    ms[r] = y;
+                }
+
+                buf.at (i) = t == 18 ? ms[3] * (1.0f + 0.5f * kk) : ms[1];
+            }
+
+            this.zs = s;
+            this.zm = m;
+            this.zk = k;
+            return;
+        }
+
+        if (t == 20)
+        {
+            // comb: a delay of one cutoff period fed back; morph turns the feedback from
+            // positive (0) through none (0.5) to negative (1)
+            let D = clamp (float (sr) / max (hz, 1.0f), 2.0f, float (combSize - 2));
+            let D0 = first ? D : this.combD;
+            let dD = (D - D0) * invN;
+            var d = D0;
+            let fb = res * 0.98f * (1.0f - 2.0f * morph);
+            let gain = 1.0f - 0.9f * abs (fb);
+            var pos = this.combPos;
+
+            for (int i = 0; i < n; ++i)
+            {
+                d += dD;
+                let rp = float (pos) - d;
+                let r0 = int (floor (rp));
+                let f = rp - float (r0);
+                let a = this.comb.at ((r0 + combSize) & (combSize - 1));
+                let b = this.comb.at ((r0 + 1 + combSize) & (combSize - 1));
+                let y = buf.at (i) + fb * (a + (b - a) * f);
+                this.comb.at (pos) = y;
+                pos = (pos + 1) & (combSize - 1);
+                buf.at (i) = y * gain;
+            }
+
+            this.combPos = pos;
+            this.combD = D;
+            return;
+        }
+
+        // formant: three band-passes at a vowel's formants; morph goes A, E, I, O, U, and the
+        // cutoff moves them (1 kHz: as spoken)
+        let shift = clamp (hz / 1000.0f, 0.25f, 4.0f);
+        let v = clamp (morph, 0.0f, 1.0f) * 4.0f;
+        let vi = min (int (v), 3);
+        let vf = v - float (vi);
+        let k = 1.0f / (4.0f + 20.0f * res);
+        var gs = float[3]();
+        var amps = float[3]();
+
+        for (wrap<3> b)
+        {
+            let f = (vowelF.at (vi * 3 + b) * (1.0f - vf) + vowelF.at (vi * 3 + 3 + b) * vf) * shift;
+            gs[b] = prewarp (f, sr);
+            amps[b] = vowelA.at (vi * 3 + b) * (1.0f - vf) + vowelA.at (vi * 3 + 3 + b) * vf;
+        }
+
+        float[3] g0, dg, a0, da;
+
+        for (wrap<3> b)
+        {
+            g0[b] = first ? gs[b] : this.fg[b];
+            a0[b] = first ? amps[b] : this.fa[b];
+            dg[b] = (gs[b] - g0[b]) * invN;
+            da[b] = (amps[b] - a0[b]) * invN;
+        }
+
+        let kk = k;
+        var s = this.fs;
+
+        for (int i = 0; i < n; ++i)
+        {
+            let x = buf.at (i);
+            float y = 0;
+
+            for (wrap<3> b)
+            {
+                g0[b] += dg[b];
+                a0[b] += da[b];
+                let gg = g0[b];
+                let a1 = 1.0f / (1.0f + gg * (gg + kk));
+                let v1 = a1 * (s.at (b * 2) + gg * (x - s.at (b * 2 + 1)));
+                let v2 = s.at (b * 2 + 1) + gg * v1;
+                s.at (b * 2) = 2.0f * v1 - s.at (b * 2);
+                s.at (b * 2 + 1) = 2.0f * v2 - s.at (b * 2 + 1);
+                y += 2.0f * kk * v1 * a0[b];
+            }
+
+            buf.at (i) = y;
+        }
+
+        this.fs = s;
+        this.fg = gs;
+        this.fa = amps;
     }
 
     //==============================================================================
@@ -435,7 +737,7 @@ namespace porridge
     }
 
     /// Sets up the block's gain ramps. Returns false when the distortion is off.
-    bool beginBlock (Distortion& this, const float[numSlots]& P, float modDb, bool isGlobal, float& dpre, float& dpost)
+    bool beginBlock (Distortion& this, const float[numSlots]& P, float modDb, bool isGlobal, float& dpre, float& dpost, int n)
     {
         let type = int (P[slot::Sat_Type]);
 
@@ -457,8 +759,8 @@ namespace porridge
             this.postS = post;
         }
 
-        dpre = (pre - this.preS) / float (blockSize);
-        dpost = (post - this.postS) / float (blockSize);
+        dpre = (pre - this.preS) / float (n);
+        dpost = (post - this.postS) / float (n);
         return true;
     }
 
@@ -498,22 +800,22 @@ namespace porridge
 
     /// Per-voice (mono) distortion of one block.
     void processMono (Distortion& this, const DistTables& t, const float[numSlots]& P, float modDb, float64 sr,
-                      float[blockSize]& buf)
+                      float[blockSize]& buf, int n)
     {
         float dpre, dpost;
 
-        if (! this.beginBlock (P, modDb, false, dpre, dpost))
+        if (! this.beginBlock (P, modDb, false, dpre, dpost, n))
             return;
 
         let type = int (P[slot::Sat_Type]);
         let os = distOversampling (P);
         let set = distFirSet (sr);
 
-        for (wrap<blockSize> i)
+        for (int i = 0; i < n; ++i)
         {
             this.preS = this.preS + dpre;
             this.postS = this.postS + dpost;
-            buf[i] = distSample (t, type, os, set, buf[i], this.preS, this.postS, this.hL, this.uL, this.idx);
+            buf.at (i) = distSample (t, type, os, set, buf.at (i), this.preS, this.postS, this.hL, this.uL, this.idx);
             if (os > 1) this.idx = (this.idx + os) & 31;
         }
     }
@@ -524,7 +826,7 @@ namespace porridge
     {
         float dpre, dpost;
 
-        if (! this.beginBlock (P, modDb, true, dpre, dpost))
+        if (! this.beginBlock (P, modDb, true, dpre, dpost, blockSize))
             return;
 
         let type = int (P[slot::Sat_Type]);

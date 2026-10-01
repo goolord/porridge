@@ -39,6 +39,18 @@ let sources = [
   {key: "slide", label: "slide (CC 74)", bipolar: false},
 ]
 
+// The sources, grouped for the mod page, by key (a source left out here is shown in a last
+// group of its own, so appending one to the list above is enough).
+let sourceGroups = [
+  ("lfos & envelopes", ["lfo1", "lfo2", "modEnv1", "modEnv2", "ampEnv", "filterEnv"]),
+  (
+    "note & performance",
+    ["velocity", "key", "aftertouch", "bend", "slide", "modWheel", "random", "x", "y"],
+  ),
+  ("macros", ["macro1", "macro2", "macro3", "macro4"]),
+  ("controllers", ["cc1", "cc2", "cc3", "cc4", "cc5", "cc6"]),
+]
+
 let sourceHelp = key =>
   switch key {
   | "lfo1" | "lfo2" => "the LFO's shape, -1..1 (without its depth modulation)"
@@ -131,12 +143,17 @@ let targets = [
   knob("EQ_4_Freq", "EQ 4 freq", "eq"),
   knob("EQ_5_Freq", "EQ 5 freq", "eq"),
   knob("Gain", "output gain", "fx"),
+  knob("F_Morph", "filter morph", "filter"),
+  knob("PM_Feedback", "pm feedback", "osc"),
+  knob("U_Width", "unison width", "osc"),
+  knob("Drift_Pitch", "drift pitch", "osc"),
 ]
 
+// The target groups, by the key in each target's group, with their titles.
 let groups = [
   ("voice", "voice"),
   ("osc", "oscillators"),
-  ("filter", "filter & dist"),
+  ("filter", "filter & distortion"),
   ("lfo", "LFOs"),
   ("fx", "effects"),
   ("eq", "EQ"),

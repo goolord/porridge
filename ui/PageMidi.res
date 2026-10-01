@@ -56,40 +56,14 @@ let build = (ctx: Ctx.t, page) => {
 
   // channel strip
   let channels = Panel.make(page, ~title="midi input", ~x=x0, ~y=y0, ~w, ~h=Grid.panelHeight(1))
-  let g = Grid.make(ctx, channels.el, ~cw=46.)
+  // 16 channel switches, the two buttons that set them all, then the pedal switch
+  let g = Grid.make(ctx, channels.el, ~cw=Grid.fitColumns(w, 24))
   for c in 0 to 15 {
     g->Grid.toggle("MIDI_Channel_" ++ Int.toString(c + 1), c, 0, Int.toString(c + 1))
   }
-  let bx = g->Grid.cx(16) + 12.
-  let by = g->Grid.cy(0)
-  Controls.button(
-    ctx,
-    channels.el,
-    "all",
-    ~x=bx,
-    ~y=by + 3.,
-    ~w=44.,
-    ~status="Receive on every channel",
-    () => setChannels(1.),
-  )->ignore
-  Controls.button(
-    ctx,
-    channels.el,
-    "none",
-    ~x=bx + 50.,
-    ~y=by + 3.,
-    ~w=44.,
-    ~status="Ignore every channel",
-    () => setChannels(0.),
-  )->ignore
-  Controls.toggle(
-    ctx,
-    channels.el,
-    "SustainPedal",
-    ~x=bx + 124.,
-    ~y=by + 5.,
-    ~label="use sustain pedal (cc 64)",
-  )
+  g->Grid.button("all", 16, 0, ~status="Receive on every channel", () => setChannels(1.))
+  g->Grid.button("none", 17, 0, ~status="Ignore every channel", () => setChannels(0.))
+  g->Grid.toggle("SustainPedal", 19, 0, "use sustain pedal (cc 64)", ~span=5)
 
   // controllers: two rows of three along the bottom
   let ccW = (w - 2. * Grid.gap) / 3.
@@ -122,16 +96,17 @@ let build = (ctx: Ctx.t, page) => {
     ~h=curveH,
   )
   mpe->Panel.headerToggle(ctx, "MPE_On", ~label="on")
-  let m = Grid.make(ctx, mpe.el)
+  let m = Grid.make(ctx, mpe.el, ~cw=Grid.fitColumns(mpeW, 2))
   m->Grid.param("MPE_BendRange", 0, 0, "note bend", ~span=2)
-  let note = el("div", ~cls="note wrap", ~parent=mpe.el)->place(
-    Grid.padX + 2.,
-    Grid.padTop + Grid.rowHeight + 6.,
-    ~w=mpeW - 2. * Grid.padX - 6.,
-  )
-  note->setTextContent(
+  m
+  ->Grid.note(
     "Channel 1 is the master channel. A note on channels 2-16 gets that channel's pitch bend, pressure (as aftertouch, when touch isn't ignored) and slide (CC 74, a modulation source). The channel switches above don't apply.",
+    0,
+    1,
+    ~span=2,
+    ~rows=5,
   )
+  ->ignore
 
   for k in 0 to 5 {
     let n = "CC" ++ Int.toString(k + 1)
@@ -143,9 +118,9 @@ let build = (ctx: Ctx.t, page) => {
       ~w=ccW,
       ~h=ccH,
     )
-    let b = Grid.make(ctx, p.el, ~cw=(ccW - 12.) / 4.)
+    let b = Grid.make(ctx, p.el, ~cw=Grid.fitColumns(ccW, 4))
     b->Grid.param(n, 0, 0, "controller")
-    b->Grid.button("learn", 1, 0, ~w=60., ~status="Move a controller to assign it", ~dy=4., () =>
+    b->Grid.button("learn", 1, 0, ~status="Move a controller to assign it", () =>
       ctx.programs->ProgramStore.learn(n)
     )
     for t in 0 to 3 {

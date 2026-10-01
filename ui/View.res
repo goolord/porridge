@@ -29,9 +29,13 @@ let make = (host, pc) => {
   let context = OatmealFormat.makeDefaultProgram("Init")
   let model = ParamModel.make(pc, ParamDefs.makeDefs(~context=() => Some(context)))
   Bank.writeValues(context, model.values)
-  model->ParamModel.listenAny(id =>
+  model->ParamModel.listenAny(id => {
     Bank.writeValues(context, Map.fromArray([(id, model->ParamModel.get(id))]))
-  )
+    // the cutoff's readout depends on the filter type
+    if id == "Filter" {
+      model->ParamModel.notify("Cutoff")
+    }
+  })
 
   let restoreBrowserChrome = BrowserChrome.install()
   // the page around the view (Cmajor's is black) shows while a host resizes the window

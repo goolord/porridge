@@ -1,5 +1,5 @@
-// Effects page, in signal order: distortion and chorus, delay, reverb, and the EQ as a
-// curve to drag.
+// Effects page: distortion and chorus, delay, reverb, and the EQ as a curve to drag. The
+// order of the effects after the distortion is a chain in the EQ panel's title row.
 
 open! Web
 
@@ -21,12 +21,12 @@ let build = (ctx: Ctx.t, page) => {
     ~h=Grid.panelHeight(2),
   )
   let g = Grid.make(ctx, distortion.el)
-  g->Grid.choice("Sat_Type", 0, 0, "type")
-  g->Grid.choice("Sat_Mode", 1, 0, "mode", ~span=2)
-  g->Grid.choice("Sat_Oversample", 3, 0, "oversample")
-  g->Grid.param("Sat_Pregain", 0, 1, "pregain")
-  g->Grid.param("Sat_Limit", 1, 1, "limit")
-  g->Grid.param("Sat_Postgain", 2, 1, "postgain")
+  g->Grid.choice("Sat_Type", 0, 0, "type", ~span=2)
+  g->Grid.choice("Sat_Mode", 2, 0, "mode", ~span=2)
+  g->Grid.choice("Sat_Oversample", 0, 1, "oversample")
+  g->Grid.param("Sat_Pregain", 1, 1, "pregain")
+  g->Grid.param("Sat_Limit", 2, 1, "limit")
+  g->Grid.param("Sat_Postgain", 3, 1, "postgain")
 
   let chorus = Panel.make(
     page,
@@ -93,4 +93,5 @@ let build = (ctx: Ctx.t, page) => {
     ~h=eqHeight,
   )
   EqEditor.make(ctx, eq.el, {x: 8., y: 25., w: eq.w - 18., h: eqHeight - 25. - 10.})
+  FxOrder.make(ctx, eq)
 }

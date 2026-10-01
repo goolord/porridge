@@ -131,18 +131,15 @@ let build = (ctx: Ctx.t, page) => {
   }
 
   selectRef := select
-  let count = Int.toFloat(Array.length(tools))
-  tools->Array.forEachWithIndex(((label, f), i) =>
-    Controls.button(
-      ctx,
-      blk,
-      label,
-      ~x=10. + width - (count - Int.toFloat(i)) * 64. + 4.,
-      ~y=27.,
-      ~w=60.,
-      f,
-    )->ignore
+  // the tools, right-aligned above the drawing
+  let toolWidth = 64.
+  let toolbar = Grid.make(
+    ctx,
+    blk,
+    ~x=10. + width + Grid.columnGap - Int.toFloat(Array.length(tools)) * toolWidth,
+    ~cw=toolWidth,
   )
+  tools->Array.forEachWithIndex(((label, f), i) => toolbar->Grid.button(label, i, 0, f))
 
   ctx.programs->ProgramStore.onShapes(() => {
     editor->ShapeEditor.set(ctx.programs->ProgramStore.shape(shape().table))

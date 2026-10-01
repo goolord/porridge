@@ -9,12 +9,12 @@ namespace porridge
         float value;
     }
 
-    let numSlots = 2670;
+    let numSlots = 2702;
 
     /// Porridge's own parameters and their defaults, which the synth starts from (hosts may
     /// not send a parameter they have never changed)
-    let porridgeSlots = int[70] (2600, 2601, 2602, 2603, 2604, 2605, 2606, 2607, 2608, 2609, 2610, 2611, 2612, 2613, 2614, 2615, 2616, 2617, 2618, 2619, 2620, 2621, 2622, 2623, 2624, 2625, 2626, 2627, 2628, 2629, 2630, 2631, 2632, 2633, 2634, 2635, 2636, 2637, 2638, 2639, 2640, 2641, 2642, 2643, 2644, 2645, 2646, 2647, 2648, 2649, 2650, 2651, 2652, 2653, 2654, 2655, 2656, 2657, 2658, 2659, 2660, 2661, 2662, 2663, 2664, 2665, 2666, 2667, 2668, 2669);
-    let porridgeDefaults = float[70] (0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 48.0f);
+    let porridgeSlots = int[102] (2600, 2601, 2602, 2603, 2604, 2605, 2606, 2607, 2608, 2609, 2610, 2611, 2612, 2613, 2614, 2615, 2616, 2617, 2618, 2619, 2620, 2621, 2622, 2623, 2624, 2625, 2626, 2627, 2628, 2629, 2630, 2631, 2632, 2633, 2634, 2635, 2636, 2637, 2638, 2639, 2640, 2641, 2642, 2643, 2644, 2645, 2646, 2647, 2648, 2649, 2650, 2651, 2652, 2653, 2654, 2655, 2656, 2657, 2658, 2659, 2660, 2661, 2662, 2663, 2664, 2665, 2666, 2667, 2668, 2669, 2670, 2671, 2672, 2673, 2674, 2675, 2676, 2677, 2678, 2679, 2680, 2681, 2682, 2683, 2684, 2685, 2686, 2687, 2688, 2689, 2690, 2691, 2692, 2693, 2694, 2695, 2696, 2697, 2698, 2699, 2700, 2701);
+    let porridgeDefaults = float[102] (0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 48.0f, 0.0f, 0.0f, 0.0f, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f);
 }
 
 /// Index of every parameter in the synth's mirror of the program struct.
@@ -432,4 +432,36 @@ namespace porridge::slot
     let Mod16_Via = 2667;
     let MPE_On = 2668;
     let MPE_BendRange = 2669;
+    let Oat_Mode = 2670;
+    let Drift_Pitch = 2671;
+    let Drift_Cutoff = 2672;
+    let Drift_Rate = 2673;
+    let FX_Order = 2674;
+    let PM_Feedback = 2675;
+    let F_Morph = 2676;
+    let Curve_Amp_Attack = 2677;
+    let Curve_Amp_Decay = 2678;
+    let Curve_Amp_Release = 2679;
+    let Curve_Filter_Attack = 2680;
+    let Curve_Filter_Decay = 2681;
+    let Curve_Filter_Release = 2682;
+    let Curve_Mod1_Attack = 2683;
+    let Curve_Mod1_Decay = 2684;
+    let Curve_Mod1_Release = 2685;
+    let Curve_Mod2_Attack = 2686;
+    let Curve_Mod2_Decay = 2687;
+    let Curve_Mod2_Release = 2688;
+    let LFO_1_Delay = 2689;
+    let LFO_1_Fade = 2690;
+    let LFO_1_Slew = 2691;
+    let LFO_1_Steps = 2692;
+    let LFO_1_OneShot = 2693;
+    let LFO_2_Delay = 2694;
+    let LFO_2_Fade = 2695;
+    let LFO_2_Slew = 2696;
+    let LFO_2_Steps = 2697;
+    let LFO_2_OneShot = 2698;
+    let U_DetuneCurve = 2699;
+    let U_RandomPhase = 2700;
+    let U_Width = 2701;
 }

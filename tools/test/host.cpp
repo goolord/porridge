@@ -3,10 +3,13 @@
 // plays MIDI events at exact frames and writes the stereo output as raw float32.
 //
 //   host --program prog.bin --events events.txt --frames 88200 --rate 44100 --out out.f32
-//        [--tempo 120] [--set Endpoint=value ...] [--input in.f32] [--preroll n]
+//        [--tempo 120] [--set Endpoint=value ...] [--input in.f32] [--preroll n] [--latency n]
 //
 // --input feeds a recorded signal to the effects instead of the voices. --preroll renders n
 // frames before frame 0 and drops them (the DLL harness renders 128 after loading a program).
+// --latency (default 64, the synth's) drops that many frames from the start of the output, as
+// a host compensating for the plugin's latency would, so frame 0 is the first one that hears
+// frame 0's MIDI. (Cmajor's C++ generator reports a latency of 0 whatever the patch declares.)
 //
 // events.txt: one event per line: "frame status data1 data2" (decimal).
 // Output format (same as tools/re/vsthost.py write_f32): int32 channels, int32 frames,
@@ -64,7 +67,7 @@ static void sendShape (Patch& p, const char* endpoint, int which, const float* d
 int main (int argc, char** argv)
 {
     std::string programPath, eventsPath, inputPath, tuningPath, outPath = "out.f32";
-    long frames = 44100, preroll = 0;
+    long frames = 44100, preroll = 0, latency = 64;
     double rate = 44100.0, tempo = 120.0;
     std::vector<std::pair<std::string, std::string>> overrides;
 
@@ -80,6 +83,7 @@ int main (int argc, char** argv)
         else if (a == "--tempo") tempo = atof (next().c_str());
         else if (a == "--input") inputPath = next();
         else if (a == "--preroll") preroll = atol (next().c_str());
+        else if (a == "--latency") latency = atol (next().c_str());
         else if (a == "--tuning") tuningPath = next();
         else if (a == "--set")
         {
@@ -190,7 +194,7 @@ int main (int argc, char** argv)
 
     const auto outHandle = Patch::getEndpointHandleForName ("out");
     const auto midiHandle = Patch::getEndpointHandleForName ("midiIn");
-    const long totalFrames = frames + preroll;
+    const long totalFrames = frames + preroll + latency;
     std::vector<float> L (totalFrames), R (totalFrames), block (2 * Patch::maxFramesPerBlock);
 
     long pos = 0;
@@ -211,9 +215,9 @@ int main (int argc, char** argv)
         {
             for (long k = 0; k < n; ++k)
             {
-                long q = pos + k;
-                inBlock[2 * k]     = q < (long) inL.size() ? inL[q] : 0.0f;
-                inBlock[2 * k + 1] = q < (long) inR.size() ? inR[q] : 0.0f;
+                long q = pos + k - latency;
+                inBlock[2 * k]     = q >= 0 && q < (long) inL.size() ? inL[q] : 0.0f;
+                inBlock[2 * k + 1] = q >= 0 && q < (long) inR.size() ? inR[q] : 0.0f;
             }
             patch->setInputFrames (inHandle, inBlock.data(), (uint32_t) n, 0);
         }
@@ -226,8 +230,8 @@ int main (int argc, char** argv)
     FILE* o = fopen (outPath.c_str(), "wb");
     int32_t hdr[2] = { 2, (int32_t) frames };
     fwrite (hdr, 4, 2, o);
-    fwrite (L.data() + preroll, 4, frames, o);
-    fwrite (R.data() + preroll, 4, frames, o);
+    fwrite (L.data() + preroll + latency, 4, frames, o);
+    fwrite (R.data() + preroll + latency, 4, frames, o);
     fclose (o);
     return 0;
 }

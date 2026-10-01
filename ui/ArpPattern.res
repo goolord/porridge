@@ -1,28 +1,9 @@
-// Arpeggiator pattern: 16 step cells and a pattern-length handle.
+// Arpeggiator pattern: 16 step cells, each showing its command as an icon (Icons.arpStep),
+// and a pattern-length handle.
 // Click a step to pick its command from the list, right-click to advance it, shift-right-click
 // to go back.
 
 open! Web
-
-// short glyphs for the 16 step commands, in the synth's order
-let glyphs = [
-  "·",
-  "↑",
-  "↑|",
-  "↓",
-  "↓|",
-  "↕",
-  "↕|",
-  "=",
-  "→",
-  "↔",
-  "⤺",
-  "⤺↑",
-  "⤺↓",
-  "⊤",
-  "⊥",
-  "?",
-]
 
 let stepId = i => "Arp_P" ++ Int.toString(i, ~radix=16)->String.toUpperCase
 
@@ -40,10 +21,12 @@ let make = (ctx: Ctx.t, parent, box) => {
   let menu = (anchor, id) =>
     ctx.menu->Menu.show(
       anchor,
-      Controls.namesOf(model->ParamModel.def(id))->Array.mapWithIndex((name, value) => {
-        Menu.label: glyphs->Array.getUnsafe(value) ++ "  " ++ name,
-        value,
-      }),
+      Controls.namesOf(model->ParamModel.def(id))->Array.mapWithIndex((name, value) =>
+        switch Icons.arpStep(value) {
+        | Some(icon) => {Menu.label: name, value, icon}
+        | None => {Menu.label: name, value}
+        }
+      ),
       Float.toInt(get(id)),
       v => model->ParamModel.gestureSet(id, Int.toFloat(v)),
     )
@@ -101,7 +84,11 @@ let make = (ctx: Ctx.t, parent, box) => {
     let last = get("Arp_End")
     cells->Array.forEachWithIndex((c, i) => {
       let v = get(stepId(i))
-      c->setTextContent(glyphs[Float.toInt(v)]->Option.getOr("?"))
+      c->setTextContent("")
+      switch Icons.arpStep(Float.toInt(v)) {
+      | Some(icon) => c->appendChild(icon)
+      | None => c->setTextContent("?")
+      }
       c->toggleClass("off", v == 0.)
       c->toggleClass("out", Int.toFloat(i) > last)
     })
