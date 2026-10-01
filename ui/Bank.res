@@ -39,7 +39,8 @@ let readValue = (bytes, id) => fieldsById->Map.get(id)->Option.mapOr(0., readFie
 let writeValue = (bytes, id, x) =>
   fieldsById->Map.get(id)->Option.forEach(field => writeField(bytes, field, x))
 
-let writeValues = (bytes, values: values) => values->Map.forEachWithKey((x, id) => writeValue(bytes, id, x))
+let writeValues = (bytes, values: values) =>
+  values->Map.forEachWithKey((x, id) => writeValue(bytes, id, x))
 
 //==============================================================================
 // Sending to the patch

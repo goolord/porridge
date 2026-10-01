@@ -998,7 +998,10 @@ let table: array<option<t>> = Array.make(~length=paramCount, None)
 
 let def = (i, ~reads=[], spec) => {
   let (name, action) = names->Array.getUnsafe(i)
-  table->Array.setUnsafe(i, Some({...spec, index: i, name, action, reads: Array.concat(spec.reads, reads)}))
+  table->Array.setUnsafe(
+    i,
+    Some({...spec, index: i, name, action, reads: Array.concat(spec.reads, reads)}),
+  )
 }
 
 [(0, 1), (6, 2)]->Array.forEach(((o, n)) => {
@@ -1080,7 +1083,11 @@ def(
       : "Noise resonance: no filtering"
   ),
 )
-def(18, bip(8536, 48., ratioText("Noise transpose", 2, 48., 4.), ~unit="semitones"), ~reads=[offOctave])
+def(
+  18,
+  bip(8536, 48., ratioText("Noise transpose", 2, 48., 4.), ~unit="semitones"),
+  ~reads=[offOctave],
+)
 
 type lfoOffsets = {
   unit: int,
@@ -1731,8 +1738,16 @@ let refText = label =>
     let hz = pow(prog->ByteView.getF32(offOctave), t * 2.) * prog->ByteView.getF32(offTune)
     `${label}: ${fixed(t * 24., 2)} st (${fixed(hz, 2)} Hz)`
   }
-def(180, bip(9072, 24., refText("Cutoff reference frequency"), ~unit="semitones"), ~reads=[offOctave, offTune])
-def(181, bip(9076, 24., refText("Pan center frequency"), ~unit="semitones"), ~reads=[offOctave, offTune])
+def(
+  180,
+  bip(9072, 24., refText("Cutoff reference frequency"), ~unit="semitones"),
+  ~reads=[offOctave, offTune],
+)
+def(
+  181,
+  bip(9076, 24., refText("Pan center frequency"), ~unit="semitones"),
+  ~reads=[offOctave, offTune],
+)
 [
   "C",
   "C#/Db",

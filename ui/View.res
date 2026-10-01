@@ -42,7 +42,9 @@ let make = (host, pc) => {
     if !refreshing.contents {
       Bank.writeValue(context, id, model->ParamModel.get(id))
       refreshing := true
-      dependents->Map.get(id)->Option.forEach(ids => ids->Array.forEach(ParamModel.notify(model, _)))
+      dependents
+      ->Map.get(id)
+      ->Option.forEach(ids => ids->Array.forEach(ParamModel.notify(model, _)))
       refreshing := false
     }
   )
