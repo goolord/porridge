@@ -280,9 +280,11 @@ let latin1 = (bytes: t) => {
   go(0, "")
 }
 
+// (a character Latin-1 doesn't have is written as "?")
 let putLatin1 = (bytes: t, offset, s, maxLength) =>
   for i in 0 to Math.Int.min(String.length(s), maxLength) - 1 {
-    bytes->TypedArray.set(offset + i, String.charCodeAtUnsafe(s, i) &&& 0xff)
+    let c = String.charCodeAtUnsafe(s, i)
+    bytes->TypedArray.set(offset + i, c > 0xff ? 63 : c)
   }
 
 // Program name (up to the first NUL of the 24-byte field).

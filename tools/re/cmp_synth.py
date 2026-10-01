@@ -22,7 +22,9 @@ def compare(name, chunk, events, frames, sr=44100.0, quiet=False):
     open(cp, "wb").write(h.get_chunk(True))
     with open(ep, "w") as f:
         for e in sorted(events): f.write("%d %d %d %d\n" % e)   # same order the DLL harness sends them
-    subprocess.check_call([HOST, "--program", cp, "--events", ep, "--frames", str(frames), "--rate", str(int(sr)), "--out", op, "--preroll", "128"])
+    # in Oat mode: Oatmeal's MIDI timing, and its arpeggiator stepping once per block
+    subprocess.check_call([HOST, "--program", cp, "--events", ep, "--frames", str(frames), "--rate", str(int(sr)), "--out", op, "--preroll", "128",
+                           "--set", "Oat_Mode=1"])
     mine = load_f32(op)
     write_f32(os.path.join(OUT, name + "_dll.f32"), dll)
     err = 0.0; peak = 0.0

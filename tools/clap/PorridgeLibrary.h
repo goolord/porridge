@@ -214,6 +214,7 @@ namespace porridge::library
             auto index = loadIndex();
             auto oldBanks = index["banks"];
             auto banks = choc::value::createEmptyArray();
+            // folders that aren't there, or whose walk stopped early: they keep the banks not found
             std::vector<std::string> unreachable;
             std::error_code ec;
             fs::create_directories (cache, ec);
@@ -233,12 +234,16 @@ namespace porridge::library
                 }
 
                 size_t visited = 0;
+                bool cutShort = false;
 
                 for (auto it = fs::recursive_directory_iterator (root, fs::directory_options::skip_permission_denied, ec);
                      ! ec && it != fs::recursive_directory_iterator(); it.increment (ec))
                 {
                     if (++visited > maxVisited)
+                    {
+                        cutShort = true;
                         break;
+                    }
 
                     if (it.depth() >= maxDepth)
                         it.disable_recursion_pending();
@@ -288,10 +293,15 @@ namespace porridge::library
                                                   static_cast<double> (size), modified));
                 }
 
+                // (an entry the walk can't step past ends it, as the visit limit does)
+                if (ec || cutShort)
+                    unreachable.push_back (folderText);
+
                 ec.clear();
             }
 
             // opened files stay, and so do the banks of a folder that's still listed but out of reach
+            // (or that was only partly walked)
             for (uint32_t i = 0; i < oldBanks.size(); ++i)
             {
                 auto old = oldBanks[i];

@@ -120,8 +120,9 @@ let canonical = (d: ParamDefs.t, x) =>
   | I32 | Filter1 | Filter2 => x
   }
 
-let clampValue = (id, x) =>
-  Lazy.get(defsById)->Map.get(id)->Option.map(d => canonical(d, d.clamp(x)))
+// A value as a loaded program keeps it (ParamDefs' load), or None for a parameter there isn't.
+let loadValue = (id, x) =>
+  Lazy.get(defsById)->Map.get(id)->Option.map(d => canonical(d, d.load(x)))
 
 //==============================================================================
 // Oatmeal
@@ -129,7 +130,7 @@ let clampValue = (id, x) =>
 let fromOatmeal = (bytes: Uint8Array.t) => {
   let values = defaultValues()
   Bank.programValues(bytes)->Map.forEachWithKey((x, id) =>
-    clampValue(id, x)->Option.forEach(x => values->Map.set(id, x))
+    loadValue(id, x)->Option.forEach(x => values->Map.set(id, x))
   )
   {
     meta: emptyMeta(getName(bytes)),
@@ -190,7 +191,10 @@ let porridgeOnly = p => {
       : None,
     p.tuning != None ? Some("the microtuning") : None,
     changed(FilterDrive) ? Some("the filter drive") : None,
-    String.length(p.meta.name) > nameLength - 1 ? Some("the full name") : None,
+    // (24 bytes with a NUL, in Latin-1)
+    String.length(p.meta.name) > nameLength - 1 || /[^\x00-\xff]/->RegExp.test(p.meta.name)
+      ? Some("the full name")
+      : None,
   ]->Array.filterMap(x => x)
 }
 
@@ -321,7 +325,7 @@ let fromJsonObject = (d: dict<JSON.t>) => {
   }
   params->Dict.forEachWithKey((v, id) =>
     switch v {
-    | Number(x) => clampValue(id, x)->Option.forEach(x => values->Map.set(id, x))
+    | Number(x) => loadValue(id, x)->Option.forEach(x => values->Map.set(id, x))
     | _ => ()
     }
   )
@@ -361,7 +365,7 @@ let fromJsonObject = (d: dict<JSON.t>) => {
         }
         if source > 0 && target > 0 {
           let k = slot.contents
-          let set = (id, x) => clampValue(id, x)->Option.forEach(x => values->Map.set(id, x))
+          let set = (id, x) => loadValue(id, x)->Option.forEach(x => values->Map.set(id, x))
           set(ModMatrix.sourceId(k), Int.toFloat(source))
           set(ModMatrix.targetId(k), Int.toFloat(target))
           set(ModMatrix.amountId(k), amount)

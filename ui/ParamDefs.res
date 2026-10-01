@@ -118,6 +118,10 @@ type t = {
   max: float,
   bipolar: bool,
   clamp: float => float,
+  // what a loaded program's value becomes: clamped, except that Oatmeal's float parameters
+  // keep what the program holds, which older versions of Oatmeal wrote outside some knobs'
+  // ranges (an F envspeed of 8.78) and which Oatmeal plays as it is
+  load: float => float,
   toNorm: float => float,
   fromNorm: float => float,
   // the original's full status-bar text
@@ -165,6 +169,7 @@ let porridgeDef = (index, spec: PorridgeParams.spec, ~like: string => t) =>
       bipolar: min < 0. && max > 0.,
       dependsOn: [],
       clamp,
+      load: clamp,
       toNorm: x => (x - min) / (max - min),
       fromNorm: v => min + (max - min) * v,
       longText: x => `${spec.name}: ${text(x)}`,
@@ -196,6 +201,7 @@ let porridgeDef = (index, spec: PorridgeParams.spec, ~like: string => t) =>
       bipolar: false,
       dependsOn: [],
       clamp,
+      load: clamp,
       toNorm: x => last > 0. ? x / last : 0.,
       fromNorm: v => Math.round(v * last),
       longText: x => `${spec.name}: ${valueText(x)}`,
@@ -223,6 +229,7 @@ let extend = (def, oatNames, extra, extraShort) => {
     shortNames: Some(Array.concat(short, extraShort)),
     max,
     clamp,
+    load: clamp,
     toNorm: x => (clamp(x) -. def.min) /. (max -. def.min),
     fromNorm: v => clamp(def.min +. v *. (max -. def.min)),
     longText: x => isNew(x) ? `${def.name}: ${newName(x)}` : def.longText(x),
@@ -276,6 +283,7 @@ let makeDefs = (~context=() => None) => {
         ? Math.max(Math.round(min), Math.min(Math.round(max), Math.round(x)))
         : Math.max(min, Math.min(max, x))
     }
+    let load = isInt || isPw ? clamp : x => Float.isFinite(x) ? x : initValue
     let fromNorm = v => fromF(OatmealParams.toInternal(index, Math.max(0., Math.min(1., v))))
     // with a zero-delay-feedback filter (Porridge's) the cutoff knob reaches 20 kHz instead of 11
     let filterType = () => context()->Option.mapOr(0, prog => Float.toInt(Bank.readValue(prog, "Filter")))
@@ -333,6 +341,7 @@ let makeDefs = (~context=() => None) => {
       max,
       bipolar: names == None && lo < 0. && hi > 0.,
       clamp,
+      load,
       toNorm: x => OatmealParams.toNormalized(index, toF(x)),
       fromNorm,
       longText: x =>

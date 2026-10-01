@@ -69,6 +69,19 @@ if (! legacy || ! legacy.every ((p, i) => sameValues (presets[i].values, p.value
     if (file !== null && file !== encoded) fail ("bundle/factory-bank.json is out of date (npm run build)");
 }
 
+// values older versions of Oatmeal wrote outside a knob's range (an F envspeed of 8.78, in the
+// Ann banks) are kept, as Oatmeal plays them, through a Porridge file and back
+{
+    const bytes = OatmealFormat.makeDefaultProgram ("wide");
+    new DataView (bytes.buffer, bytes.byteOffset).setFloat32 (8452, 8.777605, true);   // F envspeed
+    const want = Math.fround (8.777605);
+    const p = Preset.fromOatmeal (bytes);
+    const back = Preset.parseFile (Preset.writePreset (p))._0.presets[0];
+    if (p.values.get ("F_Speed") !== want || back.values.get ("F_Speed") !== want
+        || Bank.programValues (Preset.toOatmeal (back)).get ("F_Speed") !== want)
+        fail (`an F envspeed of 8.78 reads back as ${back.values.get ("F_Speed")}`);
+}
+
 // missing fields take their defaults
 const sparse = Preset.parseFile (new TextEncoder().encode (`{"porridge":"preset","version":1,"name":"x","params":{"Cutoff":0.25}}`));
 if (sparse.TAG !== "Ok") fail ("sparse preset didn't parse");

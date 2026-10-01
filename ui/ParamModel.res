@@ -93,16 +93,16 @@ let gestureSet = (t, id, x) => {
   endGesture(t, id)
 }
 
-// Push a whole set of values (e.g. a loaded program). Every endpoint is sent, even
-// if unchanged, so the patch is guaranteed to match; listeners hear of the changed ones,
-// once every value is in place.
+// Push a whole set of values (e.g. a loaded program, whose values are kept as it holds them:
+// ParamDefs' load). Every endpoint is sent, even if unchanged, so the patch is guaranteed to
+// match; listeners hear of the changed ones, once every value is in place.
 let setAll = (t, values: Bank.values) => {
   let changed = []
   values->Map.forEachWithKey((x, id) =>
     t.defs
     ->Map.get(id)
     ->Option.forEach(d => {
-      let x = d.clamp(x)
+      let x = d.load(x)
       if get(t, id) != x {
         changed->Array.push(id)
       }

@@ -346,7 +346,12 @@ let loadFile = (t, bytes, filename) =>
       t.message(`Loaded "${Preset.name(p)}" into program ${Int.toString(t.current + 1)}`)
     | Ok({presets: programs, name}) =>
       loadBank(t, programs, ~name=name != "" ? name : Web.baseName(filename))
-      t.message(`Loaded bank ${filename} (${Int.toString(Array.length(programs))} programs)`)
+      let count = Array.length(programs)
+      t.message(
+        count > bankPrograms
+          ? `Loaded the first ${Int.toString(bankPrograms)} of the ${Int.toString(count)} programs in ${filename}`
+          : `Loaded bank ${filename} (${Int.toString(count)} programs)`,
+      )
     }
   }
 
