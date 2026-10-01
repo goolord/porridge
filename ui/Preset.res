@@ -85,7 +85,7 @@ let withName = (p, name) => {
 let canonical = (d: ParamDefs.t, x) =>
   switch d.kind {
   | F32 => Math.fround(x)
-  | Pw => Math.round(x * ParamDefs.pw32) / ParamDefs.pw32
+  | Pw => Math.round(x * OatmealParams.pw32) / OatmealParams.pw32
   | I32 | Filter1 | Filter2 => x
   }
 
@@ -144,7 +144,7 @@ let porridgeOnly = p => {
 // closest ones it does.
 let toOatmeal = p => {
   let bytes = makeDefaultProgram(p.meta.name)
-  Bank.writeValues(bytes, p.values->Map.entries->Iterator.toArray->Array.map(((id, x)) => (id, ParamDefs.oatmealValue(id, x)))->Map.fromArray)
+  p.values->Map.forEachWithKey((x, id) => Bank.writeValue(bytes, id, ParamDefs.oatmealValue(id, x)))
   allTables->Array.forEach(table => writeTable(bytes, table, p.tables->getTable(table)))
   bytes
 }

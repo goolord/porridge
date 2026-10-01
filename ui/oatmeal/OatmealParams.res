@@ -625,6 +625,8 @@ let i32 = x => {
 }
 let pow = (x, y) => Math.pow(x, ~exp=y)
 let log10 = Math.log10
+// a pulse width's full turn: its phase is a uint32 fraction of this
+let pw32 = 4294967296.
 
 // float32 constants exactly as stored in Oatmeal.dll's .rdata
 module K = {
@@ -1020,7 +1022,7 @@ let def = (i, spec) => {
       unit: "% (uint32 fraction of 2^32)",
       set: v => ByteView.toUint32(pow(2., 32.) * v + 0.5), // uint32 phase; v=1 wraps to 0 (DLL quirk)
       get: x => f32(ByteView.toUint32(x) * pow(2., -32.)),
-      inv: x => ByteView.toUint32(x) / 4294967296.,
+      inv: x => ByteView.toUint32(x) / pw32,
       text: (v: float, _) => `${osc} Pulsewidth: ${fixed(v * 100., 2)} %`,
     },
   )
@@ -2028,6 +2030,10 @@ let writeInternal = (prog, i, x) => {
   | I32 => prog->ByteView.setI32(p.offset, Float.toInt(x))
   }
 }
+
+// Porridge takes a pulse width as a 0..1 fraction; Oatmeal stores it as a uint32 phase.
+let pwToPhase = x => ByteView.toUint32(Math.round(x * pw32))
+let pwOfPhase = x => x / pw32
 
 // setParameter(i, v) applied to a program: exactly the bytes the DLL writes into the program.
 let setParamNormalized = (prog, i, v) => writeInternal(prog, i, toInternal(i, v))

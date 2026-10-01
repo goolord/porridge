@@ -177,8 +177,6 @@ type t = {
   parse: string => option<float>,
 }
 
-let pw32 = 4294967296.
-
 // A Porridge parameter (PorridgeParams): plain linear knobs and lists.
 let porridgeDef = (index, spec: PorridgeParams.spec) =>
   switch spec.kind {
@@ -276,8 +274,8 @@ let makeDefs = (~context=() => None) => {
     let p = OatmealParams.param(index)
     let isPw = kind == Pw
     let isInt = Fields.isInt(field)
-    let toF = x => isPw ? ByteView.toUint32(Math.round(x * pw32)) : x
-    let fromF = x => isPw ? x / pw32 : x
+    let toF = x => isPw ? OatmealParams.pwToPhase(x) : x
+    let fromF = x => isPw ? OatmealParams.pwOfPhase(x) : x
 
     let names = switch kind {
     | Filter1 => Some(filterNames)
@@ -296,7 +294,7 @@ let makeDefs = (~context=() => None) => {
     | Filter1 | Filter2 => (0., 15.)
     | _ => (fromF(Math.min(p.min, p.max)), fromF(Math.max(p.min, p.max)))
     }
-    let initValue = fromF(OatmealParams.readInternal(init, index))
+    let initValue = Bank.readField(init, field)
     let min = isPw ? 0. : lo
     let max = isPw ? 1. : hi
 
@@ -310,9 +308,7 @@ let makeDefs = (~context=() => None) => {
     // with a zero-delay-feedback filter (16..21) the cutoff knob reaches 20 kHz instead of 11
     let zdfCutoff = () =>
       id == "Cutoff" &&
-        context()->Option.mapOr(false, prog =>
-          (prog->ByteView.getI32(OatmealParams.offFilter) &&& 0xffff) >= 16
-        )
+        context()->Option.mapOr(false, prog => Bank.readValue(prog, "Filter") >= 16.)
     let valueText = (x: float) =>
       zdfCutoff()
         ? Float.toFixed(x * x * x * 19980. + 20., ~digits=2) ++ " Hz"
