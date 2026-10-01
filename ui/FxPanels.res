@@ -1,10 +1,11 @@
 // The tabs of Porridge's own rack effects (flanger, phaser, algo reverb, convolve, bode,
-// filter, utility; the compressor has CompEditor): their controls in panels across the top, and below them a graph of
+// filter, utility, ambience; the compressor has CompEditor): their controls in panels across the top, and below them a graph of
 // what the effect does with these settings. Also each one's controls and summary on the
 // routing tab's card.
 //
 // The graphs follow dsp/FxExtra.cmajor, dsp/Space.cmajor, dsp/Convolve.cmajor and
-// dsp/Filter.cmajor closely enough to show what the knobs do; they are not measurements.
+// dsp/Filter.cmajor closely enough to show what the knobs do; they are not measurements. The
+// ambience's are its models run on an impulse (AmbienceSim).
 
 open! Web
 
@@ -511,6 +512,146 @@ let drawUtility = (p: FxGraph.plot, get: string => float) => {
 }
 
 //==============================================================================
+// ambience: what an impulse in the centre comes out as on each side, and the tone that leaves
+// with the dry sound
+
+let ambienceSettings = (get: string => float): AmbienceSim.settings => {
+  model: Float.toInt(get("Am_Model")),
+  size: get("Am_Size"),
+  time: get("Am_Time"),
+  density: get("Am_Density"),
+  highTime: get("Am_HighTime"),
+  highFreq: expValue(20., 20000., get("Am_HighFreq")),
+  lowTime: get("Am_LowTime"),
+  lowFreq: expValue(20., 20000., get("Am_LowFreq")),
+  highCut: expValue(20., 20000., get("Am_HighCut")),
+}
+
+// the last impulse, by its settings (the tone and the impulse graphs draw from the same one)
+let ambienceCache: ref<option<(AmbienceSim.settings, (Float32Array.t, Float32Array.t))>> = ref(None)
+
+let ambienceImpulse = (get: string => float) => {
+  let s = ambienceSettings(get)
+  switch ambienceCache.contents {
+  | Some((k, v)) if k == s => v
+  | _ =>
+    let v = AmbienceSim.impulse(s, ~seconds=0.15 + 1.35 * s.time)
+    ambienceCache := Some((s, v))
+    v
+  }
+}
+
+// the wet as the width leaves it: (own side, other side)
+let ambienceWidth = (get: string => float) => {
+  let side = 1. + get("Am_Width")
+  (0.5 * (1. + side), 0.5 * (1. - side))
+}
+
+let ambienceModelText = (get: string => float) =>
+  switch Float.toInt(get("Am_Model")) {
+  | 1 =>
+    let (seats, a, b) = AmbienceSim.clearCoatRooms->Array.getUnsafe(AmbienceSim.clearCoatRoom(get("Am_Size")))
+    `clear coat (Airwindows): a ${Int.toString(seats)}-seat room, ${Int.toString(a)} to ${Int.toString(b)} ms`
+  | 2 => "verb tiny (Airwindows): a small reverb fed across the sides"
+  | _ => "room: a few milliseconds of diffusion, different on each side"
+  }
+
+let drawAmbience = (p: FxGraph.plot, get: string => float) => {
+  let (lo, hi) = (-18., 6.)
+  FxGraph.frequencyGrid(p, ~lo, ~hi, ~step=6.)
+  let (l, r) = ambienceImpulse(get)
+  let n = Math.Int.min(TypedArray.length(l), 16384)
+  let mix = get("Am_Mix")
+  let (wetG, dryG) = (Math.sin(mix * pi / 2.), Math.cos(mix * pi / 2.))
+  let (own, other) = ambienceWidth(get)
+  // each side's response, smoothed over a sixth of an octave
+  let steps = 240
+  let hzOf = k => 20. * Math.pow(1000., ~exp=Int.toFloat(k) / Int.toFloat(steps))
+  let side = (a: Float32Array.t, b: Float32Array.t) => {
+    let power = Array.fromInitializer(~length=steps + 1, k => {
+      // the DFT at this frequency, the phasor turned one sample at a time
+      let w = 2. * pi * hzOf(k) / AmbienceSim.sr
+      let (c, sn) = (Math.cos(w), -.Math.sin(w))
+      let (re, im, pr, pi) = (ref(0.), ref(0.), ref(1.), ref(0.))
+      for i in 0 to n - 1 {
+        let x = own * a->ByteView.getUnsafe(i) + other * b->ByteView.getUnsafe(i)
+        re := re.contents + x * pr.contents
+        im := im.contents + x * pi.contents
+        let r = pr.contents * c - pi.contents * sn
+        pi := pr.contents * sn + pi.contents * c
+        pr := r
+      }
+      FxDsp.sq(dryG + wetG * re.contents) + FxDsp.sq(wetG * im.contents)
+    })
+    Array.fromInitializer(~length=steps + 1, k => {
+      let (from, until) = (Math.Int.max(0, k - 7), Math.Int.min(steps, k + 7))
+      let sum = ref(0.)
+      for j in from to until {
+        sum := sum.contents + power->Array.getUnsafe(j)
+      }
+      Math.sqrt(sum.contents / Int.toFloat(until - from + 1))
+    })
+  }
+  [(side(l, r), "curve"), (side(r, l), "curve alt")]->Array.forEach(((mags, cls)) => {
+    let points = mags->Array.mapWithIndex((m, k) => (FxGraph.xOfHz(p, hzOf(k)), FxGraph.yOf(p, db(m), lo, hi)))
+    FxGraph.path(p.layer, ~cls)->FxGraph.setPath(Plots.pathFrom(points))
+  })
+  let t = AmbienceSim.decayTime(l, r)
+  FxGraph.note(
+    p,
+    `${ambienceModelText(get)}; left and right (lighter) with the dry; 60 dB down after ${PorridgeParams.msText(t * 1000.)}`,
+  )
+}
+
+// The impulse: the left side above, the right below, each pixel the span of its samples.
+let drawAmbienceImpulse = (p: FxGraph.plot, get: string => float) => {
+  let (l, r) = ambienceImpulse(get)
+  let (own, other) = ambienceWidth(get)
+  let length = Int.toFloat(TypedArray.length(l)) / AmbienceSim.sr
+  let until = Math.max(0.004, Math.min(AmbienceSim.decayTime(l, r) * 0.6, length))
+  let n = Math.Int.min(TypedArray.length(l), Float.toInt(until * AmbienceSim.sr) + 1)
+  let peak = ref(1e-6)
+  for i in 0 to n - 1 {
+    peak := Math.max(peak.contents, Math.abs(l->ByteView.getUnsafe(i)) + Math.abs(r->ByteView.getUnsafe(i)))
+  }
+  let mid = (p.top + p.bottom) / 2.
+  let half = (p.bottom - p.top) / 4.
+  let step = until > 0.2 ? 0.05 : until > 0.05 ? 0.01 : until > 0.01 ? 0.002 : 0.001
+  FxGraph.ticks(~until, ~step, t => {
+    let x = p.left + t / until * (p.right - p.left)
+    FxGraph.line(p.layer, ~cls="grid", x, p.top, x, p.bottom)
+    FxGraph.text(p.layer, ~anchor="middle", x, p.bottom + 12., PorridgeParams.msText(t * 1000.))
+  })
+  FxGraph.line(p.layer, ~cls="axis", p.left, mid - half, p.right, mid - half)
+  FxGraph.line(p.layer, ~cls="axis", p.left, mid + half, p.right, mid + half)
+  FxGraph.text(p.layer, ~anchor="end", p.left - 4., mid - half + 4., "L")
+  FxGraph.text(p.layer, ~anchor="end", p.left - 4., mid + half + 4., "R")
+  let columns = Math.Int.max(1, Float.toInt(p.right - p.left))
+  let k = half * 1.8 / peak.contents
+  [(l, r, mid - half), (r, l, mid + half)]->Array.forEach(((a, b, y0)) => {
+    let d = ref("")
+    for px in 0 to columns - 1 {
+      let i0 = px * n / columns
+      let i1 = Math.Int.max(i0 + 1, (px + 1) * n / columns)
+      let (lo, hi) = (ref(0.), ref(0.))
+      for i in i0 to Math.Int.min(i1, n) - 1 {
+        let v = own * a->ByteView.getUnsafe(i) + other * b->ByteView.getUnsafe(i)
+        lo := Math.min(lo.contents, v)
+        hi := Math.max(hi.contents, v)
+      }
+      let x = p.left + Int.toFloat(px) + 0.5
+      d :=
+        d.contents ++
+        `M${Float.toFixed(x, ~digits=1)} ${Float.toFixed(y0 - hi.contents * k, ~digits=1)}V${Float.toFixed(
+            y0 - lo.contents * k + 0.5,
+            ~digits=1,
+          )}`
+    }
+    FxGraph.path(p.layer, ~cls="curve")->FxGraph.setPath(d.contents)
+  })
+}
+
+//==============================================================================
 // the kinds
 
 let loadImpulse = ref((_: FxRack.effect) => ())
@@ -543,6 +684,10 @@ let sections = (k: FxRack.kind) =>
       {title: "utility", rows: [[Knob("Ut_Gain", "gain"), Knob("Ut_Pan", "pan"), Knob("Ut_Width", "width")], [Switch("Ut_InvL", "invert L"), Switch("Ut_InvR", "invert R"), Switch("Ut_Swap", "swap L/R")]]},
       {title: "bass", rows: [[Knob("Ut_BassMono", "mono below")]]},
     ]
+  | #ambience => [
+      {title: "ambience", rows: [[List("Am_Model", "model"), Knob("Am_Size", "size"), Knob("Am_Time", "time"), Knob("Am_Density", "density")], [Knob("Am_Predelay", "predelay"), Knob("Am_HighCut", "high cut"), Knob("Am_Width", "width"), Knob("Am_Mix", "mix")]]},
+      {title: "room's loops", rows: [[Knob("Am_HighTime", "high time"), Knob("Am_HighFreq", "high freq")], [Knob("Am_LowTime", "low time"), Knob("Am_LowFreq", "low freq")]]},
+    ]
   | _ => []
   }
 
@@ -554,6 +699,7 @@ let graphTitle = (k: FxRack.kind) =>
   | #convolve => "impulse"
   | #bode => "partials"
   | #utility => "stereo"
+  | #ambience => "tone"
   | _ => ""
   }
 
@@ -597,8 +743,8 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
 
   let gy = topH + gap
   let gh = h - gy
-  // the algo reverb shows its space beside its tail
-  let sceneW = e.kind == #space ? Math.round(w * 0.46) : 0.
+  // the algo reverb shows its space beside its tail, the ambience its impulse beside its tone
+  let sceneW = e.kind == #space || e.kind == #ambience ? Math.round(w * 0.46) : 0.
   let graphX = sceneW > 0. ? sceneW + gap : 0.
   let panel = Panel.make(body, ~title=graphTitle(e.kind), ~x=graphX, ~y=gy, ~w=w - graphX, ~h=gh)
   let graphBox = {x: 8., y: 25., w: w - graphX - 18., h: gh - 35.}
@@ -639,14 +785,31 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
     | #convolve => drawConvolve(p, get, ~which=e.copy - 1, ~file=impulse())
     | #bode => drawBode(p, get)
     | #utility => drawUtility(p, get)
+    | #ambience => drawAmbience(p, get)
     | _ => ()
     }
   }
   let redraw = FxGraph.redraw(fg, draw)
   model->ParamModel.listenEach(FxRack.params(e), redraw.request)
 
+  // the ambience's impulse, drawn when its settings change
+  let impulseGraph = if e.kind == #ambience {
+    let ip = Panel.make(body, ~title="impulse in the centre", ~x=0., ~y=gy, ~w=sceneW, ~h=gh)
+    let ig = FxGraph.inPanel(ctx, ip)
+    let ilayer = FxGraph.group(ig.svg)
+    let iplot: FxGraph.plot = {layer: ilayer, left: 22., right: ig.w - 10., top: 8., bottom: ig.h - 18.}
+    let r = FxGraph.redraw(ig, () => {
+      ilayer->setTextContent("")
+      drawAmbienceImpulse(iplot, get)
+    })
+    model->ParamModel.listenEach(FxRack.params(e), r.request)
+    Some(r)
+  } else {
+    None
+  }
+
   // the space, animated while it shows (about 30 frames a second)
-  let startScene = if sceneW > 0. {
+  let startScene = if e.kind == #space {
     let sp = Panel.make(body, ~title="space", ~x=0., ~y=gy, ~w=sceneW, ~h=gh)
     let sg = FxGraph.inPanel(ctx, sp)
     let scene = {sw: sg.w, sh: sg.h, layer: FxGraph.group(sg.svg)}
@@ -678,6 +841,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
   () => {
     redraw.now()
     filterGraph->Option.forEach(f => f())
+    impulseGraph->Option.forEach(r => r.now())
     if e.kind == #convolve {
       Impulse.requestViews(ctx.pc)
     }
@@ -704,6 +868,7 @@ let cardControls = (k: FxRack.kind) =>
   | #bode => ("on", Some(("Bd_Mix", "mix")))
   | #filter => ("on", Some(("Ff_Cutoff", "cutoff")))
   | #utility => ("on", Some(("Ut_Gain", "gain")))
+  | #ambience => ("on", Some(("Am_Mix", "mix")))
   }
 
 let summary = (model, e: FxRack.effect) => {
@@ -732,5 +897,6 @@ let summary = (model, e: FxRack.effect) => {
   | #bode => `${s("Bd_Shift")} ${s("Bd_Mode")}\nfeedback ${s("Bd_Feedback")}`
   | #filter => `${s("Ff_Type")}\nres ${s("Ff_Resonance")}`
   | #utility => `width ${s("Ut_Width")}, pan ${s("Ut_Pan")}\n${s("Ut_Gain")}`
+  | #ambience => `${s("Am_Model")}, size ${s("Am_Size")}\ntime ${s("Am_Time")}`
   }
 }

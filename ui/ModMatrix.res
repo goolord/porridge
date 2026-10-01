@@ -198,6 +198,9 @@ let targets = [
   knob("Ut_Gain", "utility gain", "fx2"),
   knob("Ut_Pan", "utility pan", "fx2"),
   knob("Ut_Width", "utility width", "fx2"),
+  knob("Am_Size", "ambience size", "fx2"),
+  knob("Am_Time", "ambience time", "fx2"),
+  knob("Am_Mix", "ambience mix", "fx2"),
 ]
 
 // The target groups, by the key in each target's group, with their titles.

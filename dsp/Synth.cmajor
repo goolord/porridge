@@ -84,6 +84,7 @@ namespace porridge
         Bode[rack::bodeCount] bodes;
         FilterFx[rack::filterCount] filterFxs;
         Utility[rack::utilityCount] utilities;
+        Ambience[rack::ambienceCount] ambiences;
         float noteHz;                               // the newest note's frequency (phaser tracking)
         int meterCount;                             // blocks until the compressors' meters go out
         int blockCount;                             // blocks rendered
@@ -349,6 +350,7 @@ namespace porridge
             for (wrap<rack::bodeCount> k)        bodes[k].clearState();
             for (wrap<rack::filterCount> k)      filterFxs[k].clearState();
             for (wrap<rack::utilityCount> k)     utilities[k].clearState();
+            for (wrap<rack::ambienceCount> k)    ambiences[k].clearState();
         }
 
         /// Swaps copy k of a rack kind's parameters with its first's, so that the first's code
@@ -438,6 +440,7 @@ namespace porridge
             if (kind == rack::bodeKind)     return bodes.at (k).process (mix, active, P, sampleRate);
             if (kind == rack::filterKind)   return filterFxs.at (k).process (fxTables, mix, active, P, sampleRate);
             if (kind == rack::utilityKind)  return utilities.at (k).process (mix, active, P, sampleRate);
+            if (kind == rack::ambienceKind) return ambiences.at (k).process (mix, active, P, sampleRate);
 
             if (kind == rack::distortionKind)
             {

@@ -2,7 +2,7 @@
 // order they run, each kind up to four times. The first chorus, delay, reverb and EQ are
 // Oatmeal's; the others are numbered copies with parameters of their own (D_Wet: D2_Wet ...).
 // Porridge's own effects (flanger, phaser, compressor, algo reverb, convolve, bode, filter,
-// utility) are numbered the same way from their first (Fl_Rate, Fl2_Rate ...).
+// utility, ambience) are numbered the same way from their first (Fl_Rate, Fl2_Rate ...).
 //
 // The rack is FX_Rack_1..8 together with FX_Order: slots holding one of Oatmeal's four take them
 // in FX_Order's order, as the DSP does, so writing the rack writes both.
@@ -21,6 +21,7 @@ type kind = [
   | #bode
   | #filter
   | #utility
+  | #ambience
 ]
 
 // copy 1 is Oatmeal's for its four, or the first of Porridge's own (the rack's distortions start
@@ -41,6 +42,7 @@ let kinds: array<kind> = [
   #bode,
   #filter,
   #utility,
+  #ambience,
 ]
 
 let key = (k: kind) =>
@@ -58,6 +60,7 @@ let key = (k: kind) =>
   | #bode => "bode"
   | #filter => "filter"
   | #utility => "utility"
+  | #ambience => "ambience"
   }
 
 let kindName = (k: kind) =>
@@ -115,6 +118,7 @@ let switchId = e =>
   | #bode => id(e, "Bd_On")
   | #filter => id(e, "Ff_On")
   | #utility => id(e, "Ut_On")
+  | #ambience => id(e, "Am_On")
   }
 
 let eqBandTypes = e => [1, 2, 3, 4, 5]->Array.map(b => id(e, `EQ_${Int.toString(b)}_Type`))

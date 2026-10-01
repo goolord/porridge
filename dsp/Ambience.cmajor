@@ -1,0 +1,685 @@
+//  Ambience: a rack effect for very small spaces (a little stereo and tone, rather than a tail),
+//  cheap enough to put on anything. Three models over one delay pool:
+//    room        per side two chains of three allpasses (the early sound, different on each
+//                side), each line looping on through three more allpasses into a pairwise
+//                mixing matrix, with high and low shelves in the loops and a one-pole high cut
+//                after. At small sizes it's a few milliseconds of diffusion. (In the manner of
+//                AIR Reverb's small settings, with delays of its own, chosen for a smooth tone
+//                with the dry sound and little correlation between the sides at small sizes.)
+//    clear coat  Airwindows ClearCoat (Chris Johnson, MIT licence): seventeen bright
+//                ambiences, each four stages of 4x4 Householder matrices per side (dual mono).
+//                Size picks the room, from a 96-seat room (5 to 51 ms) up to a 1541-seat hall.
+//    verb tiny   Airwindows VerbTiny (MIT licence): one 4x4 Householder reverb cross-fed
+//                between the sides, run at a lower rate (Bezier undersampling); size divides
+//                the rate by 1 .. 4 more, which makes the room bigger and darker.
+//  The two Airwindows models come out about 10 dB down, near the room's level, and their time
+//  knob starts from no regeneration at all (the matrices alone), for the smallest spaces.
+//  The room's delays are primes in samples at 48 kHz, scaled by sr / 48000 and by the size
+//  factor 0.01 + 0.99 size^2 (fine steps at the small end), then int (x) + 1. Each pass through
+//  the matrix is 0.7 times the time knob (a loop gain of 0.99 at the top); a shelf at time t
+//  and high (low) time h makes its band's pass t + h (1 - t) for h > 0, t (1 + h) below.
+
+namespace porridge
+{
+    let ambPoolSize = 327680;       // the room at 192 kHz and full size, with 250 ms predelay
+    let ambMaxLines = 34;
+
+    /// The ambience effect.
+    struct Ambience
+    {
+        float[ambPoolSize] pool;
+        int[ambMaxLines] base, cap, wp;         // a line's start in the pool, capacity and write index
+        float64[ambMaxLines] d, dInc;           // the room's and predelay's delays (fractional) and ramps
+        int numLines;
+        int model;                              // -1: not laid out yet
+        int room;                               // clear coat's room
+        float64 sr;
+        float64 scale, scaleMax, scaleStepMax;  // the room's size factor 0.01 + 0.99 size, gliding
+        // the room's loops
+        float[4] fb, hiLp, loLp;
+        bool loopOn;
+        float dens, coef, gHi, gLo;             // smoothed: density, pass gain, shelf gains
+        float kHi, kLo;                         // the shelves' one-pole gains (per block)
+        // clear coat and verb tiny
+        float[8] awFb;                          // the last stage's feedback (0..3 left, 4..7 right)
+        float mulchL, mulchR, tailL, tailR;
+        float[5] refL, refR;                    // clear coat's undersampling: the outputs between reverb samples
+        int cycle;
+        float[8] sub;                           // clear coat's SubTight
+        float[9] bez, bezF;                     // verb tiny's Bezier undersampling (in and out)
+        // the output
+        float[2] hc;                            // high cut state
+        float hcG;                              // and its one-pole gain, gliding
+        float width, mix;                       // smoothed
+        float fade, inFade;                     // the wet's fade-out on a change of model, the input's fade-in
+        float dc;
+        bool idle, clean;
+        int silentCount;
+    }
+
+    //==============================================================================
+    // Tables
+
+    // the room: chains A, B (left) and C, D (right), then the loops, as primes at 48 kHz, and
+    // their allpass coefficients at full density
+    let ambChainPrimes = float[12] (839, 1259, 1907,  421, 641, 907,  727, 1117, 1499,  523, 757, 1069);
+    let ambLoopPrimes = float[12] (1601, 2357, 3469,  2207, 3253, 4787,  1733, 2551, 3761,  2459, 3631, 5347);
+    let ambLongest = 5347.0;
+    let ambChainG = float[3] (0.68f, 0.58f, 0.5f);
+    let ambLoopG = float[3] (0.42f, 0.33f, 0.24f);
+    let ambRoomGain = 0.5f;         // each chain's level
+    let ambClearCoatGain = 0.33f;   // the Airwindows models' levels, near the room's
+    let ambVerbTinyGain = 0.2f;
+
+    // clear coat's seventeen rooms: delays A .. P in samples at 44.1 kHz (Airwindows ClearCoat)
+    let ambClearCoatRooms = int[272] (
+        65, 124, 83, 180, 200, 291, 108, 189, 73, 410, 479, 310, 11, 928, 23, 654,        //  96 seats,  5 to 51 ms
+        114, 205, 498, 195, 205, 318, 143, 254, 64, 721, 512, 324, 11, 782, 26, 394,      // 107 seats,  7 to 52 ms
+        118, 272, 292, 145, 200, 241, 204, 504, 50, 678, 424, 412, 11, 1124, 47, 766,     // 135 seats,  8 to 58 ms
+        19, 474, 301, 275, 260, 321, 371, 571, 50, 410, 697, 414, 11, 986, 47, 522,       // 143 seats,  7 to 61 ms
+        112, 387, 452, 289, 173, 476, 321, 593, 73, 343, 829, 91, 11, 1055, 43, 862,      // 166 seats,  8 to 66 ms
+        60, 368, 295, 272, 210, 284, 326, 830, 125, 236, 737, 486, 11, 1178, 75, 902,     // 189 seats,  9 to 70 ms
+        73, 311, 472, 251, 134, 509, 393, 591, 124, 1070, 340, 525, 11, 1367, 75, 816,    // 225 seats,  7 to 79 ms
+        159, 518, 514, 165, 275, 494, 296, 667, 75, 1101, 116, 414, 11, 1261, 79, 998,    // 252 seats, 11 to 80 ms
+        41, 741, 274, 59, 306, 332, 291, 767, 42, 881, 959, 422, 11, 1237, 45, 958,       // 255 seats,  8 to 83 ms
+        251, 437, 783, 189, 130, 272, 244, 761, 128, 1190, 320, 491, 11, 1409, 58, 455,   // 323 seats, 10 to 93 ms
+        316, 510, 1087, 349, 359, 74, 79, 1269, 34, 693, 749, 511, 11, 1751, 93, 403,     // 427 seats,  9 to 110 ms
+        254, 651, 845, 316, 373, 267, 182, 857, 215, 1535, 1127, 315, 11, 1649, 97, 829,  // 470 seats, 15 to 110 ms
+        113, 101, 673, 357, 340, 229, 278, 1008, 265, 1890, 155, 267, 11, 2233, 116, 600, // 606 seats, 11 to 131 ms
+        218, 1058, 862, 505, 297, 580, 532, 1387, 120, 576, 1409, 473, 11, 1991, 76, 685, // 643 seats, 14 to 132 ms
+        78, 760, 982, 528, 445, 1128, 130, 708, 22, 2144, 354, 1169, 11, 2782, 58, 1515,  // 809 seats,  5 to 159 ms
+        330, 107, 1110, 371, 620, 143, 1014, 1763, 184, 2068, 1406, 595, 11, 2639, 33, 1594,  // 984 seats, 10 to 171 ms
+        336, 1660, 386, 623, 693, 1079, 891, 1574, 24, 2641, 1239, 775, 11, 3104, 55, 2366);  // 1541 seats, 24 to 203 ms
+
+    // verb tiny's delays A .. P (Airwindows VerbTiny: 5 to 116 ms, a 436-seat theatre)
+    let ambVerbTinyLines = int[16] (136, 52, 53, 1261, 209, 473, 549, 29, 92, 1137, 1406, 994, 1314, 191, 1263, 103);
+
+    // which of A .. P each stage's four lines use: the left side in order, the right side in
+    // the Airwindows plugins' rearranged order
+    let ambLettersL = int[16] (0, 1, 2, 3,  4, 5, 6, 7,  8, 9, 10, 11,  12, 13, 14, 15);
+    let ambLettersR = int[16] (3, 7, 11, 15,  2, 6, 10, 14,  1, 5, 9, 13,  0, 4, 8, 12);
+
+    //==============================================================================
+    // Delay lines in the pool
+
+    void ambWrite (Ambience& this, int j, float x)
+    {
+        this.pool.at (this.base.at (j) + this.wp.at (j)) = x;
+    }
+
+    void ambAdvance (Ambience& this, int j)
+    {
+        let w = this.wp.at (j) + 1;
+        this.wp.at (j) = w >= this.cap.at (j) ? 0 : w;
+    }
+
+    /// A fractional delay (>= 1, read before the write) with linear interpolation.
+    float ambRead (const Ambience& this, int j, float64 delay)
+    {
+        let di = int (delay);
+        let f = float (delay - float64 (di));
+        let c = this.cap.at (j);
+        let b = this.base.at (j);
+        var i = this.wp.at (j) - di;
+        if (i < 0) i += c;
+        let newer = this.pool.at (b + i);
+        let older = this.pool.at (b + (i == 0 ? c - 1 : i - 1));
+        return newer + f * (older - newer);
+    }
+
+    /// A Schroeder allpass (-g + z^-d) / (1 - g z^-d) on line j at its moving delay.
+    float ambAllpass (Ambience& this, int j, float x, float g)
+    {
+        let z = this.ambRead (j, this.d.at (j));
+        let v = x + g * z;
+        this.ambWrite (j, v);
+        this.ambAdvance (j);
+        return z - g * v;
+    }
+
+    /// An Airwindows delay: writes x and returns what was written cap - 1 samples ago.
+    float ambPush (Ambience& this, int j, float x)
+    {
+        this.ambWrite (j, x);
+        this.ambAdvance (j);
+        return this.pool.at (this.base.at (j) + this.wp.at (j));
+    }
+
+    /// A one-pole lowpass (the bilinear transform's, gain g = tan (pi f / sr) / (1 + tan)).
+    float ambLowpass (float& s, float x, float g)
+    {
+        let v = (x - s) * g;
+        let y = v + s;
+        s = y + v;
+        return y;
+    }
+
+    float ambOnePoleGain (float64 hz, float64 sr)
+    {
+        let k = tan (pi * min (hz, 0.49 * sr) / sr);
+        return float (k / (1.0 + k));
+    }
+
+    //==============================================================================
+    // Layout
+
+    void ambLine (Ambience& this, int capacity, int& top)
+    {
+        let j = this.numLines;
+        this.base.at (j) = top;
+        this.cap.at (j) = capacity;
+        this.wp.at (j) = 0;
+        this.d.at (j) = 1;
+        this.dInc.at (j) = 0;
+        top += capacity;
+        this.numLines = j + 1;
+    }
+
+    /// clear coat's internal rate divisor: 1 up to 88.2 kHz, then 2 .. 4 (Airwindows ClearCoat).
+    int ambCycleEnd (float64 sr)
+    {
+        return clamp (int (floor (sr / 44100.0)), 1, 4);
+    }
+
+    /// Lays the model out in the pool (silent).
+    void ambSetup (Ambience& this, int model, int room, float64 sr, float size, float predelayMs)
+    {
+        this.model = model;
+        this.room = room;
+        this.sr = sr;
+        this.numLines = 0;
+        int top = 0;
+
+        // 0, 1: the predelay
+        let pdCap = int (0.25 * sr) + 8;
+        this.ambLine (pdCap, top);
+        this.ambLine (pdCap, top);
+
+        if (model == ambienceModel::room)
+        {
+            // fit the pool: at very high rates the largest sizes shrink
+            let r = sr / 48000.0;
+            float64 sum = 0;
+
+            for (wrap<12> k)
+                sum += float64 (ambChainPrimes[k] + ambLoopPrimes[k]) * r;
+
+            this.scaleMax = min (1.0, (float64 (ambPoolSize - top) - 24.0 * 6.0) / sum);
+
+            for (wrap<12> k) this.ambLine (int (float64 (ambChainPrimes[k]) * r * this.scaleMax) + 6, top);    // 2 .. 13
+            for (wrap<12> k) this.ambLine (int (float64 (ambLoopPrimes[k]) * r * this.scaleMax) + 6, top);     // 14 .. 25
+
+            this.scale = min (ambScale (size), this.scaleMax);
+            this.scaleStepMax = 0.05 * float64 (blockSize) / (ambLongest * r);      // 5 % pitch on the longest line
+
+            for (int j = 2; j < 26; ++j)
+            {
+                let p = j < 14 ? ambChainPrimes.at (j - 2) : ambLoopPrimes.at (j - 14);
+                this.d.at (j) = floor (float64 (p) * r * this.scale) + 1.0;
+            }
+        }
+        else
+        {
+            for (wrap<32> k)
+            {
+                let letter = k < 16 ? ambLettersL[k] : ambLettersR.at (int (k) - 16);
+                let len = model == ambienceModel::clearCoat ? ambClearCoatRooms.at (room * 16 + letter) : ambVerbTinyLines.at (letter);
+                this.ambLine (len + 1, top);        // 2 .. 17 left, 18 .. 33 right
+            }
+        }
+
+        this.d[0] = max (1.0, float64 (predelayMs) * sr * 0.001);
+
+        if (! this.clean)
+            for (int i = 0; i < top; ++i)
+                this.pool.at (i) = 0;
+
+        this.clean = false;
+
+        for (wrap<4> k) { this.fb[k] = 0; this.hiLp[k] = 0; this.loLp[k] = 0; }
+        for (wrap<8> k) { this.awFb[k] = 0; this.sub[k] = 0; }
+        for (wrap<5> k) { this.refL[k] = 0; this.refR[k] = 0; }
+        for (wrap<9> k) { this.bez[k] = 0; this.bezF[k] = 0; }
+
+        this.bez[8] = 1.0f;
+        this.bezF[8] = 1.0f;
+        this.loopOn = false;
+        this.mulchL = 0; this.mulchR = 0; this.tailL = 0; this.tailR = 0;
+        this.cycle = 0;
+        this.hc[0] = 0; this.hc[1] = 0;
+        this.fade = 1.0f;
+        this.inFade = this.idle ? 1.0f : 0.0f;     // into a running effect, the input fades in
+    }
+
+    void clearState (Ambience& this)
+    {
+        for (int i = 0; i < ambPoolSize; ++i)
+            this.pool.at (i) = 0;
+
+        this.clean = true;
+        this.model = -1;
+        this.numLines = 0;
+        this.idle = true;
+        this.silentCount = 0;
+        this.dc = 1e-15f;
+        this.mix = -1.0f;       // marks the smoothed values as unset
+        this.hcG = 0;
+    }
+
+    //==============================================================================
+    // room
+
+    void ambRoom (Ambience& this, const float<2>[blockSize]& pre, float<2>[blockSize]& wet,
+                  float densT, float coefT, float gHiT, float gLoT)
+    {
+        // the loops switch off while the time is at zero; their lines are cleared before they
+        // come back, so that nothing old comes out of them
+        let loopWanted = coefT > 0 || this.coef > 1e-6f;
+
+        if (loopWanted && ! this.loopOn)
+        {
+            for (int i = this.base[14]; i < this.base[25] + this.cap[25]; ++i)
+                this.pool.at (i) = 0;
+
+            for (wrap<4> k) { this.fb[k] = 0; this.hiLp[k] = 0; this.loLp[k] = 0; }
+        }
+
+        this.loopOn = loopWanted;
+        let inv = 1.0f / float (blockSize);
+        let dDens = (densT - this.dens) * inv;
+        let dCoef = (coefT - this.coef) * inv;
+        let dHi = (gHiT - this.gHi) * inv;
+        let dLo = (gLoT - this.gLo) * inv;
+        let kHi = this.kHi, kLo = this.kLo;
+        let lines = this.loopOn ? 26 : 14;
+
+        for (wrap<blockSize> i)
+        {
+            this.dens += dDens;
+            this.coef += dCoef;
+            this.gHi += dHi;
+            this.gLo += dLo;
+            let dens = this.dens;
+            float[4] y;
+
+            for (wrap<4> k)
+            {
+                var v = (k < 2 ? pre[i][0] : pre[i][1]) + this.fb[k];
+                let j = 2 + 3 * int (k);
+                v = this.ambAllpass (j, v, ambChainG[0] * dens);
+                v = this.ambAllpass (j + 1, v, ambChainG[1] * dens);
+                y[k] = this.ambAllpass (j + 2, v, ambChainG[2] * dens);
+            }
+
+            wet[i] = float<2> (y[0] + y[1], y[2] + y[3]) * ambRoomGain;
+
+            if (this.loopOn)
+            {
+                float[4] s;
+
+                for (wrap<4> k)
+                {
+                    let j = 14 + 3 * int (k);
+                    var v = this.ambAllpass (j, y[k], ambLoopG[0] * dens);
+                    v = this.ambAllpass (j + 1, v, ambLoopG[1] * dens);
+                    v = this.ambAllpass (j + 2, v, ambLoopG[2] * dens);
+                    let h = ambLowpass (this.hiLp[k], v, kHi);
+                    v = h + this.gHi * (v - h);
+                    let l = ambLowpass (this.loLp[k], v, kLo);
+                    s[k] = v + (this.gLo - 1.0f) * l;
+                }
+
+                let c = this.coef;
+                this.fb[0] = c * (s[0] - s[2]);
+                this.fb[1] = c * (-s[1] - s[3]);
+                this.fb[2] = c * (s[1] - s[3]);
+                this.fb[3] = c * (s[0] + s[2]);
+            }
+
+            for (int j = 2; j < lines; ++j)
+                this.d.at (j) += this.dInc.at (j);
+        }
+
+        if (! this.loopOn)
+            for (int j = 14; j < 26; ++j)
+                this.d.at (j) += float64 (blockSize) * this.dInc.at (j);
+    }
+
+    //==============================================================================
+    // clear coat (Airwindows ClearCoat)
+
+    /// One side's four stages of 4x4 Householder matrices from line `first`, fed back from
+    /// awFb[fbAt ..]; returns the sum of the last stage / 8. The last stage's first line is
+    /// smoothed (3:1 with its previous value) before the feedback is taken.
+    float ambClearCoatSide (Ambience& this, float x, int first, int fbAt, float regen, float& mulch)
+    {
+        float[4] v, h;
+
+        for (wrap<4> i)
+            v[i] = x + this.awFb.at (fbAt + int (i)) * regen;
+
+        for (wrap<4> s)
+        {
+            for (wrap<4> i)
+                h[i] = this.ambPush (first + 4 * int (s) + int (i), v[i]);
+
+            if (s < 3)
+            {
+                let sum = h[0] + h[1] + h[2] + h[3];
+                for (wrap<4> i) v[i] = 2.0f * h[i] - sum;
+            }
+        }
+
+        let raw = h[0];
+        h[0] = (3.0f * raw + mulch) * 0.25f;
+        mulch = raw;
+        let sum = h[0] + h[1] + h[2] + h[3];
+
+        for (wrap<4> i)
+            this.awFb.at (fbAt + int (i)) = 2.0f * h[i] - sum;
+
+        return clamp (sum * 0.125f, -1.0f, 1.0f);
+    }
+
+    /// ClearCoat's SubTight: four stages of a sine-shaped follower, taken from the sound.
+    float ambSubTight (Ambience& this, float x, int at, float subRate)
+    {
+        var s = x * subRate;
+
+        for (wrap<4> k)
+        {
+            let j = at + 2 * int (k);
+            let scale = 0.5f + abs (s * 0.5f);
+            s = this.sub.at (j) + sin (this.sub.at (j) - s) * scale;
+            this.sub.at (j) = s * scale;
+        }
+
+        return x - clamp (s, -0.25f, 0.25f) * 16.0f;
+    }
+
+    void ambClearCoat (Ambience& this, const float<2>[blockSize]& pre, float<2>[blockSize]& wet, float regen)
+    {
+        let cycleEnd = ambCycleEnd (this.sr);
+        let subRate = float (0.001 * 44100.0 / this.sr);
+
+        for (wrap<blockSize> i)
+        {
+            this.cycle += 1;
+
+            if (this.cycle >= cycleEnd)
+            {
+                // a reverb sample, at about 44.1 kHz; the samples between are drawn straight
+                let yL = this.ambClearCoatSide (pre[i][0], 2, 0, regen, this.mulchL);
+                let yR = this.ambClearCoatSide (pre[i][1], 18, 4, regen, this.mulchR);
+                let oldL = this.refL.at (cycleEnd), oldR = this.refR.at (cycleEnd);
+
+                // (at the full rate the reverb's sample comes out at once)
+                for (int k = 0; k <= cycleEnd; ++k)
+                {
+                    let t = cycleEnd == 1 ? 1.0f : float (k) / float (cycleEnd);
+                    this.refL.at (k) = oldL + (yL - oldL) * t;
+                    this.refR.at (k) = oldR + (yR - oldR) * t;
+                }
+
+                this.cycle = 0;
+            }
+
+            var l = this.ambSubTight (this.refL.at (this.cycle), 0, subRate);
+            var r = this.ambSubTight (this.refR.at (this.cycle), 1, subRate);
+
+            if (cycleEnd > 1)
+            {
+                let al = (l + this.tailL) * 0.5f;
+                this.tailL = l;
+                let ar = (r + this.tailR) * 0.5f;
+                this.tailR = r;
+                l = al; r = ar;
+            }
+
+            wet[i] = float<2> (l, r) * ambClearCoatGain;
+        }
+    }
+
+    //==============================================================================
+    // verb tiny (Airwindows VerbTiny)
+
+    /// One side's four stages from line `first`, fed back from the other side's last stage
+    /// (awFb[from ..]); keeps its own last stage's feedback in awFb[to ..]. Returns the sum / 8.
+    float ambVerbTinySide (Ambience& this, float x, int first, int from, int to, float regen)
+    {
+        float[4] v, h;
+
+        for (wrap<4> i)
+            v[i] = x + this.awFb.at (from + int (i)) * regen;
+
+        for (wrap<4> s)
+        {
+            for (wrap<4> i)
+                h[i] = this.ambPush (first + 4 * int (s) + int (i), v[i]);
+
+            let sum = h[0] + h[1] + h[2] + h[3];
+
+            for (wrap<4> i)
+                v[i] = 2.0f * h[i] - sum;
+
+            if (s == 3)
+            {
+                for (wrap<4> i) this.awFb.at (to + int (i)) = v[i];
+                return sum * 0.125f;
+            }
+        }
+
+        return 0;
+    }
+
+    /// The step and trim of a Bezier undersampler at derez (VerbTiny's revised curve joins).
+    void ambBezStep (float derezIn, float& step, float& trim)
+    {
+        let fraction = int (1.0f / clamp (derezIn, 0.0001f, 1.0f));
+        let t = float (fraction) / float (fraction + 1);
+        step = 1.0f / float (fraction);
+        trim = 1.0f - step * t;
+    }
+
+    /// The Bezier curve through b[0] (A, newest), b[2] (B) and b[4] (C) at the cycle's point.
+    float ambBezier (const float[9]& b, int ch, float trim)
+    {
+        let x = b[8] * trim;
+        let a = b.at (ch), bb = b.at (2 + ch), c = b.at (4 + ch);
+        let cb = c * (1.0f - x) + bb * x;
+        let ba = bb * (1.0f - x) + a * x;
+        return bb + cb * (1.0f - x) + ba * x;
+    }
+
+    void ambVerbTiny (Ambience& this, const float<2>[blockSize]& pre, float<2>[blockSize]& wet,
+                      float replace, float size)
+    {
+        let overall = float (this.sr / 44100.0);
+        // (VerbTiny's own regeneration starts at half; here it starts at none, the matrix alone)
+        let regen = (1.0f - (1.0f - replace) * (1.0f - replace)) * 0.0625f;
+        let attenuate = (1.0f - replace) * (1.0f - replace);
+        float derez, trim, derezF, trimF;
+        ambBezStep (1.0f / ((1.0f + 3.0f * size) * overall), derez, trim);
+        ambBezStep (1.0f / overall, derezF, trimF);
+
+        for (wrap<blockSize> i)
+        {
+            this.bez[8] += derez;
+            this.bez[6] += pre[i][0] * attenuate * derez;
+            this.bez[7] += pre[i][1] * attenuate * derez;
+
+            if (this.bez[8] > 1.0f)
+            {
+                this.bez[8] = 0;
+                let l = this.ambVerbTinySide (this.bez[6], 2, 4, 0, regen);
+                let r = this.ambVerbTinySide (this.bez[7], 18, 0, 4, regen);
+                this.bez[4] = this.bez[2]; this.bez[2] = this.bez[0]; this.bez[0] = l;
+                this.bez[5] = this.bez[3]; this.bez[3] = this.bez[1]; this.bez[1] = r;
+                this.bez[6] = 0; this.bez[7] = 0;
+            }
+
+            let l = ambBezier (this.bez, 0, trim) * -0.25f;
+            let r = ambBezier (this.bez, 1, trim) * -0.25f;
+
+            // and the output's own undersampling, VerbTiny's filter at its brightest
+            this.bezF[8] += derezF;
+            this.bezF[6] += l * derezF;
+            this.bezF[7] += r * derezF;
+
+            if (this.bezF[8] > 1.0f)
+            {
+                this.bezF[8] = 0;
+                this.bezF[4] = this.bezF[2]; this.bezF[2] = this.bezF[0]; this.bezF[0] = this.bezF[6];
+                this.bezF[5] = this.bezF[3]; this.bezF[3] = this.bezF[1]; this.bezF[1] = this.bezF[7];
+                this.bezF[6] = 0; this.bezF[7] = 0;
+            }
+
+            wet[i] = float<2> (ambBezier (this.bezF, 0, trimF), ambBezier (this.bezF, 1, trimF)) * (0.5f * ambVerbTinyGain);
+        }
+    }
+
+    //==============================================================================
+    /// The room's pass gain for a band whose time is h (-1 .. 1) at time t, over the band's
+    /// own: the shelf's gain.
+    float ambShelfGain (float t, float h)
+    {
+        if (t <= 0)
+            return 1.0f;
+
+        return h > 0 ? (t + h * (1.0f - t)) / t : 1.0f + h;
+    }
+
+    /// The room's size factor.
+    float64 ambScale (float size)
+    {
+        return 0.01 + 0.99 * float64 (size * size);
+    }
+
+    bool process (Ambience& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
+    {
+        if (! active && this.idle)
+            return false;
+
+        let want = clamp (int (P[slot::Am_Model]), 0, 2);
+        let size = clamp (P[slot::Am_Size], 0.0f, 1.0f);
+        let predelay = clamp (P[slot::Am_Predelay], 0.0f, 250.0f);
+        let wantRoom = want == ambienceModel::clearCoat ? int (size * 16.999f) : 0;
+
+        // a new model (or clear coat room) starts silent once the old one's wet has faded out
+        if (this.model < 0 || sr != this.sr || ((want != this.model || wantRoom != this.room) && (this.idle || this.fade <= 0.0f)))
+            this.ambSetup (want, wantRoom, sr, size, predelay);
+
+        let change = want != this.model || wantRoom != this.room;
+
+        this.idle = false;
+        this.dc = -this.dc;
+        let model = this.model;
+        let nf = float64 (blockSize);
+        let a50 = float (1.0 - exp (-nf / (sr * 0.05)));
+
+        let densT = clamp (P[slot::Am_Density], 0.0f, 1.0f);
+        let timeT = clamp (P[slot::Am_Time], 0.0f, 1.0f);
+        let hiTime = clamp (P[slot::Am_HighTime], -1.0f, 1.0f);
+        let loTime = clamp (P[slot::Am_LowTime], -1.0f, 1.0f);
+        let widthT = clamp (P[slot::Am_Width], -1.0f, 1.0f);
+        let mixT = clamp (P[slot::Am_Mix], 0.0f, 1.0f);
+
+        if (this.mix < 0.0f)
+        {
+            this.width = widthT; this.mix = mixT;
+            this.dens = densT; this.coef = 0.7f * timeT;
+            this.gHi = ambShelfGain (timeT, hiTime); this.gLo = ambShelfGain (timeT, loTime);
+        }
+
+        let width0 = this.width, mix0 = this.mix;
+        this.width += (widthT - this.width) * a50;
+        this.mix += (mixT - this.mix) * a50;
+
+        // predelay: glides at up to 25 % pitch
+        let pdT = max (1.0, float64 (predelay) * sr * 0.001);
+        this.dInc[0] = clamp ((pdT - this.d[0]) * float64 (a50), -0.25 * nf, 0.25 * nf) / nf;
+
+        if (model == ambienceModel::room)
+        {
+            // size: glides on the size factor, the delays snapping to whole samples once it's there
+            let r = sr / 48000.0;
+            let scaleT = min (ambScale (size), this.scaleMax);
+            let settled = abs (scaleT - this.scale) <= this.scaleStepMax;
+            this.scale = settled ? scaleT : this.scale + clamp (scaleT - this.scale, -this.scaleStepMax, this.scaleStepMax);
+
+            for (int j = 2; j < 26; ++j)
+            {
+                let p = float64 (j < 14 ? ambChainPrimes.at (j - 2) : ambLoopPrimes.at (j - 14)) * r * this.scale;
+                let target = settled ? floor (p) + 1.0 : p + 0.5;
+                this.dInc.at (j) = clamp (target - this.d.at (j), -0.05 * nf, 0.05 * nf) / nf;
+            }
+
+            this.kHi = ambOnePoleGain (float64 (expKnob (20.0f, 20000.0f, P[slot::Am_HighFreq])), sr);
+            this.kLo = ambOnePoleGain (float64 (expKnob (20.0f, 20000.0f, P[slot::Am_LowFreq])), sr);
+        }
+
+        // the input through the predelay
+        float<2>[blockSize] pre, wet;
+        let inStep = float (1.0 / (0.01 * sr));
+        let dc = this.dc;
+
+        for (wrap<blockSize> i)
+        {
+            this.inFade = min (this.inFade + inStep, 1.0f);
+            this.ambWrite (0, buf[i][0] * this.inFade + dc);
+            this.ambWrite (1, buf[i][1] * this.inFade + dc);
+            let pd = this.d[0];
+            pre[i] = float<2> (this.ambRead (0, pd), this.ambRead (1, pd));
+            this.d[0] += this.dInc[0];
+            this.ambAdvance (0);
+            this.wp[1] = this.wp[0];
+        }
+
+        if (model == ambienceModel::room)
+            this.ambRoom (pre, wet, densT, 0.7f * timeT, ambShelfGain (timeT, hiTime), ambShelfGain (timeT, loTime));
+        else if (model == ambienceModel::clearCoat)
+            this.ambClearCoat (pre, wet, 0.0625f * 0.999f * timeT);     // (ClearCoat's own is at time 2/3)
+        else
+            this.ambVerbTiny (pre, wet, timeT, size);
+
+        // high cut, width, mix
+        var g0 = this.hcG;
+        this.hcG = ambOnePoleGain (float64 (expKnob (20.0f, 20000.0f, P[slot::Am_HighCut])), sr);
+
+        if (g0 <= 0)
+            g0 = this.hcG;
+
+
+        let wantFade = change ? 0.0f : 1.0f;
+        let fadeStep = float (1.0 / (0.015 * sr));
+        let inv = 1.0f / float (blockSize);
+        let wet0 = float (sin (float64 (mix0) * pi * 0.5)), wet1 = float (sin (float64 (this.mix) * pi * 0.5));
+        let dry0 = float (cos (float64 (mix0) * pi * 0.5)), dry1 = float (cos (float64 (this.mix) * pi * 0.5));
+
+        for (wrap<blockSize> i)
+        {
+            let t = float (int (i) + 1) * inv;
+            let g = g0 + (this.hcG - g0) * t;
+            let l = ambLowpass (this.hc[0], wet[i][0] + dc, g);
+            let r = ambLowpass (this.hc[1], wet[i][1] + dc, g);
+            // width: the side scaled by 0 (mono) .. 1 .. 2
+            let side = 1.0f + width0 + (this.width - width0) * t;
+            let own = 0.5f * (1.0f + side), other = 0.5f * (1.0f - side);
+
+            this.fade = wantFade > this.fade ? min (this.fade + fadeStep, 1.0f) : max (this.fade - fadeStep, wantFade);
+            let wetG = (wet0 + (wet1 - wet0) * t) * this.fade;
+            let dryG = dry0 + (dry1 - dry0) * t;
+
+            buf[i] = buf[i] * dryG + float<2> (own * l + other * r, other * l + own * r) * wetG;
+        }
+
+        if (stillSounding (this.idle, this.silentCount, active || anyAbove (buf, 1e-8f)))
+            return true;
+
+        // silent for longer than the predelay and the early sound can take to come out
+        if (float64 (this.silentCount) >= this.d[0] + 0.25 * sr)
+            this.idle = true;
+
+        return false;
+    }
+}
