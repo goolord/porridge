@@ -49,6 +49,54 @@ Desktop.ini
 .claude
 
 # Porridge build and test output
+/bundle/
+*.res.mjs
 tools/test/build/
 tools/re/out/
 __pycache__/
+output/
+/lib/
+.bsb.lock
+
+
+# ReScript build artifacts
+lib/bs/
+.bsb.lock
+*.bs.js
+*.bs.mjs
+*.bs.cjs
+
+# If using in-source: false (output directory build)
+# lib/js/
+# lib/es6/
+
+# Package managers & dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Bundler / web build output
+dist/
+build/
+.cache/
+
+# Environment & local config
+.env
+.env.local
+.env.*.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor / OS artifacts
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo

@@ -4,7 +4,7 @@
 #   just install    build, then copy it into the user's CLAP folder
 #
 # Build on each OS natively; there is no cross-compiling. Requirements:
-#   all:      cmaj (Cmajor CLI), node, git, cmake >= 3.16 and a C++17 compiler
+#   all:      cmaj (Cmajor CLI), node and npm, git, cmake >= 3.16 and a C++17 compiler
 #   Windows:  Visual Studio 2022 with the C++ workload (CMake's default generator)
 #   macOS:    Xcode command line tools; the result is a universal arm64/x86_64 bundle
 #   Linux:    pkg-config, gtk3 and webkit2gtk dev packages (see `just linux-deps`)
@@ -44,8 +44,13 @@ copy := if os() == "macos" { "copy_directory" } else { "copy" }
 # Build the plugin into dist/
 default: package
 
+# Compile the ReScript interface and bundle it into bundle/
+ui:
+    npm install
+    npm run build
+
 # Regenerate dsp/ParamStore.cmajor and dsp/Slots.cmajor from the parameter table
-gen:
+gen: ui
     node "{{ root / "tools" / "gen.mjs" }}"
 
 # Fetch the CLAP headers (once per CLAP_VERSION)
@@ -85,6 +90,7 @@ uninstall:
 linux-deps:
     sudo apt-get install -y build-essential cmake git pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
 
-# Delete build/ and dist/
+# Delete build/, dist/ and the compiled interface
 clean:
-    cmake -E rm -rf "{{ build }}" "{{ dist }}"
+    cmake -E rm -rf "{{ build }}" "{{ dist }}" "{{ root / "bundle" }}"
+    npx rescript clean

@@ -1,0 +1,238 @@
+// Bindings to the browser APIs the view uses.
+
+type element = Dom.element
+
+@val external document: Dom.document = "document"
+@send external createElement: (Dom.document, string) => element = "createElement"
+@send external createElementNS: (Dom.document, string, string) => element = "createElementNS"
+@get external body: Dom.document => element = "body"
+
+//==============================================================================
+// Elements
+
+@send external appendChild: (Dom.node_like<'a>, element) => unit = "appendChild"
+@send external remove: element => unit = "remove"
+@send external contains: (element, Dom.eventTarget) => bool = "contains"
+@get @return(nullable) external parentElement: element => option<element> = "parentElement"
+@set external setClassName: (element, string) => unit = "className"
+@set external setTextContent: (element, string) => unit = "textContent"
+@set external setTabIndex: (element, int) => unit = "tabIndex"
+@send external focus: element => unit = "focus"
+@send external click: element => unit = "click"
+@send external setPointerCapture: (element, int) => unit = "setPointerCapture"
+
+// Attribute values: numbers are written the way JavaScript prints them.
+@unboxed type attr = Num(float) | Str(string)
+@send external setAttribute: (element, string, attr) => unit = "setAttribute"
+
+type classList
+@get external classList: element => classList = "classList"
+@send external addClass: (classList, string) => unit = "add"
+@send external removeClass: (classList, string) => unit = "remove"
+@send external toggleClass: (classList, string, bool) => bool = "toggle"
+
+let addClass = (e, name) => e->classList->addClass(name)
+let removeClass = (e, name) => e->classList->removeClass(name)
+let toggleClass = (e, name, on) => e->classList->toggleClass(name, on)->ignore
+
+type style
+@get external style: element => style = "style"
+@send external setProperty: (style, string, string) => unit = "setProperty"
+@set external setCssText: (style, string) => unit = "cssText"
+
+let setStyle = (e, property, value) => e->style->setProperty(property, value)
+let px = x => Float.toString(x) ++ "px"
+
+type cssStyleDeclaration
+@val external getComputedStyle: element => cssStyleDeclaration = "getComputedStyle"
+@send external getPropertyValue: (cssStyleDeclaration, string) => string = "getPropertyValue"
+
+// Layout
+@get external offsetLeft: element => float = "offsetLeft"
+@get external offsetTop: element => float = "offsetTop"
+@get external offsetWidth: element => float = "offsetWidth"
+@get external offsetHeight: element => float = "offsetHeight"
+@get @return(nullable) external offsetParent: element => option<element> = "offsetParent"
+@get external clientWidth: element => float = "clientWidth"
+@get external clientHeight: element => float = "clientHeight"
+
+type rect = {left: float, top: float, width: float, height: float}
+@send external getBoundingClientRect: element => rect = "getBoundingClientRect"
+
+// Text inputs
+@get external value: element => string = "value"
+@set external setValue: (element, string) => unit = "value"
+@set external setMaxLength: (element, int) => unit = "maxLength"
+@set external setInputType: (element, string) => unit = "type"
+@set external setAccept: (element, string) => unit = "accept"
+@send external select: element => unit = "select"
+
+// Links
+@set external setHref: (element, string) => unit = "href"
+@set external setDownload: (element, string) => unit = "download"
+
+// Shadow DOM
+type shadowInit = {mode: string}
+@send external attachShadow: (element, shadowInit) => Dom.shadowRoot = "attachShadow"
+
+//==============================================================================
+// Events
+
+@get external button: Dom.mouseEvent_like<'a> => int = "button"
+@get external clientX: Dom.mouseEvent_like<'a> => float = "clientX"
+@get external clientY: Dom.mouseEvent_like<'a> => float = "clientY"
+@get external pointerId: Dom.pointerEvent => int = "pointerId"
+@get external deltaY: Dom.wheelEvent => float = "deltaY"
+@get external key: Dom.keyboardEvent => string = "key"
+@get external shiftKey: Dom.uiEvent_like<'a> => bool = "shiftKey"
+@get external ctrlKey: Dom.uiEvent_like<'a> => bool = "ctrlKey"
+@get external metaKey: Dom.uiEvent_like<'a> => bool = "metaKey"
+@get external altKey: Dom.uiEvent_like<'a> => bool = "altKey"
+@get external target: Dom.event_like<'a> => Dom.eventTarget = "target"
+@send external preventDefault: Dom.event_like<'a> => unit = "preventDefault"
+@send external stopPropagation: Dom.event_like<'a> => unit = "stopPropagation"
+
+// ctrl, or cmd on a Mac
+let commandKey = ev => ev->ctrlKey || ev->metaKey
+
+type pointerEventName = [#pointerdown | #pointermove | #pointerup | #pointercancel]
+type mouseEventName = [#mouseenter | #mouseleave | #mousemove | #click | #dblclick | #contextmenu]
+type dragEventName = [#dragenter | #dragleave | #dragover | #drop]
+
+@send
+external onPointer: (element, pointerEventName, Dom.pointerEvent => unit) => unit =
+  "addEventListener"
+@send
+external offPointer: (element, pointerEventName, Dom.pointerEvent => unit) => unit =
+  "removeEventListener"
+@send
+external onMouse: (element, mouseEventName, Dom.mouseEvent => unit) => unit = "addEventListener"
+@send
+external onWheel: (
+  element,
+  @as("wheel") _,
+  Dom.wheelEvent => unit,
+  @as(json`{"passive": false}`) _,
+) => unit = "addEventListener"
+@send
+external onKeyDown: (element, @as("keydown") _, Dom.keyboardEvent => unit) => unit =
+  "addEventListener"
+@send external onDrag: (element, dragEventName, Dom.dragEvent => unit) => unit = "addEventListener"
+@send external onEvent: (element, [#change | #blur], Dom.event => unit) => unit = "addEventListener"
+
+@send
+external onDocumentPointerDownCapture: (
+  Dom.document,
+  @as("pointerdown") _,
+  Dom.pointerEvent => unit,
+  @as(json`true`) _,
+) => unit = "addEventListener"
+@send
+external offDocumentPointerDownCapture: (
+  Dom.document,
+  @as("pointerdown") _,
+  Dom.pointerEvent => unit,
+  @as(json`true`) _,
+) => unit = "removeEventListener"
+
+// Ignores the context menu, so that right-button drags and clicks reach the control.
+let suppressContextMenu = e => e->onMouse(#contextmenu, preventDefault)
+
+//==============================================================================
+// Files
+
+type file
+type fileList
+type dataTransfer
+@get external fileName: file => string = "name"
+@send external arrayBuffer: file => promise<ArrayBuffer.t> = "arrayBuffer"
+@send @return(nullable) external item: (fileList, int) => option<file> = "item"
+@get @return(nullable) external files: element => option<fileList> = "files"
+@get @return(nullable) external dataTransfer: Dom.dragEvent => option<dataTransfer> = "dataTransfer"
+@get external transferredFiles: dataTransfer => fileList = "files"
+
+type blob
+type blobOptions = {@as("type") mimeType: string}
+@new external makeBlob: (array<Uint8Array.t>, blobOptions) => blob = "Blob"
+@val external createObjectURL: blob => string = "URL.createObjectURL"
+@val external revokeObjectURL: string => unit = "URL.revokeObjectURL"
+
+//==============================================================================
+// Canvas
+
+type context2d
+@set external setCanvasWidth: (element, float) => unit = "width"
+@set external setCanvasHeight: (element, float) => unit = "height"
+@get external canvasWidth: element => float = "width"
+@get external canvasHeight: element => float = "height"
+@send external getContext2d: (element, @as("2d") _) => context2d = "getContext"
+
+module Context2d = {
+  @set external setFillStyle: (context2d, string) => unit = "fillStyle"
+  @set external setStrokeStyle: (context2d, string) => unit = "strokeStyle"
+  @set external setLineWidth: (context2d, float) => unit = "lineWidth"
+  @send external clearRect: (context2d, float, float, float, float) => unit = "clearRect"
+  @send external fillRect: (context2d, float, float, float, float) => unit = "fillRect"
+  @send external strokeRect: (context2d, float, float, float, float) => unit = "strokeRect"
+  @send external beginPath: context2d => unit = "beginPath"
+  @send external closePath: context2d => unit = "closePath"
+  @send external moveTo: (context2d, float, float) => unit = "moveTo"
+  @send external lineTo: (context2d, float, float) => unit = "lineTo"
+  @send external stroke: context2d => unit = "stroke"
+  @send external fill: context2d => unit = "fill"
+}
+
+//==============================================================================
+// Scheduling and observers
+
+@val external requestAnimationFrame: (float => unit) => unit = "requestAnimationFrame"
+
+type resizeObserver
+@new external makeResizeObserver: (unit => unit) => resizeObserver = "ResizeObserver"
+@send external observe: (resizeObserver, element) => unit = "observe"
+@send external disconnect: resizeObserver => unit = "disconnect"
+
+//==============================================================================
+// Custom elements
+
+type elementClass
+@scope("customElements") @val @return(nullable)
+external getCustomElement: string => option<elementClass> = "get"
+@scope("customElements") @val
+external defineCustomElement: (string, elementClass) => unit = "define"
+
+//==============================================================================
+// Building
+
+// Creates an element, optionally with a class, text, and a parent to append it to.
+let el = (tag, ~cls=?, ~text=?, ~parent=?) => {
+  let e = document->createElement(tag)
+  cls->Option.forEach(cls => e->setClassName(cls))
+  text->Option.forEach(text => e->setTextContent(text))
+  parent->Option.forEach(parent => parent->appendChild(e))
+  e
+}
+
+// A rectangle in design pixels.
+type box = {x: float, y: float, w: float, h: float}
+
+// Positions an element in design pixels.
+let place = (e, x, y, ~w=?, ~h=?) => {
+  e->setStyle("left", px(x))
+  e->setStyle("top", px(y))
+  w->Option.forEach(w => e->setStyle("width", px(w)))
+  h->Option.forEach(h => e->setStyle("height", px(h)))
+  e
+}
+
+let placeBox = (e, {x, y, w, h}) => e->place(x, y, ~w, ~h)
+
+// The position of an element relative to an ancestor, following offsetParent.
+let offsetWithin = (e, ancestor) => {
+  let rec go = (node, x, y) =>
+    switch node {
+    | Some(n) if n !== ancestor => go(n->offsetParent, x + n->offsetLeft, y + n->offsetTop)
+    | _ => (x, y)
+    }
+  go(Some(e), 0., 0.)
+}

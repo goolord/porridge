@@ -1,0 +1,96 @@
+// Parameter model: the single source of truth for the view. Values are internal
+// (preset-struct) values; the patch's endpoints use the same units.
+
+type t = {
+  pc: PatchConnection.t,
+  defs: Map.t<string, ParamDefs.t>,
+  values: Bank.values,
+  listeners: Map.t<string, array<unit => unit>>,
+  anyListeners: array<string => unit>,
+  onParam: PatchConnection.parameterEvent => unit,
+}
+
+let notifyListeners = (listeners, anyListeners, id) => {
+  listeners->Map.get(id)->Option.forEach(fns => fns->Array.forEach(fn => fn()))
+  anyListeners->Array.forEach(fn => fn(id))
+}
+
+let make = (pc, defs: array<ParamDefs.t>) => {
+  let defsById = defs->Array.map(d => (d.id, d))->Map.fromArray
+  let values = defs->Array.map(d => (d.id, d.init))->Map.fromArray
+  let listeners = Map.make()
+  let anyListeners = []
+
+  let onParam = ({endpointID, value}: PatchConnection.parameterEvent) =>
+    defsById
+    ->Map.get(endpointID)
+    ->Option.forEach(d => {
+      let x = d.isInt ? Math.round(value) : value
+      switch values->Map.get(d.id) {
+      | Some(old) if old == x => ()
+      | _ =>
+        values->Map.set(d.id, x)
+        notifyListeners(listeners, anyListeners, d.id)
+      }
+    })
+
+  pc->PatchConnection.addAllParameterListener(onParam)
+  defs->Array.forEach(d => pc->PatchConnection.requestParameterValue(d.id))
+  {pc, defs: defsById, values, listeners, anyListeners, onParam}
+}
+
+let dispose = t => t.pc->PatchConnection.removeAllParameterListener(t.onParam)
+
+let def = (t, id) =>
+  switch t.defs->Map.get(id) {
+  | Some(d) => d
+  | None => JsError.panic("unknown parameter " ++ id)
+  }
+
+let get = (t, id) => t.values->Map.get(id)->Option.getOr(0.)
+
+let listen = (t, id, fn) =>
+  switch t.listeners->Map.get(id) {
+  | Some(fns) => fns->Array.push(fn)
+  | None => t.listeners->Map.set(id, [fn])
+  }
+
+let listenAny = (t, fn) => t.anyListeners->Array.push(fn)
+
+let notify = (t, id) => notifyListeners(t.listeners, t.anyListeners, id)
+
+let set = (t, id, x) =>
+  t.defs
+  ->Map.get(id)
+  ->Option.forEach(d => {
+    let x = d.clamp(x)
+    if get(t, id) != x {
+      t.values->Map.set(id, x)
+      t.pc->PatchConnection.sendEventOrValue(id, x)
+      notify(t, id)
+    }
+  })
+
+let beginGesture = (t, id) => t.pc->PatchConnection.sendParameterGestureStart(id)
+let endGesture = (t, id) => t.pc->PatchConnection.sendParameterGestureEnd(id)
+
+let gestureSet = (t, id, x) => {
+  beginGesture(t, id)
+  set(t, id, x)
+  endGesture(t, id)
+}
+
+// Push a whole set of values (e.g. a loaded program). Every endpoint is sent, even
+// if unchanged, so the patch is guaranteed to match.
+let setAll = (t, values: Bank.values) => {
+  values->Map.forEachWithKey((x, id) =>
+    t.defs
+    ->Map.get(id)
+    ->Option.forEach(d => {
+      let x = d.clamp(x)
+      t.values->Map.set(id, x)
+      t.pc->PatchConnection.sendEventOrValueNow(id, x)
+    })
+  )
+  values->Map.forEachWithKey((_, id) => notify(t, id))
+}

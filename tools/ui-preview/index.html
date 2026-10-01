@@ -50,9 +50,9 @@ class MockPatchConnection
 
 const pc = new MockPatchConnection();
 window.pc = pc;
-const worker = await import ("../../worker/worker.js");
+const worker = await import ("../../bundle/worker.js");
 worker.default (pc);
-const mod = await import ("../../ui/index.js");
+const mod = await import ("../../bundle/view.js");
 const view = mod.default (pc);
 document.getElementById ("host").appendChild (view);
 window.view = view;

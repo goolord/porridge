@@ -15,12 +15,12 @@
     },
 
     "source":           [ "dsp/Porridge.cmajor", "dsp/Types.cmajor", "dsp/Slots.cmajor", "dsp/ParamStore.cmajor", "dsp/Effects.cmajor", "dsp/Filter.cmajor", "dsp/Tables.cmajor", "dsp/Modulation.cmajor", "dsp/Oscillator.cmajor", "dsp/Voice.cmajor", "dsp/Synth.cmajor" ],
-    "worker":           "worker/worker.js",
+    "worker":           "bundle/worker.js",
     "resources":        [ "presets/*" ],
 
     "view":
     {
-        "src":       "ui/index.js",
+        "src":       "bundle/view.js",
         "width":     1344,
         "height":    732,
         "resizable": true

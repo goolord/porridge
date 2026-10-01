@@ -1,11 +1,11 @@
-// Checks ui/oatmeal/oatmeal-params.js against display strings sampled from Oatmeal.dll:
+// Checks ui/oatmeal/OatmealParams.res against display strings sampled from Oatmeal.dll:
 // for each parameter, normalized positions 0, 0.025 ... 1 were set through the VST
 // interface and the stored value and effGetParamDisplay/Label text were recorded.
 //
-//   node tools/re/check-params.mjs
+//   npm run res && node tools/re/check-params.mjs
 
 import { readFileSync } from "node:fs";
-import * as OP from "../../ui/oatmeal/oatmeal-params.js";
+import * as OP from "../../ui/oatmeal/OatmealParams.res.mjs";
 
 const samples = JSON.parse (readFileSync (new URL ("./param_samples.json", import.meta.url)));
 const f32 = new Float32Array (1), i32 = new Int32Array (f32.buffer);
@@ -15,8 +15,8 @@ const report = [];
 
 for (const s of samples)
 {
-    const p = OP.PARAMS[s.i];
-    const isInt = p.type === "i32" || p.type === "u32" || p.kind === "int";
+    const p = OP.params[s.i];
+    const isInt = p.type === "i32" || p.type === "u32";
     for (const [norm, rawInt, rawFloat, text] of s.samples)
     {
         ++checked;
