@@ -154,6 +154,22 @@ class Host:
             done += n; self.pos += n
         return out
 
+# Porridge's offline test host (built by tools/test/build.sh) and its output files
+HOST = os.path.join(REPO, "tools", "test", "build", "host.exe")
+
+def load_f32(path):
+    with open(path, "rb") as f:
+        n, m = struct.unpack("<ii", f.read(8))
+        return [list(struct.unpack("<%df" % m, f.read(4 * m))) for _ in range(n)]
+
+def patch_chunk(chunk, fields):
+    """A copy of a program chunk with fields set: {offset: float value, or (anything, int value)}."""
+    c = bytearray(chunk)
+    for off, v in fields.items():
+        if isinstance(v, (list, tuple)): struct.pack_into("<i", c, int(off), v[1])
+        else: struct.pack_into("<f", c, int(off), v)
+    return bytes(c)
+
 def write_wav(path, chans, sr):
     import wave
     n = len(chans[0])

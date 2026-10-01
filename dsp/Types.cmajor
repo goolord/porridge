@@ -1,7 +1,17 @@
-//  Event payload types shared by the graph and the synth.
+//  Constants and event payload types shared by the graph and the synth.
 
 namespace porridge
 {
+    /// Samples per control block: Oatmeal's processing unit.
+    let blockSize = 64;
+
+    /// pi as Oatmeal has it (a float).
+    let piF = 3.14159274f;
+
+    /// Phases and other uint32 values live in int64, masked with u32; two32 is a full cycle.
+    let u32 = 0xffffffffi64;
+    let two32 = 4294967296.0;
+
     /// User waveform / LFO shape: which = 0 osc 1, 1 osc 2, 2 LFO 1, 3 LFO 2.
     struct Shape
     {

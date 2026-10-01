@@ -17,6 +17,10 @@ namespace porridge
         Osc[maxUnison] osc1, osc2;
         float[maxUnison] jit, panr, ratio, uniL, uniR;
 
+        // what the detune ratios were last worked out from (uniU = 0: never)
+        int uniU;
+        float uniD, uniJ, uniCurve, uniOct;
+
         Filter f1L, f2L, f1R, f2R;
         Env fenv1L, fenv2L, fenv1R, fenv2R;
         Distortion distL, distR;
@@ -53,6 +57,41 @@ namespace porridge
         float a, b, phase, rate;
     }
 
-    /// The voice's current amp level (used for stealing and re-strike velocity).
-    float ampLevel (const Voice& this)      { return this.ampEnv.L; }
+    /// Unison copy m's detune step (1 .. h, h the outermost): linear as in Oatmeal, or bent
+    /// towards (m / h)^2 by the detune curve.
+    float detuneStep (int m, int h, float curve)
+    {
+        if (curve <= 0)
+            return float (m);
+
+        let x = float (m) / float (h);
+        return float (h) * x * (1.0f - curve + curve * x);
+    }
+
+    /// The unison copies' pitch ratios: U copies, detune D cents, jitter J, detune curve, in
+    /// steps of the octave. Copies alternate down and up from the centre, the outermost last;
+    /// with an odd count copy 0 stays in the centre (only jitter moves it). The detune curve
+    /// bunches the copies near the centre and keeps the outer ones out (supersaw-style).
+    void updateDetuneRatios (Voice& this, int U, float D, float J, float curve, float octave)
+    {
+        if (U <= 1)
+        {
+            this.ratio[0] = 1.0f;
+            return;
+        }
+
+        let odd = (U & 1) != 0;
+        let h = U >> 1;
+        let inv = 1.0f / (float (h) * 1200.0f);
+
+        if (odd)
+            this.ratio[0] = J > 0 ? float (pow (float64 (octave), float64 (J * this.jit[0] * D * (1.0f / 1200.0f)))) : 1.0f;
+
+        for (int k = odd ? 1 : 0; k < U; ++k)
+        {
+            let m = detuneStep ((k + (odd ? 1 : 2)) >> 1, h, curve);
+            let sg = (k & 1) != 0 ? -D : D;
+            this.ratio.at (k) = float (pow (float64 (octave), float64 ((float (m) * inv * (1.0f - J) + J * this.jit.at (k)) * sg)));
+        }
+    }
 }
