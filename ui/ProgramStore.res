@@ -4,11 +4,9 @@
 
 open OatmealFormat
 
-type rec t = {
+type t = {
   pc: PatchConnection.t,
   model: ParamModel.t,
-  // the current program or the bank changed
-  onChange: t => unit,
   message: string => unit,
   shapeListeners: array<unit => unit>,
   // the current program or the bank changed
@@ -16,60 +14,68 @@ type rec t = {
   mutable current: int,
   mutable programs: array<Preset.t>,
   mutable shapes: tables,
+  // whether the patch is known to hold `shapes` (until then a program sends all its tables)
+  mutable shapesKnown: bool,
   mutable tuning: option<Scala.source>,
+  // what the view last stored under each key, to tell the host's echo from a new value
+  stored: Map.t<StoredState.key, string>,
   pendingSend: Set.t<table>,
   mutable learning: option<string>,
   mutable listeners: option<(PatchConnection.storedStateEvent => unit, JSON.t => unit)>,
 }
 
-let make = (pc, model, ~onChange, ~onMessage) => {
-  let programs = Array.fromInitializer(~length=bankPrograms, i =>
-    Preset.make(`Init ${Int.toString(i)}`)
-  )
+let make = (pc, model, ~onMessage) => {
+  let programs = Preset.fillBank([])
   {
     pc,
     model,
-    onChange,
     message: onMessage,
     shapeListeners: [],
     changeListeners: [],
     current: 0,
     programs,
     shapes: Preset.copyTables((programs->Array.getUnsafe(0)).tables),
+    shapesKnown: false,
     tuning: None,
+    stored: Map.make(),
     pendingSend: Set.make(),
     learning: None,
     listeners: None,
   }
 }
 
-let changed = t => {
-  t.onChange(t)
-  t.changeListeners->Array.forEach(fn => fn())
-}
+let changed = t => t.changeListeners->Array.forEach(fn => fn())
 
 let onChanged = (t, fn) => t.changeListeners->Array.push(fn)
 
 let fireShapes = t => t.shapeListeners->Array.forEach(fn => fn())
 
+let store = (t, key, value) => {
+  t.stored->Map.set(key, value)
+  StoredState.send(t.pc, key, value)
+}
+
 let onState = (t, {key, value}: PatchConnection.storedStateEvent) =>
-  switch (key, value) {
-  | ("bank", String(bank)) if String.length(bank) > 1000 =>
+  switch (StoredState.keyOf(key), value) {
+  | (Some(key), String(s)) if t.stored->Map.get(key) == Some(s) => ()
+  | (Some(StoredState.Bank), String(bank)) if StoredState.isBank(bank) =>
     Preset.decodeBank(bank)->Option.forEach(presets => {
-      t.programs = Array.fromInitializer(~length=bankPrograms, i =>
-        presets[i]->Option.getOr(Preset.make(`Init ${Int.toString(i)}`))
-      )
+      t.programs = Preset.fillBank(presets)
       changed(t)
     })
-  | ("program", Number(i)) if Float.isFinite(i) =>
-    t.current = Math.Int.max(0, Math.Int.min(bankPrograms - 1, Float.toInt(i)))
-    changed(t)
-  | ("tuning", String(s)) =>
+  | (Some(StoredState.Program), Number(i)) if Float.isFinite(i) =>
+    let i = Math.Int.max(0, Math.Int.min(bankPrograms - 1, Float.toInt(i)))
+    if i != t.current {
+      t.current = i
+      changed(t)
+    }
+  | (Some(StoredState.Tuning), String(s)) =>
     t.tuning = s == "" ? None : Bank.decodeTuning(s)
     changed(t)
-  | ("shapes", String(shapes)) =>
+  | (Some(StoredState.Shapes), String(shapes)) =>
     Bank.decodeShapes(shapes)->Option.forEach(shapes => {
       t.shapes = shapes
+      t.shapesKnown = true
       fireShapes(t)
     })
   | _ => ()
@@ -104,9 +110,10 @@ let start = t => {
 
 // The bank, program, shapes and tuning, from a full stored state.
 let loadState = (t, values) =>
-  ["bank", "program", "shapes", "tuning"]->Array.forEach(key =>
+  StoredState.all->Array.forEach(key => {
+    let key = StoredState.name(key)
     values->Dict.get(key)->Option.forEach(value => onState(t, {key, value}))
-  )
+  })
 
 let dispose = t =>
   t.listeners->Option.forEach(((stateListener, outListener)) => {
@@ -120,6 +127,8 @@ let meta = t => (t.programs->Array.getUnsafe(t.current)).meta
 let shape = (t, table) => t.shapes->getTable(table)
 let onShapes = (t, fn) => t.shapeListeners->Array.push(fn)
 
+let storeShapes = t => store(t, StoredState.Shapes, Bank.encodeShapes(t.shapes))
+
 // live edits are sent immediately (throttled to one event per animation frame);
 // committed edits are also written to the stored state
 let setShape = (t, table, data, ~commit) => {
@@ -132,7 +141,7 @@ let setShape = (t, table, data, ~commit) => {
     })
   }
   if commit {
-    t.pc->PatchConnection.sendStoredStateValue("shapes", Bank.encodeShapes(t.shapes))
+    storeShapes(t)
     fireShapes(t)
   }
 }
@@ -145,21 +154,28 @@ let captureCurrent = (t): Preset.t => {
   tuning: t.tuning,
 }
 
-let storeBank = t =>
-  t.pc->PatchConnection.sendStoredStateValue("bank", Preset.encodeBank(t.programs))
+let storeBank = t => store(t, StoredState.Bank, Preset.encodeBank(t.programs))
 
 let sendTuning = t => {
   Bank.sendTuning(t.pc, t.tuning)
-  t.pc->PatchConnection.sendStoredStateValue("tuning", Bank.encodeTuning(t.tuning))
+  store(t, StoredState.Tuning, Bank.encodeTuning(t.tuning))
 }
 
 let apply = (t, preset: Preset.t) => {
   t.tuning = preset.tuning
   sendTuning(t)
   t.model->ParamModel.setAll(preset.values)
+  let before = t.shapes
   t.shapes = Preset.copyTables(preset.tables)
-  Bank.sendShapes(t.pc, t.shapes)
-  t.pc->PatchConnection.sendStoredStateValue("shapes", Bank.encodeShapes(t.shapes))
+  // only the tables that change, once the patch's are known
+  allTables->Array.forEach(table => {
+    let data = shape(t, table)
+    if !t.shapesKnown || !Preset.sameTable(before->getTable(table), data) {
+      Bank.sendShape(t.pc, table, data)
+    }
+  })
+  t.shapesKnown = true
+  storeShapes(t)
   fireShapes(t)
 }
 
@@ -172,7 +188,7 @@ let select = (t, i, ~keepEdits=true) => {
   }
   t.current = i
   apply(t, t.programs->Array.getUnsafe(i))
-  t.pc->PatchConnection.sendStoredStateValue("program", i)
+  StoredState.send(t.pc, StoredState.Program, i)
   storeBank(t)
   changed(t)
 }
@@ -272,19 +288,24 @@ let loadFile = (t, bytes, filename) =>
       loadIntoCurrent(t, p)
       t.message(`Loaded "${Preset.name(p)}" into program ${Int.toString(t.current + 1)}`)
     | Ok({presets: programs}) =>
-      t.programs = Array.fromInitializer(~length=bankPrograms, i =>
-        switch programs[i] {
-        | Some(p) => p
-        | None => Preset.make(`Init ${Int.toString(i)}`)
-        }
-      )
+      t.programs = Preset.fillBank(programs)
       t.current = 0
       apply(t, t.programs->Array.getUnsafe(0))
-      t.pc->PatchConnection.sendStoredStateValue("program", 0)
+      StoredState.send(t.pc, StoredState.Program, 0)
       t.message(`Loaded bank ${filename} (${Int.toString(Array.length(programs))} programs)`)
       storeBank(t)
       changed(t)
     }
+  }
+
+// A file the user picked or dropped.
+let loadUserFile = async (t, file) =>
+  try {
+    let buffer = await file->Web.arrayBuffer
+    loadFile(t, Uint8Array.fromBuffer(buffer), file->Web.fileName)
+  } catch {
+  | JsExn(e) =>
+    t.message(`Couldn't read ${file->Web.fileName}: ${e->JsExn.message->Option.getOr("")}`)
   }
 
 let download = (bytes, filename) => {

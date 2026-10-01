@@ -115,27 +115,9 @@ let scale = (ctx: Ctx.t, body, g: Grid.t) => {
   el("div", ~cls="sep", ~parent=body)->place(g->Grid.cx(0) + 3., g->Grid.cy(4) - 1., ~w=4. * g.cw - 8.)->ignore
   g->Grid.claim(0, 4, ~span=2, "the scale name")
   let name = el("div", ~cls="scale", ~parent=body)->placeBox(g->Grid.cell(0, 4, ~span=2))
-  let picker = el("input", ~parent=body)
-  picker->setInputType("file")
-  picker->setAccept(".scl,.kbm")
-  picker->setStyle("display", "none")
-  picker->onEvent(#change, _ => {
-    picker
-    ->files
-    ->Option.flatMap(item(_, 0))
-    ->Option.forEach(file =>
-      file
-      ->arrayBuffer
-      ->Promise.thenResolve(buffer =>
-        ctx.programs->ProgramStore.loadTuningFile(
-          Preset.utf8Decode(Uint8Array.fromBuffer(buffer)),
-          file->fileName,
-        )
-      )
-      ->Promise.ignore
-    )
-    picker->setValue("")
-  })
+  let pickScale = FilePicker.make(body, ~accept=".scl,.kbm", file =>
+    ctx.programs->ProgramStore.loadUserFile(file)->Promise.ignore
+  )
   // the 12 note offsets don't apply while a scale is loaded
   let notes = body->querySelectorAll(".p")->nodesToArray->Array.slice(~start=4)
   g->Grid.button(
@@ -143,7 +125,7 @@ let scale = (ctx: Ctx.t, body, g: Grid.t) => {
     2,
     4,
     ~status="Load a Scala scale (.scl) or keyboard mapping (.kbm); they're saved with the program",
-    () => picker->click,
+    pickScale,
   )
   g->Grid.button(
     "clear",

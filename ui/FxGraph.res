@@ -20,23 +20,23 @@ let make = (ctx, parent, box: box) => {
   {ctx, root, svg, w: box.w, h: box.h}
 }
 
-let group = (parent, ~cls="") => Plots.svgEl(parent, "g", cls == "" ? [] : [("class", Str(cls))])
+let group = (parent, ~cls="") => svgEl(parent, "g", cls == "" ? [] : [("class", Str(cls))])
 
 let line = (parent, ~cls, x1, y1, x2, y2) =>
-  Plots.svgEl(
+  svgEl(
     parent,
     "line",
     [("class", Str(cls)), ("x1", Num(x1)), ("y1", Num(y1)), ("x2", Num(x2)), ("y2", Num(y2))],
   )->ignore
 
 let text = (parent, ~cls="tick", ~anchor="start", x, y, s) =>
-  Plots.svgEl(
+  svgEl(
     parent,
     "text",
     [("class", Str(cls)), ("x", Num(x)), ("y", Num(y)), ("text-anchor", Str(anchor))],
   )->setTextContent(s)
 
-let path = (parent, ~cls) => Plots.svgEl(parent, "path", [("class", Str(cls))])
+let path = (parent, ~cls) => svgEl(parent, "path", [("class", Str(cls))])
 
 let setPath = (e, d) => e->setAttribute("d", Str(d))
 
@@ -108,8 +108,8 @@ let handle = (
   ~rightClick: option<unit => unit>=?,
   ~hover: bool => unit,
 ) => {
-  let dot = Plots.svgEl(layer, "circle", [("class", Str(cls)), ("r", Num(r))])
-  let hit = Plots.svgEl(
+  let dot = svgEl(layer, "circle", [("class", Str(cls)), ("r", Num(r))])
+  let hit = svgEl(
     hits,
     "circle",
     [("class", Str("hit")), ("r", Num(r + 5.)), ("style", Str("cursor:" ++ cursor))],

@@ -27,15 +27,27 @@ let make = (host, pc) => {
   // A scratch v38 program holding the current values, used as the context for status texts
   // (several texts depend on other fields: octave size, tuning, breakpoint, targets...).
   let context = OatmealFormat.makeDefaultProgram("Init")
-  let model = ParamModel.make(pc, ParamDefs.makeDefs(~context=() => Some(context)))
+  let defs = ParamDefs.makeDefs(~context=() => Some(context))
+  let model = ParamModel.make(pc, defs)
   Bank.writeValues(context, model.values)
-  model->ParamModel.listenAny(id => {
-    Bank.writeValues(context, Map.fromArray([(id, model->ParamModel.get(id))]))
-    // the cutoff's readout depends on the filter type
-    if id == "Filter" {
-      model->ParamModel.notify("Cutoff")
+  // a change also refreshes the readouts that depend on the parameter
+  let dependents = Map.make()
+  defs->Array.forEach(d =>
+    d.dependsOn->Array.forEach(on =>
+      dependents->Map.set(on, [...dependents->Map.get(on)->Option.getOr([]), d.id])
+    )
+  )
+  let refreshing = ref(false)
+  model->ParamModel.listenAny(id =>
+    if !refreshing.contents {
+      Bank.writeValue(context, id, model->ParamModel.get(id))
+      refreshing := true
+      dependents
+      ->Map.get(id)
+      ->Option.forEach(ids => ids->Array.forEach(ParamModel.notify(model, _)))
+      refreshing := false
     }
-  })
+  )
 
   let restoreBrowserChrome = BrowserChrome.install()
   // the page around the view (Cmajor's is black) shows while a host resizes the window
@@ -62,11 +74,12 @@ let make = (host, pc) => {
   }
 
   let progName = el("div", ~cls="name")
-  let updateProgramBar = (programs: ProgramStore.t) =>
+  let programs = ProgramStore.make(pc, model, ~onMessage=toast)
+  let updateProgramBar = () =>
     progName->setTextContent(
       pad2(programs.current + 1) ++ "  " ++ programs->ProgramStore.name(programs.current),
     )
-  let programs = ProgramStore.make(pc, model, ~onChange=updateProgramBar, ~onMessage=toast)
+  programs->ProgramStore.onChanged(updateProgramBar)
 
   let pages: array<(page, element)> = [
     (#main, el("div", ~cls="pv-page on", ~parent=stage)),
@@ -123,8 +136,7 @@ let make = (host, pc) => {
   let button = (parent, text, title, onClick) => {
     let b = el("button", ~cls="btn", ~text, ~parent)
     b->onMouse(#click, _ => onClick())
-    b->onMouse(#mouseenter, _ => status->Status.show(title))
-    b->onMouse(#mouseleave, _ => status->Status.clear)
+    status->Status.hover(b, () => title)
     b
   }
 
@@ -189,10 +201,7 @@ let make = (host, pc) => {
   prog->appendChild(progName)
   progName->onMouse(#click, _ => openProgramMenu())
   progName->onMouse(#dblclick, _ => renameProgram())
-  progName->onMouse(#mouseenter, _ =>
-    status->Status.show("Click to pick a program, double-click to rename it")
-  )
-  progName->onMouse(#mouseleave, _ => status->Status.clear)
+  status->Status.hover(progName, () => "Click to pick a program, double-click to rename it")
   button(prog, ">", "Next program", () =>
     programs->ProgramStore.select(programs.current + 1)
   )->ignore
@@ -215,7 +224,6 @@ let make = (host, pc) => {
     }
   document->onDocumentKeyDown(onShortcut)
 
-  let fileInput = el("input")
   // a sample becomes a shape on the Shapes page (showing the page again would clear its undo)
   let importSample = file => {
     let here = shownPage.contents == #shapes
@@ -224,23 +232,21 @@ let make = (host, pc) => {
     }
     shapesPage.contents->Option.forEach((s: PageShapes.t) => s.importSample(file, ~here))
   }
-  let loadFile = async file =>
-    if AudioFile.isAudio(file->fileName) {
-      importSample(file)
-    } else {
-      try {
-        let buffer = await file->arrayBuffer
-        programs->ProgramStore.loadFile(Uint8Array.fromBuffer(buffer), file->fileName)
-      } catch {
-      | JsExn(e) => toast(`Couldn't read ${file->fileName}: ${e->JsExn.message->Option.getOr("")}`)
-      }
-    }
+  let loadFile = file =>
+    AudioFile.isAudio(file->fileName)
+      ? importSample(file)
+      : programs->ProgramStore.loadUserFile(file)->Promise.ignore
+  let pickFile = FilePicker.make(
+    stage,
+    ~accept=".porridge,.json,.omp,.omb,.fxp,.fxb,.dat,.scl,.kbm",
+    loadFile,
+  )
 
   button(
     head,
     "Load",
     "Load a Porridge preset or bank (.porridge), an Oatmeal program or bank (.omp, .omb, .fxp, .fxb, .dat), or a Scala tuning (.scl, .kbm). You can also drop the file onto the window.",
-    () => fileInput->click,
+    pickFile,
   )->ignore
   let save = ref(None)
   let saveButton = button(head, "Save ▾", "Save this program or the whole bank, or export them for Oatmeal", () =>
@@ -279,15 +285,6 @@ let make = (host, pc) => {
   button(head, "⚙", "Settings: the size of the interface", () =>
     SettingsDialog.show(settings, stage)
   )->addClass("icon")
-
-  stage->appendChild(fileInput)
-  fileInput->setInputType("file")
-  fileInput->setAccept(".porridge,.json,.omp,.omb,.fxp,.fxb,.dat,.scl,.kbm")
-  fileInput->setStyle("display", "none")
-  fileInput->onEvent(#change, _ => {
-    fileInput->files->Option.flatMap(item(_, 0))->Option.forEach(f => loadFile(f)->Promise.ignore)
-    fileInput->setValue("")
-  })
 
   stage->appendChild(toastEl)
 
@@ -332,11 +329,11 @@ let make = (host, pc) => {
       // a sample goes to the Shapes page; with the browser open, other files are added to it
       // instead of replacing the bank
       if sample->Option.isSome {
-        sample->Option.forEach(f => loadFile(f)->Promise.ignore)
+        sample->Option.forEach(loadFile)
       } else if browser->PresetBrowser.isOpen {
         browser->PresetBrowser.addFiles(files)
       } else {
-        files[0]->Option.forEach(f => loadFile(f)->Promise.ignore)
+        files[0]->Option.forEach(loadFile)
       }
     })
   })
@@ -359,7 +356,7 @@ let make = (host, pc) => {
   layout()
 
   programs->ProgramStore.start
-  updateProgramBar(programs)
+  updateProgramBar()
   status->Status.setIdle(PageMain.hint)
 
   // The patch's parameters and stored state arrive in one message (asking for each

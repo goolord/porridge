@@ -109,6 +109,12 @@ let originalTarget = ev => ev->composedPath->Array.get(0)->Option.getOr(ev->targ
 // ctrl, or cmd on a Mac
 let commandKey = ev => ev->ctrlKey || ev->metaKey
 
+// Where a pointer is over an element, as fractions of its width and height.
+let pointerFraction = (e, ev) => {
+  let r = e->getBoundingClientRect
+  ((ev->clientX - r.left) / r.width, (ev->clientY - r.top) / r.height)
+}
+
 type pointerEventName = [#pointerdown | #pointermove | #pointerup | #pointercancel]
 type mouseEventName = [#mouseenter | #mouseleave | #mousemove | #click | #dblclick | #contextmenu]
 type dragEventName = [#dragenter | #dragleave | #dragover | #drop]
@@ -187,6 +193,15 @@ external offDocumentWheel: (Dom.document, @as("wheel") _, Dom.wheelEvent => unit
 // Ignores the context menu, so that right-button drags and clicks reach the control.
 let suppressContextMenu = e => e->onMouse(#contextmenu, preventDefault)
 
+// Calls f when Enter or Space is pressed on a focused element, as a click would.
+let onActivate = (e, f) =>
+  e->onKeyDown(ev =>
+    if ev->key == "Enter" || ev->key == " " {
+      ev->preventDefault
+      f()
+    }
+  )
+
 //==============================================================================
 // Files
 
@@ -237,6 +252,22 @@ module Context2d = {
 
 @val external requestAnimationFrame: (float => unit) => unit = "requestAnimationFrame"
 
+// Wraps f so that a burst of calls runs it once, when schedule calls back.
+let coalesce = (schedule, f) => {
+  let pending = ref(false)
+  () =>
+    if !pending.contents {
+      pending := true
+      schedule(() => {
+        pending := false
+        f()
+      })
+    }
+}
+
+// Wraps f so that any number of calls before the next frame run it once, in that frame.
+let perFrame = f => coalesce(run => requestAnimationFrame(_ => run()), f)
+
 type resizeObserver
 @new external makeResizeObserver: (unit => unit) => resizeObserver = "ResizeObserver"
 @send external observe: (resizeObserver, element) => unit = "observe"
@@ -276,6 +307,16 @@ let place = (e, x, y, ~w=?, ~h=?) => {
 }
 
 let placeBox = (e, {x, y, w, h}) => e->place(x, y, ~w, ~h)
+
+let svgNamespace = "http://www.w3.org/2000/svg"
+
+// Creates an SVG element with these attributes, inside a parent.
+let svgEl = (parent, tag, attrs) => {
+  let e = document->createElementNS(svgNamespace, tag)
+  attrs->Array.forEach(((name, value)) => e->setAttribute(name, value))
+  parent->appendChild(e)
+  e
+}
 
 // The position of an element relative to an ancestor, following offsetParent.
 let offsetWithin = (e, ancestor) => {

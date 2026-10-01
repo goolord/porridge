@@ -38,7 +38,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
   let dots = FxGraph.group(g.svg)
   let layer = FxGraph.group(g.svg)
   let hits = FxGraph.group(g.svg)
-  let readout = Plots.svgEl(hits, "text", [("class", Str("readout"))])
+  let readout = svgEl(hits, "text", [("class", Str("readout"))])
 
   let minimum = () => get("C_MinDelay")
   let range = () => get("C_Depth")
@@ -149,7 +149,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
 
     band->setTextContent("")
     let (xl, xh) = (xOf(lo), xOf(hi))
-    Plots.svgEl(
+    svgEl(
       band,
       "rect",
       [("class", Str("band")), ("x", Num(xl)), ("y", Num(top)), ("width", Num(Math.max(1., xh - xl))), ("height", Num(bottom - top))],
@@ -170,7 +170,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     lanes->Array.forEachWithIndex(((_, y, height), side) => {
       let yc = stereo == 0 ? y : y + height / 2.
       // the dry sound, at 0
-      Plots.svgEl(
+      svgEl(
         dots,
         "circle",
         [("class", Str("dry")), ("cx", Num(xOf(0.))), ("cy", Num(yc)), ("r", Num(4. + 6. * (1. -. mix)))],
@@ -180,7 +180,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
         let seed = Int.toFloat(v) + (side == 1 ? 0.5 : 0.)
         let amount = at(seed, side == 1 ? offR : offL)
         let x = xOf(lo + amount * (hi - lo))
-        Plots.svgEl(dots, "circle", [("class", Str("voice")), ("cx", Num(x)), ("cy", Num(yc + spread)), ("r", Num(size))])->ignore
+        svgEl(dots, "circle", [("class", Str("voice")), ("cx", Num(x)), ("cy", Num(yc + spread)), ("r", Num(size))])->ignore
       })
     })
 

@@ -45,7 +45,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
   let marks = FxGraph.group(g.svg)
   let layer = FxGraph.group(g.svg)
   let hits = FxGraph.group(g.svg)
-  let readout = Plots.svgEl(hits, "text", [("class", Str("readout"))])
+  let readout = svgEl(hits, "text", [("class", Str("readout"))])
 
   let unit = () => Float.toInt(get("D_Unit"))
   let quantized = () => get("D_Quantize") != 0.
@@ -175,7 +175,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     })
     let d = Plots.pathFrom(points)
     let bottomY = Float.toString(y0 + gh)
-    Plots.svgEl(
+    svgEl(
       glyphs,
       "path",
       [
@@ -305,7 +305,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
       })
       pointed.contents->Option.forEach((echo: FxDsp.echo) => {
         let x = xOf(echo.time)
-        Plots.svgEl(
+        svgEl(
           marks,
           "circle",
           [("class", Str("pointed")), ("cx", Num(x)), ("cy", Num(yOf(echo.side, echo.amp))), ("r", Num(5.))],
@@ -328,7 +328,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
           // a reversed echo swells into its time
           let length = echo.side == 0 ? s.lengthL : s.lengthR
           let x1 = Math.max(left, xOf(echo.time - length * 0.6))
-          Plots.svgEl(
+          svgEl(
             stems,
             "path",
             [
@@ -338,7 +338,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
           )->ignore
         } else {
           FxGraph.line(stems, ~cls="stem", x, y0, x, y)
-          Plots.svgEl(stems, "circle", [("class", Str("head")), ("cx", Num(x)), ("cy", Num(y)), ("r", Num(2.2))])->ignore
+          svgEl(stems, "circle", [("class", Str("head")), ("cx", Num(x)), ("cy", Num(y)), ("r", Num(2.2))])->ignore
         }
         if Math.abs(echo.amp) > scale.contents * 1.08 {
           FxGraph.text(marks, ~cls="clip", ~anchor="middle", x, echo.amp > 0. ? y - 3. : y + 9., "▲")

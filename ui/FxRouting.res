@@ -60,14 +60,14 @@ let make = (ctx: Ctx.t, body, ops) => {
   // An arrow from (x0, y0) to (x1, y1), along the given corners.
   let arrow = (points: array<(float, float)>) => {
     let d = points->Array.mapWithIndex(((x, y), i) => (i == 0 ? "M" : "L") ++ f(x) ++ " " ++ f(y))->Array.join("")
-    Plots.svgEl(arrows, "path", [("class", Str("flow")), ("d", Str(d))])->ignore
+    svgEl(arrows, "path", [("class", Str("flow")), ("d", Str(d))])->ignore
     switch (points[Array.length(points) - 2], points[Array.length(points) - 1]) {
     | (Some((px, py)), Some((x, y))) =>
       let (dx, dy) = (x - px, y - py)
       let len = Math.max(1e-6, Math.sqrt(dx * dx + dy * dy))
       let (ux, uy) = (dx / len, dy / len)
       let s = 6.
-      Plots.svgEl(
+      svgEl(
         arrows,
         "path",
         [

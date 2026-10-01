@@ -10,8 +10,6 @@ graph Porridge  [[ main ]]
 
     input event std::midi::Message midiIn               [[ name: "MIDI In" ]];
     input event std::timeline::Tempo tempoIn;
-    input event std::timeline::TransportState transportIn;
-    input event std::timeline::Position positionIn;
     input event porridge::Shape shapeIn;
     input event porridge::Curve curveIn;
     input event porridge::Tuning tuningIn;
@@ -29,8 +27,6 @@ graph Porridge  [[ main ]]
         params.paramOut -> synth.paramIn;
         midiIn          -> synth.midiIn;
         tempoIn         -> synth.tempoIn;
-        transportIn     -> synth.transportIn;
-        positionIn      -> synth.positionIn;
         shapeIn         -> synth.shapeIn;
         curveIn         -> synth.curveIn;
         tuningIn        -> synth.tuningIn;

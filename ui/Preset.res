@@ -72,6 +72,15 @@ let make = name => {
   tuning: None,
 }
 
+// A whole bank: presets, then Init programs.
+let fillBank = presets =>
+  Array.fromInitializer(~length=bankPrograms, i =>
+    switch presets[i] {
+    | Some(p) => p
+    | None => make(`Init ${Int.toString(i)}`)
+    }
+  )
+
 let name = p => p.meta.name
 
 let withName = (p, name) => {
@@ -85,7 +94,7 @@ let withName = (p, name) => {
 let canonical = (d: ParamDefs.t, x) =>
   switch d.kind {
   | F32 => Math.fround(x)
-  | Pw => Math.round(x * ParamDefs.pw32) / ParamDefs.pw32
+  | Pw => Math.round(x * OatmealParams.pw32) / OatmealParams.pw32
   | I32 | Filter1 | Filter2 => x
   }
 
@@ -108,27 +117,28 @@ let valueOf = (p, id) =>
 
 // What an Oatmeal export of this preset loses.
 let porridgeOnly = p => {
-  let changed = PorridgeParams.all->Array.filter(spec =>
-    switch (p.values->Map.get(spec.id), Lazy.get(defsById)->Map.get(spec.id)) {
-    | (Some(x), Some(d)) => x != d.init
-    | _ => false
-    }
-  )
-  let modulated = changed->Array.some(spec => ModMatrix.isSlotParam(spec.id))
-  let macros = changed->Array.some(spec => String.startsWith(spec.id, "Macro"))
-  let mpe = changed->Array.some(spec => String.startsWith(spec.id, "MPE"))
-  let some = prefixes =>
-    changed->Array.some(spec => prefixes->Array.some(prefix => String.startsWith(spec.id, prefix)))
+  // a feature's parameters are changed from their defaults
+  let changed = feature =>
+    PorridgeParams.groups->Array.some(((f, specs)) =>
+      f == feature &&
+        specs->Array.some(spec =>
+          switch (p.values->Map.get(spec.id), Lazy.get(defsById)->Map.get(spec.id)) {
+          | (Some(x), Some(d)) => x != d.init
+          | _ => false
+          }
+        )
+    )
   // values Porridge added to Oatmeal's lists (HQ waveforms, osc mix modes, filter types)
   let extended = ids =>
     ids->Array.some(id =>
       p.values->Map.get(id)->Option.mapOr(false, x => ParamDefs.oatmealValue(id, x) != x)
     )
+  // (Oatmeal always plays like Oat mode)
   [
-    modulated ? Some("modulations") : None,
-    macros ? Some("macros") : None,
-    mpe ? Some("MPE settings") : None,
-    some(["Drift"]) ? Some("the analog drift") : None,
+    changed(Modulations) ? Some("modulations") : None,
+    changed(Macros) ? Some("macros") : None,
+    changed(Mpe) ? Some("MPE settings") : None,
+    changed(Drift) ? Some("the analog drift") : None,
     {
       // Oatmeal's chain is chorus, delay, reverb, EQ; effects left out of the rack are exported
       // switched off, so only their order is lost
@@ -140,12 +150,13 @@ let porridgeOnly = p => {
     | copies =>
       Some(`the rack's extra effects (${copies->Array.map(e => FxRack.kindName(e.kind))->Array.join(", ")})`)
     },
-    some(["Curve_"]) ? Some("the envelope curves") : None,
-    some(["LFO_1_", "LFO_2_"]) ? Some("the LFO delay, slew, steps and one-shot") : None,
-    some(["U_DetuneCurve", "U_RandomPhase", "U_Width"]) ? Some("the unison extras") : None,
+    changed(Curves) ? Some("the envelope curves") : None,
+    changed(LfoExtras) ? Some("the LFO delay, slew, steps and one-shot") : None,
+    changed(UnisonExtras) ? Some("the unison extras") : None,
+    extended(["Sat_Type"]) ? Some("the custom distortion shape (exported as soft clipping)") : None,
     extended(["O1_Waveform", "O2_Waveform"]) ? Some("the HQ waveforms (exported as the plain ones)") : None,
-    extended(["OscMix"]) || some(["PM_Feedback"]) ? Some("the PM, ring and AM osc mix (exported as normal)") : None,
-    extended(["Filter", "Filter2"]) || some(["F_Morph"])
+    extended(["OscMix"]) || changed(PmFeedback) ? Some("the PM, ring and AM osc mix (exported as normal)") : None,
+    extended(["Filter", "Filter2"]) || changed(FilterMorph)
       ? Some("the zero-delay-feedback filters (exported as the nearest Oatmeal type)")
       : None,
     p.tuning != None ? Some("the microtuning") : None,
@@ -169,7 +180,7 @@ let toOatmeal = p => {
       }
     }
   )
-  Bank.writeValues(bytes, values)
+  values->Map.forEachWithKey((x, id) => Bank.writeValue(bytes, id, x))
   allTables->Array.forEach(table => writeTable(bytes, table, p.tables->getTable(table)))
   bytes
 }
@@ -254,7 +265,7 @@ let toJson = (p, ~header=true) => {
   fields->Dict.set("params", JSON.Object(params))
 
   let value = id => p.values->Map.get(id)->Option.getOr(0.)
-  let modulations = Array.fromInitializer(~length=ModMatrix.slots, i => i + 1)->Array.filterMap(k => {
+  let modulations = ModMatrix.slotNumbers->Array.filterMap(k => {
     let source = ModMatrix.sources[Float.toInt(value(ModMatrix.sourceId(k)))]
     let target = ModMatrix.targets[Float.toInt(value(ModMatrix.targetId(k)))]
     switch (source, target) {
@@ -477,7 +488,25 @@ let writeBank = (presets, ~name=?) => utf8Encode(JSON.stringify(bankToJson(prese
 //==============================================================================
 // The bank in the patch's stored state
 
-let encodeBank = presets => JSON.stringify(bankToJson(presets))
+// It's written on every program change, so each preset's JSON is kept (presets aren't
+// changed once made) and only new ones are encoded.
+let encoded: WeakMap.t<t, string> = WeakMap.make()
+
+let encodePreset = p =>
+  switch encoded->WeakMap.get(p) {
+  | Some(json) => json
+  | None =>
+    let json = JSON.stringify(toJson(p, ~header=false))
+    encoded->WeakMap.set(p, json)->ignore
+    json
+  }
+
+let encodeBank = presets => {
+  // the bank's fields, ending in "presets":[]}
+  let empty = JSON.stringify(bankToJson([]))
+  String.slice(empty, ~start=0, ~end=-2) ++
+  presets->Array.map(encodePreset)->Array.join(",") ++ "]}"
+}
 
 // Oatmeal's factory bank (presets/oatmealprs.dat), as a new instance starts with it: its
 // programs, then Init programs up to a full bank. tools/bundle.mjs stores it, encoded, in

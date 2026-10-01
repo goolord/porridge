@@ -75,7 +75,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
   let notes = FxGraph.group(g.svg)
   let layer = FxGraph.group(g.svg)
   let hits = FxGraph.group(g.svg)
-  let readout = Plots.svgEl(hits, "text", [("class", Str("readout"))])
+  let readout = svgEl(hits, "text", [("class", Str("readout"))])
 
   let predelay = () => get("R_Predelay") / 1000.
   let tailSeconds = () => infinite() ? 8. : get("R_Length")
@@ -245,7 +245,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
       }
       let upper = levels->Array.map(((x, db)) => (x, middle - lift(db)))
       let lower = levels->Array.map(((x, db)) => (x, middle + lift(db)))->Array.toReversed
-      Plots.svgEl(
+      svgEl(
         shapes,
         "path",
         [("class", Str("tail")), ("d", Str(Plots.pathFrom(Array.concat(upper, lower)) ++ "Z"))],
@@ -253,7 +253,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
       // the dry hit
       let dx = xOf(0.)
       let dh = lift(FxGraph.gainDb(get("R_Dry")))
-      Plots.svgEl(
+      svgEl(
         shapes,
         "path",
         [
@@ -354,7 +354,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
   let rNotes = FxGraph.group(rg.svg)
   let rLayer = FxGraph.group(rg.svg)
   let rHits = FxGraph.group(rg.svg)
-  let rReadout = Plots.svgEl(rHits, "text", [("class", Str("readout"))])
+  let rReadout = svgEl(rHits, "text", [("class", Str("readout"))])
   let rFocus = ref(None)
   let rDragging = ref(false)
   let rDraw = ref(() => ())
@@ -506,7 +506,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
   let oRays = FxGraph.group(og.svg)
   let oLayer = FxGraph.group(og.svg)
   let oHits = FxGraph.group(og.svg)
-  let oReadout = Plots.svgEl(oHits, "text", [("class", Str("readout"))])
+  let oReadout = svgEl(oHits, "text", [("class", Str("readout"))])
   let (ox, oy) = (16., 10.)
   let biggest = og.h - 2. * oy
   // a side for a size (10..250 ms), and back
@@ -547,7 +547,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     () => {
       oRays->setTextContent("")
       let side = sideOf(get("R_Size"))
-      Plots.svgEl(
+      svgEl(
         oRays,
         "rect",
         [("class", Str("room")), ("x", Num(ox)), ("y", Num(oy)), ("width", Num(side)), ("height", Num(side))],
@@ -564,7 +564,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
         let jitter = Math.sin(Int.toFloat(k) * 7.3) * scatter * side * 0.25
         let wx = FxDsp.clamp(sx + Math.cos(a) * side, ox, ox + side)
         let wy = FxDsp.clamp(sy + Math.sin(a) * side, oy, oy + side)
-        Plots.svgEl(
+        svgEl(
           oRays,
           "path",
           [
@@ -574,8 +574,8 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
           ],
         )->ignore
       }
-      Plots.svgEl(oRays, "circle", [("class", Str("source")), ("cx", Num(sx)), ("cy", Num(sy)), ("r", Num(3.5))])->ignore
-      Plots.svgEl(oRays, "circle", [("class", Str("listener")), ("cx", Num(lx)), ("cy", Num(ly)), ("r", Num(3.5))])->ignore
+      svgEl(oRays, "circle", [("class", Str("source")), ("cx", Num(sx)), ("cy", Num(sy)), ("r", Num(3.5))])->ignore
+      svgEl(oRays, "circle", [("class", Str("listener")), ("cx", Num(lx)), ("cy", Num(ly)), ("r", Num(3.5))])->ignore
       corner->FxGraph.place(ox + side, oy + side)
       corner->FxGraph.setClass(oFocus.contents ? "node hot" : "node")
       let tx = ox + biggest + 18.

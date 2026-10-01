@@ -5,9 +5,6 @@
 
 namespace porridge
 {
-    let u32 = 0xffffffffi64;
-    let two32 = 4294967296.0;
-
     int64 toS32 (int64 u)
     {
         let m = u & u32;
@@ -31,9 +28,9 @@ namespace porridge
         float fb1, fb2;                 // PM feedback: the last two outputs
     }
 
-    void construct (Osc& this)
+    /// The fields of a new oscillator that don't start at zero (the rest must be zero).
+    void initDefaults (Osc& this)
     {
-        this = Osc();
         this.ampTarget = 1.0f;
         this.first = true;
         this.pw = 0x80000000i64;
@@ -112,7 +109,7 @@ namespace porridge
     }
 
     /// Pulse, user PWM and HQ pulse: the difference of two phases of a waveform.
-    bool isPulse (int waveform)     { return waveform == 2 || waveform == 5 || waveform == 7; }
+    bool isPulse (int waveform)     { return waveform == waveType::pulse || waveform == waveType::userPwm || waveform == waveType::pulseHQ; }
 
     struct OscBlock
     {
@@ -150,21 +147,22 @@ namespace porridge
 
         let inc = ((this.offset + this.base) & u32) + extra;
 
-        if (this.waveform == 0)
+        if (this.waveform == waveType::sine)
         {
             b.tableOffset = -1;
             b.shift = 17;
         }
-        else if (this.waveform >= 6)
+        else if (this.waveform >= waveType::sawHQ)
         {
             // HQ saw, pulse (two saws) and triangle
-            let c = chooseHQ (this.waveform == 8 ? setTri : setSaw, inc);
+            let c = tables.chooseHQ (this.waveform == waveType::triangleHQ ? setTri : setSaw, inc);
             b.tableOffset = c.offset;
             b.shift = c.shift;
         }
         else
         {
-            let set = (this.waveform == 1 || this.waveform == 2) ? setSaw : (this.waveform == 3 ? setTri : userSet);
+            let set = (this.waveform == waveType::saw || this.waveform == waveType::pulse) ? setSaw
+                        : (this.waveform == waveType::triangle ? setTri : userSet);
             let c = chooseTable (set, min (inc, 0x7fffffffffffi64));
             b.tableOffset = c.offset;
             b.shift = c.shift;
@@ -256,6 +254,13 @@ namespace porridge
         return float (a);
     }
 
+    /// Moves the phase on by one sample, and the pitch ramp (offset) on by its slope.
+    void stepPhase (Osc& this, const OscBlock& b)
+    {
+        this.phase = (this.phase + this.base + this.offset) & u32;
+        this.offset = (this.offset + b.slope) & u32;
+    }
+
     float waveValue (const Osc& this, const WaveTables& tables, const OscBlock& b, int64 ph)
     {
         if (b.pulse)
@@ -283,8 +288,7 @@ namespace porridge
                 out.at (i) = float (float64 (out.at (i)) + float64 (amp) * float64 (lookup (tables, b, this.phase)));
             }
 
-            this.phase = (this.phase + this.base + this.offset) & u32;
-            this.offset = (this.offset + b.slope) & u32;
+            this.stepPhase (b);
         }
     }
 
@@ -298,8 +302,7 @@ namespace porridge
         {
             amp.at (i) = this.tickShared (b);
             wave.at (i) = this.waveValue (tables, b, this.phase);
-            this.phase = (this.phase + this.base + this.offset) & u32;
-            this.offset = (this.offset + b.slope) & u32;
+            this.stepPhase (b);
         }
     }
 
@@ -310,7 +313,7 @@ namespace porridge
                        const float[blockSize]& wave, const float[blockSize]& amp, int mode, float feedback, int n)
     {
         let b = this.beginBlock (tables, userSet, mult, 0, n);
-        let pm = mode == 3 || mode == 4;
+        let pm = mode == oscMixMode::pm2to1 || mode == oscMixMode::pmFeedback;
         let fb = float64 (feedback) * 0.3;
 
         for (int i = 0; i < n; ++i)
@@ -320,7 +323,7 @@ namespace porridge
             if (pm)
             {
                 var cycles = fb * 0.5 * float64 (this.fb1 + this.fb2);
-                if (mode == 3) cycles += 0.5 * float64 (wave.at (i) * amp.at (i));
+                if (mode == oscMixMode::pm2to1) cycles += 0.5 * float64 (wave.at (i) * amp.at (i));
                 let y = this.waveValue (tables, b, this.phase + (int64 (cycles * two32) & u32));
                 this.fb2 = this.fb1;
                 this.fb1 = y;
@@ -330,12 +333,11 @@ namespace porridge
             {
                 let d = clamp (amp.at (i), 0.0f, 1.0f);
                 let y = this.waveValue (tables, b, this.phase);
-                let g = mode == 5 ? 1.0f - d + d * wave.at (i) : 1.0f - 0.5f * d + 0.5f * d * wave.at (i);
+                let g = mode == oscMixMode::ring ? 1.0f - d + d * wave.at (i) : 1.0f - 0.5f * d + 0.5f * d * wave.at (i);
                 out.at (i) = out.at (i) + a * y * g;
             }
 
-            this.phase = (this.phase + this.base + this.offset) & u32;
-            this.offset = (this.offset + b.slope) & u32;
+            this.stepPhase (b);
         }
     }
 
@@ -438,24 +440,27 @@ namespace porridge
         }
     }
 
+    /// The FM modulator's band-pass: a one-pole high-pass (c2) into two one-pole low-passes (c1).
+    struct FmCoefs
+    {
+        float c1, c2;
+    }
+
+    FmCoefs makeFmCoefs (float64 sr)
+    {
+        FmCoefs c;
+        c.c1 = float (1.0 - pow (10.0, -3.0 / float64 (float (sr) * 0.002f)));
+        c.c2 = float (pow (10.0, -2.0 / float64 (float (sr) * 0.01f)));
+        return c;
+    }
+
     /// FM: the modulator (osc 1) is silent and writes its band-passed output to fm[0..63]
     /// (fm[64] = block maximum); the carrier (osc 2) advances by inc * (1 + fm[i]).
     void renderFM (Osc& this, const WaveTables& tables, int userSet, float mult, float[blockSize]& out,
-                   bool isCarrier, float[65]& fm, float64 sr, int n)
+                   bool isCarrier, float[65]& fm, const FmCoefs& coefs, int n)
     {
-        float c1, c2;
-
-        if (! isCarrier)
-        {
-            c1 = float (1.0 - pow (10.0, -3.0 / float64 (float (sr) * 0.002f)));
-            c2 = float (pow (10.0, -2.0 / float64 (float (sr) * 0.01f)));
-        }
-        else
-        {
-            c1 = 1.0f;
-            c2 = 0.5f;
-        }
-
+        let c1 = isCarrier ? 1.0f : coefs.c1;
+        let c2 = isCarrier ? 0.5f : coefs.c2;
         let c3 = 2.0f * c2 - 1.0f;
         let extra = isCarrier ? int64 (float64 ((this.base + this.offset) & u32) * float64 (fm[64])) : 0;
         let b = this.beginBlock (tables, userSet, mult, max (extra, 0i64), n);
@@ -485,8 +490,7 @@ namespace porridge
                 mx = max (mx, this.s2);
             }
 
-            this.phase = (this.phase + this.base + this.offset) & u32;
-            this.offset = (this.offset + b.slope) & u32;
+            this.stepPhase (b);
         }
 
         if (! isCarrier)
@@ -544,11 +548,7 @@ namespace porridge
     void renderNoise (Noise& this, Rand& rng, const float[numSlots]& P, float Rg, float at, float ampMod, float resMod,
                       float64 sr, float[blockSize]& buf, int n)
     {
-        var amp = ampMod * P[slot::N_Amp];
-        let nat = P[slot::N_Aftertouch];
-
-        if (nat > 0.01f)       amp *= float (pow (10.0, float64 ((at - 1.0f) * nat * 0.05f)));
-        else if (nat < -0.01f) amp *= float (pow (10.0, float64 (at * nat * 0.05f)));
+        let amp = ampMod * P[slot::N_Amp] * aftertouchGain (at, P[slot::N_Aftertouch]);
 
         if (this.glideOn)
         {

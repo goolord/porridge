@@ -26,37 +26,10 @@ let make = (ctx: Ctx.t, parent, area) => {
   let box = {x: area.x + (area.w - side) / 2., y: area.y + (area.h - side) / 2., w: side, h: side}
   let s = Plots.svg(parent, box)
   s->addClass("draw")
-  let svgEl = Plots.svgEl(s, ...)
-  svgEl(
-    "rect",
-    [
-      ("class", Str("bg")),
-      ("x", Num(0.5)),
-      ("y", Num(0.5)),
-      ("width", Num(side - 1.)),
-      ("height", Num(side - 1.)),
-    ],
-  )->ignore
-  svgEl(
-    "line",
-    [
-      ("class", Str("axis")),
-      ("x1", Num(side / 2.)),
-      ("x2", Num(side / 2.)),
-      ("y1", Num(1.)),
-      ("y2", Num(side - 1.)),
-    ],
-  )->ignore
-  svgEl(
-    "line",
-    [
-      ("class", Str("axis")),
-      ("x1", Num(1.)),
-      ("x2", Num(side - 1.)),
-      ("y1", Num(side / 2.)),
-      ("y2", Num(side / 2.)),
-    ],
-  )->ignore
+  let svgEl = svgEl(s, ...)
+  Plots.background(s, box)
+  s->Plots.line(side / 2., 1., side / 2., side - 1.)->ignore
+  s->Plots.line(1., side / 2., side - 1., side / 2.)->ignore
   let radius = svgEl(
     "circle",
     [
@@ -131,44 +104,42 @@ let make = (ctx: Ctx.t, parent, area) => {
       let circular = ev->button == 2
       let r0 = Math.hypot(get("XY_X"), get("XY_Y"))
       let position = ref((get("XY_X"), get("XY_Y")))
-      let last = ref((ev->clientX, ev->clientY))
-      let scale = ctx.scale()
+      let fine = ev => ev->shiftKey || ev->ctrlKey
+      // the position under the pointer
+      let under = ev => {
+        let (fx, fy) = s->pointerFraction(ev)
+        let k = 2. * (side / 2.) / (side / 2. - 3.)
+        ((fx - 0.5) * k, (0.5 - fy) * k)
+      }
 
-      let apply = (cx, cy, ~fine) => {
-        let (x, y) = position.contents
-        let (nx, ny) = if fine {
-          let (lastX, lastY) = last.contents
-          (
-            x + (cx - lastX) / scale / (side / 2.) * 0.15,
-            y - (cy - lastY) / scale / (side / 2.) * 0.15,
-          )
-        } else {
-          let r = s->getBoundingClientRect
-          (
-            ((cx - r.left) / r.width - 0.5) * 2. * (side / 2.) / (side / 2. - 3.),
-            -((cy - r.top) / r.height - 0.5) * 2. * (side / 2.) / (side / 2. - 3.),
-          )
-        }
+      let apply = ((nx, ny)) => {
         let (nx, ny) = if circular && r0 > 0. {
           let a = Math.atan2(~y=ny, ~x=nx)
           (Math.cos(a) * r0, Math.sin(a) * r0)
         } else {
           (nx, ny)
         }
-        let clamp = v => Math.max(-1., Math.min(1., v))
-        position := (clamp(nx), clamp(ny))
-        last := (cx, cy)
-        let (x, y) = position.contents
+        let clamp = v => Float.clamp(v, ~min=-1., ~max=1.)
+        let (x, y) = (clamp(nx), clamp(ny))
+        position := (x, y)
         model->ParamModel.set("XY_X", x)
         model->ParamModel.set("XY_Y", y)
       }
 
-      if !(ev->shiftKey || ev->ctrlKey) {
-        apply(ev->clientX, ev->clientY, ~fine=false)
+      if !fine(ev) {
+        apply(under(ev))
       }
-      s->Controls.capturePointer(
+      Controls.dragBy(
+        ctx,
+        s,
         ev,
-        ~onMove=mv => apply(mv->clientX, mv->clientY, ~fine=mv->shiftKey || mv->ctrlKey),
+        ~onMove=(dx, dy, mv) =>
+          if fine(mv) {
+            let (x, y) = position.contents
+            apply((x + dx / (side / 2.) * 0.15, y - dy / (side / 2.) * 0.15))
+          } else {
+            apply(under(mv))
+          },
         ~onUp=() => {
           dragging := false
           model->ParamModel.endGesture("XY_X")
@@ -195,9 +166,14 @@ let make = (ctx: Ctx.t, parent, area) => {
   })
 
   ["XY_X", "XY_Y", "XY_Var_Radius"]->Array.forEach(id => model->ParamModel.listen(id, draw))
+  // (reported at the patch's rate: drawn once a frame, and only when it moves)
+  let drawSoon = perFrame(draw)
   ctx.pc->PatchConnection.addEndpointListener("xyOut", json => {
-    livePosition := decodePosition(json)
-    draw()
+    let position = decodePosition(json)
+    if position != livePosition.contents {
+      livePosition := position
+      drawSoon()
+    }
   })
   draw()
 }

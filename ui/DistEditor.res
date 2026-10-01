@@ -160,7 +160,7 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement) => {
   // the custom shape's points, and a bend point in the middle of every segment
   let shapeHandles = FxGraph.group(cg.svg)
   let shapeHits = FxGraph.group(cg.svg)
-  let readout = Plots.svgEl(shapeHits, "text", [("class", Str("readout"))])
+  let readout = svgEl(shapeHits, "text", [("class", Str("readout"))])
   let focus = ref(None)
   let geometry = ref((x => x, y => y))
   let xAt = px => {

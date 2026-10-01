@@ -53,6 +53,10 @@ let def = (t, id) =>
 
 let get = (t, id) => t.values->Map.get(id)->Option.getOr(0.)
 
+// The parameter's value as the status line and the readouts show it.
+let longText = (t, id) => def(t, id).longText(get(t, id))
+let shortText = (t, id) => def(t, id).shortText(get(t, id))
+
 let listen = (t, id, fn) =>
   switch t.listeners->Map.get(id) {
   | Some(fns) => fns->Array.push(fn)
@@ -85,16 +89,21 @@ let gestureSet = (t, id, x) => {
 }
 
 // Push a whole set of values (e.g. a loaded program). Every endpoint is sent, even
-// if unchanged, so the patch is guaranteed to match.
+// if unchanged, so the patch is guaranteed to match; listeners hear of the changed ones,
+// once every value is in place.
 let setAll = (t, values: Bank.values) => {
+  let changed = []
   values->Map.forEachWithKey((x, id) =>
     t.defs
     ->Map.get(id)
     ->Option.forEach(d => {
       let x = d.clamp(x)
+      if get(t, id) != x {
+        changed->Array.push(id)
+      }
       t.values->Map.set(id, x)
       t.pc->PatchConnection.sendEventOrValueNow(id, x)
     })
   )
-  values->Map.forEachWithKey((_, id) => notify(t, id))
+  changed->Array.forEach(id => notify(t, id))
 }

@@ -1,9 +1,10 @@
 //  Envelopes, LFOs and the pitch envelope, as in Oatmeal.
 //
 //  Envelope parameters live in the program mirror as 16-float blocks (chunk offsets 8232 amp,
-//  8300 filter, 8364 filter 2, 9312 mod 1, 9408 mod 2): [0] kill ms (4.0), [1] attack, [2] hold,
-//  [3] decay 1, [4] decay 2, [5] release, [6] release/2, [11] breakpoint, [13] sustain.
-//  The derived coefficients are computed per block into EnvCoefs.
+//  8300 filter, 9312 mod 1, 9408 mod 2): [0] kill ms (4.0), [1] attack, [2] hold, [3] decay 1,
+//  [4] decay 2, [5] release, [6] release/2, [11] breakpoint, [13] sustain. Filter 2's envelope
+//  is the filter's, at F_Speed. The derived coefficients are computed into EnvCoefs whenever a
+//  parameter changes.
 //
 //  Porridge adds a curve to each stage (attack, the decays, release): the level's remaining
 //  distance to the stage's end is raised to a power e = 8^curve, so 0 is Oatmeal's shape and
@@ -18,17 +19,18 @@ namespace porridge
         float eA, eD, eR;       // curve exponents (1: Oatmeal's)
     }
 
-    EnvCoefs makeEnvCoefs (const float[numSlots]& P, int baseSlot, int curveSlot, float64 sr, float timeScale)
+    /// attackSlot: the envelope's block, from its attack time (slot::Attack, F_Attack, M1_Attack, M2_Attack).
+    EnvCoefs makeEnvCoefs (const float[numSlots]& P, int attackSlot, int curveSlot, float64 sr, float timeScale)
     {
         EnvCoefs c;
         let kill    = 4.0 * float64 (timeScale);        // 'kill' fade time: always 4 ms in Oatmeal (not a parameter)
-        let attack  = float64 (P.at (baseSlot + 1) * timeScale);
-        let hold    = float64 (P.at (baseSlot + 2) * timeScale);
-        let d1      = float64 (P.at (baseSlot + 3) * timeScale);
-        let d2      = float64 (P.at (baseSlot + 4) * timeScale);
-        let release = float64 (P.at (baseSlot + 5) * timeScale);
-        var bp  = P.at (baseSlot + 11);
-        var sus = P.at (baseSlot + 13);
+        let attack  = float64 (P.at (attackSlot) * timeScale);
+        let hold    = float64 (P.at (attackSlot + 1) * timeScale);
+        let d1      = float64 (P.at (attackSlot + 2) * timeScale);
+        let d2      = float64 (P.at (attackSlot + 3) * timeScale);
+        let release = float64 (P.at (attackSlot + 4) * timeScale);
+        var bp  = P.at (attackSlot + 10);
+        var sus = P.at (attackSlot + 12);
 
         if (bp  > 0.998f) bp  = 1.0f;
         if (sus > 0.998f) sus = 1.0f;
@@ -59,9 +61,23 @@ namespace porridge
         return to + (from - to) * float (pow (float64 (u), float64 (e)));
     }
 
+    /// Envelope stages (Env.stage).
+    namespace envStage
+    {
+        let off = 0;
+        let kill = 1;           // the fade from the old level before a retriggered attack
+        let attack = 2;
+        let hold = 3;
+        let decay1 = 4;         // to the breakpoint
+        let decay2Down = 5;     // from the breakpoint down to the sustain level
+        let decay2Up = 6;       // ... or up to it
+        let sustain = 7;
+        let release = 8;
+    }
+
     struct Env
     {
-        int stage;          // 0 off, 1 kill ramp, 2 attack, 3 hold, 4 decay 1, 5 decay 2 falling, 6 rising, 7 sustain, 8 release
+        int stage;          // envStage
         float L, y, X, k;
         int holdCnt;
     }
@@ -74,70 +90,97 @@ namespace porridge
 
     void trigger (Env& this, const EnvCoefs& c, bool fade)
     {
-        if (this.stage == 0)
+        if (this.stage == envStage::off)
         {
             this.y = 0;
             this.L = 0;
         }
-        else if (this.stage == 4)
+        else if (this.stage == envStage::decay1)
         {
             this.L = envCubic (this.L, c.bp, 1.0);
         }
-        else if (this.stage == 5 || this.stage == 6)
+        else if (this.stage == envStage::decay2Down || this.stage == envStage::decay2Up)
         {
             this.L = envCubic (this.L, c.sus, c.bp);
         }
 
-        if (this.stage != 0 && this.stage != 1 && this.stage != 2)
+        if (this.stage != envStage::off && this.stage != envStage::kill && this.stage != envStage::attack)
             this.L = this.L < 1e-5f ? 0.0f : (this.L > 0.99999f ? 1.0f : float (1.0 - sqrt (1.0 - float64 (this.L))));
 
         this.holdCnt = 0;
-        this.stage = (fade && this.stage != 0) ? 1 : 2;
+        this.stage = (fade && this.stage != envStage::off) ? envStage::kill : envStage::attack;
+    }
+
+    /// The stage after the attack (and hold): decay 1, or straight on to decay 2 or the sustain
+    /// when the breakpoint (and the sustain level) are at the top.
+    int stageAfterPeak (float bp, float sus)
+    {
+        return bp < 1.0f ? envStage::decay1 : (sus < 1.0f ? envStage::decay2Down : envStage::sustain);
+    }
+
+    /// The stage after decay 1: decay 2, the way to the sustain level, or the sustain.
+    int stageAfterBreakpoint (float bp, float sus)
+    {
+        return bp < sus ? envStage::decay2Up : (bp > sus ? envStage::decay2Down : envStage::sustain);
+    }
+
+    /// Decay 2 follows the breakpoint and sustain levels when they move: its direction turns
+    /// (or it ends) and the level stays between them.
+    void settleDecay2 (Env& this, float bp, float sus)
+    {
+        if (this.stage == envStage::decay2Down)    { if (bp < sus) this.stage = envStage::decay2Up; else if (bp == sus) this.stage = envStage::sustain; }
+        else if (this.stage == envStage::decay2Up) { if (bp > sus) this.stage = envStage::decay2Down; else if (bp == sus) this.stage = envStage::sustain; }
+
+        if (this.stage == envStage::decay2Down) { if (this.L > bp) this.L = bp; else if (this.L < sus) this.L = sus; }
+        if (this.stage == envStage::decay2Up)   { if (this.L < bp) this.L = bp; else if (this.L > sus) this.L = sus; }
     }
 
     void release (Env& this, const EnvCoefs& c, bool blockEnv)
     {
         if (blockEnv)
         {
-            if (this.stage != 0)
+            if (this.stage != envStage::off)
             {
-                this.stage = 8;
+                this.stage = envStage::release;
                 this.X = this.L;
             }
 
             return;
         }
 
-        if (this.stage == 0 || this.stage >= 8)
+        if (this.stage == envStage::off || this.stage >= envStage::release)
             return;
 
-        if (this.stage == 1 || this.stage == 2)       this.L = (2.0f - this.L) * this.L;
-        else if (this.stage == 4)                     this.L = envCubic (this.L, c.bp, 1.0);
-        else if (this.stage == 5 || this.stage == 6)  this.L = envCubic (this.L, c.sus, c.bp);
+        if (this.stage == envStage::kill || this.stage == envStage::attack)                 this.L = (2.0f - this.L) * this.L;
+        else if (this.stage == envStage::decay1)                                            this.L = envCubic (this.L, c.bp, 1.0);
+        else if (this.stage == envStage::decay2Down || this.stage == envStage::decay2Up)    this.L = envCubic (this.L, c.sus, c.bp);
 
         this.X = this.L;
 
         if (this.X <= 0.001f)
         {
-            this.stage = 0;
+            this.stage = envStage::off;
             return;
         }
 
         this.k = this.X / (this.X - 0.001f);
-        this.stage = 8;
+        this.stage = envStage::release;
     }
 
+    /// The amp envelope's output smoothing coefficient (per sample).
+    float ampSmoothing (float64 sr)     { return float (1.0 - pow (10.0, -1.0 / (sr * 0.0005))); }
+
     /// Amp envelope, per sample. Fills out[0..n); returns false once the envelope has ended.
-    bool renderAmp (Env& this, const EnvCoefs& c, float speedIn, bool pedalDown, float64 sr, float[blockSize]& out, int n)
+    /// sm = ampSmoothing (sample rate).
+    bool renderAmp (Env& this, const EnvCoefs& c, float speedIn, bool pedalDown, float sm, float[blockSize]& out, int n)
     {
         for (int i = 0; i < n; ++i)
             out.at (i) = 0;
 
-        if (this.stage == 0)
+        if (this.stage == envStage::off)
             return false;
 
         let speed = float64 (max (speedIn, 0.01f));
-        let sm = float (1.0 - pow (10.0, -1.0 / (sr * 0.0005)));
         let att = float (speed * float64 (c.attInc));
         let kill = float (speed * float64 (c.killDec));
         let bp = max (c.bp, 1e-4f);
@@ -146,11 +189,7 @@ namespace porridge
         let d2 = float (pow (float64 (c.d2coef), speed));
         let rel = float (pow (float64 (c.relCoef), pedalDown ? speed * 0.0078125 : speed));
 
-        if (this.stage == 5)      { if (bp < sus) this.stage = 6; else if (bp == sus) this.stage = 7; }
-        else if (this.stage == 6) { if (bp > sus) this.stage = 5; else if (bp == sus) this.stage = 7; }
-
-        if (this.stage == 5) { if (this.L > bp) this.L = bp; else if (this.L < sus) this.L = sus; }
-        if (this.stage == 6) { if (this.L < bp) this.L = bp; else if (this.L > sus) this.L = sus; }
+        this.settleDecay2 (bp, sus);
 
         var i = 0;
         var guard = 0;
@@ -160,14 +199,14 @@ namespace porridge
             ++guard;
             let s = this.stage;
 
-            if (s == 1)
+            if (s == envStage::kill)
             {
                 this.y += ((2.0f - this.L) * this.L - this.y) * sm;
                 out.at (i) = this.y;
                 this.L -= kill;
-                if (this.L <= 0) { this.L = 0; this.stage = 2; continue; }
+                if (this.L <= 0) { this.L = 0; this.stage = envStage::attack; continue; }
             }
-            else if (s == 2)
+            else if (s == envStage::attack)
             {
                 let a = bend (this.L, 0.0f, 1.0f, c.eA);
                 this.y += ((2.0f - a) * a - this.y) * sm;
@@ -180,45 +219,45 @@ namespace porridge
 
                     if (c.holdSamples > 0)
                     {
-                        this.stage = 3;
+                        this.stage = envStage::hold;
                         this.holdCnt = int (float64 (c.holdSamples) * speed);
                     }
                     else
                     {
-                        this.stage = bp < 1.0f ? 4 : (sus < 1.0f ? 5 : 7);
+                        this.stage = stageAfterPeak (bp, sus);
                     }
 
                     continue;
                 }
             }
-            else if (s == 3)
+            else if (s == envStage::hold)
             {
                 this.y += (this.L - this.y) * sm;
                 out.at (i) = this.y;
                 this.holdCnt -= 1;
-                if (this.holdCnt < 0) { this.stage = bp < 1.0f ? 4 : (sus < 1.0f ? 5 : 7); continue; }
+                if (this.holdCnt < 0) { this.stage = stageAfterPeak (bp, sus); continue; }
             }
-            else if (s == 4)
+            else if (s == envStage::decay1)
             {
                 this.y += (bend (envCubic (this.L, bp, 1.0), 1.0f, bp, c.eD) - this.y) * sm;
                 out.at (i) = this.y;
                 this.L *= d1;
-                if (this.L <= bp) { this.L = bp; this.stage = bp < sus ? 6 : (bp > sus ? 5 : 7); continue; }
+                if (this.L <= bp) { this.L = bp; this.stage = stageAfterBreakpoint (bp, sus); continue; }
             }
-            else if (s == 5 || s == 6)
+            else if (s == envStage::decay2Down || s == envStage::decay2Up)
             {
                 this.y += (bend (envCubic (this.L, sus, bp), bp, sus, c.eD) - this.y) * sm;
                 out.at (i) = this.y;
                 this.L *= d2;
 
-                if (s == 5 ? this.L <= sus : this.L >= sus)
+                if (s == envStage::decay2Down ? this.L <= sus : this.L >= sus)
                 {
                     this.L = sus;
-                    this.stage = 7;
+                    this.stage = envStage::sustain;
                     continue;
                 }
             }
-            else if (s == 7)
+            else if (s == envStage::sustain)
             {
                 this.y += (this.L - this.y) * sm;
                 out.at (i) = this.y;
@@ -227,11 +266,11 @@ namespace porridge
                 if (this.y < 0.001f)
                 {
                     this.L = 0;
-                    this.stage = 0;
+                    this.stage = envStage::off;
                     return true;
                 }
             }
-            else if (s == 8)
+            else if (s == envStage::release)
             {
                 if (this.L > 0.001f)
                 {
@@ -249,7 +288,7 @@ namespace porridge
                 if (this.y < 1e-6f)
                 {
                     this.L = 0;
-                    this.stage = 0;
+                    this.stage = envStage::off;
                     return true;
                 }
             }
@@ -268,7 +307,7 @@ namespace porridge
     /// after advancing n samples (0 if off).
     float renderBlock (Env& this, const EnvCoefs& c, float speedIn, bool pedalDown, int n)
     {
-        if (this.stage == 0)
+        if (this.stage == envStage::off)
             return 0.0f;
 
         let speed = max (speedIn, 0.01f);
@@ -277,19 +316,15 @@ namespace porridge
         let rel = pedalDown ? float (pow (float64 (c.relCoef), 0.0078125)) : c.relCoef;
         let s = float (n) * speed;
 
-        if (this.stage == 5)      { if (bp < sus) this.stage = 6; else if (bp == sus) this.stage = 7; }
-        else if (this.stage == 6) { if (bp > sus) this.stage = 5; else if (bp == sus) this.stage = 7; }
+        this.settleDecay2 (bp, sus);
 
-        if (this.stage == 5) { if (this.L > bp) this.L = bp; else if (this.L < sus) this.L = sus; }
-        if (this.stage == 6) { if (this.L < bp) this.L = bp; else if (this.L > sus) this.L = sus; }
-
-        if (this.stage == 1)
+        if (this.stage == envStage::kill)
         {
             this.L -= s * c.killDec;
-            if (this.L <= 0) { this.L = 0; this.stage = 2; }
+            if (this.L <= 0) { this.L = 0; this.stage = envStage::attack; }
         }
 
-        if (this.stage == 2)
+        if (this.stage == envStage::attack)
         {
             this.L += s * c.attInc;
 
@@ -299,56 +334,56 @@ namespace porridge
 
                 if (c.holdSamples > 0)
                 {
-                    this.stage = 3;
+                    this.stage = envStage::hold;
                     this.holdCnt = c.holdSamples;
                 }
                 else
                 {
-                    this.stage = bp < 1.0f ? 4 : (sus < 1.0f ? 5 : 7);
+                    this.stage = stageAfterPeak (bp, sus);
                 }
             }
         }
 
-        if (this.stage == 3)
+        if (this.stage == envStage::hold)
         {
             this.holdCnt -= max (int (float (n) * speed), 1);
-            if (this.holdCnt < 0) this.stage = bp < 1.0f ? 4 : (sus < 1.0f ? 5 : 7);
+            if (this.holdCnt < 0) this.stage = stageAfterPeak (bp, sus);
         }
 
-        if (this.stage == 4)
+        if (this.stage == envStage::decay1)
         {
             this.L *= float (pow (float64 (c.d1coef), float64 (s)));
-            if (this.L <= bp) this.stage = bp < sus ? 6 : (bp > sus ? 5 : 7);
+            if (this.L <= bp) this.stage = stageAfterBreakpoint (bp, sus);
         }
 
-        if (this.stage == 5)
+        if (this.stage == envStage::decay2Down)
         {
             this.L *= float (pow (float64 (c.d2coef), float64 (s)));
-            if (this.L <= sus) { this.stage = 7; this.L = sus; }
+            if (this.L <= sus) { this.stage = envStage::sustain; this.L = sus; }
         }
 
-        if (this.stage == 6)
+        if (this.stage == envStage::decay2Up)
         {
             this.L *= float (pow (float64 (c.d2coef), float64 (s)));
-            if (this.L >= sus) { this.stage = 7; this.L = sus; }
+            if (this.L >= sus) { this.stage = envStage::sustain; this.L = sus; }
         }
 
-        if (this.stage == 7)
+        if (this.stage == envStage::sustain)
         {
             this.L = sus;
-            if (sus < 0.001f) { this.L = 0; this.stage = 0; }
+            if (sus < 0.001f) { this.L = 0; this.stage = envStage::off; }
         }
 
-        if (this.stage == 8)
+        if (this.stage == envStage::release)
         {
             this.L *= float (pow (float64 (rel), float64 (s)));
-            if (this.L < 0.001f) { this.L = 0; this.stage = 0; }
+            if (this.L < 0.001f) { this.L = 0; this.stage = envStage::off; }
         }
 
-        if (this.stage == 2)                        return bend (this.L, 0.0f, 1.0f, c.eA);
-        if (this.stage == 4)                        return bend (this.L, 1.0f, bp, c.eD);
-        if (this.stage == 5 || this.stage == 6)     return bend (this.L, bp, sus, c.eD);
-        if (this.stage == 8)                        return bend (this.L, this.X, 0.0f, c.eR);
+        if (this.stage == envStage::attack)                                             return bend (this.L, 0.0f, 1.0f, c.eA);
+        if (this.stage == envStage::decay1)                                             return bend (this.L, 1.0f, bp, c.eD);
+        if (this.stage == envStage::decay2Down || this.stage == envStage::decay2Up)     return bend (this.L, bp, sus, c.eD);
+        if (this.stage == envStage::release)                                            return bend (this.L, this.X, 0.0f, c.eR);
 
         return this.L;
     }
@@ -374,7 +409,7 @@ namespace porridge
     void resetPhase (LFO& this, Rand& rng, const float[numSlots]& P)
     {
         let r = float64 (float (rng.next()) * (1.0f / 16384.0f) - 1.0f);
-        this.phase = int64 ((r * float64 (P[slot::LFOPhaseRand]) * 0.5 + float64 (P[slot::LFOPhase])) * 4294967296.0 + 0.5) & 0xffffffffi64;
+        this.phase = int64 ((r * float64 (P[slot::LFOPhaseRand]) * 0.5 + float64 (P[slot::LFOPhase])) * two32 + 0.5) & u32;
         this.prevR = float (rng.next()) / 32768.0f;
         this.curR = float (rng.next()) / 32768.0f;
         this.done = false;
@@ -409,17 +444,17 @@ namespace porridge
         else if (unit == 2) period = sr * speed;
         else                period = speed * samplesPerBeat * lfoUnitBeats (unit);
 
-        let inc = int64 (4294967296.0 / max (period, 1e-9) + 0.5) & 0xffffffffi64;
+        let inc = int64 (two32 / max (period, 1e-9) + 0.5) & u32;
         let old = this.phase;
         let oneShot = P.at (isLFO2 ? slot::LFO_2_OneShot : slot::LFO_1_OneShot) != 0;
 
         // one-shot (Porridge): one cycle from the phase it was reset to, then hold the end
         if (oneShot)
         {
-            if (this.done || this.phase + inc * int64 (nAdv) > 0xffffffffi64)
+            if (this.done || this.phase + inc * int64 (nAdv) > u32)
             {
                 this.done = true;
-                this.phase = 0xffffffffi64;
+                this.phase = u32;
             }
             else
             {
@@ -428,12 +463,12 @@ namespace porridge
         }
         else
         {
-            this.phase = (this.phase + inc * int64 (nAdv)) & 0xffffffffi64;
+            this.phase = (this.phase + inc * int64 (nAdv)) & u32;
         }
 
         // sample & hold (Porridge): the shape read at the start of each of n steps per cycle
         let steps = lfoStepCounts.at (clamp (int (P.at (isLFO2 ? slot::LFO_2_Steps : slot::LFO_1_Steps)), 0, 9));
-        let ph = steps > 0 ? int64 (float64 (int (float64 (this.phase) * float64 (steps) / 4294967296.0)) * 4294967296.0 / float64 (steps))
+        let ph = steps > 0 ? int64 (float64 (int (float64 (this.phase) * float64 (steps) / two32)) * two32 / float64 (steps))
                            : this.phase;
 
         let shape = int (P.at (isLFO2 ? slot::LFO_2_Shape : slot::LFO_1_Shape));
@@ -449,7 +484,7 @@ namespace porridge
             if (shape == 5)
                 return this.curR;
 
-            return float (float64 (this.prevR) + float64 (this.curR - this.prevR) * float64 (ph) * (1.0 / 4294967296.0));
+            return float (float64 (this.prevR) + float64 (this.curR - this.prevR) * float64 (ph) * (1.0 / two32));
         }
 
         // A table's last interval interpolates towards the wrap guard (T[32768] = T[0], or the
@@ -568,6 +603,15 @@ namespace porridge
 
         let a = float (pow (10.0, 3.0 * float64 (d)));
         return a + (1.0f - a) * (1.0f - v);
+    }
+
+    /// Aftertouch level control (oscillators, noise): at (0..1) cuts the level by up to
+    /// 20 * depth dB, from full pressure down (depth > 0) or from none up (depth < 0).
+    float aftertouchGain (float at, float depth)
+    {
+        if (depth > 0.01f)  return float (pow (10.0, float64 ((at - 1.0f) * depth * 0.05f)));
+        if (depth < -0.01f) return float (pow (10.0, float64 (at * depth * 0.05f)));
+        return 1.0f;
     }
 
     /// Constant-power pan gains: centre = (1, 1).

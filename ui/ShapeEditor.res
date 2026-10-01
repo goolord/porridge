@@ -31,10 +31,8 @@ type rec t = {
   // status text for point index, pointer value
   statusText: (t, int, float) => string,
 }
-// A menu item changes the data in place; the menu then saves an undo step, redraws and
-// commits, if it changed anything. An item that 'managesUndo' does all of that itself
-// (or is an undo), and is just run.
-and menuItem = {label: string, run: t => unit, managesUndo?: bool}
+// (see editItem and undoItem)
+and menuItem = {label: string, run: t => unit}
 
 let lo = t => t.bipolar ? -1. : 0.
 
@@ -47,12 +45,10 @@ let defaultStatus = (t, i, v) =>
 
 // point index, value and vertical fraction under the pointer
 let valueAt = (t, ev) => {
-  let r = t.canvas->getBoundingClientRect
-  let fx = (ev->clientX - r.left) / r.width
-  let fy = (ev->clientY - r.top) / r.height
-  let i = Math.Int.max(0, Math.Int.min(t.n - 1, Float.toInt(Math.round(fx * Int.toFloat(t.n - 1)))))
+  let (fx, fy) = t.canvas->pointerFraction(ev)
+  let i = Int.clamp(Float.toInt(Math.round(fx * Int.toFloat(t.n - 1))), ~min=0, ~max=t.n - 1)
   let v = t.bipolar ? 1. - 2. * fy : 1. - fy
-  (i, Math.max(lo(t), Math.min(1., v)), fy)
+  (i, Float.clamp(v, ~min=lo(t), ~max=1.), fy)
 }
 
 let hoverStatus = (t, ev) => {
@@ -63,37 +59,19 @@ let hoverStatus = (t, ev) => {
 let draw = t => {
   open Context2d
   let g = t.g
-  let (w, h) = (t.canvas->canvasWidth, t.canvas->canvasHeight)
-  let ink = switch t.canvas->getComputedStyle->getPropertyValue("--signal")->String.trim {
-  | "" => "#1c3c73"
-  | ink => ink
-  }
-  let grid = "rgba(31,26,14,0.18)"
-  g->clearRect(0., 0., w, h)
-  g->setFillStyle("rgba(236,227,196,0.45)")
-  g->fillRect(0., 0., w, h)
-  g->setStrokeStyle(grid)
-  g->setLineWidth(1.)
+  let (w, h) = CanvasStyle.paper(t.canvas, g)
+  let grid = CanvasStyle.shade(0.18)
   let divs = Int.toFloat(t.gridDivs)
   for k in 1 to t.gridDivs - 1 {
-    let x = Math.round(Int.toFloat(k) * w / divs) + 0.5
-    g->beginPath
-    g->moveTo(x, 0.)
-    g->lineTo(x, h)
-    g->stroke
+    g->CanvasStyle.vline(h, Int.toFloat(k) * w / divs, grid)
   }
   for k in 1 to 3 {
-    let y = Math.round(Int.toFloat(k) * h / 4.) + 0.5
-    g->setStrokeStyle(t.bipolar && k == 2 ? "rgba(31,26,14,0.4)" : grid)
-    g->beginPath
-    g->moveTo(0., y)
-    g->lineTo(w, y)
-    g->stroke
+    g->CanvasStyle.hline(w, Int.toFloat(k) * h / 4., t.bipolar && k == 2 ? CanvasStyle.shade(0.4) : grid)
   }
   let py = v => t.bipolar ? (0.5 - 0.5 * v) * (h - 8.) + 4. : (1. - v) * (h - 8.) + 4.
   let px = i => Int.toFloat(i) / Int.toFloat(t.n - 1) * (w - 1.)
   let base = py(0.)
-  g->setFillStyle("rgba(28,60,115,0.16)")
+  g->setFillStyle(CanvasStyle.tint(0.16))
   g->beginPath
   g->moveTo(px(0), base)
   for i in 0 to t.n - 1 {
@@ -102,16 +80,14 @@ let draw = t => {
   g->lineTo(px(t.n - 1), base)
   g->closePath
   g->fill
-  g->setStrokeStyle(ink)
+  g->setStrokeStyle(CanvasStyle.ink)
   g->setLineWidth(2.4)
   g->beginPath
   for i in 0 to t.n - 1 {
     i == 0 ? g->moveTo(px(i), py(t.data->at(i))) : g->lineTo(px(i), py(t.data->at(i)))
   }
   g->stroke
-  g->setStrokeStyle("#6f5f36")
-  g->setLineWidth(2.)
-  g->strokeRect(1., 1., w - 2., h - 2.)
+  CanvasStyle.border(g, w, h)
 }
 
 // Changes the height of the drawing area (in design pixels).
@@ -142,6 +118,18 @@ let undo = t =>
     draw(t)
     t.onCommit(t.data)
   })
+
+// Changes the data in one step that undo takes back, and commits it.
+let apply = (t, f) => {
+  pushUndo(t)
+  f(t.data)
+  draw(t)
+  t.onCommit(t.data)
+}
+
+// Menu items: an operation on the data (one undoable step), and undo.
+let editItem = (label, f) => {label, run: t => apply(t, f)}
+let undoItem = {label: "undo", run: undo}
 
 let line = (t, (i0, v0), (i1, v1)) => {
   let ((i0, v0), (i1, v1)) = i1 < i0 ? ((i1, v1), (i0, v0)) : ((i0, v0), (i1, v1))
@@ -222,35 +210,22 @@ let onDown = (t, ev) =>
     }
   }
 
+// The menu, at the pointer.
 let openMenu = (t, ev) => {
-  let items = t.menu->Array.mapWithIndex(({label}, value) => {Menu.label, value})
-  // open at the pointer: use a temporary anchor element positioned there
   let r = t.canvas->getBoundingClientRect
   let s = t.ctx.scale()
-  let anchor =
-    el("div", ~parent=?t.canvas->parentElement)->place(
-      t.box.x + (ev->clientX - r.left) / s,
-      t.box.y + (ev->clientY - r.top) / s,
-      ~w=1.,
-      ~h=1.,
-    )
-  anchor->setStyle("position", "absolute")
-  t.ctx.menu->Menu.show(anchor, items, -1, k =>
-    t.menu[k]->Option.forEach(item =>
-      if item.managesUndo == Some(true) {
-        item.run(t)
-      } else {
-        let before = TypedArray.copy(t.data)
-        item.run(t)
-        if !(t.data->TypedArray.everyWithIndex((v, i) => v == before->at(i))) {
-          saveUndo(t, before)
-          draw(t)
-          t.onCommit(t.data)
-        }
-      }
+  t.canvas
+  ->parentElement
+  ->Option.forEach(parent =>
+    t.ctx.menu->Menu.showAt(
+      parent,
+      ~x=t.box.x + (ev->clientX - r.left) / s,
+      ~y=t.box.y + (ev->clientY - r.top) / s,
+      t.menu->Array.mapWithIndex(({label}, value) => {Menu.label, value}),
+      -1,
+      k => t.menu[k]->Option.forEach(item => item.run(t)),
     )
   )
-  anchor->remove
 }
 
 let make = (
@@ -264,9 +239,7 @@ let make = (
   ~onCommit,
   ~statusText=defaultStatus,
 ) => {
-  let canvas = el("canvas", ~cls="draw", ~parent)->placeBox(box)
-  canvas->setCanvasWidth(box.w * 2.)
-  canvas->setCanvasHeight(box.h * 2.)
+  let canvas = CanvasStyle.make(parent, box)
   let t = {
     ctx,
     box,

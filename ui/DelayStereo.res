@@ -22,7 +22,7 @@ let make = (ctx: Ctx.t, parent, box: box, ~pan, ~rotation, ~feedbackL, ~feedback
   let arrows = FxGraph.group(g.svg)
   let fixed = FxGraph.group(g.svg)
   [lx, rx]->Array.forEachWithIndex((x, side) => {
-    Plots.svgEl(
+    svgEl(
       fixed,
       "rect",
       [("class", Str("dline")), ("x", Num(x)), ("y", Num(boxY)), ("width", Num(boxW)), ("height", Num(boxH)), ("rx", Num(2.))],
@@ -31,11 +31,11 @@ let make = (ctx: Ctx.t, parent, box: box, ~pan, ~rotation, ~feedbackL, ~feedback
   })
   FxGraph.line(fixed, ~cls="axis", trackL, trackY, trackR, trackY)
   FxGraph.text(fixed, ~anchor="middle", cx, trackY - 2., "in")
-  Plots.svgEl(fixed, "circle", [("class", Str("dial")), ("cx", Num(cx)), ("cy", Num(cy)), ("r", Num(radius))])->ignore
-  let needle = Plots.svgEl(fixed, "line", [("class", Str("needle"))])
+  svgEl(fixed, "circle", [("class", Str("dial")), ("cx", Num(cx)), ("cy", Num(cy)), ("r", Num(radius))])->ignore
+  let needle = svgEl(fixed, "line", [("class", Str("needle"))])
   let layer = FxGraph.group(g.svg)
   let hits = FxGraph.group(g.svg)
-  let readout = Plots.svgEl(hits, "text", [("class", Str("readout"))])
+  let readout = svgEl(hits, "text", [("class", Str("readout"))])
 
   let focus = ref(None)
   let draw = ref(() => ())
@@ -85,7 +85,7 @@ let make = (ctx: Ctx.t, parent, box: box, ~pan, ~rotation, ~feedbackL, ~feedback
   let arrow = (~width, ~dashed, (x0, y0), (c1x, c1y), (c2x, c2y), (x1, y1)) => {
     let cls = "flow" ++ (dashed ? " neg" : "") ++ (width < 0.05 ? " none" : "")
     let w = 0.8 + Math.min(2., width) * 1.6
-    Plots.svgEl(
+    svgEl(
       arrows,
       "path",
       [
@@ -100,7 +100,7 @@ let make = (ctx: Ctx.t, parent, box: box, ~pan, ~rotation, ~feedbackL, ~feedback
     let s = 4. + w
     let (ax, ay) = (x1 - ux * s - uy * s * 0.55, y1 - uy * s + ux * s * 0.55)
     let (bx, by) = (x1 - ux * s + uy * s * 0.55, y1 - uy * s - ux * s * 0.55)
-    Plots.svgEl(
+    svgEl(
       arrows,
       "path",
       [("class", Str("flowhead" ++ (width < 0.05 ? " none" : ""))), ("d", Str(`M${f(ax)} ${f(ay)}L${f(x1)} ${f(y1)}L${f(bx)} ${f(by)}`))],

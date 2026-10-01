@@ -45,6 +45,10 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const project = process.argv[2] ?? join(root, "build", "clap-project");
 const marker = "// Porridge:";
 
+// The synth reports one block of latency for sample-accurate MIDI (dsp/Synth.cmajor).
+const blockSize = Number(/let blockSize = (\d+);/.exec(readFileSync(join(root, "dsp", "Types.cmajor"), "utf8"))?.[1]);
+if (!blockSize) throw new Error("blockSize not found in dsp/Types.cmajor");
+
 // the file being patched
 let file, source;
 
@@ -699,8 +703,8 @@ replace(
 //==============================================================================
 replace(
   `    return static_cast<uint32_t> (patch.getFramesLatency());`,
-  `    ${marker} the synth's MIDI latency, one 64-sample block (see dsp/Synth.cmajor)
-    return static_cast<uint32_t> (std::max (patch.getFramesLatency(), 64.0));`,
+  `    ${marker} the synth's MIDI latency, one ${blockSize}-sample block (see dsp/Synth.cmajor)
+    return static_cast<uint32_t> (std::max (patch.getFramesLatency(), ${blockSize}.0));`,
 );
 
 //==============================================================================

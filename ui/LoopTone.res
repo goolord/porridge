@@ -53,7 +53,7 @@ let make = (ctx: Ctx.t, parent, box: box, spec, ~highlight: ref<option<(string, 
   let curve = FxGraph.path(g.svg, ~cls="curve")
   let layer = FxGraph.group(g.svg)
   let hits = FxGraph.group(g.svg)
-  let readout = Plots.svgEl(hits, "text", [("class", Str("readout"))])
+  let readout = svgEl(hits, "text", [("class", Str("readout"))])
 
   let lpHz = () => spec.lowpassHz(FxGraph.get(g, spec.lowpass))
   let hpHz = () => spec.highpassHz(FxGraph.get(g, spec.highpass))

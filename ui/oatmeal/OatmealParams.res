@@ -612,352 +612,6 @@ let ccTargets = [
 ]
 let oscMix = ["normal", "hardsync", "FM (1 -> 2, 1 silent)"]
 
-// getParameter() values of the Init program (as printed by the DLL, 6 decimals).
-let defaultNormalized = [
-  0.,
-  0.666667,
-  0.5,
-  0.5,
-  0.,
-  0.5,
-  0.,
-  0.,
-  0.5,
-  0.5,
-  0.,
-  0.5,
-  0.625,
-  0.5,
-  0.5,
-  0.,
-  0.5,
-  0.,
-  0.5,
-  0.058824,
-  0.,
-  0.383007,
-  0.,
-  1.,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.058824,
-  0.,
-  0.396078,
-  0.,
-  1.,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.5,
-  0.,
-  0.021909,
-  0.,
-  0.03874,
-  1.,
-  0.222542,
-  0.899657,
-  0.044733,
-  0.5,
-  0.,
-  0.5,
-  0.291667,
-  0.375,
-  0.5,
-  0.5,
-  0.5,
-  0.021909,
-  0.,
-  0.03874,
-  1.,
-  0.222542,
-  0.899657,
-  0.044733,
-  0.,
-  0.,
-  0.2,
-  0.068929,
-  0.039039,
-  0.079079,
-  0.5,
-  0.8,
-  0.,
-  0.357143,
-  0.,
-  0.,
-  0.,
-  0.020202,
-  0.020202,
-  0.675,
-  0.675,
-  0.5,
-  0.5,
-  0.7,
-  0.,
-  0.666667,
-  0.645131,
-  0.,
-  0.43679,
-  0.191805,
-  0.8,
-  0.2,
-  0.666667,
-  0.51134,
-  0.385,
-  0.125,
-  0.635,
-  0.86,
-  0.5,
-  0.5,
-  0.5,
-  0.225806,
-  0.,
-  0.166667,
-  0.444444,
-  0.825,
-  1.,
-  0.5,
-  0.5,
-  0.,
-  0.223607,
-  0.028868,
-  0.,
-  1.,
-  0.,
-  0.,
-  1.,
-  0.,
-  0.,
-  0.,
-  1.,
-  0.,
-  0.014434,
-  0.25,
-  0.,
-  0.,
-  0.,
-  0.470588,
-  1.,
-  0.25,
-  0.066667,
-  0.,
-  0.,
-  0.066667,
-  0.,
-  0.,
-  0.066667,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.466667,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.375,
-  0.044498,
-  0.625,
-  0.067099,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.5,
-  0.25,
-  0.5,
-  0.3125,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.707107,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.366644,
-  0.366644,
-  0.366644,
-  0.366644,
-  0.366644,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.021909,
-  0.,
-  0.03874,
-  1.,
-  0.222542,
-  0.899657,
-  0.044733,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.021909,
-  0.,
-  0.03874,
-  1.,
-  0.222542,
-  0.899657,
-  0.044733,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  1.,
-  0.,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.5,
-  0.5,
-  0.5,
-  0.5,
-  0.,
-  0.,
-  0.,
-  0.,
-  0.,
-]
-
 // ---------------------------------------------------------------------------------------------------
 // numeric helpers (x87 emulation)
 
@@ -971,6 +625,8 @@ let i32 = x => {
 }
 let pow = (x, y) => Math.pow(x, ~exp=y)
 let log10 = Math.log10
+// a pulse width's full turn: its phase is a uint32 fraction of this
+let pw32 = 4294967296.
 
 // float32 constants exactly as stored in Oatmeal.dll's .rdata
 module K = {
@@ -1053,7 +709,8 @@ type t = {
   inv: float => float,
   // DLL status-bar string (0x100405f0) for normalized v, in the context of a program
   text: (float, Uint8Array.t) => string,
-  defaultNormalized: float,
+  // offsets of the other fields text reads from that program
+  reads: array<int>,
 }
 
 let blank = {
@@ -1073,7 +730,7 @@ let blank = {
   get: x => x,
   inv: x => x,
   text: (_, _) => "",
-  defaultNormalized: 0.,
+  reads: [],
 }
 
 // Field offsets that some status texts read from the program.
@@ -1339,9 +996,12 @@ let paramCount = 342
 
 let table: array<option<t>> = Array.make(~length=paramCount, None)
 
-let def = (i, spec) => {
+let def = (i, ~reads=[], spec) => {
   let (name, action) = names->Array.getUnsafe(i)
-  table->Array.setUnsafe(i, Some({...spec, index: i, name, action}))
+  table->Array.setUnsafe(
+    i,
+    Some({...spec, index: i, name, action, reads: Array.concat(spec.reads, reads)}),
+  )
 }
 
 [(0, 1), (6, 2)]->Array.forEach(((o, n)) => {
@@ -1368,7 +1028,7 @@ let def = (i, spec) => {
       unit: "% (uint32 fraction of 2^32)",
       set: v => ByteView.toUint32(pow(2., 32.) * v + 0.5), // uint32 phase; v=1 wraps to 0 (DLL quirk)
       get: x => f32(ByteView.toUint32(x) * pow(2., -32.)),
-      inv: x => ByteView.toUint32(x) / 4294967296.,
+      inv: x => ByteView.toUint32(x) / pw32,
       text: (v: float, _) => `${osc} Pulsewidth: ${fixed(v * 100., 2)} %`,
     },
   )
@@ -1393,6 +1053,7 @@ let def = (i, spec) => {
 def(
   12,
   bip(8516, 4., ratioText("Transpose", 2, 48., 4.), ~unit="octaves (display: semitones = 12*x)"),
+  ~reads=[offOctave],
 )
 def(13, bip(8520, 50., (v: float, _) => `Detune: ${fixed((2. * v - 1.) * 50., 3)} Hz`, ~unit="Hz"))
 def(
@@ -1422,7 +1083,11 @@ def(
       : "Noise resonance: no filtering"
   ),
 )
-def(18, bip(8536, 48., ratioText("Noise transpose", 2, 48., 4.), ~unit="semitones"))
+def(
+  18,
+  bip(8536, 48., ratioText("Noise transpose", 2, 48., 4.), ~unit="semitones"),
+  ~reads=[offOctave],
+)
 
 type lfoOffsets = {
   unit: int,
@@ -1495,6 +1160,7 @@ type lfoOffsets = {
         ),
       inv: x => x <= 1. ? (4. - 1. / x) / 9. : ((x - 1.) / 255. + 0.5) / 1.5,
       text: unitsText(`${l} speed`, o.quantize, lfoSpeed),
+      reads: [o.quantize],
     },
   )
   def(base + 3, sw(o.quantize, 1, Some(lfoQuantize), enumText(`${l}: `, 1, lfoQuantize)))
@@ -1551,6 +1217,7 @@ def(
         enumText("Filter 2: ", 15, filter2Types)(v, prog)
       }
     ),
+    reads: [offFilter, offFDouble],
     storage: Hi16,
     states: Some(13),
     max: 12.,
@@ -1573,6 +1240,7 @@ def(
         ? `Cutoff: ${fixed(hz, 2)} Hz (/${fixed(ref / hz, 4)})`
         : `Cutoff: ${fixed(hz, 2)} Hz (*${fixed(hz / ref, 4)})`
     },
+    reads: [offOctave, offCutRef, offTune],
   },
 )
 def(44, uni(8436, pct("Resonance")))
@@ -1596,7 +1264,7 @@ envelopes->Array.forEach(({first, offset: o, display}) => {
     }
   def(first + 0, sq(o + 4, 9999.8, 0.2, attackText, ~unit="ms"))
   def(first + 1, sq(o + 8, 10000., 0., holdText, ~unit="ms"))
-  def(first + 2, sq(o + 12, 19990., 10., decay1Text(o + 44), ~unit="ms"))
+  def(first + 2, sq(o + 12, 19990., 10., decay1Text(o + 44), ~unit="ms"), ~reads=[o + 44])
   def(
     first + 3,
     lvl(o + 44, levelText("Breakpoint", "Breakpoint: skip decay 1", "Breakpoint: skip decay 1")),
@@ -1728,6 +1396,7 @@ def(79, sw(8664, 2, Some(delayReverse), enumText("Delay, right: ", 2, delayRever
           ? `${label}: ${int(ftol(length + 0.5))} units`
           : `${label}: ${fixed(length, 3)} units`
       },
+      reads: [8656],
     },
   )
 )
@@ -1916,6 +1585,7 @@ def(
         (x - 1.) / K.arpStep + 0.25
       },
     text: unitsText("Arp step", 8852, arpStep),
+    reads: [8852],
   },
 )
 for k in 1 to 16 {
@@ -1954,6 +1624,7 @@ for k in 1 to 7 {
   def(
     156 + k,
     bip(4 * (156 + k) + 8328, 36., ratioText(`Arp note ${note}`, 3, 36., 3.), ~unit="semitones"),
+    ~reads=[offOctave],
   )
 }
 def(
@@ -2067,8 +1738,16 @@ let refText = label =>
     let hz = pow(prog->ByteView.getF32(offOctave), t * 2.) * prog->ByteView.getF32(offTune)
     `${label}: ${fixed(t * 24., 2)} st (${fixed(hz, 2)} Hz)`
   }
-def(180, bip(9072, 24., refText("Cutoff reference frequency"), ~unit="semitones"))
-def(181, bip(9076, 24., refText("Pan center frequency"), ~unit="semitones"))
+def(
+  180,
+  bip(9072, 24., refText("Cutoff reference frequency"), ~unit="semitones"),
+  ~reads=[offOctave, offTune],
+)
+def(
+  181,
+  bip(9076, 24., refText("Pan center frequency"), ~unit="semitones"),
+  ~reads=[offOctave, offTune],
+)
 [
   "C",
   "C#/Db",
@@ -2097,6 +1776,7 @@ def(181, bip(9076, 24., refText("Pan center frequency"), ~unit="semitones"))
       },
       ~unit="cents",
     ),
+    ~reads=[offOctave],
   )
 })
 def(
@@ -2142,6 +1822,7 @@ def(197, bip(9140, 1., (v: float, _) => `Y: ${fixed(2. * v - 1., 4)}`))
         1.,
         depthText(prefix, prefix, target0 + 4 * (k - 1), xyDepthUnit, 4.),
       ),
+      ~reads=[target0 + 4 * (k - 1)],
     )
     def(
       base + 3 + k,
@@ -2247,6 +1928,7 @@ def(261, bip(9508, 1., veloText))
     def(
       base + k - 1,
       bip(depthOffset + 4 * (k - 1), 1., depthText(prefix, prefix, targetOffset, envDepthUnit, 2.)),
+      ~reads=[targetOffset],
     )
     def(
       base + 3 + k,
@@ -2299,7 +1981,7 @@ for c in 1 to 6 {
       ccDepthUnit,
       4.,
     )
-    def(base + k, bip(offset + 4 * k, 1., depth))
+    def(base + k, bip(offset + 4 * k, 1., depth), ~reads=[offset + 16 + 4 * k])
     def(
       base + 4 + k,
       sw(offset + 16 + 4 * k, 34, Some(ccTargets), (v: float, _) => {
@@ -2324,10 +2006,10 @@ def(
 // ---------------------------------------------------------------------------------------------------
 // public API
 
-// The parameter table, with the Init program's defaults.
+// The parameter table.
 let params = table->Array.mapWithIndex((spec, i) =>
   switch spec {
-  | Some(p) => {...p, defaultNormalized: defaultNormalized->Array.getUnsafe(i)}
+  | Some(p) => p
   | None => JsError.panic(`param ${Int.toString(i)} undefined`)
   }
 )
@@ -2342,36 +2024,6 @@ let toInternal = (i, v) => param(i).set(f32(v))
 let toNormalized = (i, x) => {
   let v = param(i).inv(x)
   Float.isNaN(v) ? 0. : Math.min(1., Math.max(0., v))
-}
-
-// Like toNormalized, but returns the float32 v (searching a few hundred ulps around the inverse) for which
-// toInternal(i, v) reproduces x bit-exactly when such a v exists (lossless VST parameter round trips).
-let toNormalizedF32 = (i, x) => {
-  let reproduces = v => {
-    let y = toInternal(i, v)
-    y == x || (Float.isNaN(y) && Float.isNaN(x))
-  }
-  // stay within [0, 1]
-  let candidate = bits =>
-    bits < 0 || bits > 0x3f800000
-      ? None
-      : Some(ByteView.float32OfBits(bits))->Option.filter(reproduces)
-  let v0 = f32(toNormalized(i, x))
-  let b0 = ByteView.bitsOfFloat32(v0)
-  let rec search = k =>
-    if k > 512 {
-      v0
-    } else {
-      switch candidate(b0 + k) {
-      | Some(v) => v
-      | None =>
-        switch candidate(b0 - k) {
-        | Some(v) => v
-        | None => search(k + 1)
-        }
-      }
-    }
-  reproduces(v0) ? v0 : search(1)
 }
 
 // internal -> what Oatmeal.dll's getParameter returns (float32, with its quirks: PWM rate = v/2, F envspeed > 0.5 -> v-1).
@@ -2407,11 +2059,12 @@ let writeInternal = (prog, i, x) => {
   }
 }
 
+// Porridge takes a pulse width as a 0..1 fraction; Oatmeal stores it as a uint32 phase.
+let pwToPhase = x => ByteView.toUint32(Math.round(x * pw32))
+let pwOfPhase = x => x / pw32
+
 // setParameter(i, v) applied to a program: exactly the bytes the DLL writes into the program.
 let setParamNormalized = (prog, i, v) => writeInternal(prog, i, toInternal(i, v))
-
-// getParameter as the DLL computes it from a program.
-let getParamDll = (prog, i) => dllGetParameter(i, readInternal(prog, i))
 
 // Context used when no program is passed: only the fields status texts read, set to their Init values.
 let initContext = Lazy.make(() => {
@@ -2459,57 +2112,3 @@ let displayText = (i, x, ~prog=?, ~dll=false, ~v=?) => {
   let value = statusText(i, v, ~prog?)->valuePart
   String.startsWith(value, " ") ? value->String.slice(~start=1) : value
 }
-
-// Exactly what the VST host sees from effGetParamDisplay: " " + value part (from the DLL getParameter value), max 23 chars.
-let hostDisplay = (prog, i) =>
-  statusText(i, getParamDll(prog, i), ~prog)->valuePart->String.slice(~start=0, ~end=23)
-
-// Switch value names for parameter i (None for continuous params).
-let valueNames = i => param(i).labels->Option.map(Array.copy)
-
-// Plain-data description of a parameter (for docs / GUIs).
-type description = {
-  index: int,
-  name: string,
-  action: string,
-  offset: int,
-  offset2: Null.t<int>,
-  @as("type") storage: storage,
-  min: float,
-  max: float,
-  unit: string,
-  states: Null.t<int>,
-  add: int,
-  labels: Null.t<array<string>>,
-  defaultNormalized: float,
-  defaultInternal?: float,
-  defaultText?: string,
-}
-
-// Pass the Init program (OatmealFormat.makeDefaultProgram) to also get defaultInternal / defaultText.
-let describeParams = (~init=?) =>
-  params->Array.map(p => {
-    let defaultInternal = init->Option.map(prog => readInternal(prog, p.index))
-    let defaultText =
-      init->Option.map(prog => statusText(p.index, getParamDll(prog, p.index), ~prog))
-    {
-      index: p.index,
-      name: p.name,
-      action: p.action,
-      offset: p.offset,
-      offset2: Null.fromOption(p.offset2),
-      storage: p.storage,
-      min: p.min,
-      max: p.max,
-      unit: switch (p.unit, p.labels) {
-      | ("", Some(_)) => "enum"
-      | (unit, _) => unit
-      },
-      states: Null.fromOption(p.states),
-      add: p.add,
-      labels: Null.fromOption(p.labels->Option.map(Array.copy)),
-      defaultNormalized: p.defaultNormalized,
-      ?defaultInternal,
-      ?defaultText,
-    }
-  })

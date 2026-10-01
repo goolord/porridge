@@ -5,7 +5,7 @@
 // MIDI lands on its own sample rather than at the next 64-sample block.
 
 type kind =
-  | Float({min: float, max: float, init: float, text: float => string, unit?: string})
+  | Float({min: float, max: float, init: float, text: float => string})
   | Choice({names: array<string>, init: int})
   // the same range, knob law and text as an Oatmeal parameter (a second effect's copy of it)
   | Like(string)
@@ -342,22 +342,41 @@ let copySpecs = rackKinds->Array.flatMap(k =>
   )
 )
 
-let all = [
-  ...macroSpecs,
-  ...slotSpecs,
-  ...mpeSpecs,
-  ...oatSpecs,
-  ...driftSpecs,
-  ...fxOrderSpecs,
-  ...pmSpecs,
-  ...filterSpecs,
-  ...curveSpecs,
-  ...lfoSpecs,
-  ...unisonSpecs,
-  ...rackSpecs,
-  ...eqOnSpecs,
-  ...shaperSpecs,
-  ...copySpecs,
+type feature =
+  | Macros
+  | Modulations
+  | Mpe
+  | OatMode
+  | Drift
+  | FxOrder
+  | PmFeedback
+  | FilterMorph
+  | Curves
+  | LfoExtras
+  | UnisonExtras
+  | EffectsRack
+  | EqSwitch
+  | CustomShape
+  | RackCopies
+
+let groups = [
+  (Macros, macroSpecs),
+  (Modulations, slotSpecs),
+  (Mpe, mpeSpecs),
+  (OatMode, oatSpecs),
+  (Drift, driftSpecs),
+  (FxOrder, fxOrderSpecs),
+  (PmFeedback, pmSpecs),
+  (FilterMorph, filterSpecs),
+  (Curves, curveSpecs),
+  (LfoExtras, lfoSpecs),
+  (UnisonExtras, unisonSpecs),
+  (EffectsRack, rackSpecs),
+  (EqSwitch, eqOnSpecs),
+  (CustomShape, shaperSpecs),
+  (RackCopies, copySpecs),
 ]
+
+let all = groups->Array.flatMap(((_, specs)) => specs)
 
 let slotOf = i => firstSlot + i
