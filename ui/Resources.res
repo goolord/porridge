@@ -1,5 +1,5 @@
-// Reads files the patch bundles ("resources" in the manifest: presets/*), for the worker
-// and the view.
+// Reads files the patch bundles ("resources" in the manifest: presets/* and the factory
+// bank), for the worker and the view.
 
 open PatchConnection
 
@@ -8,6 +8,7 @@ type response
 external asResponse: resource => response = "%identity"
 @get external ok: response => option<bool> = "ok"
 @send external arrayBuffer: response => promise<ArrayBuffer.t> = "arrayBuffer"
+@send external text: response => promise<string> = "text"
 @val external isView: Type.Classify.object => bool = "ArrayBuffer.isView"
 @val external codePoints: string => array<string> = "Array.from"
 external asView: Type.Classify.object => Uint8Array.t = "%identity"
@@ -56,18 +57,33 @@ let toBytes = async (data: resource) =>
     }
   }
 
-let readBytes = async (pc, path) => {
+// A text file: the native worker gives it as a string already (if it's valid UTF-8), which is
+// much quicker there than going through the bytes.
+let toText = async (data: resource) =>
+  switch Type.Classify.classify(data) {
+  | String(text) => Some(text)
+  | Object(_) if Type.typeof(data->member("text")) == #function =>
+    let response = asResponse(data)
+    response->ok == Some(false) ? None : Some(await response->text)
+  | _ => None
+  }
+
+// Reads a resource with `convert`, trying the path as it is, then from the root.
+let read = async (pc, path, convert, ~isEmpty) => {
   let rec attempt = async paths =>
     switch paths {
     | list{} => None
     | list{p, ...rest} =>
-      let bytes = try await toBytes(await pc->readResource(p)) catch {
+      let content = try await convert(await pc->readResource(p)) catch {
       | _ => None
       }
-      switch bytes {
-      | Some(b) if TypedArray.length(b) > 0 => bytes
+      switch content {
+      | Some(c) if !isEmpty(c) => content
       | _ => await attempt(rest)
       }
     }
   await attempt(list{path, "/" ++ path})
 }
+
+let readBytes = (pc, path) => read(pc, path, toBytes, ~isEmpty=b => TypedArray.length(b) == 0)
+let readText = (pc, path) => read(pc, path, toText, ~isEmpty=s => s == "")

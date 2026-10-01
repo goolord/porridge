@@ -362,9 +362,20 @@ let make = (host, pc) => {
   updateProgramBar(programs)
   status->Status.setIdle(PageMain.hint)
 
+  // The patch's parameters and stored state arrive in one message (asking for each
+  // parameter took about 450 round trips through the plugin's web view).
+  let disposed = ref(false)
+  pc->PatchConnection.requestFullStoredState(state =>
+    if !disposed.contents {
+      model->ParamModel.loadParameters(state.parameters->Option.getOr([]))
+      programs->ProgramStore.loadState(state.values->Option.getOr(Dict.make()))
+    }
+  )
+
   {
     showPage,
     dispose: () => {
+      disposed := true
       resizeObserver->disconnect
       document->offDocumentKeyDown(onShortcut)
       restoreBrowserChrome()

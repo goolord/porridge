@@ -1,7 +1,8 @@
 # Builds the Porridge CLAP plugin on macOS, Linux and Windows.
 #
 #   just            build dist/Porridge.clap for this machine
-#   just install    build, then copy it into the user's CLAP folder
+#   just install    build, then copy it into the CLAP folder (on Windows, the system one,
+#                   which asks for administrator rights)
 #
 # Build on each OS natively; there is no cross-compiling. Requirements:
 #   all:      cmaj (Cmajor CLI), node and npm, git, cmake >= 3.16 and a C++17 compiler
@@ -10,7 +11,7 @@
 #   Linux:    pkg-config, gtk3 and webkit2gtk dev packages (see `just linux-deps`)
 #
 # Every recipe line is a plain command (file operations go through `cmake -E`),
-# so the same recipes run under sh and PowerShell.
+# so the same recipes run under sh and PowerShell; only installing differs per OS.
 
 set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 
@@ -30,9 +31,11 @@ dist     := root / "dist"
 
 plugin := "Porridge.clap"
 
-# CLAP's per-user search path for each OS.
+# Where to install on each OS. Windows hosts don't all scan the per-user CLAP folder, so it
+# goes in the system-wide one (CommonProgramW6432 is the 64-bit Common Files, even if a 32-bit
+# process launched just).
 install_dir := if os() == "windows" {
-    env("LOCALAPPDATA", "") / "Programs" / "Common" / "CLAP"
+    env("CommonProgramW6432", env("CommonProgramFiles", "C:\\Program Files\\Common Files")) / "CLAP"
 } else if os() == "macos" {
     home_directory() / "Library" / "Audio" / "Plug-Ins" / "CLAP"
 } else {
@@ -81,15 +84,29 @@ package: compile
     cmake -E echo "built {{ dist / plugin }}"
 
 # Build, then install into the user's CLAP folder
+[unix]
 install: package
     cmake -E make_directory "{{ install_dir }}"
     cmake -E rm -rf "{{ install_dir / plugin }}"
     cmake -E {{ copy }} "{{ dist / plugin }}" "{{ install_dir / plugin }}"
     cmake -E echo "installed {{ install_dir / plugin }}"
 
+# Build, then install into the system CLAP folder. Program Files needs administrator rights,
+# so only the copy runs elevated: a UAC prompt, unless the shell already is.
+[windows]
+install: package
+    $p = Start-Process cmake -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList '-E copy "{{ dist / plugin }}" "{{ install_dir / plugin }}"'; if ($p.ExitCode) { throw "couldn't copy to {{ install_dir }}; is a host holding the plugin open?" }
+    cmake -E echo "installed {{ install_dir / plugin }}"
+
 # Remove the plugin from the user's CLAP folder
+[unix]
 uninstall:
     cmake -E rm -rf "{{ install_dir / plugin }}"
+
+# Remove the plugin from the system CLAP folder (elevated, as for install)
+[windows]
+uninstall:
+    $p = Start-Process cmake -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList '-E rm -f "{{ install_dir / plugin }}"'; exit $p.ExitCode
 
 # Install the Linux build dependencies (Debian/Ubuntu)
 [linux]

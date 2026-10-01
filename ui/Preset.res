@@ -454,6 +454,38 @@ let writeBank = (presets, ~name=?) => utf8Encode(JSON.stringify(bankToJson(prese
 
 let encodeBank = presets => JSON.stringify(bankToJson(presets))
 
+// Oatmeal's factory bank (presets/oatmealprs.dat), as a new instance starts with it: its
+// programs, then Init programs up to a full bank. tools/bundle.mjs stores it, encoded, in
+// bundle/factory-bank.json for the worker.
+let factoryBank = bytes => {
+  let programs = switch OatmealFormat.parseFile(bytes) {
+  | Ok({programs}) => programs
+  | Error(e) => JsError.panic("the factory bank can't be read: " ++ e)
+  }
+  Array.fromInitializer(~length=bankPrograms, i =>
+    switch programs[i] {
+    | Some(p) => fromOatmeal(p.bytes)
+    | None => make(i == 0 ? "Init" : `Init ${Int.toString(i)}`)
+    }
+  )
+}
+
+// The first preset of an encoded bank, without decoding the rest.
+let decodeFirst = s =>
+  switch JSON.parseOrThrow(s) {
+  | Object(d) =>
+    switch d->Dict.get("presets") {
+    | Some(Array(items)) =>
+      switch items[0] {
+      | Some(Object(p)) => Some(fromJsonObject(p))
+      | _ => None
+      }
+    | _ => None
+    }
+  | _ => None
+  | exception _ => None
+  }
+
 // Older sessions stored the bank as base64 Oatmeal chunks.
 let decodeBank = s =>
   if String.startsWith(String.trim(s), "{") {

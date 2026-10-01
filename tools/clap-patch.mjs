@@ -23,6 +23,18 @@
 //  - The latency is the synth's 64 samples (dsp/Synth.cmajor applies MIDI a block late, on
 //    its own sample). Cmajor's C++ generator reports 0 whatever the patch declares.
 //
+// and to load faster:
+//
+//  - The patch worker runs in QuickJS, in the plugin, instead of in a hidden web view (with
+//    a renderer process) of its own per instance; the web view took half a second or more to
+//    start, during which the patch played without its waveforms and a new instance without
+//    its bank. choc's QuickJS never ran promise jobs, so it does now
+//    (choc_javascript_QuickJS.h).
+//  - Activating rebuilds the patch only if the sample rate or block size changed, instead of
+//    loading it again from scratch (which built it three times).
+//  - Cmajor's Engine keeps the program details it last parsed (cmaj_Engine.h): Porridge's are
+//    about 175 kB of JSON, and every build asked for them about five times.
+//
 //   node tools/clap-patch.mjs [path to the generated project]
 
 import { readFileSync, writeFileSync } from "node:fs";
@@ -31,15 +43,24 @@ import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const project = process.argv[2] ?? join(root, "build", "clap-project");
-const file = join(project, "helpers", "clap", "cmaj_CLAPPlugin.h");
 const marker = "// Porridge:";
 
-let source = readFileSync(file, "utf8").replace(/\r\n/g, "\n");
+// the file being patched
+let file, source;
 
-if (source.includes(marker)) {
+// Starts patching a file; false if it already is.
+const open = (path) => {
+  file = path;
+  source = readFileSync(file, "utf8").replace(/\r\n/g, "\n");
+  if (!source.includes(marker)) return true;
   console.log(`${file} is already patched`);
-  process.exit(0);
-}
+  return false;
+};
+
+const save = () => {
+  writeFileSync(file, source);
+  console.log(`patched ${file}`);
+};
 
 const fail = (what) => {
   console.error(`clap-patch: couldn't find ${what} in ${file}; the Cmajor wrapper has changed, so update tools/clap-patch.mjs`);
@@ -63,6 +84,106 @@ const replaceRange = (start, end, replacement) => {
 };
 
 //==============================================================================
+// Cmajor's Engine
+
+if (open(join(project, "include", "cmajor", "API", "cmaj_Engine.h"))) {
+  replace(
+    `#include <functional>\n`,
+    `#include <functional>
+#include <mutex>
+#include <string>
+`,
+  );
+
+  replace(
+    `                return choc::json::parse (choc::com::StringPtr (details));\n`,
+    `                ${marker} a big patch's details take a while to parse, and loading it asks
+                // for them several times, so the last ones parsed are kept (added by
+                // tools/clap-patch.mjs)
+                static std::mutex lock;
+                static std::string lastText;
+                static choc::value::Value lastDetails;
+
+                choc::com::StringPtr text (details);
+                std::lock_guard<std::mutex> lockForCache (lock);
+
+                if (text.get() != lastText)
+                {
+                    lastDetails = choc::json::parse (text.get());
+                    lastText = std::string (text.get());
+                }
+
+                return lastDetails;
+`,
+  );
+
+  save();
+}
+
+//==============================================================================
+// choc's QuickJS, which runs the patch worker
+
+if (open(join(project, "include", "choc", "choc", "javascript", "choc_javascript_QuickJS.h"))) {
+  replace(
+    `    void pumpMessageLoop() override {}\n`,
+    `    void pumpMessageLoop() override {}
+
+    ${marker} runs the promise jobs (await, then) that a call into the script queued, as an
+    // event loop does after each task; without this, async code stopped at its first await
+    // (added by tools/clap-patch.mjs)
+    void runPendingJobs()
+    {
+        JSContext* jobContext = nullptr;
+
+        while (JS_ExecutePendingJob (runtime, &jobContext) > 0)
+        {}
+    }
+`,
+  );
+
+  replace(
+    `        return takeValue (JS_Eval (context, code.c_str(), code.size(), "", JS_EVAL_TYPE_GLOBAL)).toChocValue();\n`,
+    `        auto result = takeValue (JS_Eval (context, code.c_str(), code.size(), "", JS_EVAL_TYPE_GLOBAL)).toChocValue();
+        runPendingJobs();
+        return result;
+`,
+  );
+
+  for (const type of ["JS_EVAL_TYPE_MODULE", "JS_EVAL_TYPE_GLOBAL"]) {
+    const line = `                auto result = takeValue (JS_Eval (context, code.c_str(), code.size(), "", ${type}));\n`;
+    replace(line, line + `                runPendingJobs();\n`);
+  }
+
+  replace(
+    `        functionArgs.clear();
+        return returnVal.toChocValue();
+`,
+    `        functionArgs.clear();
+        runPendingJobs();
+        return returnVal.toChocValue();
+`,
+  );
+
+  save();
+}
+
+//==============================================================================
+// The CLAP wrapper
+
+if (!open(join(project, "helpers", "clap", "cmaj_CLAPPlugin.h"))) process.exit(0);
+
+replace(
+  `#include "cmajor/helpers/cmaj_PluginHelpers.h"\n`,
+  `${marker} the patch worker runs in QuickJS, rather than in a hidden web view that takes
+// about a second to start (added by tools/clap-patch.mjs)
+#ifndef CMAJ_USE_QUICKJS_WORKER
+ #define CMAJ_USE_QUICKJS_WORKER 1
+#endif
+
+#include "cmajor/helpers/cmaj_PluginHelpers.h"
+`,
+);
+
 replace(
   `#include "choc/gui/choc_DesktopWindow.h"\n`,
   `#include "choc/gui/choc_DesktopWindow.h"
@@ -582,5 +703,42 @@ replace(
     return static_cast<uint32_t> (std::max (patch.getFramesLatency(), 64.0));`,
 );
 
-writeFileSync(file, source);
-console.log(`patched ${file}`);
+//==============================================================================
+replace(
+  `    bool loadPatch (const std::filesystem::path& pathToManifest, FrequencyAndBlockSize frequencyAndBlockSize)
+    {
+        const auto manifest = environment.makePatchManifest (pathToManifest);
+`,
+  `    bool loadPatch (const std::filesystem::path& pathToManifest, FrequencyAndBlockSize frequencyAndBlockSize)
+    {
+        ${marker} a generated plugin's patch never changes, so once it's loaded, activating
+        // only needs to rebuild it if the sample rate or block size changed, which
+        // setPlaybackParams does (keeping the parameter values). Loading it again from scratch
+        // built it three times: preload, setPlaybackParams' rebuild, then loadPatch.
+        if (environment.engineType == Environment::EngineType::AOT && patch.isPlayable())
+        {
+            const auto channels = [] (const cmaj::EndpointDetailsList& endpoints)
+            {
+                uint32_t count = 0;
+
+                for (const auto& endpoint : endpoints)
+                    count += endpoint.getNumAudioChannels();
+
+                return count;
+            };
+
+            patch.setPlaybackParams ({
+                frequencyAndBlockSize.frequency,
+                frequencyAndBlockSize.maxBlockSize,
+                channels (patch.getInputEndpoints()),
+                channels (patch.getOutputEndpoints()),
+            });
+
+            return patch.isPlayable();
+        }
+
+        const auto manifest = environment.makePatchManifest (pathToManifest);
+`,
+);
+
+save();

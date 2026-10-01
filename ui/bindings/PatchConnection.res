@@ -33,6 +33,13 @@ external removeStoredStateValueListener: (t, storedStateEvent => unit) => unit =
 @send external requestStoredStateValue: (t, string) => unit = "requestStoredStateValue"
 @send external sendStoredStateValue: (t, string, 'value) => unit = "sendStoredStateValue"
 
+// The parameters that differ from their defaults, and every stored-state value, in one reply
+// to this view.
+type namedValue = {name: string, value: float}
+type fullState = {parameters?: array<namedValue>, values?: dict<JSON.t>}
+@send
+external requestFullStoredState: (t, fullState => unit) => unit = "requestFullStoredState"
+
 @send external addEndpointListener: (t, string, JSON.t => unit) => unit = "addEndpointListener"
 @send
 external removeEndpointListener: (t, string, JSON.t => unit) => unit = "removeEndpointListener"

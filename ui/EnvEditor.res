@@ -154,7 +154,6 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
   }
   let fractionAt = y => clamp((bottom - y) / (bottom - top), 0., 1.)
   let levelAt = y => decibels ? levelDef.fromNorm(fractionAt(y)) : fractionAt(y)
-  let sustainPx = 0.13 * (w - 2. * margin)
   // the DSP treats a breakpoint above 0.998 as "skip decay 1"
   let skipped = () => get("Breakpoint") > 0.998
 
@@ -163,7 +162,7 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
       ? ["Attack", "Hold", "Decay2", "Release"]
       : ["Attack", "Hold", "Decay1", "Decay2", "Release"]
     let total = stages->Array.reduce(0., (a, k) => a + units(get(k)))
-    {unitPx: (w - 2. * margin - 5. * segmentGap - sustainPx) / niceSpan(total), limit: 1.}
+    {unitPx: (w - 2. * margin - 5. * segmentGap) / niceSpan(total), limit: 1.}
   }
 
   let layout = f => {
@@ -175,9 +174,9 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
     let xa = after(x0, "Attack")
     let xh = after(xa, "Hold")
     let xb = skip ? xh + segmentGap : after(xh, "Decay1")
+    // the release starts at the sustain point: the time a note is held has no width
     let xs = after(xb, "Decay2")
-    let xr0 = xs + sustainPx
-    let xr = after(xr0, "Release")
+    let xr = after(xs, "Release")
 
     let points = [(x0, yOf(0.))]
     // each sampled segment, and its middle point
@@ -200,8 +199,8 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
     }
     let lo = Math.max(sus, 1e-4)
     let decay2Mid = sample(xb, xs, t => bend(envCubic(bp * Math.pow(lo / bp, ~exp=t), lo, bp), bp, lo, cd))
-    points->Array.push((xr0, yOf(sus)))
-    let releaseMid = sample(xr0, xr, t =>
+    points->Array.push((xs, yOf(sus)))
+    let releaseMid = sample(xs, xr, t =>
       sus <= 0.001 ? 0. : bend((sus * Math.pow(10., ~exp=-3. * t) - 0.001) * sus / (sus - 0.001), sus, 0., cr)
     )
     // the decay curve bends both decays; its point sits on whichever one has a drop
@@ -218,7 +217,7 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
       stretch(xa, xh, ta, th),
       stretch(xh, xb, th, tb),
       stretch(xb, xs, tb, tb + get("Decay2")),
-      stretch(~release=true, xr0, xr, 0., get("Release")),
+      stretch(~release=true, xs, xr, 0., get("Release")),
     ]
 
     let top = yOf(1.)
@@ -227,7 +226,7 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
       point(~time=id("Hold"), xa, xh, top),
       point(~time=id("Decay1"), ~level=id("Breakpoint"), ~hollow=skip, xh, xb, yOf(bp)),
       point(~time=id("Decay2"), ~level=id("Sustain"), xb, xs, yOf(sus)),
-      point(~time=id("Release"), xr0, xr, yOf(0.)),
+      point(~time=id("Release"), xs, xr, yOf(0.)),
       bendPoint(attackCurve, attackMid, ~rising=true),
       bendPoint(decayCurve, decayMid, ~rising=decayRising),
       bendPoint(releaseCurve, releaseMid, ~rising=false),
@@ -280,7 +279,6 @@ let pitch = (ctx: Ctx.t, ~w, ~h): shape => {
   let peakRatio = () => Math.pow(2., ~exp=get("PEnv_Peak") * octave() / 12.)
   // the attack runs at double speed going down
   let attackFactor = () => peakRatio() <= startRatio() ? 0.5 : 1.
-  let holdPx = 0.12 * (w - 2. * margin)
   let releasePx = 0.16 * (w - 2. * margin)
   let mid = (margin + bottomOf(h)) / 2.
   let yOf = (st, f) => mid - clamp(st / f.limit, -1., 1.) * (mid - margin)
@@ -299,7 +297,7 @@ let pitch = (ctx: Ctx.t, ~w, ~h): shape => {
     )
     let total = units(get("PEnv_Attack") * attackFactor()) + units(get("PEnv_Decay"))
     {
-      unitPx: (w - 2. * margin - 2. * segmentGap - holdPx - releasePx) / niceSpan(total),
+      unitPx: (w - 2. * margin - 2. * segmentGap - releasePx) / niceSpan(total),
       // a step above the biggest value, so that a drag to the edge can go further next time
       limit: Math.min(48., 12. * (Math.floor(biggest / 12.) + 1.)),
     }
@@ -314,20 +312,19 @@ let pitch = (ctx: Ctx.t, ~w, ~h): shape => {
     let x0 = margin
     let xp = x0 + segmentGap + units(get("PEnv_Attack") * attackFactor()) * f.unitPx
     let xs = xp + segmentGap + units(get("PEnv_Decay")) * f.unitPx
-    let xr = xs + holdPx + releasePx
+    let xr = xs + releasePx
 
     let attack = t => (x0 + (xp - x0) * t, yOf(semitones(r0 + (r1 - r0) * t), f))
     let points = [attack(0.)]
     points->Plots.trace(attack)
     points->Array.push((xs, yOf(sustain, f)))
-    points->Array.push((xs + holdPx, yOf(sustain, f)))
     points->Array.push((xr, yOf(sustain + release, f)))
 
     let tp = get("PEnv_Attack") * attackFactor()
     let times = [
       stretch(x0, xp, 0., tp),
       stretch(xp, xs, tp, tp + get("PEnv_Decay")),
-      stretch(~release=true, xs + holdPx, xr, 0., 1000.),
+      stretch(~release=true, xs, xr, 0., 1000.),
     ]
 
     let handles = [

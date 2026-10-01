@@ -16,7 +16,7 @@
 
     "source":           [ "dsp/Porridge.cmajor", "dsp/Types.cmajor", "dsp/Slots.cmajor", "dsp/ModTables.cmajor", "dsp/ParamStore.cmajor", "dsp/Effects.cmajor", "dsp/Filter.cmajor", "dsp/Tables.cmajor", "dsp/Modulation.cmajor", "dsp/Oscillator.cmajor", "dsp/Voice.cmajor", "dsp/Synth.cmajor" ],
     "worker":           "bundle/worker.js",
-    "resources":        [ "presets/*" ],
+    "resources":        [ "presets/*", "bundle/factory-bank.json" ],
 
     "view":
     {

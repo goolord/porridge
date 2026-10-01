@@ -35,9 +35,13 @@ let make = (pc, defs: array<ParamDefs.t>) => {
     })
 
   pc->PatchConnection.addAllParameterListener(onParam)
-  defs->Array.forEach(d => pc->PatchConnection.requestParameterValue(d.id))
   {pc, defs: defsById, values, listeners, anyListeners, onParam}
 }
+
+// The patch's values, from a full stored state: it lists the parameters that differ from
+// their defaults, which the model starts with.
+let loadParameters = (t, parameters: array<PatchConnection.namedValue>) =>
+  parameters->Array.forEach(({name, value}) => t.onParam({endpointID: name, value}))
 
 let dispose = t => t.pc->PatchConnection.removeAllParameterListener(t.onParam)
 

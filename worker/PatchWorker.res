@@ -6,59 +6,51 @@
 
 open PatchConnection
 
-// A new instance: install the factory bank, as Oatmeal does.
-let installFactoryBank = async pc => {
-  let factory = switch await Resources.readBytes(pc, "presets/oatmealprs.dat") {
-  | Some(bytes) =>
-    switch OatmealFormat.parseFile(bytes) {
-    | Ok({programs}) => programs->Array.map(p => p.bytes)
-    | Error(e) =>
-      Console.log("Porridge: factory bank not available: " ++ e)
-      []
-    }
-  | None => []
-  }
-  let all = Array.fromInitializer(~length=OatmealFormat.bankPrograms, i =>
-    switch factory[i] {
-    | Some(bytes) => Preset.fromOatmeal(bytes)
-    | None => Preset.make(i == 0 ? "Init" : `Init ${Int.toString(i)}`)
-    }
-  )
+// The factory bank, encoded as the stored state keeps it. Converting Oatmeal's bank here
+// would take about half a second in the plugin, whose worker runs in QuickJS, so
+// tools/bundle.mjs does it (Preset.factoryBank).
+let factoryBankPath = "bundle/factory-bank.json"
 
-  let first = all->Array.getUnsafe(0)
-  Bank.sendValues(pc, first.values)
-  Bank.sendShapes(pc, first.tables)
-  pc->sendStoredStateValue("shapes", Bank.encodeShapes(first.tables))
-  pc->sendStoredStateValue("program", 0)
-  pc->sendStoredStateValue("bank", Preset.encodeBank(all))
-}
+// A new instance: install the factory bank, as Oatmeal does.
+let installFactoryBank = async pc =>
+  switch await Resources.readText(pc, factoryBankPath) {
+  | Some(bank) =>
+    switch Preset.decodeFirst(bank) {
+    | Some(first) =>
+      Bank.sendValues(pc, first.values)
+      Bank.sendShapes(pc, first.tables)
+      pc->sendStoredStateValue("shapes", Bank.encodeShapes(first.tables))
+      pc->sendStoredStateValue("program", 0)
+      pc->sendStoredStateValue("bank", bank)
+    | None => Console.log("Porridge: the factory bank can't be read")
+    }
+  | None => Console.log("Porridge: the factory bank is missing (" ++ factoryBankPath ++ ")")
+  }
 
 let default = pc => {
-  let seen = Map.make()
-  let settled = ref(false)
+  let checkedBank = ref(false)
 
   pc->addStoredStateValueListener(({key, value}) => {
     switch (key, value) {
     | ("shapes", String(shapes)) =>
       Bank.decodeShapes(shapes)->Option.forEach(Bank.sendShapes(pc, _))
     | ("tuning", String(tuning)) => Bank.sendTuning(pc, tuning == "" ? None : Bank.decodeTuning(tuning))
+    // The patch answers the request below even when there is no bank, which is a new
+    // instance. (A host restores a session before the worker starts, or later, replacing
+    // the factory bank.)
+    | ("bank", bank) if !checkedBank.contents =>
+      checkedBank := true
+      switch bank {
+      | String(bank) if String.length(bank) > 1000 => ()
+      // Not from inside this callback: Cmajor replays the replies that came while the worker
+      // was starting with a lock held, and storing a value sends it back to the worker,
+      // which needs that lock.
+      | _ => setTimeout(() => installFactoryBank(pc)->Promise.ignore, 0)->ignore
+      }
     | _ => ()
-    }
-    if !settled.contents {
-      seen->Map.set(key, value)
     }
   })
   pc->requestStoredStateValue("bank")
   pc->requestStoredStateValue("shapes")
   pc->requestStoredStateValue("tuning")
-
-  // Give the host a moment to answer; if there is no bank in the session this is a
-  // new instance.
-  setTimeout(() => {
-    settled := true
-    switch seen->Map.get("bank") {
-    | Some(JSON.String(bank)) if String.length(bank) > 1000 => ()
-    | _ => installFactoryBank(pc)->Promise.ignore
-    }
-  }, 400)->ignore
 }

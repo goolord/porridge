@@ -87,10 +87,15 @@ class MockPatchConnection
         this.stateListeners.forEach (f => f ({ key: "porridge:settings", value: { settings, zoom } }));
     }
     sendStoredStateValue (key, v)   { this.state.set (key, v); this.stateListeners.forEach (f => f ({ key, value: v })); }
+    requestFullStoredState (callback)
+    {
+        setTimeout (() => callback ({ parameters: [...this.params].map (([name, value]) => ({ name, value })),
+                                      values: Object.fromEntries (this.state) }), 0);
+    }
     addEndpointListener (id, fn)    { if (! this.endpointListeners.has (id)) this.endpointListeners.set (id, []); this.endpointListeners.get (id).push (fn); }
     removeEndpointListener() {}
     getResourceAddress (p)          { return "../../" + p.replace (/^\//, ""); }
-    async readResource (p)          { const r = await fetch (this.getResourceAddress (p)); return await r.arrayBuffer(); }
+    readResource (p)                { return fetch (this.getResourceAddress (p)); }
 }
 
 const pc = new MockPatchConnection();

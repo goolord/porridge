@@ -2,6 +2,8 @@
 //   - every factory program survives Oatmeal -> Porridge JSON -> Oatmeal with identical
 //     parameters, tables and name;
 //   - the stored-state bank encoding reads back to the same presets;
+//   - the factory bank a new instance starts with reads back, its first preset on its own
+//     too, and bundle/factory-bank.json (from npm run build) is up to date;
 //   - a preset missing parameters and tables reads back with their defaults;
 //   - modulations, macro names and microtunings survive a round trip;
 //   - Porridge's extra list values export as Oatmeal's nearest, and are reported.
@@ -50,6 +52,22 @@ const decoded = Preset.decodeBank (Preset.encodeBank (presets));
 if (! decoded || ! decoded.every ((p, i) => sameValues (presets[i].values, p.values))) fail ("stored bank differs");
 const legacy = Preset.decodeBank (Bank.encodeBank (programs.map (p => p.bytes)));
 if (! legacy || ! legacy.every ((p, i) => sameValues (presets[i].values, p.values))) fail ("legacy stored bank differs");
+
+// the factory bank the worker installs, which it decodes only the first preset of
+{
+    const bank = Preset.factoryBank (new Uint8Array (readFileSync (join (root, "presets", "oatmealprs.dat"))));
+    const encoded = Preset.encodeBank (bank);
+    const all = Preset.decodeBank (encoded);
+    const first = Preset.decodeFirst (encoded);
+    if (bank.length !== OatmealFormat.bankPrograms) fail ("the factory bank isn't a full bank");
+    if (! all || ! all.every ((p, i) => sameValues (bank[i].values, p.values))) fail ("the factory bank differs");
+    if (! first || ! all || ! sameValues (all[0].values, first.values)
+         || Bank.encodeShapes (all[0].tables) !== Bank.encodeShapes (first.tables))
+        fail ("decodeFirst differs from decodeBank");
+    let file = null;
+    try { file = readFileSync (join (root, "bundle", "factory-bank.json"), "utf8"); } catch {}
+    if (file !== null && file !== encoded) fail ("bundle/factory-bank.json is out of date (npm run build)");
+}
 
 // missing fields take their defaults
 const sparse = Preset.parseFile (new TextEncoder().encode (`{"porridge":"preset","version":1,"name":"x","params":{"Cutoff":0.25}}`));

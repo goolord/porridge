@@ -100,11 +100,13 @@ let start = t => {
   t.listeners = Some((stateListener, outListener))
   t.pc->PatchConnection.addStoredStateValueListener(stateListener)
   t.pc->PatchConnection.addEndpointListener("ccOut", outListener)
-  t.pc->PatchConnection.requestStoredStateValue("bank")
-  t.pc->PatchConnection.requestStoredStateValue("program")
-  t.pc->PatchConnection.requestStoredStateValue("shapes")
-  t.pc->PatchConnection.requestStoredStateValue("tuning")
 }
+
+// The bank, program, shapes and tuning, from a full stored state.
+let loadState = (t, values) =>
+  ["bank", "program", "shapes", "tuning"]->Array.forEach(key =>
+    values->Dict.get(key)->Option.forEach(value => onState(t, {key, value}))
+  )
 
 let dispose = t =>
   t.listeners->Option.forEach(((stateListener, outListener)) => {
