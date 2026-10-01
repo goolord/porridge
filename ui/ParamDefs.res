@@ -24,46 +24,32 @@ let filterNames = [
 ]
 
 // Compact names for the narrow value fields (the full names appear in menus and the status bar).
+let filterShortNames = [
+  "off",
+  "1P LP",
+  "2P LP",
+  "4P LP",
+  "1P HP",
+  "2P HP",
+  "4P HP",
+  "2P BP wide",
+  "2P BP narrow",
+  "4P BP",
+  "2P notch",
+  "2P LP drive",
+  "4P LP drive",
+  "phaser 4",
+  "phaser 12",
+  "phaser 36",
+]
+
+// Filter 2's first value follows filter 1 instead of being off.
+let asFilter2 = (names, first) => [first, ...names->Array.slice(~start=1)]
+
 let shortNamesFor = id =>
   switch id {
-  | "Filter" =>
-    Some([
-      "off",
-      "1P LP",
-      "2P LP",
-      "4P LP",
-      "1P HP",
-      "2P HP",
-      "4P HP",
-      "2P BP wide",
-      "2P BP narrow",
-      "4P BP",
-      "2P notch",
-      "2P LP drive",
-      "4P LP drive",
-      "phaser 4",
-      "phaser 12",
-      "phaser 36",
-    ])
-  | "Filter2" =>
-    Some([
-      "as filter 1",
-      "1P LP",
-      "2P LP",
-      "4P LP",
-      "1P HP",
-      "2P HP",
-      "4P HP",
-      "2P BP wide",
-      "2P BP narrow",
-      "4P BP",
-      "2P notch",
-      "2P LP drive",
-      "4P LP drive",
-      "phaser 4",
-      "phaser 12",
-      "phaser 36",
-    ])
+  | "Filter" => Some(filterShortNames)
+  | "Filter2" => Some(filterShortNames->asFilter2("as filter 1"))
   | "Sat_Mode" => Some(["global", "voice, post-filter", "voice, pre-filter", "double"])
   | "PolyMode" => Some(["mono", "poly", "mono legato"])
   | "AftertouchMode" => Some(["ignore", "channel", "poly"])
@@ -146,6 +132,12 @@ let compact = s => {
   })
 }
 
+// The index of value name s, ignoring case.
+let nameIndex = (names, s) =>
+  names
+  ->Array.findIndex(n => String.toLowerCase(n) == String.toLowerCase(String.trim(s)))
+  ->(i => i >= 0 ? Some(Int.toFloat(i)) : None)
+
 let firstNumber = s =>
   switch /-?\d+(\.\d+)?/->RegExp.exec(String.replace(s, "-inf", "-1e9")) {
   | Some(m) => Float.parseFloat(RegExp.Result.fullMatch(m))
@@ -227,10 +219,7 @@ let porridgeDef = (index, spec: PorridgeParams.spec) =>
       longText: x => `${spec.name}: ${valueText(x)}`,
       valueText,
       shortText: valueText,
-      parse: s =>
-        names
-        ->Array.findIndex(n => String.toLowerCase(n) == String.toLowerCase(String.trim(s)))
-        ->(i => i >= 0 ? Some(Int.toFloat(i)) : None),
+      parse: nameIndex(names, _),
     }
   }
 
@@ -258,9 +247,10 @@ let extend = (def, oatNames, extra, extraShort) => {
     valueText: x => isNew(x) ? newName(x) : def.valueText(x),
     shortText: x => isNew(x) ? newShort(x) : def.shortText(x),
     parse: s =>
-      names
-      ->Array.findIndex(n => String.toLowerCase(n) == String.toLowerCase(String.trim(s)))
-      ->(i => i >= 0 ? Some(Int.toFloat(i)) : def.parse(s)),
+      switch nameIndex(names, s) {
+      | Some(i) => Some(i)
+      | None => def.parse(s)
+      },
   }
 }
 
@@ -279,7 +269,7 @@ let makeDefs = (~context=() => None) => {
 
     let names = switch kind {
     | Filter1 => Some(filterNames)
-    | Filter2 => Some(["same as filter 1", ...filterNames->Array.slice(~start=1)])
+    | Filter2 => Some(filterNames->asFilter2("same as filter 1"))
     | _ => p.labels
     }->Option.map(names =>
       switch p.states {
