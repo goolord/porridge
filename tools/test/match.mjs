@@ -104,6 +104,13 @@ async function matcher ({ budget, wav, useModel })
 
         const t0 = performance.now ();
         const ctx = MatchSearch.makeContext (engine, target, init.values, init.tables);
+        // renders are repeatable: the same genes after others (each a different kind of patch)
+        // render the same, as only the pages renders change are put back between them
+        const probe = Genome.random (Cmaes.makeRandom (31 + job.index));
+        const first = MatchSearch.renderGenes (ctx, probe)[2].slice ();
+        for (const x of Genome.probes ()) MatchSearch.renderGenes (ctx, x);
+        const again = MatchSearch.renderGenes (ctx, probe)[2];
+        const repeatable = first.every ((v, i) => v === again[i]);
         const score = x => MatchSearch.evaluate (ctx, x, MatchLoss.standard, -1)[0] - MatchSearch.cost (x);
         const similarity = loss => MatchLoss.similarity (loss);
         const seedGenes = Genome.seed (target);
@@ -137,7 +144,7 @@ async function matcher ({ budget, wav, useModel })
             }
         }
         return {
-            job, name, seed, predicted, truth, evals, ms,
+            job, name, seed, predicted, truth, evals, ms, repeatable,
             pitch: SoundTarget.pitchText (target),
             shape: `${SoundTarget.seconds (target).toFixed (2)} s, attack ${(target.attack * 1000).toFixed (0)} ms, decay ${(target.decay * 1000).toFixed (0)} ms, sustain ${target.sustain.toFixed (2)}`,
             outline: m.outline.best?.similarity,
@@ -207,6 +214,7 @@ else
         if (! r || r.error) continue;
         const name = r.name;
         const found = r.cards.filter (Boolean);
+        check (r.repeatable, `${name}: a render is the same after others`);
         check (found.length === r.cards.length, `${name}: every search found a patch`);
         for (const c of found)
             check (c.similarity >= r.seed - 1, `${name}: ${c.title} (${c.similarity.toFixed (1)}%) is no further than the seed (${r.seed.toFixed (1)}%)`);

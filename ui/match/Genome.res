@@ -515,6 +515,22 @@ let random = (random: unit => float) => {
   x
 }
 
+// Patches that between them switch every part on (each mix mode, filter type and wave, with
+// unison, noise, sweeps, modulation, drive, chorus and the longest reverb): rendering them shows
+// which of the engine's memory a candidate's render can change (MatchEngine.learnPages).
+let probes = () =>
+  Array.fromInitializer(~length=10, k => {
+    let x = Float64Array.fromLength(count)
+    genes->Array.forEachWithIndex((g, i) => x->set64(i, g.options == 0 ? 0.8 : valueOfChoice(mod(k, g.options), g.options)))
+    let set = (key, value) => x->set64(indexOf(key), value)
+    set("octave", valueOfChoice(0, 3))
+    set("tune", 0.5)
+    set("unison", valueOfChoice(3, 4))
+    set("reverbTime", 1.)
+    set("pitchEnv", k < 5 ? 0.95 : 0.05)
+    x
+  })
+
 // A short description of a patch, for its card: "saw + pulse +12 · 4P LP · pluck · reverb".
 let describe = (x: Float64Array.t) => {
   let v = get(x, ...)

@@ -733,7 +733,7 @@ let make = (ctx: Ctx.t, stage): t => {
       player->SamplePlayer.stop
       root->removeClass("on")
       ctx.menu->Menu.close
-      // the workers go (they hold about 45 MB each); a new match starts them again
+      // the workers go (they hold about 50 MB each); a new match starts them again
       withPool(MatchPool.dispose)
       pool := None
       loaded.contents->Option.forEach(l => l.session = None)

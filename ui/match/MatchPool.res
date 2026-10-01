@@ -1,7 +1,8 @@
 // The sound matcher's workers, as the view runs them. The first time someone matches a sound,
 // the engine (bundle/match-engine.wasm and .js), the worker (bundle/match-worker.js) and the
-// predictor (bundle/match-model.bin, if the build has one) are read from the patch's resources, the module is compiled once, and the workers start, each
-// with an engine of its own (about 45 MB each, so at most six).
+// predictor (bundle/match-model.bin, if the build has one) are read from the patch's resources,
+// the module is compiled once, and the workers start, each with an engine of its own (about
+// 50 MB each with its base kept, so at most twelve, and one core left for the rest).
 //
 // Work goes out as tasks, each to the next idle worker: rendering and scoring one candidate
 // (`evaluate`), or preparing a sample. A worker is set up for a
@@ -21,7 +22,7 @@ let compile: Uint8Array.t => promise<MatchEngine.wasmModule> = %raw(`bytes => We
 let cores: unit => int = %raw(`() => navigator.hardwareConcurrency || 2`)
 @val external floatsOf: Float64Array.t => array<float> = "Array.from"
 
-let maxWorkers = 6
+let maxWorkers = 12
 
 type task = {
   id: int,

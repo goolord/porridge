@@ -126,8 +126,18 @@ let tablesFor = (target: SoundTarget.t, tables: OatmealFormat.tables) =>
   | None => tables
   }
 
+// rendered past the target's length, so that a render can start at its onset as the sample does
+let onsetRoom = 4410
+
 let makeContext = (engine, target: SoundTarget.t, ~base: Bank.values, ~tables) => {
   MatchEngine.setBase(engine, base, tablesFor(target, tables))
+  let baseValue = id => base->Map.get(id)->Option.getOr(0.)
+  MatchEngine.learnPages(
+    engine,
+    Genome.probes()->Array.map(x => Genome.decode(x, ~note=target.note, ~base=baseValue)),
+    ~note=target.note,
+    ~frames=TypedArray.length(target.samples) + onsetRoom,
+  )
   {
     engine,
     target,
@@ -140,9 +150,6 @@ let makeContext = (engine, target: SoundTarget.t, ~base: Bank.values, ~tables) =
 let baseValue = (ctx, id) => ctx.base->Map.get(id)->Option.getOr(0.)
 
 let frames = ctx => TypedArray.length(ctx.target.samples)
-
-// rendered past the target's length, so that a render can start at its onset as the sample does
-let onsetRoom = 4410
 
 // Renders x at the key and tuning its genes play it at, from its onset (SoundTarget.onsetOf),
 // as long as the target.
