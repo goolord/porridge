@@ -5,9 +5,8 @@ open! Web
 let percent = zoom => Float.toString(Math.round(zoom * 100.)) ++ " %"
 
 let show = (settings: Settings.t, stage) => {
-  let shade = el("div", ~cls="shade", ~parent=stage)
-  let d = el("div", ~cls="dlg", ~parent=shade)
-  el("div", ~cls="dttl", ~text="Settings", ~parent=d)->ignore
+  let dialog = Dialog.make(stage, "Settings")
+  let d = dialog.element
 
   let row = el("div", ~cls="drow", ~parent=d)
   el("span", ~text="interface size", ~parent=row)->ignore
@@ -48,23 +47,9 @@ let show = (settings: Settings.t, stage) => {
   settings->Settings.refresh
   update()
 
-  let buttons = el("div", ~cls="dbtns", ~parent=d)
-  let closeButton = el("button", ~cls="btn", ~text="Close", ~parent=buttons)
   let close = () => {
     stopListening()
-    shade->remove
+    dialog->Dialog.remove
   }
-  closeButton->onMouse(#click, _ => close())
-  d->onKeyDown(k => {
-    k->stopPropagation
-    if k->key == "Escape" || k->key == "Enter" {
-      close()
-    }
-  })
-  shade->onPointer(#pointerdown, ev =>
-    if ev->target === Obj.magic(shade) {
-      close()
-    }
-  )
-  closeButton->focus
+  dialog->Dialog.finish([("Close", close)], ~onEnter=close, ~close)->Array.forEach(focus)
 }
