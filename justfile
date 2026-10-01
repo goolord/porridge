@@ -23,6 +23,7 @@ patch    := root / "Porridge.cmajorpatch"
 build    := root / "build"
 clap_dir := build / "deps" / ("clap-" + clap_version)
 project  := build / "clap-project"
+staging  := build / "clap-project-new"
 cmake_dir := build / "cmake"
 out_dir  := build / "out"
 dist     := root / "dist"
@@ -57,11 +58,15 @@ gen: ui
 clap:
     {{ if path_exists(clap_dir / "include" / "clap" / "clap.h") == "true" { "cmake -E echo \"CLAP " + clap_version + " headers present\"" } else { "git clone --depth 1 --branch " + clap_version + " https://github.com/free-audio/clap \"" + clap_dir + "\"" } }}
 
-# Generate the CLAP C++/CMake project from the patch, then patch its wrapper (see tools/clap-patch.mjs)
+# Generate the CLAP C++/CMake project from the patch and patch its wrapper (see tools/clap-patch.mjs),
+# in a staging folder; only files that changed are copied into the project, so an unchanged
+# entry.cpp keeps its timestamp and isn't recompiled
 generate: gen clap
-    cmake -E rm -rf "{{ project }}"
-    {{ cmaj }} generate --target=clap "--clapIncludePath={{ clap_dir / "include" }}" "--output={{ project }}" "{{ patch }}"
-    node "{{ root / "tools" / "clap-patch.mjs" }}" "{{ project }}"
+    cmake -E rm -rf "{{ staging }}"
+    {{ cmaj }} generate --target=clap "--clapIncludePath={{ clap_dir / "include" }}" "--output={{ staging }}" "{{ patch }}"
+    node "{{ root / "tools" / "clap-patch.mjs" }}" "{{ staging }}"
+    node "{{ root / "tools" / "sync-dir.mjs" }}" "{{ staging }}" "{{ project }}"
+    cmake -E rm -rf "{{ staging }}"
 
 # Configure and compile the generated project
 compile: generate
