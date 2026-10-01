@@ -570,8 +570,8 @@ namespace porridge
         let old = this.headSide;
         let nw = 1 - old;
         let xf = this.headXfade;
-        let oldParts = this.headParts[old];
-        let newParts = xf ? this.headParts[nw] : 0;
+        let oldParts = this.headParts.at (old);
+        let newParts = xf ? this.headParts.at (nw) : 0;
 
         if (oldParts == 0 && newParts == 0)
         {
@@ -609,7 +609,7 @@ namespace porridge
         this.headFft();
 
         for (wrap<blockSize> i)
-            wet[i] = float<2> (this.headWork.re[64 + i], -this.headWork.im[64 + i]);
+            wet[i] = float<2> (this.headWork.re.at (64 + i), -this.headWork.im.at (64 + i));
     }
 
     //==============================================================================
@@ -1312,7 +1312,7 @@ namespace porridge
         let lk = this.srcLk;
         let nw = 1 - this.headSide;
 
-        this.headParts[nw] = min (convHeadParts, (lk + 63) / 64);
+        this.headParts.at (nw) = min (convHeadParts, (lk + 63) / 64);
         this.newTailParts = clamp ((lk - 2048 + 1023) / 1024, 0, convTailParts);
         this.committed = 0;
         this.lkNew = lk;
@@ -1407,7 +1407,7 @@ namespace porridge
                 s.erNext[ch] = k + 1;
             }
 
-            x += s.erEnv[ch] * s.rng[ch + 2].nextSigned();
+            x += s.erEnv[ch] * s.rng.at (ch + 2).nextSigned();
             s.erEnv[ch] *= s.erDecay;
 
             s.lp1[ch] += s.toneLp * (x - s.lp1[ch]);
@@ -1485,7 +1485,7 @@ namespace porridge
         {
             let clang = s.rng[ch].nextSigned() * float (s.envHi);
             s.hpS[ch] += s.toneHp * (clang - s.hpS[ch]);
-            let diffuse = s.rng[ch + 2].nextSigned() * float (s.envLo) * 0.04f;
+            let diffuse = s.rng.at (ch + 2).nextSigned() * float (s.envLo) * 0.04f;
             out[ch] = (ch == 0 ? l : r) + (clang - s.hpS[ch]) * 0.6f + diffuse;
         }
 
@@ -1579,10 +1579,10 @@ namespace porridge
         for (wrap<2> ch)
         {
             if (t % amPeriod == 0)
-                s.amTarget[ch] = 0.15f + 0.85f * convRand01 (s.rng[ch + 2]);
+                s.amTarget[ch] = 0.15f + 0.85f * convRand01 (s.rng.at (ch + 2));
 
             if (t % bpPeriod == 0)
-                s.bpTarget[ch] = log (250.0f) + convRand01 (s.rng[ch + 2]) * log (2800.0f / 250.0f);
+                s.bpTarget[ch] = log (250.0f) + convRand01 (s.rng.at (ch + 2)) * log (2800.0f / 250.0f);
 
             if ((t & 31) == 0)
             {
@@ -1596,7 +1596,7 @@ namespace porridge
             float lp, bp;
             svfTick (s.bpS1[ch], s.bpS2[ch], s.bpC[ch], s.rng[ch].nextSigned(), lp, bp);
 
-            s.nLp[ch] += s.nLpA * (s.rng[ch + 2].nextSigned() - s.nLp[ch]);
+            s.nLp[ch] += s.nLpA * (s.rng.at (ch + 2).nextSigned() - s.nLp[ch]);
             out[ch] = env * s.amCur[ch] * (0.7f * bp * s.bpK + 0.6f * s.nLp[ch]);
         }
 
