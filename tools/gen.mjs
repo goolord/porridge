@@ -137,7 +137,24 @@ const choices = [
                 notch: "2P notch", lp2Nonlinear: "nonlinear 2P lowpass", lp4Nonlinear: "nonlinear 4P lowpass",
                 phaser4: "phaser, 4 stages", phaser12: "phaser, 12 stages", phaser36: "phaser, 36 stages",
                 svf: "SVF LP > BP > HP", ladder: "ladder", diodeLadder: "diode ladder", sallenKey: "Sallen-Key",
-                comb: "comb", formant: "formant" } },
+                comb: "comb", formant: "formant",
+                bp12: "bandpass 12 dB", bp24: "bandpass 24 dB", peak12: "peak 12 dB", peak24: "peak 24 dB",
+                notch12: "notch 12 dB", notch24: "notch 24 dB", lbh24: "L/B/H 24 (morph)", lnh: "L/N/H (morph)",
+                bpb: "B/P/B (morph)", npn: "N/P/N (morph)", mg6: "MG low 6", mg12: "MG low 12", mg18: "MG low 18",
+                mg24: "MG low 24", mgDirty: "MG dirty", acid: "acid ladder", french: "French LP", german: "German LP",
+                cleanDrive: "clean drive", pzSvf: "PZ SVF", combPlus: "comb +", combMinus: "comb −",
+                flanger: "flanger", flangerPlus: "flanger +", flangerMinus: "flanger −", phaser: "phaser",
+                phaserPlus: "phaser +", phaserMinus: "phaser −", formant1: "formant I", formant2: "formant II",
+                formant3: "formant III", lowEq: "low EQ", bandEq: "band EQ", highEq: "high EQ", ringMod: "ring mod",
+                sampleHold: "sample & hold", diffusor: "diffusor", reverb: "reverb", last: "reverb" } },
+    { ns: "impulse", param: "Cv_Impulse", doc: "The convolver's impulses (Cv_Impulse).",
+      values: { room: "room", hall: "hall", cathedral: "cathedral", plate: "plate", spring: "spring",
+                cab1x12: "cabinet 1×12", cab4x12: "cabinet 4×12", metalTank: "metal tank", telephone: "telephone",
+                swell: "swell", noiseBloom: "noise bloom", file: "file" } },
+    { ns: "reverbModel", param: "Rv_Model", doc: "The algorithmic reverb's models (Rv_Model).",
+      values: { hall: "hall", plate: "plate", nitrous: "nitrous", basin: "basin", vintage: "vintage" } },
+    { ns: "bodeMode", param: "Bd_Mode", doc: "The frequency shifter's modes (Bd_Mode).",
+      values: { up: "up", down: "down", stereo: "stereo (L up, R down)", ring: "ring" } },
     { ns: "satMode", param: "Sat_Mode", doc: "Where the distortion sits (Sat_Mode).",
       values: { global: "global", afterFilter: "per voice, after filter", beforeFilter: "per voice, before filter",
                 both: "double (before filter and global)" } },
@@ -201,15 +218,20 @@ ${slots.join ("\n")}
 
 /// The effects rack (ui/PorridgeParams.res): its slots, and for each kind of effect the first's
 /// parameters, every copy's after one another (which the synth swaps in to run that copy), the
-/// value a rack slot holds for the first copy, and how many copies there are.
+/// value a rack slot holds for its first entry, and how many entries it has. Oatmeal's chorus,
+/// delay, reverb and EQ are values 1..4, so their entries here are the copies; Porridge's own
+/// effects' entries are the first (run unswapped), then the copies.
 namespace porridge::rack
 {
     let slots = int[${rackSlots}] (${Array.from ({ length: rackSlots }, (_, k) => slotById (rackId (k + 1))).join (", ")});
 ${rackKinds.map (k =>
 `    let ${k.key}First = int[${k.params.length}] (${k.params.map (([id]) => slotById (id)).join (", ")});
     let ${k.key}Copies = int[${k.params.length * k.copies.length}] (${k.copies.flatMap (n => k.params.map (([id]) => slotById (copyId (id, n)))).join (", ")});
-    let ${k.key}Value = ${rackEntries.findIndex (e => e && e[0] === k.key && e[1] === k.copies[0])};
-    let ${k.key}Count = ${k.copies.length};`).join ("\n")}
+    let ${k.key}Value = ${rackEntries.findIndex (e => e && e[0] === k.key && e[1] === (k.firstInRack ? 1 : k.copies[0]))};
+    let ${k.key}Count = ${k.copies.length + (k.firstInRack ? 1 : 0)};`).join ("\n")}
+
+    /// how many values a rack slot can hold
+    let numEntries = ${rackEntries.length};
 }
 
 ${targetConstants ("xyTgt", "X/Y pad targets (XY_H_Target_n, XY_V_Target_n).", xyTargets)}

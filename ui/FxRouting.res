@@ -166,6 +166,7 @@ let make = (ctx: Ctx.t, body, ops) => {
       | n => `${Int.toString(n)} bands on`
       }
     | #distortion => `pregain ${s("Sat_Pregain")}\nlimit ${s("Sat_Limit")}`
+    | k => FxPanels.summary(k, s)
     }
   }
 
@@ -213,6 +214,11 @@ let make = (ctx: Ctx.t, body, ops) => {
       | #distortion =>
         Controls.choice(ctx, controls, id("Sat_Type"), ~x=0., ~y=0., ~label="type")
         Controls.param(ctx, controls, id("Sat_Postgain"), ~x=0., ~y=Grid.rowHeight, ~label="postgain")
+      | k =>
+        FxPanels.cardControls(k)->Option.forEach(((on, level, label)) => {
+          Controls.toggle(ctx, controls, id(on), ~x=0., ~y=0., ~w=100., ~label="on")
+          Controls.param(ctx, controls, id(level), ~x=0., ~y=Grid.rowHeight, ~label)
+        })
       }
       let sum = el("div", ~cls="csum", ~parent=card)
       head->onPointer(#pointerdown, ev =>

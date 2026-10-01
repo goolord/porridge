@@ -4,44 +4,10 @@
 // Endpoint values are Oatmeal's internal values, except pulse width, which the patch takes
 // as a 0..1 fraction (Oatmeal stores it as a 32-bit phase).
 
-let filterNames = [
-  "off",
-  "1P lowpass",
-  "2P lowpass",
-  "4P lowpass",
-  "1P highpass",
-  "2P highpass",
-  "4P highpass",
-  "2P wide bandpass",
-  "2P narrow bandpass",
-  "4P bandpass",
-  "2P notch",
-  "nonlinear 2P lowpass",
-  "nonlinear 4P lowpass",
-  "phaser, 4 stages",
-  "phaser, 12 stages",
-  "phaser, 36 stages",
-]
+let filterNames = FilterTypes.oatmeal
 
 // Compact names for the narrow value fields (the full names appear in menus and the status bar).
-let filterShortNames = [
-  "off",
-  "1P LP",
-  "2P LP",
-  "4P LP",
-  "1P HP",
-  "2P HP",
-  "4P HP",
-  "2P BP wide",
-  "2P BP narrow",
-  "4P BP",
-  "2P notch",
-  "2P LP drive",
-  "4P LP drive",
-  "phaser 4",
-  "phaser 12",
-  "phaser 36",
-]
+let filterShortNames = FilterTypes.oatmealShort
 
 // Filter 2's first value follows filter 1 instead of being off.
 let asFilter2 = (names, first) => [first, ...names->Array.slice(~start=1)]
@@ -71,10 +37,7 @@ let porridgeValuesFor = id =>
   | "OscMix" =>
     Some((["PM 2 > 1", "PM 1 feedback", "ring 1 × 2", "AM 2 > 1"], ["PM 2 > 1", "PM 1 fb", "ring 1×2", "AM 2 > 1"]))
   | "Filter" | "Filter2" =>
-    Some((
-      ["SVF LP > BP > HP", "ladder", "diode ladder", "Sallen-Key", "comb", "formant"],
-      ["SVF morph", "ladder", "diode", "Sallen-Key", "comb", "formant"],
-    ))
+    Some((FilterTypes.porridgeNames, FilterTypes.porridgeShort))
   | "Sat_Type" => Some((["custom shape"], ["custom"]))
   | _ => None
   }
@@ -85,13 +48,7 @@ let oatmealValue = (id, x) =>
   | "O1_Waveform" | "O2_Waveform" if x > 5. => x -. 5.
   | "OscMix" if x > 2. => 0.
   | "Sat_Type" if x > 4. => 2.
-  | "Filter" | "Filter2" if x > 15. =>
-    switch Float.toInt(x) {
-    | 16 | 19 => 2.
-    | 17 | 18 => 3.
-    | 21 => 9.
-    | _ => 0.
-    }
+  | "Filter" | "Filter2" if x > 15. => Int.toFloat(FilterTypes.oatmealType(Float.toInt(x)))
   | _ => x
   }
 
@@ -186,7 +143,9 @@ let porridgeDef = (index, spec: PorridgeParams.spec, ~like: string => t) =>
       name: spec.name,
       longText: x => `${spec.name}: ${d.valueText(x)}`,
     }
-  | Float({min, max, init, text}) =>
+  | Float({min, max, init, text, ?read}) =>
+    // (a float32, as presets and the patch keep it)
+    let init = Math.fround(init)
     let clamp = x => Float.isFinite(x) ? Math.max(min, Math.min(max, x)) : init
     {
       id: spec.id,
@@ -207,10 +166,13 @@ let porridgeDef = (index, spec: PorridgeParams.spec, ~like: string => t) =>
       longText: x => `${spec.name}: ${text(x)}`,
       valueText: text,
       shortText: x => compact(text(x)),
-      parse: s => {
-        let x = Float.parseFloat(s)
-        Float.isFinite(x) ? Some(clamp(String.includes(text(init), "%") ? x / 100. : x)) : None
-      },
+      parse: s =>
+        switch read {
+        | Some(read) => read(s)->Option.map(clamp)
+        | None =>
+          let x = Float.parseFloat(s)
+          Float.isFinite(x) ? Some(clamp(String.includes(text(init), "%") ? x / 100. : x)) : None
+        },
     }
   | Choice({names, init}) =>
     let last = Int.toFloat(Array.length(names) - 1)

@@ -166,6 +166,32 @@ let targets = [
   ...[2, 3, 4]->Array.map(n => knob(`D${Int.toString(n)}_Wet`, `delay ${Int.toString(n)} wet`, "rack")),
   ...[2, 3, 4]->Array.map(n => knob(`R${Int.toString(n)}_Wet`, `reverb ${Int.toString(n)} wet`, "rack")),
   ...[2, 3, 4, 5]->Array.map(n => knob(`Sat${Int.toString(n)}_Pregain`, `dist ${Int.toString(n)} pregain`, "rack")),
+  knob("F_Drive", "filter drive", "filter"),
+  // Porridge's own effects (the first of each kind)
+  knob("Fl_Rate", "flanger rate", "fx2"),
+  knob("Fl_Depth", "flanger depth", "fx2"),
+  knob("Fl_Feedback", "flanger feedback", "fx2"),
+  knob("Fl_Mix", "flanger mix", "fx2"),
+  knob("Ph_Rate", "phaser rate", "fx2"),
+  knob("Ph_Freq", "phaser frequency", "fx2"),
+  knob("Ph_Feedback", "phaser feedback", "fx2"),
+  knob("Ph_Mix", "phaser mix", "fx2"),
+  knob("Cp_Depth", "compressor depth", "fx2"),
+  knob("Cp_InGain", "compressor input", "fx2"),
+  knob("Cp_Mix", "compressor mix", "fx2"),
+  knob("Rv_Size", "algo reverb size", "fx2"),
+  knob("Rv_Mix", "algo reverb mix", "fx2"),
+  knob("Cv_Mix", "convolve mix", "fx2"),
+  knob("Bd_Shift", "bode shift", "fx2"),
+  knob("Bd_Feedback", "bode feedback", "fx2"),
+  knob("Bd_Mix", "bode mix", "fx2"),
+  knob("Ff_Cutoff", "FX filter cutoff", "fx2"),
+  knob("Ff_Resonance", "FX filter resonance", "fx2"),
+  knob("Ff_Morph", "FX filter morph", "fx2"),
+  knob("Ff_Drive", "FX filter drive", "fx2"),
+  knob("Ut_Gain", "utility gain", "fx2"),
+  knob("Ut_Pan", "utility pan", "fx2"),
+  knob("Ut_Width", "utility width", "fx2"),
 ]
 
 // The target groups, by the key in each target's group, with their titles.
@@ -177,6 +203,7 @@ let groups = [
   ("fx", "effects"),
   ("eq", "EQ"),
   ("rack", "rack copies"),
+  ("fx2", "more effects"),
 ]
 
 let sourceIndex = key => sources->Array.findIndex(s => s.key == key)

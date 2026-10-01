@@ -112,7 +112,7 @@ else
     if (v.get ("O1_Waveform") !== 2 || v.get ("Filter") !== 9 || v.get ("OscMix") !== 0)
         fail (`extended values exported as ${v.get ("O1_Waveform")}, ${v.get ("Filter")}, ${v.get ("OscMix")}`);
     const lost = Preset.porridgeOnly (p).join ();
-    for (const what of ["HQ waveforms", "osc mix", "zero-delay-feedback", "effects order"])
+    for (const what of ["HQ waveforms", "osc mix", "filter types", "effects order"])
         if (! lost.includes (what)) fail ("porridgeOnly misses " + what + ": " + lost);
 }
 

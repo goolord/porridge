@@ -100,6 +100,18 @@ let phaser = notches => {
   wide([Line(`M1 5 ${d} L21 5`)])
 }
 
+let bandpass = "M1 14 C5.5 14 6 5 11 5 S16.5 14 21 14"
+let narrowBandpass = "M2 14 C8 14 9 4 11 4 S14 14 20 14"
+let peakBell = "M1 10 H6 C9 10 9.5 3 11 3 S13 10 16 10 H21"
+let notch = "M1 5 H7 C9.5 5 10 14 11 14 S12.5 5 15 5 H21"
+let comb = "M1 13 Q3 1 5 13 Q7 1 9 13 Q11 1 13 13 Q15 1 17 13 Q19 1 21 13"
+let formantHumps = "M1 13 C3 13 3.5 3 5.5 3 S7.5 11 9.5 11 S11.5 5 13.5 5 S15.5 12 17 12 S19 9 21 9"
+let resonantLowpass = "M8 6 H11 C13 6 13 1.5 14.5 1.5 C16 1.5 16.5 10 19 14"
+let morphArrow = "M16 1.5 H21"
+let morphHead = "M19.3 0 L21 1.5 L19.3 3"
+let ladderMarks = [Line("M1.5 3 V13 M5.5 3 V13 M1.5 5.5 H5.5 M1.5 8 H5.5 M1.5 10.5 H5.5"), Line(resonantLowpass)]
+let ladderIcon = slope => wide([Line("M1.5 3 V13 M5.5 3 V13 M1.5 5.5 H5.5 M1.5 8 H5.5 M1.5 10.5 H5.5"), Line("M8 5 H11 C13.5 5 14 8 16 11"), Text(14.5, 15.5, slope)])
+
 let filterTypes = [
   // off: everything passes
   wide([Line("M1 5 H21"), Dash("M1 12 H21")]),
@@ -129,7 +141,62 @@ let filterTypes = [
   // comb
   wide([Line("M1 13 Q3 1 5 13 Q7 1 9 13 Q11 1 13 13 Q15 1 17 13 Q19 1 21 13")]),
   // formant: vowel humps
-  wide([Line("M1 13 C3 13 3.5 3 5.5 3 S7.5 11 9.5 11 S11.5 5 13.5 5 S15.5 12 17 12 S19 9 21 9")]),
+  wide([Line(formantHumps)]),
+  // bandpass 12 / 24
+  wide([Line(bandpass)]),
+  wide([Line(narrowBandpass)]),
+  // peak 12 / 24
+  wide([Line(peakBell)]),
+  wide([Line("M1 10 H8 C10 10 10.2 2 11 2 S12 10 14 10 H21")]),
+  // notch 12 / 24
+  wide([Line(notch)]),
+  wide([Line("M1 5 H8 C10 5 10.4 14 11 14 S12 5 14 5 H21")]),
+  // the morphing types: one response sliding into the next
+  wide([Line(lp4), Line(morphArrow), Line(morphHead)]),
+  wide([Line("M1 5 H5 C8 5 9 13 11 13"), Line("M11 13 C13 13 14 5 17 5 H21"), Line(morphArrow), Line(morphHead)]),
+  wide([Line("M1 14 C4 14 5 4 7.5 4 S10 14 11 14 C12 14 13 2 14.5 2 S17 14 21 14")]),
+  wide([Line("M1 5 H3 C4.5 5 5 13 6 13 S7.5 5 9 5 C10 5 10.5 2 11 2 S12 5 13 5 C14.5 5 15 13 16 13 S17.5 5 19 5 H21")]),
+  // MG low 6, 12, 18, 24: the ladder with its slope
+  ladderIcon("6"),
+  ladderIcon("12"),
+  ladderIcon("18"),
+  ladderIcon("24"),
+  // MG dirty, acid ladder
+  wide([...ladderMarks, bolt]),
+  wide([Fill("M1 3.5 L6 8 L1 12.5 Z"), Line("M6.5 3.5 V12.5"), Line(resonantLowpass), bolt]),
+  // French LP: multimode, German LP: the screaming peak
+  wide([Line("M1 3 L7 8 L1 13 Z"), Line(resonantLowpass), Line("M10 14.5 H19")]),
+  wide([Line("M1 3 L7 8 L1 13 Z"), Line("M8 7 H11 C13 7 13 0.8 14.5 0.8 C16 0.8 16.5 10 19 14"), bolt]),
+  // clean drive, PZ SVF
+  wide([Line(lp2), Line("M17 1.5 L19 3.5 L21 1.5")]),
+  wide([Line("M1 5 H5 C9 5 10 9 12 14"), Line("M10 14 C12 9 13 5 17 5 H21"), bolt]),
+  // comb + / −
+  wide([Line(comb)]),
+  wide([Line("M1 3 Q3 15 5 3 Q7 15 9 3 Q11 15 13 3 Q15 15 17 3 Q19 15 21 3")]),
+  // flanger, + and −: notches, thinning out
+  wide([Line("M1 5 L2.5 13 L4 5 L6 13 L8.5 5 L11.5 13 L15.5 5 L21 5")]),
+  wide([Line("M1 5 L2.5 13 L4 5 L6 13 L8.5 5 L11.5 13 L15.5 5 L21 5"), Line("M17.5 1.5 H21 M19.25 0 V3")]),
+  wide([Line("M1 5 L2.5 13 L4 5 L6 13 L8.5 5 L11.5 13 L15.5 5 L21 5"), Line("M17.5 1.5 H21")]),
+  // phaser, + and −
+  phaser(3),
+  {...phaser(5), marks: [...phaser(5).marks, Line("M17.5 1.5 H21 M19.25 0 V3")]},
+  {...phaser(5), marks: [...phaser(5).marks, Line("M17.5 1.5 H21")]},
+  // formant I, II, III
+  wide([Line("M1 13 C3 13 4 3 6 3 S8 11 10 11 S12 5 14 5 S17 13 21 13")]),
+  wide([Line(formantHumps), Text(16.5, 6., "2")]),
+  wide([Line(formantHumps), Text(16.5, 6., "3")]),
+  // low EQ, band EQ, high EQ
+  wide([Line("M1 4 H6 C10 4 10 10 14 10 H21")]),
+  wide([Line("M1 10 H6 C9 10 9 4 11 4 S13 10 16 10 H21")]),
+  {width: 22., marks: [Line("M1 4 H6 C10 4 10 10 14 10 H21")], mirrored: true},
+  // ring mod: a multiplier and a sine
+  wide([Line("M5 8 m-4 0 a4 4 0 1 0 8 0 a4 4 0 1 0 -8 0 M2.2 5.2 L7.8 10.8 M7.8 5.2 L2.2 10.8"), Line("M11 8 C12.7 2.5 14.3 2.5 16 8 S19.3 13.5 21 8")]),
+  // sample & hold: steps
+  wide([Line("M1 12 H4 V7 H7 V10 H10 V4 H13 V8 H16 V5 H19 V11 H21")]),
+  // diffusor: a transient smeared out
+  wide([Line("M1 13 H3 V3 V13 H21"), Dot(7., 9., 1.), Dot(10., 11., 1.), Dot(12., 8., 1.), Dot(15., 11.5, 1.), Dot(18., 10.5, 1.)]),
+  // reverb: a dying train of reflections
+  wide([Line("M1 13 H21 M3 13 V3 M6 13 V6 M8.5 13 V7.5 M11 13 V9 M13.5 13 V10 M16 13 V11 M18.5 13 V12")]),
 ]
 
 // Filter 2's first value follows filter 1
@@ -227,6 +294,7 @@ let lookup = id =>
   | "O1_Waveform" | "O2_Waveform" | "LFO_1_Shape" | "LFO_2_Shape" =>
     Some((_, name) => waveformByName(name))
   | "Filter" => Some(filterTypes->byIndex)
+  | id if FilterTypes.isFxType(id) => Some(filterTypes->byIndex)
   | "Filter2" => Some((index, _) => index == 0 ? Some(sameAsFilter1) : filterTypes[index])
   | "PolyMode" => Some(voiceModes->byIndex)
   | "OscMix" => Some(oscMix->byIndex)

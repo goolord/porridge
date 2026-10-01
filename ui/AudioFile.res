@@ -8,6 +8,8 @@ type t = {
   sampleRate: float,
   // the frame length a wavetable declares: Serum's "clm " chunk or Surge's "srge"
   frameSize: option<int>,
+  // the first two channels apart, when there are two or more (impulse responses keep them)
+  sides: option<(Float32Array.t, Float32Array.t)>,
 }
 
 let extensions = [
@@ -67,9 +69,9 @@ let chunks = (b, off, ~littleEndian, f) => {
 
 type encoding = Int(int) | Float(int)
 
-// Mixes interleaved frames down to mono. Integer samples take whole bytes (20 bits are read
-// as 24, the low bits zero); 8-bit WAV is unsigned, 8-bit AIFF signed.
-let decodeFrames = (b, ~offset, ~bytes, ~channels, ~encoding, ~littleEndian, ~unsigned8=false) => {
+// Mixes interleaved frames down to mono, or takes channel `only`. Integer samples take whole
+// bytes (20 bits are read as 24, the low bits zero); 8-bit WAV is unsigned, 8-bit AIFF signed.
+let decodeFrames = (b, ~offset, ~bytes, ~channels, ~encoding, ~littleEndian, ~unsigned8=false, ~only=?) => {
   let width = switch encoding {
   | Int(bits) => (bits + 7) / 8
   | Float(bits) => bits / 8
@@ -97,16 +99,27 @@ let decodeFrames = (b, ~offset, ~bytes, ~channels, ~encoding, ~littleEndian, ~un
     | Float(64) => b.view->DataView.getFloat64(off, ~littleEndian)
     | Float(_) => b.view->DataView.getFloat32(off, ~littleEndian)
     }
-  let scale = 1. / Int.toFloat(Math.Int.max(1, channels))
-  for i in 0 to frames - 1 {
-    let sum = ref(0.)
-    for c in 0 to channels - 1 {
-      sum := sum.contents + read(offset + i * block + c * width)
+  switch only {
+  | Some(c) =>
+    for i in 0 to frames - 1 {
+      out->setAt(i, read(offset + i * block + c * width))
     }
-    out->setAt(i, sum.contents * scale)
+  | None =>
+    let scale = 1. / Int.toFloat(Math.Int.max(1, channels))
+    for i in 0 to frames - 1 {
+      let sum = ref(0.)
+      for c in 0 to channels - 1 {
+        sum := sum.contents + read(offset + i * block + c * width)
+      }
+      out->setAt(i, sum.contents * scale)
+    }
   }
   out
 }
+
+// The first two channels of a file with two or more.
+let sidesOf = (decode: int => Float32Array.t, channels) =>
+  channels >= 2 ? Some((decode(0), decode(1))) : None
 
 let supported = encoding =>
   switch encoding {
@@ -158,18 +171,13 @@ let readWav = (b): result<t, string> => {
     }
     switch encoding {
     | Some(encoding) if supported(encoding) && channels > 0 && sampleRate > 0. =>
+      let decode = only =>
+        decodeFrames(b, ~offset, ~bytes, ~channels, ~encoding, ~littleEndian=true, ~unsigned8=true, ~only?)
       Ok({
-        samples: decodeFrames(
-          b,
-          ~offset,
-          ~bytes,
-          ~channels,
-          ~encoding,
-          ~littleEndian=true,
-          ~unsigned8=true,
-        ),
+        samples: decode(None),
         sampleRate,
         frameSize: frameSize.contents,
+        sides: sidesOf(c => decode(Some(c)), channels),
       })
     | _ =>
       Error(`it's a kind of WAV that can't be read here (format ${Int.toString(code)}, ${Int.toString(bits)} bits)`)
@@ -219,10 +227,12 @@ let readAiff = (b, ~compressed): result<t, string> => {
     }
     switch encoding {
     | Some((encoding, littleEndian)) if supported(encoding) && channels > 0 && sampleRate > 0. =>
+      let decode = only => decodeFrames(b, ~offset, ~bytes, ~channels, ~encoding, ~littleEndian, ~only?)
       Ok({
-        samples: decodeFrames(b, ~offset, ~bytes, ~channels, ~encoding, ~littleEndian),
+        samples: decode(None),
         sampleRate,
         frameSize: None,
+        sides: sidesOf(c => decode(Some(c)), channels),
       })
     | _ => Error(`it's a compressed AIFF ("${compression}"), which can't be read here`)
     }
@@ -275,7 +285,8 @@ let decodeInBrowser = async (bytes: Uint8Array.t) => {
       out->setAt(i, ByteView.getUnsafe(out, i) + ByteView.getUnsafe(d, i) / Int.toFloat(channels))
     }
   }
-  {samples: out, sampleRate: buffer->bufferRate, frameSize: None}
+  let sides = channels >= 2 ? Some((buffer->getChannelData(0), buffer->getChannelData(1))) : None
+  {samples: out, sampleRate: buffer->bufferRate, frameSize: None, sides}
 }
 
 let decode = async (bytes, filename): result<t, string> =>

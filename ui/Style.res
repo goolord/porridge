@@ -101,6 +101,9 @@ let css = `
 .ptab.on { color: var(--paper); background: var(--signal); }
 .pbody { position: absolute; inset: 0; display: none; }
 .pbody.on { display: block; }
+.pbody.cover { background: var(--panel); z-index: 1; border-radius: inherit; }
+.blk:has(> .pbody.cover.on) > .ptabs { z-index: 2; }
+.blk.responding > :not(.pbody):not(.ptabs) { visibility: hidden; }
 .blk > .hdr { position: absolute; right: 6px; top: 1px; width: 40px; height: 18px; }
 
 /* the FX page: a tab per effect in the order they run (the rack's are dragged sideways), and a
@@ -291,6 +294,43 @@ let css = `
 .plot.off { opacity: 0.4; }
 .plot rect.bg { fill: rgba(236, 227, 196, 0.35); stroke: var(--edge); stroke-width: 1; }
 .plot path.curve.faint { stroke-width: 1; stroke-dasharray: 3 2; opacity: 0.7; }
+.plot path.curve.dim { stroke-width: 1; opacity: 0.45; }
+.plot path.curve.fill { fill: var(--signal-soft); stroke-width: 1; }
+.plot line.grid { stroke: rgba(31,26,14,0.1); stroke-width: 1; }
+.plot line.mark { stroke: var(--ink-faint); stroke-width: 1.2; stroke-dasharray: 3 3; }
+.plot line.curve { stroke: var(--signal); stroke-width: 2; }
+.plot line.curve.alt { stroke: var(--mod); }
+.plot circle.dot { fill: var(--signal); }
+.plot rect.compzone { fill: var(--signal-soft); opacity: 0.5; }
+.plot rect.complevel { fill: var(--signal); opacity: 0.75; }
+.plot rect.compgain { fill: var(--mod); }
+.plot rect.compgain.up { fill: #3f7a3a; }
+.plot line.compthresh { stroke: var(--signal); stroke-width: 1.5; }
+.plot text.readout { font-size: 11px; font-weight: 700; fill: var(--signal); }
+.blk.resting .ed, .blk.resting .p { opacity: 0.4; }
+.plot.bigknob { cursor: ns-resize; }
+.plot path.knobtrack { fill: none; stroke: rgba(31,26,14,0.15); stroke-width: 9; stroke-linecap: round; }
+.plot path.knobfill { fill: none; stroke: var(--signal); stroke-width: 9; stroke-linecap: round; }
+.plot circle.knobcap { fill: var(--paper); stroke: var(--edge); stroke-width: 1.5; }
+.plot line.knobpointer { stroke: var(--ink); stroke-width: 3; stroke-linecap: round; }
+.plot text.knobvalue { font-size: 18px; font-weight: 700; fill: var(--ink); }
+.grp.center { text-align: center; }
+.plot path.impulse { fill: none; stroke: var(--signal); stroke-width: 1; }
+.plot path.front { fill: none; stroke: var(--signal); stroke-width: 1.4; }
+.plot path.front.bright { stroke-width: 0.9; }
+.plot path.front.dull { stroke-width: 3; stroke-opacity: 0.6; }
+.plot path.room { fill: var(--paper); fill-opacity: 0.5; stroke: var(--ink-soft); stroke-width: 2; }
+.plot path.plate { fill: rgba(150, 160, 170, 0.35); stroke: var(--ink-soft); stroke-width: 1.5; }
+.plot path.spring { fill: none; stroke: var(--ink-faint); stroke-width: 1.2; stroke-dasharray: 2 1.5; }
+.plot path.basin { fill: rgba(28, 60, 115, 0.12); stroke: var(--ink-soft); stroke-width: 2; }
+.plot path.unit { fill: rgba(31, 26, 14, 0.75); stroke: var(--edge); }
+.plot path.display { fill: #1d2a1a; stroke: #46563a; }
+.plot path.pixel { fill: #3b5a2c; }
+.plot path.pixel.lit { fill: #9fdc6a; }
+.plot text.lcd { font-size: 12px; font-family: monospace; fill: #9fdc6a; }
+.plot path.hallray { fill: none; stroke: var(--mod); stroke-width: 1; stroke-dasharray: 3 2; }
+.plot circle.spark { fill: var(--signal); }
+.plot circle.spark.dull { fill: var(--ink-soft); }
 .plot line.axis.faint { stroke: rgba(31,26,14,0.12); }
 .plot text.tick { font-size: 10px; fill: var(--ink-faint); }
 
@@ -365,6 +405,11 @@ let css = `
 .menu div { padding: 2px 12px 2px 10px; white-space: nowrap; cursor: pointer; }
 .menu div:hover { background: var(--signal); color: var(--paper); }
 .menu div.cur { font-weight: 700; }
+.menu.cols { column-gap: 0; }
+.menu.cols div { break-inside: avoid; }
+.menu div.mh { padding: 4px 12px 1px 10px; font-size: 11px; color: var(--ink-faint); cursor: default;
+    text-transform: uppercase; letter-spacing: 0.06em; }
+.menu div.mh:hover { background: none; color: var(--ink-faint); }
 .menu.icons div { display: flex; align-items: center; }
 .menu.icons .icw { width: 38px; flex: none; }
 

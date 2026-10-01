@@ -26,6 +26,45 @@ namespace porridge
         float[64] data;
     }
 
+    /// A knob that holds its position v (0..1) for a value from lo to hi on a log scale
+    /// (ui/PorridgeParams.res expKnob): frequencies, rates and times.
+    float expKnob (float lo, float hi, float v)
+    {
+        return lo * float (pow (float64 (hi / lo), float64 (clamp (v, 0.0f, 1.0f))));
+    }
+
+    /// Frames of a convolver's impulse per chunk.
+    let impulseChunkFrames = 2048;
+
+    /// Part of an impulse response loaded from a file, for convolver `which` (0 or 1): frames
+    /// offset .. offset + impulseChunkFrames of `length`, at sample rate `rate`, with 1 or 2
+    /// channels (a mono impulse leaves `right` unused). The last chunk completes it.
+    struct ImpulseChunk
+    {
+        int which;
+        int channels;
+        int length;
+        int offset;
+        float rate;
+        float[impulseChunkFrames] left, right;
+    }
+
+    /// Convolver `which`'s impulse for the view: its length in seconds and the peak of each of
+    /// 512 equal pieces of it, before its length and reverse are applied.
+    struct ImpulseView
+    {
+        int which;
+        float seconds;
+        float[512] peaks;
+    }
+
+    /// Compressor `which`'s meters for the view: each band's level and gain change in dB.
+    struct CompMeter
+    {
+        int which;
+        float[3] level, gain;
+    }
+
     /// Microtuning: every key's pitch in semitones from 440 Hz (below -1000: the key is silent).
     /// With on = 0 the keys follow Oatmeal's tuning.
     struct Tuning

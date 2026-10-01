@@ -42,6 +42,8 @@ type handle = {
   y: float,
   // drawn hollow when the stage it ends is skipped
   hollow: bool,
+  // not shown, for a bend point whose stage is skipped or flat
+  hidden: bool,
   // a stage's curve (PorridgeParams.curveSpecs), and which way up bends it positive
   curve: option<string>,
   bendSign: float,
@@ -54,13 +56,15 @@ let point = (~time=?, ~level=?, ~hollow=false, x0, x, y) => {
   x,
   y,
   hollow,
+  hidden: false,
   curve: None,
   bendSign: 0.,
 }
 
 // A stage's bend point, at the middle of its segment.
-let bendPoint = (curve, (x, y), ~rising) => {
+let bendPoint = (~hidden=false, curve, (x, y), ~rising) => {
   ...point(x, x, y),
+  hidden,
   curve: Some(curve),
   bendSign: rising ? 1. : -1.,
 }
@@ -133,8 +137,12 @@ let envName = prefix =>
   | _ => "Mod2"
   }
 
-let curveIds = prefix =>
-  PorridgeParams.stageNames->Array.map(((stage, _)) => PorridgeParams.curveId(envName(prefix), stage))
+// attack, decay 1, decay 2 and release
+let curveIds = prefix => {
+  let env = envName(prefix)
+  let curve = PorridgeParams.curveId(env, ...)
+  [curve("Attack"), PorridgeParams.decay1CurveId(env), curve("Decay"), curve("Release")]
+}
 
 // Attack, hold, decay 1 to the breakpoint, decay 2 to sustain, release. The amp envelope
 // is drawn in dB like its readouts; the others are linear, like their percentages.
@@ -142,9 +150,9 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
   let model = ctx.model
   let id = k => prefix ++ k
   let get = k => model->ParamModel.get(id(k))
-  let (attackCurve, decayCurve, releaseCurve) = switch curveIds(prefix) {
-  | [a, d, r] => (a, d, r)
-  | _ => ("", "", "")
+  let (attackCurve, decay1Curve, decay2Curve, releaseCurve) = switch curveIds(prefix) {
+  | [a, d1, d2, r] => (a, d1, d2, r)
+  | _ => ("", "", "", "")
   }
   let curve = c => model->ParamModel.get(c)
   let levelDef = model->ParamModel.def(id("Sustain"))
@@ -186,7 +194,7 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
       points->Plots.trace(t => (xFrom + (xTo - xFrom) * t, yOf(level(t))))
       ((xFrom + xTo) / 2., yOf(level(0.5)))
     }
-    let (ca, cd, cr) = (curve(attackCurve), curve(decayCurve), curve(releaseCurve))
+    let (ca, cd1, cd2, cr) = (curve(attackCurve), curve(decay1Curve), curve(decay2Curve), curve(releaseCurve))
     let attackMid = sample(x0, xa, t => {
       let a = bend(t, 0., 1., ca)
       (2. - a) * a
@@ -195,22 +203,29 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
     let decay1Mid = if skip {
       // decay 2 starts from the top, at the hollow breakpoint
       points->Array.push((xb, yOf(1.)))
-      None
+      ((xh + xb) / 2., yOf(1.))
     } else {
-      Some(sample(xh, xb, t => bend(envCubic(Math.pow(bp, ~exp=t), bp, 1.), 1., bp, cd)))
+      sample(xh, xb, t => bend(envCubic(Math.pow(bp, ~exp=t), bp, 1.), 1., bp, cd1))
     }
     let lo = Math.max(sus, 1e-4)
-    let decay2Mid = sample(xb, xs, t => bend(envCubic(bp * Math.pow(lo / bp, ~exp=t), lo, bp), bp, lo, cd))
+    let decay2Mid = sample(xb, xs, t => bend(envCubic(bp * Math.pow(lo / bp, ~exp=t), lo, bp), bp, lo, cd2))
     points->Array.push((xs, yOf(sus)))
-    let releaseMid = sample(xs, xr, t =>
-      sus <= 0.001 ? 0. : bend((sus * Math.pow(10., ~exp=-3. * t) - 0.001) * sus / (sus - 0.001), sus, 0., cr)
-    )
-    // the decay curve bends both decays; its point sits on whichever one has a drop
-    let (decayMid, decayRising) = switch decay1Mid {
-    | Some(mid) if Math.abs(bp - sus) < 0.02 => (mid, false)
-    | _ => (decay2Mid, sus > bp)
+    // The release time is a 60 dB fall from the top, so from the sustain level the curve
+    // reaches the bottom of the graph (0, or -60 dB for the amp) after this fraction of it.
+    // The curve is stretched to end at the release point, and the time axis says when it
+    // really ends.
+    let k = sus / (sus - 0.001)
+    let fall = if sus <= 0.001 {
+      1.
+    } else {
+      let floor = decibels ? 0.001 : 0.
+      // the level before the bend, and the falling exponential, at the bottom
+      let level = sus * Math.pow(floor / sus, ~exp=1. / Math.pow(8., ~exp=cr))
+      Math.min(1., Math.log10(sus / (level / k + 0.001)) / 3.)
     }
-
+    let releaseMid = sample(xs, xr, t =>
+      sus <= 0.001 ? 0. : bend((sus * Math.pow(10., ~exp=-3. * fall * t) - 0.001) * k, sus, 0., cr)
+    )
     let ta = get("Attack")
     let th = ta + get("Hold")
     let tb = th + (skip ? 0. : get("Decay1"))
@@ -219,7 +234,7 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
       stretch(xa, xh, ta, th),
       stretch(xh, xb, th, tb),
       stretch(xb, xs, tb, tb + get("Decay2")),
-      stretch(~release=true, xs, xr, 0., get("Release")),
+      stretch(~release=true, xs, xr, 0., get("Release") * fall),
     ]
 
     let top = yOf(1.)
@@ -230,7 +245,8 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
       point(~time=id("Decay2"), ~level=id("Sustain"), xb, xs, yOf(sus)),
       point(~time=id("Release"), xs, xr, yOf(0.)),
       bendPoint(attackCurve, attackMid, ~rising=true),
-      bendPoint(decayCurve, decayMid, ~rising=decayRising),
+      bendPoint(~hidden=skip, decay1Curve, decay1Mid, ~rising=false),
+      bendPoint(~hidden=Math.abs(bp - sus) < 0.02, decay2Curve, decay2Mid, ~rising=sus > bp),
       bendPoint(releaseCurve, releaseMid, ~rising=false),
     ]
     (points, handles, times)
@@ -468,6 +484,7 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
         [dot, hit]->Array.forEach(e => {
           e->setAttribute("cx", Num(h.x))
           e->setAttribute("cy", Num(h.y))
+          e->setAttribute("display", Str(h.hidden ? "none" : "inline"))
         })
         let hot = ed.hover == Some(i) || ed.dragging == Some(i)
         let isBend = h.curve != None

@@ -3,8 +3,11 @@
 
 open! Web
 
-// An item may have an icon in front of its label (see Icons).
-type item = {label: string, value: int, icon?: element}
+// An item may have an icon in front of its label (see Icons), and a heading above it that
+// starts a group. Long menus run in columns.
+type item = {label: string, value: int, icon?: element, heading?: string}
+
+let rowsPerColumn = 24
 
 type t = {
   root: element,
@@ -37,7 +40,13 @@ let show = (t, anchor, items, current, onPick) =>
     if withIcons {
       m->addClass("icons")
     }
-    items->Array.forEach(({label, value, ?icon}) => {
+    let count = Array.length(items) + items->Array.filter(item => item.heading != None)->Array.length
+    if count > rowsPerColumn {
+      m->addClass("cols")
+      m->setStyle("column-count", Int.toString((count + rowsPerColumn - 1) / rowsPerColumn))
+    }
+    items->Array.forEach(({label, value, ?icon, ?heading}) => {
+      heading->Option.forEach(text => el("div", ~cls="mh", ~text, ~parent=m)->ignore)
       let row = el("div", ~cls=value == current ? "cur" : "", ~parent=m)
       switch icon {
       | Some(icon) => row->appendChild(icon)

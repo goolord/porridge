@@ -20,7 +20,7 @@ let envelopeFields = prefix => [
   (prefix ++ "Release", "release"),
   ...EnvEditor.curveIds(prefix)->Array.mapWithIndex((id, i) => (
     id,
-    ["attack curve", "decay curve", "release curve"]->Array.getUnsafe(i),
+    ["attack curve", "decay 1 curve", "decay 2 curve", "release curve"]->Array.getUnsafe(i),
   )),
 ]
 
@@ -200,7 +200,23 @@ let build = (ctx: Ctx.t, page) => {
 
   //==============================================================================
   // filter
-  let filter = Panel.make(page, ~tabs=["filter", "dual filter"], ~x=x1, ~y=y0, ~w=columnWidth, ~h=rowHeight)
+  let refreshResponse = ref(() => ())
+  let filterEl = ref(None)
+  let filter = Panel.make(
+    page,
+    ~tabs=["filter", "response", "dual filter"],
+    ~onSelect=i => {
+      // the response covers the filter envelope
+      filterEl.contents->Option.forEach(e => e->Web.toggleClass("responding", i == 1))
+      if i == 1 {
+        refreshResponse.contents()
+      }
+    },
+    ~x=x1,
+    ~y=y0,
+    ~w=columnWidth,
+    ~h=rowHeight,
+  )
   let main = Grid.make(ctx, filter->Panel.body(0))
   main->Grid.choice("Filter", 0, 0, "type", ~span=2)
   main->Grid.param("Cutoff", 2, 0, "cutoff")
@@ -210,8 +226,59 @@ let build = (ctx: Ctx.t, page) => {
   main->Grid.param("F_VeloSens", 2, 1, "velocity")
   main->Grid.param("F_Aftertouch", 3, 1, "touch")
   main->Grid.param("F_Morph", 0, 2, "morph")
-  main->Grid.note("morph: SVF LP › BP › HP · comb + › − · formant vowel", 1, 2, ~span=3)->ignore
-  let dual = Grid.make(ctx, filter->Panel.body(1))
+  main->Grid.param("F_Drive", 1, 2, "drive")
+  // what morph and drive do for this type
+  let morphNote = main->Grid.note("", 2, 2, ~span=2)
+  let describe = () => {
+    let t = Float.toInt(ctx.model->ParamModel.get("Filter"))
+    let morph = FilterTypes.morphText(t)->Option.mapOr("morph: —", m => "morph: " ++ m)
+    morphNote->Web.setTextContent(FilterTypes.hasDrive(t) ? morph : morph ++ " · no drive")
+  }
+  ctx.model->ParamModel.listen("Filter", describe)
+  describe()
+  // the response: the type with its cutoff and resonance, as a curve with a point to drag
+  // (covering the envelope while it shows)
+  filterEl := Some(filter.el)
+  let response = filter->Panel.body(1)
+  response->Web.addClass("cover")
+  let resp = Grid.make(ctx, response)
+  resp->Grid.choice("Filter", 0, 0, "type", ~span=2)
+  resp->Grid.param("Cutoff", 2, 0, "cutoff")
+  resp->Grid.param("Resonance", 3, 0, "reso")
+  let get = id => ctx.model->ParamModel.get(id)
+  let graphTop = Grid.padTop + Grid.rowHeight + 4.
+  // the knob's law: cubic, up to 11 kHz for Oatmeal's types and 20 kHz for Porridge's
+  let range = () => get("Filter") >= 16. ? 19980. : 10980.
+  refreshResponse :=
+    FilterGraph.make(
+      ctx,
+      response,
+      {x: 8., y: graphTop, w: columnWidth - 18., h: rowHeight - graphTop - 10.},
+      {
+        typeOf: () => Float.toInt(get("Filter")),
+        cutoff: "Cutoff",
+        toHz: c => c * c * c * range() + 20.,
+        ofHz: hz => Math.cbrt(Math.max(0., Math.min(1., (hz - 20.) / range()))),
+        res: "Resonance",
+        morph: "F_Morph",
+        drive: "F_Drive",
+        mix: None,
+        spread: None,
+        // filter 2, when doubling: its type (or filter 1's) an octave up per half of the split
+        second: () => {
+          let t1 = Float.toInt(get("Filter"))
+          let t2 = Float.toInt(get("Filter2"))
+          get("F_Double") == 0.
+            ? None
+            : {
+                let c = get("Cutoff")
+                Some((t2 == 0 ? t1 : t2, (c * c * c * range() + 20.) * Math.pow(2., ~exp=2. * get("F_Split"))))
+              }
+        },
+        alsoIds: ["Filter", "Filter2", "F_Double", "F_Split"],
+      },
+    )
+  let dual = Grid.make(ctx, filter->Panel.body(2))
   dual->Grid.choice("Filter2", 0, 0, "filter 2", ~span=2)
   dual->Grid.choice("F_Double", 2, 0, "double")
   dual->Grid.param("F_Split", 3, 0, "split")

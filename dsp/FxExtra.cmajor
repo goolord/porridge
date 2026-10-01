@@ -1,0 +1,983 @@
+//  Porridge's extra rack effects: flanger, phaser, frequency shifter (Bode), utility, a voice
+//  filter in the FX chain and a multiband compressor. Same conventions as Effects.cmajor: each
+//  processes the synth's 64-frame stereo block in place, recomputes its coefficients from the
+//  program mirror at the start of every block, smooths whatever would zipper, and reports
+//  whether its output still holds sound.
+
+namespace porridge
+{
+    //==============================================================================
+    // shared pieces
+
+    /// One-pole smoothing coefficient for a time constant of ms milliseconds, applied every
+    /// `every` samples.
+    float extraSmoothing (float64 sr, float64 ms, int every)
+    {
+        return float (1.0 - exp (-1000.0 * float64 (every) / (ms * sr)));
+    }
+
+    /// tan (pi hz / sr), with hz kept between 1 Hz and 0.45 sr.
+    float extraPrewarp (float64 hz, float64 sr)
+    {
+        return float (tan (pi * clamp (hz, 1.0, 0.45 * sr) / sr));
+    }
+
+    /// 4-point cubic (Catmull-Rom) interpolation between y1 (t = 0) and y2 (t = 1).
+    float<2> extraHermite (float<2> y0, float<2> y1, float<2> y2, float<2> y3, float t)
+    {
+        let c1 = 0.5f * (y2 - y0);
+        let c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
+        let c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+        return ((c3 * t + c2) * t + c1) * t + y1;
+    }
+
+    /// Linear up to +-1, then bending smoothly towards +-2: bounds a feedback loop without
+    /// colouring normal levels.
+    float extraSoftClip (float x)
+    {
+        let a = abs (x);
+
+        if (a <= 1.0f)
+            return x;
+
+        let y = 1.0f + tanh (a - 1.0f);
+        return x < 0 ? -y : y;
+    }
+
+    float<2> extraSoftClip (float<2> x)
+    {
+        return float<2> (extraSoftClip (x[0]), extraSoftClip (x[1]));
+    }
+
+    float extraPeak (float<2> x)
+    {
+        return max (abs (x[0]), abs (x[1]));
+    }
+
+    //==============================================================================
+    /// A stereo trapezoidal state-variable filter (Simper's), the crossovers' building block.
+    struct ExtraSvf
+    {
+        float<2> ic1, ic2;
+    }
+
+    /// An ExtraSvf's coefficients: g = tan (pi f / sr), k = 1 / Q.
+    struct ExtraSvfCoefs
+    {
+        float g, k, a1, a2, a3;
+    }
+
+    ExtraSvfCoefs extraSvfCoefs (float64 hz, float64 sr, float k)
+    {
+        ExtraSvfCoefs c;
+        c.g = extraPrewarp (hz, sr);
+        c.k = k;
+        c.a1 = 1.0f / (1.0f + c.g * (c.g + k));
+        c.a2 = c.g * c.a1;
+        c.a3 = c.g * c.a2;
+        return c;
+    }
+
+    /// One sample: the lowpass and bandpass outputs (highpass = x - k bp - lp).
+    void tick (ExtraSvf& this, const ExtraSvfCoefs& c, float<2> x, float<2>& lp, float<2>& bp)
+    {
+        let v3 = x - this.ic2;
+        let v1 = c.a1 * this.ic1 + c.a2 * v3;
+        let v2 = this.ic2 + c.a2 * this.ic1 + c.a3 * v3;
+        this.ic1 = 2.0f * v1 - this.ic1;
+        this.ic2 = 2.0f * v2 - this.ic2;
+        lp = v2;
+        bp = v1;
+    }
+
+    /// The 2nd-order allpass with the same coefficients (the phase of a crossover's band sum).
+    float<2> allpass (ExtraSvf& this, const ExtraSvfCoefs& c, float<2> x)
+    {
+        float<2> lp, bp;
+        this.tick (c, x, lp, bp);
+        return x - 2.0f * c.k * bp;
+    }
+
+    /// Butterworth damping: two in series make a Linkwitz-Riley crossover.
+    let extraButterworthK = 1.41421356f;
+
+    /// A stereo Linkwitz-Riley 4th-order crossover: low + high is the 2nd-order allpass of the
+    /// same frequency, so the bands sum flat.
+    struct ExtraCrossover
+    {
+        ExtraSvf lp1, lp2, hp1, hp2;
+    }
+
+    void split (ExtraCrossover& this, const ExtraSvfCoefs& c, float<2> x, float<2>& low, float<2>& high)
+    {
+        float<2> lp, bp;
+        this.lp1.tick (c, x, lp, bp);
+        this.lp2.tick (c, lp, low, bp);
+        this.hp1.tick (c, x, lp, bp);
+        let h = x - c.k * bp - lp;
+        this.hp2.tick (c, h, lp, bp);
+        high = h - c.k * bp - lp;
+    }
+
+    //==============================================================================
+    /// Flanger: a cubic-interpolated delay swept on an exponential scale from Fl_Delay up to
+    /// four octaves longer (at depth 1) by a sine LFO, the right side's LFO Fl_Phase degrees
+    /// ahead; softly saturated feedback.
+    let flangerLineSize = 65536;    // 341 ms at 192 kHz: 20 ms * 2^4 and the interpolator's taps
+
+    struct Flanger
+    {
+        float<2>[flangerLineSize] line;
+        int pos;
+        float64 phase;                      // LFO phase 0..1 (left)
+        float delay, depth, fb, mix;        // smoothed: shortest delay (samples), depth, feedback, mix
+        bool fresh, idle;
+        int silentCount;                    // samples since a value above the threshold went into the line
+    }
+
+    void clearState (Flanger& this)
+    {
+        for (wrap<flangerLineSize> i)
+            this.line[i] = float<2> (0.0f, 0.0f);
+
+        this.pos = 0;
+        this.phase = 0;
+        this.fresh = true;
+        this.idle = true;
+        this.silentCount = 0;
+    }
+
+    /// The line's value d samples back (d >= 2), cubic-interpolated.
+    float<2> flangerRead (const Flanger& this, float d)
+    {
+        let di = int (d);
+        let t = d - float (di);
+        let m = flangerLineSize - 1;
+        let p = this.pos - di;
+        return extraHermite (this.line.at ((p + 1) & m), this.line.at (p & m),
+                             this.line.at ((p - 1) & m), this.line.at ((p - 2) & m), t);
+    }
+
+    bool process (Flanger& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
+    {
+        if (! active && this.idle)
+            return false;
+
+        let longest = float (flangerLineSize - 4);
+        let tDelay = min (expKnob (0.1f, 20.0f, P[slot::Fl_Delay]) * 0.001f * float (sr), longest / 16.0f);
+        let tDepth = clamp (P[slot::Fl_Depth], 0.0f, 1.0f);
+        let tFb = clamp (P[slot::Fl_Feedback], -1.0f, 1.0f) * 0.97f;
+        let tMix = clamp (P[slot::Fl_Mix], 0.0f, 1.0f);
+        let inc = float64 (expKnob (0.02f, 20.0f, P[slot::Fl_Rate])) / sr;
+        let offset = float64 (clamp (P[slot::Fl_Phase], 0.0f, 180.0f)) / 360.0;
+        let k = extraSmoothing (sr, 20.0, 1);
+
+        if (this.fresh)
+        {
+            this.fresh = false;
+            this.delay = tDelay; this.depth = tDepth; this.fb = tFb; this.mix = tMix;
+        }
+
+        float written = 0;
+
+        for (wrap<blockSize> i)
+        {
+            this.delay += (tDelay - this.delay) * k;
+            this.depth += (tDepth - this.depth) * k;
+            this.fb += (tFb - this.fb) * k;
+            this.mix += (tMix - this.mix) * k;
+
+            // delay = shortest * 2^(4 depth lfo), lfo 0..1
+            let span = 4.0f * 0.693147181f * this.depth;
+            let lfoL = 0.5f - 0.5f * float (cos (twoPi * this.phase));
+            let lfoR = 0.5f - 0.5f * float (cos (twoPi * (this.phase + offset)));
+            let yL = this.flangerRead (clamp (this.delay * exp (span * lfoL), 2.0f, longest))[0];
+            let yR = this.flangerRead (clamp (this.delay * exp (span * lfoR), 2.0f, longest))[1];
+            let y = float<2> (yL, yR);
+            let x = buf[i];
+
+            let back = extraSoftClip (this.fb * y);
+            let w = x + back + 1e-18f;      // the offset keeps the decaying loop off denormals
+            this.line.at (this.pos) = w;
+            this.pos = (this.pos + 1) & (flangerLineSize - 1);
+            written = max (written, extraPeak (w));
+
+            // from mix 0.5 up the dry side is the line's input (with the feedback), so that
+            // mix 0.5 cancels exactly, the deepest notches at any feedback
+            buf[i] = (x + back * min (1.0f, 2.0f * this.mix)) * (1.0f - this.mix) + y * this.mix;
+
+            this.phase += inc;
+            if (this.phase >= 1.0) this.phase -= 1.0;
+        }
+
+        if (active || written > 1e-8f) this.silentCount = 0;
+        else                           this.silentCount += blockSize;
+
+        if (active || anyAbove (buf, 1e-8f))
+        {
+            this.idle = false;
+            return true;
+        }
+
+        // nothing audible went into the line for longer than its longest delay
+        if (float (this.silentCount) > this.delay * 16.0f + float (blockSize))
+            this.idle = true;
+
+        return false;
+    }
+
+    //==============================================================================
+    /// Phaser: 2..16 first-order allpasses swept +-3 octaves (at depth 1) around the centre by
+    /// a sine LFO, the stages spread over up to +-1 octave, feedback from the chain's output
+    /// to its input. Coefficients are computed at block ends and ramped per sample.
+    struct Phaser
+    {
+        float<2>[16] s, a;                  // the stages' states and coefficients
+        float<2> last;                      // the chain's previous output, for the feedback
+        float64 phase;                      // LFO phase 0..1 (left)
+        float centre, depth, spread;        // smoothed per block: ln (centre Hz), depth, spread
+        float fb, mix;                      // smoothed per sample
+        int stages;                         // last block's number of stages
+        bool fresh, idle;
+    }
+
+    void clearState (Phaser& this)
+    {
+        for (wrap<16> k)
+            this.s[k] = float<2> (0.0f, 0.0f);
+
+        this.last = float<2> (0.0f, 0.0f);
+        this.stages = 0;
+        this.phase = 0;
+        this.fresh = true;
+        this.idle = true;
+    }
+
+    /// Ph_Stages' choice index -> number of stages.
+    int phaserStages (int choice)
+    {
+        let n = int[6] (2, 4, 6, 8, 12, 16);
+        return n.at (clamp (choice, 0, 5));
+    }
+
+    /// A first-order allpass coefficient: -90 degrees at hz.
+    float phaserCoef (float64 hz, float64 sr)
+    {
+        let t = extraPrewarp (hz, sr);
+        return (t - 1.0f) / (t + 1.0f);
+    }
+
+    /// noteHz: the newest note's frequency (0 when none), for the frequency tracking.
+    bool process (Phaser& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr, float noteHz)
+    {
+        if (! active && this.idle)
+            return false;
+
+        let n = phaserStages (int (P[slot::Ph_Stages]));
+        var centre = float64 (expKnob (20.0f, 20000.0f, P[slot::Ph_Freq]));
+
+        if (noteHz > 0)
+            centre *= pow (float64 (noteHz) / 261.63, float64 (clamp (P[slot::Ph_Track], 0.0f, 1.0f)));
+
+        let tCentre = float (log (clamp (centre, 1.0, 100000.0)));
+        let tDepth = clamp (P[slot::Ph_Depth], 0.0f, 1.0f);
+        let tSpread = clamp (P[slot::Ph_Spread], 0.0f, 1.0f);
+        let tFb = clamp (P[slot::Ph_Feedback], -1.0f, 1.0f) * 0.95f;
+        let tMix = clamp (P[slot::Ph_Mix], 0.0f, 1.0f);
+        let offset = float64 (clamp (P[slot::Ph_Phase], 0.0f, 180.0f)) / 360.0;
+        let kb = extraSmoothing (sr, 20.0, blockSize);
+        let k = extraSmoothing (sr, 20.0, 1);
+        let fresh = this.fresh;
+
+        if (fresh)
+        {
+            this.fresh = false;
+            this.centre = tCentre; this.depth = tDepth; this.spread = tSpread;
+            this.fb = tFb; this.mix = tMix;
+        }
+
+        this.centre += (tCentre - this.centre) * kb;
+        this.depth += (tDepth - this.depth) * kb;
+        this.spread += (tSpread - this.spread) * kb;
+
+        // the LFO at the end of this block sets the coefficients the block ramps to
+        this.phase += float64 (expKnob (0.02f, 20.0f, P[slot::Ph_Rate])) / sr * float64 (blockSize);
+        this.phase -= floor (this.phase);
+        let ln2 = 0.693147181;
+        let sweepL = 3.0 * float64 (this.depth) * sin (twoPi * this.phase);
+        let sweepR = 3.0 * float64 (this.depth) * sin (twoPi * (this.phase + offset));
+
+        float<2>[16] da;
+
+        for (wrap<16> s)
+        {
+            if (s >= n) break;
+
+            let oct = float64 (this.spread) * (2.0 * float64 (s) / float64 (n - 1) - 1.0);
+            let aL = phaserCoef (exp (float64 (this.centre) + ln2 * (sweepL + oct)), sr);
+            let aR = phaserCoef (exp (float64 (this.centre) + ln2 * (sweepR + oct)), sr);
+
+            if (fresh || s >= this.stages)
+            {
+                // a stage that comes in starts clean, at its coefficient
+                this.a[s] = float<2> (aL, aR);
+                this.s[s] = float<2> (0.0f, 0.0f);
+            }
+
+            da[s] = (float<2> (aL, aR) - this.a[s]) * (1.0f / float (blockSize));
+        }
+
+        this.stages = n;
+
+        for (wrap<blockSize> i)
+        {
+            this.fb += (tFb - this.fb) * k;
+            this.mix += (tMix - this.mix) * k;
+
+            let x = buf[i];
+            let back = extraSoftClip (this.fb * this.last);
+            var v = x + back + 1e-18f;      // the offset keeps the decaying stages off denormals
+
+            for (wrap<16> s)
+            {
+                if (s >= n) break;
+
+                this.a[s] += da[s];
+                let y = this.a[s] * v + this.s[s];
+                this.s[s] = v - this.a[s] * y;
+                v = y;
+            }
+
+            // from mix 0.5 up the dry side is the chain's input (with the feedback), so that
+            // mix 0.5 cancels exactly, the deepest notches at any feedback
+            this.last = v;
+            buf[i] = (x + back * min (1.0f, 2.0f * this.mix)) * (1.0f - this.mix) + v * this.mix;
+        }
+
+        if (active || anyAbove (buf, 1e-8f))
+        {
+            this.idle = false;
+            return true;
+        }
+
+        var state = extraPeak (this.last);
+
+        for (wrap<16> s)
+        {
+            if (s >= n) break;
+            state = max (state, extraPeak (this.s[s]));
+        }
+
+        if (state < 1e-8f)
+            this.idle = true;
+
+        return false;
+    }
+
+    //==============================================================================
+    /// Bode frequency shifter: an IIR Hilbert pair (two chains of 8 allpasses with a 90 degree
+    /// difference from 20 Hz to sr/2 - 20 Hz, designed for the sample rate) and a quadrature
+    /// oscillator. With feedback the shifted signal also goes through a delay back into the
+    /// shifter's input, so every echo is shifted further (a barber pole).
+    let bodeLineSize = 192004;      // 1 s at 192 kHz and the interpolator's taps
+    let bodeCoefs = 16;             // even ones: path A, odd ones: path B (one sample later)
+
+    struct Bode
+    {
+        float<2>[bodeLineSize] line;
+        int pos;
+        float[bodeCoefs] c;
+        float64 designRate;                         // the rate c was designed for
+        float<2>[bodeCoefs] x1, x2, y1, y2;         // the allpasses' states (in z^-2)
+        float<2> prev;                              // path B's one-sample delay
+        float<2> hpX, hpY;                          // the feedback's DC blocker
+        float64 phase;                              // oscillator phase 0..1
+        float hz, fb, mix, delay;                   // smoothed: shift, feedback, mix, delay (samples)
+        float<2> side;                              // smoothed per side: 1 up, -1 down, 0 both (ring)
+        bool fresh, idle;
+        int silentCount;
+    }
+
+    void clearState (Bode& this)
+    {
+        for (int i = 0; i < bodeLineSize; ++i)
+            this.line.at (i) = float<2> (0.0f, 0.0f);
+
+        for (wrap<bodeCoefs> j)
+        {
+            this.x1[j] = float<2> (0.0f, 0.0f); this.x2[j] = float<2> (0.0f, 0.0f);
+            this.y1[j] = float<2> (0.0f, 0.0f); this.y2[j] = float<2> (0.0f, 0.0f);
+        }
+
+        this.pos = 0;
+        this.prev = float<2> (0.0f, 0.0f);
+        this.hpX = float<2> (0.0f, 0.0f);
+        this.hpY = float<2> (0.0f, 0.0f);
+        this.phase = 0;
+        this.fresh = true;
+        this.idle = true;
+        this.silentCount = 0;
+    }
+
+    /// The Hilbert pair's coefficients for a transition band of `transition` (of sr) at both
+    /// ends: the polyphase half-band design (elliptic) from Laurent de Soras's HIIR, whose
+    /// allpasses in -z^-2 make a 90 degree phase splitter.
+    void bodeDesign (Bode& this, float64 sr)
+    {
+        let transition = 20.0 / sr;
+        let order = float64 (bodeCoefs * 2 + 1);
+        var kk = tan ((1.0 - transition * 2.0) * pi * 0.25);
+        kk *= kk;
+        let kksqrt = pow (1.0 - kk * kk, 0.25);
+        let e = 0.5 * (1.0 - kksqrt) / (1.0 + kksqrt);
+        let e4 = e * e * e * e;
+        let q = e * (1.0 + e4 * (2.0 + e4 * (15.0 + 150.0 * e4)));
+
+        for (wrap<bodeCoefs> j)
+        {
+            let c = float64 (j + 1);
+            float64 num = 0, den = 0, sign = 1;
+
+            for (int i = 0; i < 40; ++i)
+            {
+                let t = pow (q, float64 (i * (i + 1))) * sin (float64 (i * 2 + 1) * c * pi / order) * sign;
+                num += t;
+                sign = -sign;
+                if (abs (t) < 1e-100) break;
+            }
+
+            sign = -1;
+
+            for (int i = 1; i < 40; ++i)
+            {
+                let t = pow (q, float64 (i * i)) * cos (float64 (i * 2) * c * pi / order) * sign;
+                den += t;
+                sign = -sign;
+                if (abs (t) < 1e-100) break;
+            }
+
+            let ww = num * pow (q, 0.25) / (den + 0.5);
+            let wwsq = ww * ww;
+            let x = sqrt ((1.0 - wwsq * kk) * (1.0 - wwsq / kk)) / (1.0 + wwsq);
+            this.c[j] = float ((1.0 - x) / (1.0 + x));
+        }
+
+        this.designRate = sr;
+    }
+
+    /// One allpass section: y = c (x + y[n-2]) - x[n-2].
+    float<2> bodeSection (Bode& this, wrap<bodeCoefs> j, float<2> x)
+    {
+        let y = this.c[j] * (x + this.y2[j]) - this.x2[j];
+        this.x2[j] = this.x1[j]; this.x1[j] = x;
+        this.y2[j] = this.y1[j]; this.y1[j] = y;
+        return y;
+    }
+
+    /// The line's value d samples back (d >= 2), cubic-interpolated.
+    float<2> bodeRead (const Bode& this, float d)
+    {
+        let di = int (d);
+        let t = d - float (di);
+        var p = this.pos - di - 2;
+        if (p < 0) p += bodeLineSize;
+        let y3 = this.line.at (p);
+        p = p + 1 >= bodeLineSize ? 0 : p + 1;
+        let y2 = this.line.at (p);
+        p = p + 1 >= bodeLineSize ? 0 : p + 1;
+        let y1 = this.line.at (p);
+        p = p + 1 >= bodeLineSize ? 0 : p + 1;
+        return extraHermite (this.line.at (p), y1, y2, y3, t);
+    }
+
+    bool process (Bode& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
+    {
+        if (! active && this.idle)
+            return false;
+
+        if (this.designRate != sr)
+            this.bodeDesign (sr);
+
+        let v = clamp (P[slot::Bd_Shift], -1.0f, 1.0f);
+        let tHz = 5000.0f * v * v * v;
+        let tFb = clamp (P[slot::Bd_Feedback], 0.0f, 1.0f) * 0.95f;
+        let tMix = clamp (P[slot::Bd_Mix], 0.0f, 1.0f);
+        let tDelay = clamp (expKnob (1.0f, 1000.0f, P[slot::Bd_Delay]) * 0.001f * float (sr), 2.0f, float (bodeLineSize - 4));
+        let mode = int (P[slot::Bd_Mode]);
+        let tSide = mode == bodeMode::down   ? float<2> (-1.0f, -1.0f)
+                  : mode == bodeMode::stereo ? float<2> (1.0f, -1.0f)
+                  : mode == bodeMode::ring   ? float<2> (0.0f, 0.0f)
+                                             : float<2> (1.0f, 1.0f);
+        let k = extraSmoothing (sr, 20.0, 1);
+        let kd = extraSmoothing (sr, 60.0, 1);         // delay changes glide like tape
+        let hpR = float (1.0 - twoPi * 10.0 / sr);     // the feedback's DC blocker at 10 Hz
+
+        if (this.fresh)
+        {
+            this.fresh = false;
+            this.hz = tHz; this.fb = tFb; this.mix = tMix; this.delay = tDelay;
+            this.side = tSide;
+        }
+
+        float written = 0;
+
+        for (wrap<blockSize> i)
+        {
+            this.hz += (tHz - this.hz) * k;
+            this.fb += (tFb - this.fb) * k;
+            this.mix += (tMix - this.mix) * k;
+            this.delay += (tDelay - this.delay) * kd;
+            this.side += (tSide - this.side) * k;
+
+            let x = buf[i];
+            var u = x + 1e-18f;     // the offset keeps the decaying allpasses off denormals
+
+            if (this.fb > 1e-6f)
+            {
+                let back = this.bodeRead (this.delay);
+                let h = back - this.hpX + hpR * this.hpY;
+                this.hpX = back;
+                this.hpY = h;
+                u += extraSoftClip (this.fb * h);
+            }
+
+            // path A: the input through the even allpasses; path B: the previous input through
+            // the odd ones, 90 degrees behind A
+            var a = u;
+            var b = this.prev;
+            this.prev = u;
+
+            for (wrap<bodeCoefs / 2> j)
+            {
+                a = this.bodeSection (wrap<bodeCoefs> (2 * j), a);
+                b = this.bodeSection (wrap<bodeCoefs> (2 * j + 1), b);
+            }
+
+            let cs = float (cos (twoPi * this.phase));
+            let sn = float (sin (twoPi * this.phase));
+            this.phase += float64 (this.hz) / sr;
+            this.phase -= floor (this.phase);
+
+            // up: b cos + a sin, down: b cos - a sin, ring: their mean (b cos); the mode's
+            // sign glides so that switching modes doesn't click
+            let wet = b * cs + a * sn * this.side;
+            this.line.at (this.pos) = wet;
+            this.pos = this.pos + 1 >= bodeLineSize ? 0 : this.pos + 1;
+            written = max (written, extraPeak (wet));
+
+            buf[i] = x + (wet - x) * this.mix;
+        }
+
+        if (active || written > 1e-8f) this.silentCount = 0;
+        else                           this.silentCount += blockSize;
+
+        if (active || anyAbove (buf, 1e-8f))
+        {
+            this.idle = false;
+            return true;
+        }
+
+        // the Hilbert filters' ringing, and the echoes while the feedback is up
+        let tail = float (sr) * 0.1f + (this.fb > 1e-6f ? this.delay : 0.0f);
+
+        if (float (this.silentCount) > tail)
+            this.idle = true;
+
+        return false;
+    }
+
+    //==============================================================================
+    /// Utility: swap, phase inversion, mid/side width, bass mono below a Linkwitz-Riley
+    /// crossover, balance and gain, in that order; every gain glides per sample.
+    struct Utility
+    {
+        ExtraCrossover xo;
+        float swap, invL, invR, width, bass, panL, panR, gain;     // smoothed
+        float hz;                                                   // the crossover, ln (Hz), per block
+        bool fresh, idle;
+        int silentCount;
+    }
+
+    void clearState (Utility& this)
+    {
+        this.xo = ExtraCrossover();
+        this.fresh = true;
+        this.idle = true;
+        this.silentCount = 0;
+    }
+
+    bool process (Utility& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
+    {
+        if (! active && this.idle)
+            return false;
+
+        let tSwap = P[slot::Ut_Swap] != 0 ? 1.0f : 0.0f;
+        let tInvL = P[slot::Ut_InvL] != 0 ? -1.0f : 1.0f;
+        let tInvR = P[slot::Ut_InvR] != 0 ? -1.0f : 1.0f;
+        let tWidth = clamp (P[slot::Ut_Width], 0.0f, 2.0f);
+        let bassV = P[slot::Ut_BassMono];
+        let tBass = bassV > 0 ? 1.0f : 0.0f;
+        let pan = clamp (P[slot::Ut_Pan], -1.0f, 1.0f);
+        let tPanL = min (1.0f, 1.0f - pan);
+        let tPanR = min (1.0f, 1.0f + pan);
+        let tGain = float (pow (10.0, float64 (clamp (P[slot::Ut_Gain], -48.0f, 24.0f)) * 0.05));
+        let k = extraSmoothing (sr, 20.0, 1);
+        let tHz = bassV > 0 ? float (log (float64 (expKnob (20.0f, 1000.0f, bassV)))) : this.hz;
+
+        if (this.fresh)
+        {
+            this.fresh = false;
+            this.swap = tSwap; this.invL = tInvL; this.invR = tInvR; this.width = tWidth;
+            this.bass = tBass; this.panL = tPanL; this.panR = tPanR; this.gain = tGain;
+            this.hz = bassV > 0 ? tHz : float (log (100.0));
+        }
+
+        this.hz += (tHz - this.hz) * extraSmoothing (sr, 20.0, blockSize);
+
+        // the crossover runs while bass mono is on or fading
+        let bassOn = tBass > 0 || this.bass > 1e-5f;
+        let c = extraSvfCoefs (exp (float64 (this.hz)), sr, extraButterworthK);
+
+        for (wrap<blockSize> i)
+        {
+            this.swap += (tSwap - this.swap) * k;
+            this.invL += (tInvL - this.invL) * k;
+            this.invR += (tInvR - this.invR) * k;
+            this.width += (tWidth - this.width) * k;
+            this.bass += (tBass - this.bass) * k;
+            this.panL += (tPanL - this.panL) * k;
+            this.panR += (tPanR - this.panR) * k;
+            this.gain += (tGain - this.gain) * k;
+
+            let x0 = buf[i];
+            var x = x0 + (float<2> (x0[1], x0[0]) - x0) * this.swap;
+            x *= float<2> (this.invL, this.invR);
+
+            let mid = 0.5f * (x[0] + x[1]);
+            let side = 0.5f * (x[0] - x[1]) * this.width;
+            x = float<2> (mid + side, mid - side);
+
+            if (bassOn)
+            {
+                float<2> low, high;
+                this.xo.split (c, x, low, high);
+                let m = 0.5f * (low[0] + low[1]);
+                x += (float<2> (m, m) + high - x) * this.bass;
+            }
+
+            buf[i] = x * float<2> (this.panL, this.panR) * this.gain;
+        }
+
+        // fully faded out: forget the crossover's state so that it starts clean next time
+        if (tBass == 0 && this.bass < 1e-5f)
+        {
+            this.bass = 0;
+            this.xo = ExtraCrossover();
+        }
+
+        if (active || anyAbove (buf, 1e-8f))
+        {
+            this.silentCount = 0;
+            this.idle = false;
+            return true;
+        }
+
+        this.silentCount += blockSize;
+
+        if (float (this.silentCount) > float (sr) * 0.1f)
+            this.idle = true;
+
+        return false;
+    }
+
+    //==============================================================================
+    /// A voice filter (Filter.cmajor, any type) in the FX chain: one per side, the cutoffs
+    /// spread apart by Ff_Spread semitones, with a dry/wet mix.
+    struct FilterFx
+    {
+        Filter left, right;
+        float hz;                   // ln (cutoff Hz), smoothed per block
+        float mix;                  // smoothed per sample
+        bool fresh, idle;
+        int silentCount;
+    }
+
+    void clearState (FilterFx& this)
+    {
+        this.left.clearState();
+        this.right.clearState();
+        this.fresh = true;
+        this.idle = true;
+        this.silentCount = 0;
+    }
+
+    bool process (FilterFx& this, const FxTables& tables, float<2>[blockSize]& buf, bool active,
+                  const float[numSlots]& P, float64 sr)
+    {
+        if (! active && this.idle)
+            return false;
+
+        let t = int (P[slot::Ff_Type]);
+
+        if (t <= filterType::off)
+            return active;
+
+        let tHz = float (log (float64 (expKnob (20.0f, 20000.0f, P[slot::Ff_Cutoff]))));
+        let tMix = clamp (P[slot::Ff_Mix], 0.0f, 1.0f);
+
+        if (this.fresh)
+        {
+            this.fresh = false;
+            this.hz = tHz;
+            this.mix = tMix;
+        }
+
+        this.hz += (tHz - this.hz) * extraSmoothing (sr, 10.0, blockSize);
+
+        let spread = clamp (P[slot::Ff_Spread], -24.0f, 24.0f) * (0.693147181f / 24.0f);
+        let res = clamp (P[slot::Ff_Resonance], 0.0f, 1.0f);
+        let morph = clamp (P[slot::Ff_Morph], 0.0f, 1.0f);
+        let drive = clamp (P[slot::Ff_Drive], 0.0f, 1.0f);
+
+        float[blockSize] l, r;
+
+        for (wrap<blockSize> i)
+        {
+            l[i] = buf[i][0];
+            r[i] = buf[i][1];
+        }
+
+        this.left.process (tables, t, exp (this.hz - spread), res, morph, drive, sr, l, blockSize);
+        this.right.process (tables, t, exp (this.hz + spread), res, morph, drive, sr, r, blockSize);
+
+        let k = extraSmoothing (sr, 20.0, 1);
+
+        for (wrap<blockSize> i)
+        {
+            this.mix += (tMix - this.mix) * k;
+            let x = buf[i];
+            buf[i] = x + (float<2> (l[i], r[i]) - x) * this.mix;
+        }
+
+        if (active || anyAbove (buf, 1e-8f))
+        {
+            this.silentCount = 0;
+            this.idle = false;
+            return true;
+        }
+
+        // resonant types ring and the comb types echo: a quarter second of silence
+        this.silentCount += blockSize;
+
+        if (float (this.silentCount) > float (sr) * 0.25f)
+            this.idle = true;
+
+        return false;
+    }
+
+    //==============================================================================
+    /// Multiband compressor (OTT / Dynastia style), single band or three (Linkwitz-Riley
+    /// 4th-order crossovers, the low band allpassed to match the high crossover's phase so that
+    /// the bands sum flat). Per band: downward compression above its threshold and upward below
+    /// its upward threshold (6 dB soft knees), a stereo-linked peak detector, a trim and an on
+    /// switch. Cp_Depth scales every gain change; Cp_Mix blends with the dry input. No lookahead.
+    struct Compressor
+    {
+        ExtraCrossover lowX, highX;
+        ExtraSvf lowAp;                     // the low band's allpass at the high split
+        float[3] env, meter;                // per band (low, mid, high): the detector, the meter (linear peak)
+
+        // meters for the view, per band, updated every block (single band: index 1, the
+        // others -120 / 0): the band's level after the input gain, and its gain change
+        // (after the depth, before the trim), in dB
+        float[3] levelDb, gainDb;
+
+        // smoothed per band: threshold, 1 / ratio - 1, upward threshold, 1 - 1 / upward ratio,
+        // trim (linear, 0 when the band is off)
+        float[3] threshold, downSlope, upThreshold, upSlope, trim;
+        float inGain, outGain, depth, mix;  // smoothed
+        float lowHz, highHz;                // ln (split Hz), smoothed per block
+        bool fresh, idle;
+        int silentCount;
+    }
+
+    void clearState (Compressor& this)
+    {
+        this.lowX = ExtraCrossover();
+        this.highX = ExtraCrossover();
+        this.lowAp = ExtraSvf();
+
+        for (wrap<3> j)
+        {
+            this.env[j] = 0;
+            this.meter[j] = 0;
+            this.levelDb[j] = -120.0f;
+            this.gainDb[j] = 0;
+        }
+
+        this.fresh = true;
+        this.idle = true;
+        this.silentCount = 0;
+    }
+
+    /// The static curve: gain change in dB for a detector level in dB (downSlope = 1 / ratio - 1,
+    /// upSlope = 1 - 1 / upward ratio).
+    float compressorGain (float level, float threshold, float downSlope, float upThreshold, float upSlope)
+    {
+        let knee = 6.0f;
+        float down = 0, up = 0;
+
+        let over = level - threshold;
+        if (over >= 0.5f * knee)        down = downSlope * over;
+        else if (over > -0.5f * knee)   down = downSlope * (over + 0.5f * knee) * (over + 0.5f * knee) / (2.0f * knee);
+
+        let under = upThreshold - level;
+        if (under >= 0.5f * knee)       up = upSlope * under;
+        else if (under > -0.5f * knee)  up = upSlope * (under + 0.5f * knee) * (under + 0.5f * knee) / (2.0f * knee);
+
+        // the boost bends over above 24 dB towards at most 30, and fades out from -90 to -100
+        // dBFS so that noise floors stay down
+        if (up > 24.0f)
+            up = 24.0f + 6.0f * tanh ((up - 24.0f) / 6.0f);
+
+        up *= clamp ((level + 100.0f) * 0.1f, 0.0f, 1.0f);
+        return down + up;
+    }
+
+    /// Band j's detector, meter and gain (meterRel: the meter's release per sample); returns
+    /// the band compressed and trimmed.
+    float<2> compressBand (Compressor& this, wrap<3> j, float<2> x, float att, float rel, float meterRel)
+    {
+        let e = extraPeak (x);
+        let env = this.env[j];
+        this.env[j] = env + (e - env) * (e > env ? att : rel);
+        this.meter[j] = max (e, this.meter[j] * meterRel);
+        let level = 20.0f * float (log10 (float64 (this.env[j]) + 1e-30));
+        let g = this.depth * compressorGain (level, this.threshold[j], this.downSlope[j], this.upThreshold[j], this.upSlope[j]);
+        this.gainDb[j] = g;
+        return x * (float (pow (10.0, float64 (g) * 0.05)) * this.trim[j]);
+    }
+
+    /// The parameters' slots per band (low, mid, high).
+    let compressorThresh   = int[3] (slot::Cp_LowThresh,   slot::Cp_MidThresh,   slot::Cp_HighThresh);
+    let compressorRatio    = int[3] (slot::Cp_LowRatio,    slot::Cp_MidRatio,    slot::Cp_HighRatio);
+    let compressorUpThresh = int[3] (slot::Cp_LowUpThresh, slot::Cp_MidUpThresh, slot::Cp_HighUpThresh);
+    let compressorUpRatio  = int[3] (slot::Cp_LowUpRatio,  slot::Cp_MidUpRatio,  slot::Cp_HighUpRatio);
+    let compressorTrim     = int[3] (slot::Cp_LowGain,     slot::Cp_MidGain,     slot::Cp_HighGain);
+    let compressorOn       = int[3] (slot::Cp_LowOn,       slot::Cp_MidOn,       slot::Cp_HighOn);
+
+    bool process (Compressor& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
+    {
+        if (! active && this.idle)
+            return false;
+
+        let bands = int (P[slot::Cp_Bands]) != 0;
+        let att = extraSmoothing (sr, float64 (expKnob (0.1f, 300.0f, P[slot::Cp_Attack])), 1);
+        let rel = extraSmoothing (sr, float64 (expKnob (5.0f, 3000.0f, P[slot::Cp_Release])), 1);
+        let meterRel = 1.0f - extraSmoothing (sr, 100.0, 1);
+
+        float[3] tThreshold, tDownSlope, tUpThreshold, tUpSlope, tTrim;
+
+        for (wrap<3> j)
+        {
+            tThreshold[j] = P.at (compressorThresh[j]);
+            tDownSlope[j] = 1.0f / max (P.at (compressorRatio[j]), 1.0f) - 1.0f;
+            tUpThreshold[j] = min (P.at (compressorUpThresh[j]), tThreshold[j]);
+            tUpSlope[j] = 1.0f - 1.0f / max (P.at (compressorUpRatio[j]), 1.0f);
+            tTrim[j] = P.at (compressorOn[j]) != 0 ? float (pow (10.0, float64 (P.at (compressorTrim[j])) * 0.05)) : 0.0f;
+        }
+
+        let tIn = float (pow (10.0, float64 (P[slot::Cp_InGain]) * 0.05));
+        let tOut = float (pow (10.0, float64 (P[slot::Cp_OutGain]) * 0.05));
+        let tDepth = clamp (P[slot::Cp_Depth], 0.0f, 1.0f);
+        let tMix = clamp (P[slot::Cp_Mix], 0.0f, 1.0f);
+
+        let hiHz = clamp (float64 (expKnob (20.0f, 20000.0f, P[slot::Cp_HighSplit])), 20.0, 0.45 * sr);
+        let loHz = min (float64 (expKnob (20.0f, 20000.0f, P[slot::Cp_LowSplit])), hiHz);
+        let tLow = float (log (loHz));
+        let tHigh = float (log (hiHz));
+        let k = extraSmoothing (sr, 20.0, 1);
+
+        if (this.fresh)
+        {
+            this.fresh = false;
+            this.inGain = tIn; this.outGain = tOut; this.depth = tDepth; this.mix = tMix;
+            this.threshold = tThreshold; this.downSlope = tDownSlope;
+            this.upThreshold = tUpThreshold; this.upSlope = tUpSlope;
+            this.trim = tTrim;
+            this.lowHz = tLow; this.highHz = tHigh;
+        }
+
+        let kb = extraSmoothing (sr, 20.0, blockSize);
+        this.lowHz += (tLow - this.lowHz) * kb;
+        this.highHz += (tHigh - this.highHz) * kb;
+        let cLow = extraSvfCoefs (exp (float64 (this.lowHz)), sr, extraButterworthK);
+        let cHigh = extraSvfCoefs (exp (float64 (this.highHz)), sr, extraButterworthK);
+
+        for (wrap<blockSize> i)
+        {
+            this.inGain += (tIn - this.inGain) * k;
+            this.outGain += (tOut - this.outGain) * k;
+            this.depth += (tDepth - this.depth) * k;
+            this.mix += (tMix - this.mix) * k;
+
+            for (wrap<3> j)
+            {
+                this.threshold[j] += (tThreshold[j] - this.threshold[j]) * k;
+                this.downSlope[j] += (tDownSlope[j] - this.downSlope[j]) * k;
+                this.upThreshold[j] += (tUpThreshold[j] - this.upThreshold[j]) * k;
+                this.upSlope[j] += (tUpSlope[j] - this.upSlope[j]) * k;
+                this.trim[j] += (tTrim[j] - this.trim[j]) * k;
+            }
+
+            // the dry side is the input with the crossovers' phase (their allpass), so that the
+            // mix doesn't comb-filter around the splits; the input gain is linear, so the bands
+            // are split before it
+            let x = buf[i];
+            float<2> dry, wet;
+
+            if (bands)
+            {
+                float<2> low, rest, mid, high;
+                this.lowX.split (cLow, x, low, rest);
+                this.highX.split (cHigh, rest, mid, high);
+                low = this.lowAp.allpass (cHigh, low);
+
+                dry = low + mid + high;
+                wet = this.compressBand (0, low * this.inGain, att, rel, meterRel)
+                    + this.compressBand (1, mid * this.inGain, att, rel, meterRel)
+                    + this.compressBand (2, high * this.inGain, att, rel, meterRel);
+            }
+            else
+            {
+                dry = x;
+                wet = this.compressBand (1, x * this.inGain, att, rel, meterRel);
+            }
+
+            buf[i] = dry + (wet * this.outGain - dry) * this.mix;
+        }
+
+        for (wrap<3> j)
+            this.levelDb[j] = max (-120.0f, 20.0f * float (log10 (float64 (this.meter[j]) + 1e-30)));
+
+        if (! bands)
+        {
+            this.levelDb[0] = -120.0f; this.levelDb[2] = -120.0f;
+            this.gainDb[0] = 0; this.gainDb[2] = 0;
+        }
+
+        if (active || anyAbove (buf, 1e-8f))
+        {
+            this.silentCount = 0;
+            this.idle = false;
+            return true;
+        }
+
+        this.silentCount += blockSize;
+
+        if (float (this.silentCount) > float (sr) * 0.1f)
+            this.idle = true;
+
+        return false;
+    }
+}

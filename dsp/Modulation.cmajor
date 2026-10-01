@@ -6,9 +6,9 @@
 //  is the filter's, at F_Speed. The derived coefficients are computed into EnvCoefs whenever a
 //  parameter changes.
 //
-//  Porridge adds a curve to each stage (attack, the decays, release): the level's remaining
-//  distance to the stage's end is raised to a power e = 8^curve, so 0 is Oatmeal's shape and
-//  positive curves leave the start level faster.
+//  Porridge adds a curve to each stage (attack, decay 1, decay 2, release): the level's
+//  remaining distance to the stage's end is raised to a power e = 8^curve, so 0 is Oatmeal's
+//  shape and positive curves leave the start level faster.
 
 namespace porridge
 {
@@ -16,11 +16,13 @@ namespace porridge
     {
         float killDec, attInc, d1coef, d2coef, relCoef, bp, sus;
         int holdSamples;
-        float eA, eD, eR;       // curve exponents (1: Oatmeal's)
+        float eA, eD1, eD, eR;  // curve exponents (1: Oatmeal's); eD is decay 2's
     }
 
     /// attackSlot: the envelope's block, from its attack time (slot::Attack, F_Attack, M1_Attack, M2_Attack).
-    EnvCoefs makeEnvCoefs (const float[numSlots]& P, int attackSlot, int curveSlot, float64 sr, float timeScale)
+    /// curveSlot: its attack, decay 2 and release curves (slot::Curve_Amp_Attack ...); decay1CurveSlot:
+    /// its decay 1 curve, which came later (slot::Curve_Amp_Decay1 ...).
+    EnvCoefs makeEnvCoefs (const float[numSlots]& P, int attackSlot, int curveSlot, int decay1CurveSlot, float64 sr, float timeScale)
     {
         EnvCoefs c;
         let kill    = 4.0 * float64 (timeScale);        // 'kill' fade time: always 4 ms in Oatmeal (not a parameter)
@@ -44,6 +46,7 @@ namespace porridge
         c.d2coef = float (pow (max (float64 (sus) / max (float64 (bp), 1e-6), 1e-6), 1.0 / max (sr * d2 * 0.001, 1.0)));
         c.relCoef = float (pow (10.0, -3.0 / max (sr * release * 0.001, 1.0)));
         c.eA = curveExponent (P.at (curveSlot));
+        c.eD1 = curveExponent (P.at (decay1CurveSlot));
         c.eD = curveExponent (P.at (curveSlot + 1));
         c.eR = curveExponent (P.at (curveSlot + 2));
         return c;
@@ -239,7 +242,7 @@ namespace porridge
             }
             else if (s == envStage::decay1)
             {
-                this.y += (bend (envCubic (this.L, bp, 1.0), 1.0f, bp, c.eD) - this.y) * sm;
+                this.y += (bend (envCubic (this.L, bp, 1.0), 1.0f, bp, c.eD1) - this.y) * sm;
                 out.at (i) = this.y;
                 this.L *= d1;
                 if (this.L <= bp) { this.L = bp; this.stage = stageAfterBreakpoint (bp, sus); continue; }
@@ -381,7 +384,7 @@ namespace porridge
         }
 
         if (this.stage == envStage::attack)                                             return bend (this.L, 0.0f, 1.0f, c.eA);
-        if (this.stage == envStage::decay1)                                             return bend (this.L, 1.0f, bp, c.eD);
+        if (this.stage == envStage::decay1)                                             return bend (this.L, 1.0f, bp, c.eD1);
         if (this.stage == envStage::decay2Down || this.stage == envStage::decay2Up)     return bend (this.L, bp, sus, c.eD);
         if (this.stage == envStage::release)                                            return bend (this.L, this.X, 0.0f, c.eR);
 

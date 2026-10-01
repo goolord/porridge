@@ -1,6 +1,6 @@
 // Runs whenever the patch is created, with or without the GUI open.
-// Parameters are restored by the host, but the user waveforms, LFO shapes and response
-// curves live in the patch's stored state and must be pushed into the DSP here.
+// Parameters are restored by the host, but the user waveforms, LFO shapes, response curves
+// and the convolvers' impulses live in the patch's stored state and must be pushed into the DSP here.
 // On a fresh instance it installs the factory bank and loads its first program, like
 // Oatmeal does when it starts.
 
@@ -49,6 +49,8 @@ let default = pc => {
     | (Some(Shapes), String(shapes)) => Bank.decodeShapes(shapes)->Option.forEach(sendShapes)
     | (Some(Tuning), String(tuning)) =>
       Bank.sendTuning(pc, tuning == "" ? None : Bank.decodeTuning(tuning))
+    | (Some(Impulses), String(s)) =>
+      Impulse.decode(s)->Array.forEachWithIndex((imp, which) => Impulse.send(pc, which, imp))
     // The patch answers the request below even when there is no bank, which is a new
     // instance. (A host restores a session before the worker starts, or later, replacing
     // the factory bank.)
@@ -64,5 +66,5 @@ let default = pc => {
     | _ => ()
     }
   })
-  [StoredState.Bank, Shapes, Tuning]->Array.forEach(StoredState.request(pc, _))
+  [StoredState.Bank, Shapes, Tuning, Impulses]->Array.forEach(StoredState.request(pc, _))
 }

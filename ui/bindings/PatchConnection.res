@@ -5,8 +5,9 @@ type t
 type parameterEvent = {endpointID: string, value: float}
 type storedStateEvent = {key: string, value: JSON.t}
 
-// Whatever readResource resolves to: a fetch Response in the WebAudio runtime; an array of
-// (signed) byte values or a string in the native worker.
+// Whatever readResource resolves to: a fetch Response in the WebAudio runtime (and from
+// Resources.res's fetch in the native view); an array of (signed) byte values or a string in
+// the native worker.
 type resource
 
 @send
@@ -44,4 +45,7 @@ external requestFullStoredState: (t, fullState => unit) => unit = "requestFullSt
 @send
 external removeEndpointListener: (t, string, JSON.t => unit) => unit = "removeEndpointListener"
 
+// Only the WebAudio runtime's connection and the worker's have readResource; the native
+// view's doesn't (Resources.res fetches instead).
 @send external readResource: (t, string) => promise<resource> = "readResource"
+@send external getResourceAddress: (t, string) => string = "getResourceAddress"

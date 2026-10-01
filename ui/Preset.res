@@ -7,7 +7,9 @@
 //     "modulations": [ { "source": "lfo1", "target": "Cutoff", "amount": 0.25, "via": "modWheel" } ],
 //     "macros": ["brightness", "", "", ""],                    // macro knob names
 //     "tables": { "wave1": "<base64 float32 LE>", ... },      // only tables that differ from Init
-//     "tuning": { "scl": "<.scl text>", "kbm": "<.kbm text>" }  // microtuning, if any
+//     "tuning": { "scl": "<.scl text>", "kbm": "<.kbm text>" }, // microtuning, if any
+//     "impulses": [ { "name": "hall.wav", "rate": 48000, "left": "<base64 float32 LE>",
+//                     "right": "..." }, null ]           // the convolvers' files (Impulse.res), if any
 //   }
 //
 // The modulation matrix's slot parameters (Mod1_Source ...) are written as "modulations",
@@ -45,6 +47,8 @@ type t = {
   tables: tables,
   // a Scala scale and keyboard mapping; None plays Oatmeal's tuning
   tuning: option<Scala.source>,
+  // each convolver's impulse from a file (Cv_Impulse "file")
+  impulses: array<option<Impulse.t>>,
 }
 
 let defs = Lazy.make(() => ParamDefs.makeDefs())
@@ -70,6 +74,7 @@ let make = name => {
   values: defaultValues(),
   tables: copyTables(Lazy.get(defaultTables)),
   tuning: None,
+  impulses: Impulse.none(),
 }
 
 // A whole bank: presets, then Init programs.
@@ -109,7 +114,7 @@ let fromOatmeal = (bytes: Uint8Array.t) => {
   Bank.programValues(bytes)->Map.forEachWithKey((x, id) =>
     clampValue(id, x)->Option.forEach(x => values->Map.set(id, x))
   )
-  {meta: emptyMeta(getName(bytes)), values, tables: extractTables(bytes), tuning: None}
+  {meta: emptyMeta(getName(bytes)), values, tables: extractTables(bytes), tuning: None, impulses: Impulse.none()}
 }
 
 let valueOf = (p, id) =>
@@ -150,16 +155,17 @@ let porridgeOnly = p => {
     | copies =>
       Some(`the rack's extra effects (${copies->Array.map(e => FxRack.kindName(e.kind))->Array.join(", ")})`)
     },
-    changed(Curves) ? Some("the envelope curves") : None,
+    changed(Curves) || changed(Decay1Curves) ? Some("the envelope curves") : None,
     changed(LfoExtras) ? Some("the LFO delay, slew, steps and one-shot") : None,
     changed(UnisonExtras) ? Some("the unison extras") : None,
     extended(["Sat_Type"]) ? Some("the custom distortion shape (exported as soft clipping)") : None,
     extended(["O1_Waveform", "O2_Waveform"]) ? Some("the HQ waveforms (exported as the plain ones)") : None,
     extended(["OscMix"]) || changed(PmFeedback) ? Some("the PM, ring and AM osc mix (exported as normal)") : None,
     extended(["Filter", "Filter2"]) || changed(FilterMorph)
-      ? Some("the zero-delay-feedback filters (exported as the nearest Oatmeal type)")
+      ? Some("Porridge's filter types (exported as the nearest Oatmeal type)")
       : None,
     p.tuning != None ? Some("the microtuning") : None,
+    changed(FilterDrive) ? Some("the filter drive") : None,
     String.length(p.meta.name) > nameLength - 1 ? Some("the full name") : None,
   ]->Array.filterMap(x => x)
 }
@@ -300,6 +306,9 @@ let toJson = (p, ~header=true) => {
     t->Dict.set("kbm", str(kbm))
     fields->Dict.set("tuning", JSON.Object(t))
   })
+  if !Impulse.isEmpty(p.impulses) {
+    fields->Dict.set("impulses", Impulse.listToJson(p.impulses))
+  }
   JSON.Object(fields)
 }
 
@@ -311,16 +320,24 @@ let getString = (d, key) =>
 
 let fromJsonObject = (d: dict<JSON.t>) => {
   let values = defaultValues()
-  switch d->Dict.get("params") {
-  | Some(Object(params)) =>
-    params->Dict.forEachWithKey((v, id) =>
-      switch v {
-      | Number(x) => clampValue(id, x)->Option.forEach(x => values->Map.set(id, x))
-      | _ => ()
-      }
-    )
-  | _ => ()
+  let params = switch d->Dict.get("params") {
+  | Some(Object(params)) => params
+  | _ => Dict.make()
   }
+  params->Dict.forEachWithKey((v, id) =>
+    switch v {
+    | Number(x) => clampValue(id, x)->Option.forEach(x => values->Map.set(id, x))
+    | _ => ()
+    }
+  )
+  // files from before decay 1 had a curve of its own: the decay curve bent both decays
+  PorridgeParams.envNames->Array.forEach(((env, _)) => {
+    let decay1 = PorridgeParams.decay1CurveId(env)
+    let decay = PorridgeParams.curveId(env, "Decay")
+    if params->Dict.get(decay1) == None {
+      values->Map.get(decay)->Option.forEach(x => values->Map.set(decay1, x))
+    }
+  })
 
   let given = switch d->Dict.get("tables") {
   | Some(Object(tables)) => tables
@@ -401,6 +418,7 @@ let fromJsonObject = (d: dict<JSON.t>) => {
       Scala.table(source)->Result.isOk ? Some(source) : None
     | _ => None
     },
+    impulses: d->Dict.get("impulses")->Option.mapOr(Impulse.none(), Impulse.listFromJson),
   }
 }
 

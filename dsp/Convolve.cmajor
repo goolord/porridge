@@ -1,0 +1,2034 @@
+//  Convolve: zero-latency convolution with built-in impulses (synthesised here) and one loaded
+//  from a file by the UI (loadImpulse).
+//
+//  Engine: non-uniform partitioned convolution. A head of 32 partitions of 64 taps (FFT 128) runs
+//  every block and covers taps 0 .. 2047. A tail of up to 126 partitions of 1024 taps (FFT 2048)
+//  covers taps 2048 .. 131071: its output for segment j + 2 (segments of 1024 samples, 16 blocks)
+//  is computed during input segment j + 1 from the frequency-domain delay line of input segments
+//  <= j, the work (forward FFT, multiply-accumulates, inverse FFT) spread over the segment's 16
+//  blocks by its estimated cost. Every FFT is a complex FFT of a stereo pair packed as
+//  left + i * right; spectra keep bins 0 .. N/2 - 1 of each channel, bin 0 holding DC (re) and
+//  Nyquist (im).
+//
+//  The source impulse (a built-in, or the file at the processing rate) is normalised for pink
+//  noise (see normalGain); then Cv_Length keeps a part of it, fading its end, and Cv_Reverse
+//  reverses that.
+//
+//  Changing the impulse: the new one is built over several blocks (synthesis or resampling, the
+//  source's spectrum for the gain, the head's spectra) while the old one keeps playing. Then the
+//  convolver's input
+//  crossfades from the old impulse to the new one over one segment: what came before rings out
+//  through the old impulse, what comes after goes through the new one. Each tail partition is
+//  replaced just after the old impulse's last use of it (one partition FFT per segment), so the
+//  tail needs no second set of spectra. While the effect is idle the new impulse is filled in
+//  directly.
+
+namespace porridge
+{
+    let convHeadParts   = 32;          // head partitions of 64 taps (FFT 128): taps 0 .. 2047
+    let convTailParts   = 126;         // tail partitions of 1024 taps (FFT 2048): taps 2048 .. 131071
+    let convMaxTaps     = 131072;      // longest impulse per channel, at the processing rate
+    let convPredelayMax = 48064;       // 250 ms at 192 kHz, and a little
+    let convSincZeros   = 8;           // the file resampler's windowed sinc: zero crossings a side
+    let convSincRes     = 256;         // table points per zero crossing
+    let convPi          = 3.141592653589793;
+
+    // Convolver.mode: how the tail partitions are being set up
+    let convSteady = 0;
+    let convXfade  = 1;                // crossfading from the old impulse to the new one
+    let convFill   = 2;                // filling the new impulse in directly (nothing to ring out)
+
+    /// Half spectrum of one channel of a tail partition or input frame: bins 0 .. 1023,
+    /// bin 0 holding DC (re) and Nyquist (im).
+    struct ConvSpectrum
+    {
+        float[1024] re, im;
+    }
+
+    /// The same for the head (bins 0 .. 63).
+    struct ConvHeadSpectrum
+    {
+        float[64] re, im;
+    }
+
+    struct ConvFft
+    {
+        float[2048] re, im;
+    }
+
+    struct ConvFftSmall
+    {
+        float[128] re, im;
+    }
+
+    /// The built-in impulse being synthesised, a few hundred taps per block.
+    struct ConvSynth
+    {
+        int kind, length, pos;
+        Lcg[4] rng;
+        float64 envLo, envHi, kLo, kHi;     // two bands' envelopes, decaying (or growing for the swell)
+        float split, toneLp, toneHp, erDecay;
+        int pre, attack, fadeOut, erCount;
+        float[2] splitS, lp1, lp2, hpS, erEnv;
+        int[2] erNext;
+        int[32] erTime;                     // early reflections: [channel * 16 + echo]
+        float[32] erGain;
+        float64[8] b0, b1, b2, a1, a2, z1, z2;  // biquad cascade (cabinets, telephone)
+        int biquads, taps;
+        int[6] tapTime;
+        float[6] tapGain;
+        float<48> mRe, mIm, mCr, mCi;       // metal tank modes: state and per-sample rotation
+        float<48> mL, mLq, mR, mRq;         // each mode's projection onto the channels
+        int spK, spM, spPos;                // spring: stretched allpass delay, stages, position
+        int[2] spD;
+        float<2>[512] spAp;                 // the allpass chains' state, both channels
+        float<2> spA;
+        float[2] spLp, spDc, spOut1, spOut2;
+        float spG, spLpA, spDcA, spOutA;
+        float[2] amCur, amTarget, bpLog, bpTarget, bpA1, bpA2, bpA3, bpS1, bpS2, nLp;
+        float amA, bpK, nLpA;
+        int peak;
+    }
+
+    /// Convolution with a built-in or loaded impulse. Call prepare once before use.
+    struct Convolver
+    {
+        // FFT tables and the resampler's kernel
+        float[1024] twCos, twSin;
+        int[2048] bitRev;
+        float[convSincZeros * convSincRes + 2] sincTable;
+        bool prepared;
+
+        int64 blockCount;                   // blocks processed (time stands still while idle)
+
+        // input: the predelay, then the convolver's input history
+        float[convPredelayMax] pdL, pdR;
+        int pdPos, pdCur, pdNext;           // write position; delay, and the one faded to
+        float pdFade;
+        bool pdFading;
+        float[4096] inL, inR;
+
+        // head: two sides (the old and the new impulse while crossfading)
+        ConvHeadSpectrum[128] headH;        // [side * 64 + part * 2 + channel]
+        ConvHeadSpectrum[128] headX;        // [side * 64 + (frame & 31) * 2 + channel]
+        ConvHeadSpectrum[2] headAcc;
+        ConvFftSmall headWork;
+        int headSide;
+        int[2] headParts;
+        bool headXfade;
+        int64 headLo, headB0;               // first frame of the playing side; first block of the crossfade
+
+        // tail
+        ConvSpectrum[252] tailH;            // [part * 2 + channel]
+        ConvSpectrum[252] tailX;            // input frames, [(frame % 126) * 2 + channel]
+        ConvSpectrum[4] tailE;              // the crossfade's two mixed frames, the old impulse's share
+        ConvSpectrum[8] ring;               // new partitions waiting for the old ones' last use
+        ConvSpectrum[2] acc;
+        ConvFft work, workH;
+        float[2048] outL, outR;             // tail output, two segments
+        int mode, tailParts, newTailParts, fillNext, committed;
+        int64 tailLo, xfS;                  // first frame in use; first segment after the crossfade
+
+        // this segment's tail job
+        int64 jobC;
+        int jobPc, jobEnd, jobFwd, jobALo, jobE1, jobE2, jobE3, jobE4, jobE5;
+        float jobTotal, jobDone;
+
+        // the partition FFT in progress (tail partition pjQ of the new impulse)
+        bool pjActive, pjRing;
+        int pjQ, pjStep;
+
+        // building a new impulse
+        int bPhase, bImpulse, bLk, bBase, bFileVersion, bPos, bSub;
+        bool bReverse, bMeasure;
+        float64 bSr;
+        float bPeak;
+        int curImpulse, curLk, curFileVersion, lkPlay, lkNew;
+        bool curReverse;
+        float64 curSr;
+
+        // the impulse being built or switched to, and its source's gain
+        int srcImpulse, srcLk, srcFade;
+        bool srcReverse, srcGone;
+        float srcGain;
+        float64 srcStep;
+        bool gainValid;
+        int gainImpulse, gainVersion;
+        float64 gainSr;
+
+        // the file's impulse, as loaded
+        float[convMaxTaps] fileL, fileR;
+        int fileLength, fileVersion;
+        float fileRate;
+        bool fileReceiving;
+
+        // a built-in's impulse (or the resampled file's) at the processing rate: 16-bit pairs with
+        // a scale per 2048 frames
+        int[convMaxTaps] stage;
+        float[64] stageScaleL, stageScaleR;
+        bool stageValid;
+        int stageImpulse, stageVersion;
+        float64 stageSr;
+        ConvSynth syn;
+
+        // the wet's filters, width, gain and the mix
+        float mixCur, gainCur, widthCur, hpAmt, lpAmt, hpLog, lpLog;
+        float[2] hp1, hp2, lp1, lp2;
+        bool idle;
+        int silentCount;                    // samples since the input was last active
+
+        // for the view: the source impulse (normalised, before Cv_Length and Cv_Reverse) as the
+        // peak |h| of each of 512 equal time bins, its length, and a count of its changes
+        float[512] viewPeaks;
+        float viewSeconds;
+        int viewVersion;
+    }
+
+    //==============================================================================
+    void prepare (Convolver& this)
+    {
+        for (wrap<1024> k)
+        {
+            let a = 2.0 * convPi * float64 (k) / 2048.0;
+            this.twCos[k] = float (cos (a));
+            this.twSin[k] = float (sin (a));
+        }
+
+        for (int i = 0; i < 2048; ++i)
+        {
+            int r = 0;
+
+            for (int b = 0; b < 11; ++b)
+                if (((i >> b) & 1) != 0)
+                    r |= 1 << (10 - b);
+
+            this.bitRev.at (i) = r;
+        }
+
+        let n = convSincZeros * convSincRes;
+
+        for (int i = 0; i <= n; ++i)
+        {
+            let u = float64 (i) / float64 (convSincRes);
+            let v = u / float64 (convSincZeros);
+            let s = i == 0 ? 1.0 : sin (convPi * u) / (convPi * u);
+            this.sincTable.at (i) = float (s * (0.42 + 0.5 * cos (convPi * v) + 0.08 * cos (2.0 * convPi * v)));
+        }
+
+        this.sincTable.at (n + 1) = 0.0f;
+
+        this.mode = convSteady;
+        this.tailParts = 0;
+        this.headParts[0] = 0;
+        this.headParts[1] = 0;
+        this.curImpulse = -1;
+        this.bPhase = 0;
+        this.stageValid = false;
+        this.mixCur = -1.0f;                // first block: jump to the targets
+        this.hpLog = log (20.0f);
+        this.lpLog = log (20000.0f);
+        this.prepared = true;
+        this.clearState();
+    }
+
+    /// Silence the history (input, frames, tail output, filters); keeps the impulses.
+    void clearState (Convolver& this)
+    {
+        for (int i = 0; i < convPredelayMax; ++i) { this.pdL.at (i) = 0; this.pdR.at (i) = 0; }
+        this.pdFading = false;
+        for (wrap<4096> i) { this.inL[i] = 0; this.inR[i] = 0; }
+        for (wrap<128> i) this.headX[i] = ConvHeadSpectrum();
+        for (wrap<2048> i) { this.outL[i] = 0; this.outR[i] = 0; this.work.re[i] = 0; this.work.im[i] = 0; }
+        this.acc[0] = ConvSpectrum();
+        this.acc[1] = ConvSpectrum();
+
+        for (wrap<2> c) { this.hp1[c] = 0; this.hp2[c] = 0; this.lp1[c] = 0; this.lp2[c] = 0; }
+
+        // The frames before now are left out instead of cleared, and a crossfade is finished.
+        this.settle();
+        this.tailLo = this.blockCount >> 4;
+        this.idle = true;
+        this.silentCount = 0;
+    }
+
+    /// The history is silent: finish a crossfade at once (the head switches, the tail's new
+    /// partitions are filled in directly) and leave the older frames out.
+    void settle (Convolver& this)
+    {
+        if (this.headXfade)
+        {
+            this.headSide = 1 - this.headSide;
+            this.headXfade = false;
+        }
+
+        this.headLo = this.blockCount;
+
+        if (this.mode == convXfade)
+        {
+            this.mode = convFill;
+            this.fillNext = this.committed;
+            this.pjActive = false;
+            this.tailLo = this.blockCount >> 4;
+            this.lkPlay = this.lkNew;
+        }
+
+        if (this.mode == convFill && this.fillNext >= this.newTailParts)
+        {
+            this.mode = convSteady;
+            this.tailParts = this.newTailParts;
+        }
+    }
+
+    //==============================================================================
+    /// Part of the file's impulse. A new offset-0 chunk starts a new file; the chunk that
+    /// reaches the last frame completes it; length 0 clears it.
+    void loadImpulse (Convolver& this, const ImpulseChunk& c)
+    {
+        let readingFile = this.srcImpulse == impulse::file && (this.bPhase != 0 || this.mode != convSteady);
+
+        if (c.length <= 0 || c.offset == 0)
+        {
+            if (this.bPhase != 0 && this.bImpulse == impulse::file)
+                this.bPhase = 0;            // built again once the file is complete
+
+            if (readingFile)
+                this.srcGone = true;        // a switch in progress truncates the old file's impulse
+        }
+
+        if (c.length <= 0)
+        {
+            this.fileLength = 0;
+            this.fileReceiving = false;
+            this.fileVersion++;
+            return;
+        }
+
+        if (c.offset == 0)
+        {
+            this.fileLength = min (c.length, convMaxTaps);
+            this.fileRate = max (c.rate, 1000.0f);
+            this.fileReceiving = true;
+        }
+
+        if (! this.fileReceiving)
+            return;
+
+        for (wrap<impulseChunkFrames> j)
+        {
+            let i = c.offset + int (j);
+
+            if (i >= 0 && i < this.fileLength)
+            {
+                this.fileL.at (i) = c.left[j];
+                this.fileR.at (i) = c.channels >= 2 ? c.right[j] : c.left[j];
+            }
+        }
+
+        if (c.offset + impulseChunkFrames >= c.length)
+        {
+            this.fileReceiving = false;
+            this.fileVersion++;
+        }
+    }
+
+    //==============================================================================
+    // FFT and spectra
+
+    /// One radix-2 stage of a forward FFT of 2048 or 128 points, input in bit-reversed order.
+    void convFftStage<W> (W& w, const float[1024]& twc, const float[1024]& tws, int stage)
+    {
+        let half = 1 << stage;
+        let step = 1024 >> stage;           // twiddles are those of the 2048-point FFT
+        let pairs = w.re.size / 2;
+
+        for (int j = 0; j < pairs; ++j)
+        {
+            let k = j & (half - 1);
+            let i0 = ((j - k) << 1) + k;
+            let i1 = i0 + half;
+            let c = twc.at (k * step);
+            let s = tws.at (k * step);
+            let xr = w.re.at (i1), xi = w.im.at (i1);
+            let tr = c * xr + s * xi;
+            let ti = c * xi - s * xr;
+            let ur = w.re.at (i0), ui = w.im.at (i0);
+            w.re.at (i0) = ur + tr;  w.im.at (i0) = ui + ti;
+            w.re.at (i1) = ur - tr;  w.im.at (i1) = ui - ti;
+        }
+    }
+
+    /// Splits the FFT of left + i * right into the two channels' half spectra (times 2 * scale).
+    void convUnpack<W, S> (const W& w, S& l, S& r, float scale)
+    {
+        let n = w.re.size;
+        let h = n / 2;
+        let s2 = scale * 2.0f;
+        l.re[0] = w.re[0] * s2;  l.im[0] = w.re.at (h) * s2;
+        r.re[0] = w.im[0] * s2;  r.im[0] = w.im.at (h) * s2;
+
+        for (int k = 1; k < h; ++k)
+        {
+            let ar = w.re.at (k), ai = w.im.at (k);
+            let br = w.re.at (n - k), bi = w.im.at (n - k);
+            l.re.at (k) = (ar + br) * scale;  l.im.at (k) = (ai - bi) * scale;
+            r.re.at (k) = (ai + bi) * scale;  r.im.at (k) = (br - ar) * scale;
+        }
+    }
+
+    /// The reverse: packs two half spectra as the conjugate of left + i * right, bit-reversed,
+    /// so that a forward FFT gives left in re and -right in im.
+    void convPack<W, S> (W& w, const S& l, const S& r, const int[2048]& rev, int shift)
+    {
+        let n = w.re.size;
+        let h = n / 2;
+        let d0 = rev.at (0);
+        let dh = rev.at (h << shift);
+        w.re.at (d0) = l.re[0];  w.im.at (d0) = -r.re[0];
+        w.re.at (dh) = l.im[0];  w.im.at (dh) = -r.im[0];
+
+        for (int k = 1; k < h; ++k)
+        {
+            let lr = l.re.at (k), li = l.im.at (k), rr = r.re.at (k), ri = r.im.at (k);
+            let a = rev.at (k << shift);
+            let b = rev.at ((n - k) << shift);
+            w.re.at (a) = lr - ri;  w.im.at (a) = -(li + rr);
+            w.re.at (b) = lr + ri;  w.im.at (b) = li - rr;
+        }
+    }
+
+    /// acc += x * h (bin 0: DC and Nyquist are real).
+    void convMac<S> (S& acc, const S& x, const S& h)
+    {
+        let dc = acc.re[0] + x.re[0] * h.re[0];
+        let ny = acc.im[0] + x.im[0] * h.im[0];
+
+        for (wrap<x.re.size> k)
+        {
+            let xr = x.re[k], xi = x.im[k], hr = h.re[k], hi = h.im[k];
+            acc.re[k] += xr * hr - xi * hi;
+            acc.im[k] += xr * hi + xi * hr;
+        }
+
+        acc.re[0] = dc;
+        acc.im[0] = ny;
+    }
+
+    /// The input crossfade from the old impulse to the new one at sample t (0 .. 1).
+    float rampAt (const Convolver& this, int64 t)
+    {
+        let u = t - (this.xfS - 1) * 1024;
+
+        if (u < 0)     return 0.0f;
+        if (u >= 1024) return 1.0f;
+
+        return convSmoothStep ((float (u) + 0.5f) * (1.0f / 1024.0f));
+    }
+
+    //==============================================================================
+    // The impulse's taps
+
+    float convSmoothStep (float x)
+    {
+        let u = clamp (x, 0.0f, 1.0f);
+        return u * u * (3.0f - 2.0f * u);
+    }
+
+    /// The file's impulse resampled to the processing rate (windowed sinc).
+    float<2> resampleTap (const Convolver& this, int t)
+    {
+        let x = float64 (t) * this.srcStep;
+        let fc = min (1.0, 1.0 / this.srcStep);
+        let reach = float64 (convSincZeros) / fc;
+        let n0 = max (0, int (ceil (x - reach)));
+        let n1 = min (this.fileLength - 1, int (floor (x + reach)));
+        let limit = convSincZeros * convSincRes;
+        float l = 0, r = 0;
+
+        for (int m = n0; m <= n1; ++m)
+        {
+            let u = abs (x - float64 (m)) * fc * float64 (convSincRes);
+            let i = int (u);
+
+            if (i < limit)
+            {
+                let a = this.sincTable.at (i);
+                let k = a + (this.sincTable.at (i + 1) - a) * float (u - float64 (i));
+                l += k * this.fileL.at (m);
+                r += k * this.fileR.at (m);
+            }
+        }
+
+        return float<2> (l, r) * float (fc);
+    }
+
+    /// Tap t of the source impulse, before the length, fade and reverse: the file's when it is at
+    /// the processing rate, else staging (a built-in, or the file resampled).
+    float<2> baseTap (const Convolver& this, int t)
+    {
+        if (this.srcImpulse == impulse::file && this.srcStep == 1.0)
+        {
+            if (this.srcGone || t >= this.fileLength)
+                return float<2>();
+
+            return float<2> (this.fileL.at (t), this.fileR.at (t));
+        }
+
+        let v = this.stage.at (t);
+        let block = t >> 11;
+        return float<2> (float ((v << 16) >> 16) * this.stageScaleL.at (block),
+                         float (v >> 16) * this.stageScaleR.at (block));
+    }
+
+    /// Tap t of the impulse that is built: the kept part, its end faded, maybe reversed.
+    float<2> keptTap (const Convolver& this, int t)
+    {
+        let n = this.srcLk;
+
+        if (t < 0 || t >= n)
+            return float<2>();
+
+        let s = this.srcReverse ? n - 1 - t : t;
+        var v = this.baseTap (s);
+        let fadeStart = n - this.srcFade;
+
+        if (s >= fadeStart)
+            v *= float (0.5 + 0.5 * cos (convPi * (float64 (s - fadeStart) + 0.5) / float64 (this.srcFade)));
+
+        return v;
+    }
+
+    //==============================================================================
+    // Head: 64-tap partitions, every block
+
+    /// Frame n (blocks n - 1 and n of the input) into the head's delay line at dst.
+    /// weight: 0 plain, 1 the old impulse's share of a crossfade, 2 the new one's.
+    void headFrame (Convolver& this, int64 n, int dst, int weight)
+    {
+        let t0 = (n - 1) * 64;
+
+        for (wrap<128> j)
+        {
+            let t = t0 + j;
+            let k = int (t & 4095);
+            var w = 1.0f;
+
+            if (weight != 0)
+            {
+                let r = this.rampAt (t);
+                w = weight == 1 ? 1.0f - r : r;
+            }
+
+            let d = this.bitRev.at (int (j) * 16);
+            this.headWork.re.at (d) = this.inL.at (k) * w;
+            this.headWork.im.at (d) = this.inR.at (k) * w;
+        }
+
+        for (int s = 0; s < 7; ++s)
+            convFftStage (this.headWork, this.twCos, this.twSin, s);
+
+        convUnpack (this.headWork, this.headX.at (dst), this.headX.at (dst + 1), 1.0f);
+    }
+
+    /// Head partition p of the impulse being built, into side `side`.
+    void headPartition (Convolver& this, int p, int side)
+    {
+        for (wrap<128> j)
+        {
+            let d = this.bitRev.at (int (j) * 16);
+            let v = j < 64 ? this.keptTap (p * 64 + int (j)) : float<2>();
+            this.headWork.re.at (d) = v[0];
+            this.headWork.im.at (d) = v[1];
+        }
+
+        for (int s = 0; s < 7; ++s)
+            convFftStage (this.headWork, this.twCos, this.twSin, s);
+
+        let i = side * 64 + p * 2;
+        convUnpack (this.headWork, this.headH.at (i), this.headH.at (i + 1), this.srcGain / (4.0f * 128.0f));
+    }
+
+    void headBlock (Convolver& this, int64 n, float<2>[blockSize]& wet)
+    {
+        if (this.headXfade && n >= this.headB0 + 48)
+        {
+            this.headSide = 1 - this.headSide;
+            this.headLo = this.headB0;
+            this.headXfade = false;
+        }
+
+        let old = this.headSide;
+        let nw = 1 - old;
+        let xf = this.headXfade;
+        let oldParts = this.headParts[old];
+        let newParts = xf ? this.headParts[nw] : 0;
+
+        if (oldParts == 0 && newParts == 0)
+        {
+            for (wrap<blockSize> i)
+                wet[i] = float<2>();
+
+            return;
+        }
+
+        let slot = int (n & 31) * 2;
+        let lastOld = xf ? this.headB0 + 16 : n;    // the last frame with input for the old impulse
+
+        if (oldParts > 0 && n <= lastOld)
+            this.headFrame (n, old * 64 + slot, xf ? 1 : 0);
+
+        if (newParts > 0 && n >= this.headB0)
+            this.headFrame (n, nw * 64 + slot, 2);
+
+        this.headAcc[0] = ConvHeadSpectrum();
+        this.headAcc[1] = ConvHeadSpectrum();
+
+        for (int p = 0; p < convHeadParts; ++p)
+        {
+            let f = n - p;
+            let x = int (f & 31) * 2;
+
+            if (p < oldParts && f >= this.headLo && f <= lastOld)
+            {
+                convMac (this.headAcc[0], this.headX.at (old * 64 + x), this.headH.at (old * 64 + p * 2));
+                convMac (this.headAcc[1], this.headX.at (old * 64 + x + 1), this.headH.at (old * 64 + p * 2 + 1));
+            }
+
+            if (p < newParts && f >= this.headB0)
+            {
+                convMac (this.headAcc[0], this.headX.at (nw * 64 + x), this.headH.at (nw * 64 + p * 2));
+                convMac (this.headAcc[1], this.headX.at (nw * 64 + x + 1), this.headH.at (nw * 64 + p * 2 + 1));
+            }
+        }
+
+        convPack (this.headWork, this.headAcc[0], this.headAcc[1], this.bitRev, 4);
+
+        for (int s = 0; s < 7; ++s)
+            convFftStage (this.headWork, this.twCos, this.twSin, s);
+
+        for (wrap<blockSize> i)
+            wet[i] = float<2> (this.headWork.re[64 + i], -this.headWork.im[64 + i]);
+    }
+
+    //==============================================================================
+    // Tail: 1024-tap partitions, one segment's job spread over its 16 blocks
+
+    // The steps' costs, in units of about 100 ns (measured on x86, compiled with -O2): what the
+    // job spreads evenly over the segment's blocks.
+    let convCostStage  = 14.0f;     // one radix-2 stage of the 2048-point FFT
+    let convCostGather = 12.0f;     // 2048 input samples into the FFT, bit-reversed
+    let convCostUnpack = 4.0f;      // the FFT into the two channels' half spectra
+    let convCostPack   = 11.0f;     // and back
+    let convCostMac    = 5.5f;      // one partition's multiply-accumulate, both channels
+    let convCostCommit = 1.5f;
+    let convCostTaps   = 8.5f;      // 256 taps of the new impulse into the FFT
+    let convCostMisc   = 3.0f;      // clearing the accumulators, writing the output
+
+    /// Starts the FFT of tail partition q of the new impulse, into the ring or straight into tailH.
+    void pjobStart (Convolver& this, int q, bool toRing)
+    {
+        this.pjActive = true;
+        this.pjRing = toRing;
+        this.pjQ = q;
+        this.pjStep = 0;
+    }
+
+    float pjobStepCost (int step)
+    {
+        return step < 4 ? convCostTaps : step < 15 ? convCostStage : convCostUnpack;
+    }
+
+    /// One of the partition FFT's 16 steps: 4 x gather 256 taps, 11 stages, unpack.
+    void pjobStep (Convolver& this)
+    {
+        if (! this.pjActive)
+        {
+            if (this.mode == convFill && this.fillNext < this.newTailParts)
+                this.pjobStart (this.fillNext, false);
+            else
+                return;
+        }
+
+        let s = this.pjStep;
+
+        if (s < 4)
+        {
+            if (s == 0)
+            {
+                for (int j = 1024; j < 2048; ++j)
+                {
+                    let d = this.bitRev.at (j);
+                    this.workH.re.at (d) = 0;
+                    this.workH.im.at (d) = 0;
+                }
+            }
+
+            let t0 = 2048 + 1024 * this.pjQ;
+
+            for (int j = 256 * s; j < 256 * s + 256; ++j)
+            {
+                let v = this.keptTap (t0 + j);
+                let d = this.bitRev.at (j);
+                this.workH.re.at (d) = v[0];
+                this.workH.im.at (d) = v[1];
+            }
+        }
+        else if (s < 15)
+        {
+            convFftStage (this.workH, this.twCos, this.twSin, s - 4);
+        }
+        else
+        {
+            let q = this.pjQ;
+            let scale = this.srcGain / (4.0f * 2048.0f);
+            this.pjActive = false;
+
+            if (this.pjRing)
+            {
+                let i = (q & 3) * 2;
+                convUnpack (this.workH, this.ring.at (i), this.ring.at (i + 1), scale);
+            }
+            else
+            {
+                convUnpack (this.workH, this.tailH.at (q * 2), this.tailH.at (q * 2 + 1), scale);
+
+                if (this.mode == convFill)
+                {
+                    this.fillNext = q + 1;
+
+                    if (this.fillNext >= this.newTailParts)
+                    {
+                        this.mode = convSteady;
+                        this.tailParts = this.newTailParts;
+                    }
+                }
+            }
+        }
+
+        this.pjStep = s + 1;
+    }
+
+    /// The forward FFT's gather: frame f (segments f - 1 and f) bit-reversed into work.
+    /// weight: 0 plain, 1 the new impulse's share of a crossfade, 2 the old one's.
+    void tailGather (Convolver& this, int64 f, int weight)
+    {
+        let t0 = (f - 1) * 1024;
+
+        for (int j = 0; j < 2048; ++j)
+        {
+            let t = t0 + j;
+            let k = int (t & 4095);
+            var w = 1.0f;
+
+            if (weight != 0)
+            {
+                let r = this.rampAt (t);
+                w = weight == 1 ? r : 1.0f - r;
+            }
+
+            let d = this.bitRev.at (j);
+            this.work.re.at (d) = this.inL.at (k) * w;
+            this.work.im.at (d) = this.inR.at (k) * w;
+        }
+    }
+
+    /// Plans segment c's job: [clear acc] [commit] [forward FFTs] [partition FFT] [MACs, old
+    /// impulse or the only one] [MACs, new impulse] [inverse FFT].
+    void tailSetup (Convolver& this, int64 c)
+    {
+        let S = this.xfS;
+
+        if (this.mode == convXfade && c > S + 1 + max (this.tailParts, this.newTailParts))
+        {
+            this.mode = convSteady;
+            this.tailParts = this.newTailParts;
+            this.tailLo = S - 1;
+            this.lkPlay = this.lkNew;
+        }
+
+        let xf = this.mode == convXfade;
+        let f = c - 1;
+        var total = convCostMisc;
+        this.jobC = c;
+
+        // the new partition whose old one was last used in the segment before
+        let commitQ = c - S - 2;
+        let commit = xf && commitQ >= 0 && commitQ < this.newTailParts ? 1 : 0;
+        total += float (commit) * convCostCommit;
+
+        // forward FFT of frame c - 1; twice for the crossfade's mixed frames
+        let used = this.mode != convSteady || this.tailParts > 0;
+        this.jobFwd = f < this.tailLo || ! used ? 0 : xf && (f == S - 1 || f == S) ? 2 : 1;
+        total += float (this.jobFwd) * (convCostGather + 11.0f * convCostStage + convCostUnpack);
+
+        // the new impulse's partition for this segment
+        if (xf)
+        {
+            let q = c - S + 1;
+
+            if (q >= 0 && q < this.newTailParts)
+                this.pjobStart (int (q), true);
+        }
+        else if (this.mode == convFill && ! this.pjActive && this.fillNext < this.newTailParts)
+        {
+            this.pjobStart (this.fillNext, false);
+        }
+
+        let pj = this.pjActive ? 16 - this.pjStep : 0;
+
+        for (int s = this.pjStep; this.pjActive && s < 16; ++s)
+            total += pjobStepCost (s);
+
+        // MACs: frame c - 1 - q with partition q
+        let newest = c - 1 - this.tailLo;     // highest q whose frame is in use
+        var aLo = 0, aHi = -1, bHi = -1;
+
+        if (xf)
+        {
+            aLo = int (max (0i64, c - 1 - S));
+            aHi = int (min (int64 (this.tailParts - 1), newest));
+            bHi = int (min (int64 (this.newTailParts - 1), c - S));
+        }
+        else
+        {
+            let parts = this.mode == convFill ? this.fillNext : this.tailParts;
+            aHi = int (min (int64 (parts - 1), newest));
+        }
+
+        let nA = max (0, aHi - aLo + 1);
+        let nB = max (0, bHi + 1);
+        total += float (nA + nB) * convCostMac;
+        total += nA + nB > 0 ? convCostPack + 11.0f * convCostStage + convCostMisc : convCostMisc;
+
+        this.jobALo = aLo;
+        this.jobE1 = 1 + commit;
+        this.jobE2 = this.jobE1 + 13 * this.jobFwd;
+        this.jobE3 = this.jobE2 + pj;
+        this.jobE4 = this.jobE3 + nA;
+        this.jobE5 = this.jobE4 + nB;
+        this.jobEnd = this.jobE5 + (nA + nB > 0 ? 13 : 1);
+        this.jobPc = 0;
+        this.jobTotal = total;
+        this.jobDone = 0;
+    }
+
+    /// One step of the segment's job; returns its cost.
+    float tailStep (Convolver& this)
+    {
+        let k = this.jobPc;
+        let c = this.jobC;
+        let S = this.xfS;
+        this.jobPc = k + 1;
+
+        if (k == 0)
+        {
+            this.acc[0] = ConvSpectrum();
+            this.acc[1] = ConvSpectrum();
+            return convCostMisc;
+        }
+
+        if (k < this.jobE1)
+        {
+            let q = int (c - S - 2);
+            let i = (q & 3) * 2;
+            this.tailH.at (q * 2) = this.ring.at (i);
+            this.tailH.at (q * 2 + 1) = this.ring.at (i + 1);
+            this.committed = q + 1;
+            return convCostCommit;
+        }
+
+        if (k < this.jobE2)
+        {
+            let v = (k - this.jobE1) / 13;
+            let s = (k - this.jobE1) % 13;
+            let f = c - 1;
+            let mixed = this.jobFwd == 2;
+
+            if (s == 0)
+            {
+                this.tailGather (f, mixed ? v + 1 : 0);
+                return convCostGather;
+            }
+
+            if (s < 12)
+            {
+                convFftStage (this.work, this.twCos, this.twSin, s - 1);
+                return convCostStage;
+            }
+
+            if (mixed && v == 1)
+            {
+                let e = int (f - (S - 1)) * 2;
+                convUnpack (this.work, this.tailE.at (e), this.tailE.at (e + 1), 1.0f);
+            }
+            else
+            {
+                let x = int (f % convTailParts) * 2;
+                convUnpack (this.work, this.tailX.at (x), this.tailX.at (x + 1), 1.0f);
+            }
+
+            return convCostUnpack;
+        }
+
+        if (k < this.jobE3)
+        {
+            let cost = this.pjActive ? pjobStepCost (this.pjStep) : 1.0f;
+            this.pjobStep();
+            return cost;
+        }
+
+        if (k < this.jobE4)
+        {
+            // the old impulse (or the only one)
+            let q = this.jobALo + (k - this.jobE3);
+            let f = c - 1 - q;
+
+            if (f < this.tailLo || (this.mode == convFill && q >= this.fillNext))
+                return 1.0f;
+
+            let h = q * 2;
+
+            if (this.mode == convXfade && f >= S - 1)
+            {
+                let e = int (f - (S - 1)) * 2;
+                convMac (this.acc[0], this.tailE.at (e), this.tailH.at (h));
+                convMac (this.acc[1], this.tailE.at (e + 1), this.tailH.at (h + 1));
+            }
+            else
+            {
+                let x = int (f % convTailParts) * 2;
+                convMac (this.acc[0], this.tailX.at (x), this.tailH.at (h));
+                convMac (this.acc[1], this.tailX.at (x + 1), this.tailH.at (h + 1));
+            }
+
+            return convCostMac;
+        }
+
+        if (k < this.jobE5)
+        {
+            // the new impulse during a crossfade: its partition q is in the ring until committed
+            if (this.mode != convXfade)
+                return 1.0f;
+
+            let q = k - this.jobE4;
+            let f = c - 1 - q;
+            let x = int (f % convTailParts) * 2;
+
+            if (c < S + 2 + q)
+            {
+                let i = (q & 3) * 2;
+                convMac (this.acc[0], this.tailX.at (x), this.ring.at (i));
+                convMac (this.acc[1], this.tailX.at (x + 1), this.ring.at (i + 1));
+            }
+            else
+            {
+                convMac (this.acc[0], this.tailX.at (x), this.tailH.at (q * 2));
+                convMac (this.acc[1], this.tailX.at (x + 1), this.tailH.at (q * 2 + 1));
+            }
+
+            return convCostMac;
+        }
+
+        let s = k - this.jobE5;
+        let ob = int ((c + 1) & 1) * 1024;
+
+        if (this.jobEnd - this.jobE5 == 1)
+        {
+            // nothing to convolve: silence
+            for (int j = 0; j < 1024; ++j) { this.outL.at (ob + j) = 0; this.outR.at (ob + j) = 0; }
+            return convCostMisc;
+        }
+
+        if (s == 0)
+        {
+            convPack (this.work, this.acc[0], this.acc[1], this.bitRev, 0);
+            return convCostPack;
+        }
+
+        if (s < 12)
+        {
+            convFftStage (this.work, this.twCos, this.twSin, s - 1);
+            return convCostStage;
+        }
+
+        for (int j = 0; j < 1024; ++j)
+        {
+            this.outL.at (ob + j) = this.work.re.at (1024 + j);
+            this.outR.at (ob + j) = -this.work.im.at (1024 + j);
+        }
+
+        return convCostMisc;
+    }
+
+    /// Block b's share of the segment's job (the last block finishes it).
+    void tailWork (Convolver& this, int b)
+    {
+        let target = b == 15 ? 1.0e30f : this.jobTotal * float (b + 1) * (1.0f / 16.0f);
+
+        while (this.jobPc < this.jobEnd && this.jobDone < target)
+            this.jobDone += this.tailStep();
+    }
+
+    //==============================================================================
+    // Building a new impulse: [synthesis or resampling] -> [the source's gain and view] -> head
+    // spectra -> switch
+
+    int convBuiltinLength (int kind, float64 sr)
+    {
+        let fit = float64 (convMaxTaps) / sr;
+        var seconds = 2.8;
+
+        if (kind == impulse::room)            seconds = 0.5;
+        else if (kind == impulse::cathedral)  seconds = 7.0;
+        else if (kind == impulse::plate)      seconds = 2.4;
+        else if (kind == impulse::spring)     seconds = 2.4;
+        else if (kind == impulse::cab1x12)    seconds = 0.04;
+        else if (kind == impulse::cab4x12)    seconds = 0.05;
+        else if (kind == impulse::metalTank)  seconds = 3.4;
+        else if (kind == impulse::telephone)  seconds = 0.03;
+        else if (kind == impulse::swell)      seconds = min (2.0, fit);     // shaped: squeezed to fit
+        else if (kind == impulse::noiseBloom) seconds = min (4.0, fit);
+
+        return min (convMaxTaps, int (seconds * sr + 0.5));
+    }
+
+    int fileBaseLength (const Convolver& this, float64 sr)
+    {
+        if (this.fileLength <= 0)
+            return 0;
+
+        let step = float64 (this.fileRate) / sr;
+
+        if (abs (step - 1.0) < 1.0e-6)
+            return this.fileLength;
+
+        return min (convMaxTaps, int (floor (float64 (this.fileLength - 1) / step)) + 1);
+    }
+
+    /// Compares the impulse the parameters ask for with the one playing (or being built).
+    void updateWanted (Convolver& this, const float[numSlots]& P, float64 sr)
+    {
+        let imp = clamp (int (P[slot::Cv_Impulse] + 0.5f), 0, impulse::file);
+
+        if (imp == impulse::file && this.fileReceiving)
+            return;                         // the rest of the file is on its way
+
+        let rev = P[slot::Cv_Reverse] > 0.5f;
+        let base = imp == impulse::file ? this.fileBaseLength (sr) : convBuiltinLength (imp, sr);
+        let len = float64 (clamp (P[slot::Cv_Length], 0.02f, 1.0f));
+        let lk = base == 0 ? 0 : clamp (int (len * float64 (base) + 0.5), 1, base);
+        let fv = imp == impulse::file ? this.fileVersion : 0;
+
+        if (this.bPhase != 0)
+        {
+            // a new source starts over; a new length or reverse waits for this build's switch
+            if (imp != this.bImpulse || sr != this.bSr || fv != this.bFileVersion)
+                this.startBuild (imp, lk, rev, base, fv, sr);
+
+            return;
+        }
+
+        if (this.mode != convSteady || this.headXfade)
+            return;
+
+        if (imp != this.curImpulse || lk != this.curLk || rev != this.curReverse || sr != this.curSr || fv != this.curFileVersion)
+            this.startBuild (imp, lk, rev, base, fv, sr);
+    }
+
+    void startBuild (Convolver& this, int imp, int lk, bool rev, int base, int fv, float64 sr)
+    {
+        this.bImpulse = imp;
+        this.bLk = lk;
+        this.bReverse = rev;
+        this.bBase = base;
+        this.bFileVersion = fv;
+        this.bSr = sr;
+        this.bPos = 0;
+        this.bSub = 0;
+        this.bPeak = 0;
+
+        this.srcImpulse = imp;
+        this.srcLk = lk;
+        this.srcReverse = rev;
+        this.srcGone = false;
+        this.srcFade = max (1, int (float64 (lk) * (0.05 + 0.3 * (1.0 - float64 (lk) / float64 (max (base, 1))))));
+        let step = float64 (this.fileRate) / sr;
+        this.srcStep = imp != impulse::file || abs (step - 1.0) < 1.0e-6 ? 1.0 : step;
+
+        // built-ins and resampled files are read from staging, made in phase 1 unless it holds
+        // them; a new source is measured for its gain in phase 2
+        let staged = imp != impulse::file || this.srcStep != 1.0;
+        let cached = this.stageValid && this.stageImpulse == imp && this.stageSr == sr && this.stageVersion == fv;
+        this.bMeasure = ! (this.gainValid && this.gainImpulse == imp && this.gainSr == sr && this.gainVersion == fv);
+
+        if (this.bMeasure)
+            this.gainValid = false;
+
+        if (staged && ! cached)
+        {
+            this.stageValid = false;
+            this.synthStart (imp, sr);
+            this.bPhase = 1;
+        }
+        else
+        {
+            this.bPhase = this.bMeasure ? 2 : 3;
+        }
+    }
+
+    /// Quantises the synthesis buffer's frames 0 .. count - 1 into staging block `block`.
+    void stageFlush (Convolver& this, int block, int count)
+    {
+        float mL = 0, mR = 0;
+
+        for (int j = 0; j < count; ++j)
+        {
+            mL = max (mL, abs (this.workH.re.at (j)));
+            mR = max (mR, abs (this.workH.im.at (j)));
+        }
+
+        let sL = mL > 0 ? mL / 32767.0f : 1.0f;
+        let sR = mR > 0 ? mR / 32767.0f : 1.0f;
+        this.stageScaleL.at (block) = sL;
+        this.stageScaleR.at (block) = sR;
+
+        for (int j = 0; j < count; ++j)
+        {
+            let l = int (roundToInt (this.workH.re.at (j) / sL));
+            let r = int (roundToInt (this.workH.im.at (j) / sR));
+            this.stage.at (block * 2048 + j) = (l & 0xffff) | (r << 16);
+        }
+    }
+
+    /// One step of measuring the source impulse: an FFT of each 2048 taps (gather 4 x 512 taps,
+    /// 11 stages, add the power), the power summed into tailE[0].re and the view's peaks kept in
+    /// tailE[1].im (both unused while building). Then the gain and the view. Returns its cost.
+    float measureStep (Convolver& this, float64 sr)
+    {
+        let s = this.bSub;
+        let n = this.bBase;
+
+        if (s < 4)
+        {
+            if (s == 0 && this.bPos == 0)
+            {
+                this.tailE[0] = ConvSpectrum();
+                this.tailE[1] = ConvSpectrum();
+                this.bPeak = 0;
+
+                if (n == 0)
+                {
+                    this.bSub = 16;         // nothing loaded: silence
+                    return 1.0f;
+                }
+            }
+
+            let t0 = this.bPos * 2048;
+
+            for (int j = 512 * s; j < 512 * s + 512; ++j)
+            {
+                let t = t0 + j;
+                let v = t < n ? this.baseTap (t) : float<2>();
+                let a = max (abs (v[0]), abs (v[1]));
+                this.bPeak = max (this.bPeak, a);
+
+                if (t < n)
+                {
+                    let bin = int ((int64 (t) * 512) / int64 (n));
+                    this.tailE[1].im.at (bin) = max (this.tailE[1].im.at (bin), a);
+                }
+
+                let d = this.bitRev.at (j);
+                this.workH.re.at (d) = v[0];
+                this.workH.im.at (d) = v[1];
+            }
+
+            this.bSub = s + 1;
+            return 2.0f * convCostTaps;
+        }
+
+        if (s < 15)
+        {
+            convFftStage (this.workH, this.twCos, this.twSin, s - 4);
+            this.bSub = s + 1;
+            return convCostStage;
+        }
+
+        if (s == 16)
+        {
+            let g = this.normalGain (sr);
+            this.srcGain = g;
+            this.gainValid = true;
+            this.gainImpulse = this.bImpulse;
+            this.gainVersion = this.bFileVersion;
+            this.gainSr = sr;
+
+            for (wrap<512> i)
+            {
+                // a short impulse leaves bins without a tap: they show the tap at their start
+                let t = int ((int64 (i) * int64 (n)) / 512);
+                let v = n < 512 && t < n ? this.baseTap (t) : float<2>();
+                this.viewPeaks[i] = (n < 512 ? max (abs (v[0]), abs (v[1])) : this.tailE[1].im[i]) * g;
+            }
+
+            this.viewSeconds = float (float64 (n) / sr);
+            this.viewVersion++;
+            this.bPhase = 3;
+            this.bPos = 0;
+            return 100.0f;
+        }
+
+        // (|L|^2 + |R|^2) / 2 from the FFT of left + i * right
+        for (int k = 1; k < 1024; ++k)
+        {
+            let ar = this.workH.re.at (k), ai = this.workH.im.at (k);
+            let br = this.workH.re.at (2048 - k), bi = this.workH.im.at (2048 - k);
+            let lr = ar + br, li = ai - bi, rr = ai + bi, ri = br - ar;
+            this.tailE[0].re.at (k) += 0.125f * (lr * lr + li * li + rr * rr + ri * ri);
+        }
+
+        this.bSub = 0;
+        this.bPos++;
+
+        if (this.bPos * 2048 >= n)
+        {
+            this.bSub = 16;                 // the gain, in a block of its own
+            return 1000.0f;
+        }
+
+        return 15.0f;
+    }
+
+    /// The gain that brings pink noise through the source impulse out at its own level, capped so
+    /// that the response (smoothed over a third of an octave) peaks at +3 dB and no tap exceeds 1.
+    /// Resonant impulses (cabinets, telephone, metal tank) come out a little lower instead of hot.
+    float normalGain (Convolver& this, float64 sr)
+    {
+        let binHz = sr / 2048.0;
+        let kLo = clamp (int (20.0 / binHz), 1, 1023);
+        let kHi = clamp (int (min (20000.0, 0.45 * sr) / binHz), kLo, 1023);
+        float64 num = 0, den = 0, sum = 0;
+        this.tailE[1].re[0] = 0;
+
+        // pink weighting (1 / f per bin); prefix sums of the power into tailE[1].re
+        for (int k = 1; k < 1024; ++k)
+        {
+            let p = float64 (this.tailE[0].re.at (k));
+
+            if (k >= kLo && k <= kHi)
+            {
+                num += p / float64 (k);
+                den += 1.0 / float64 (k);
+            }
+
+            sum += p;
+            this.tailE[1].re.at (k) = float (sum);
+        }
+
+        let pink = num / den;
+
+        if (pink < 1.0e-20 || this.bPeak <= 0)
+            return 0.0f;
+
+        float64 peak = 0;
+
+        for (int k = kLo; k <= kHi; ++k)
+        {
+            let a = max (1, int (float64 (k) * 0.8909));        // a sixth of an octave either side
+            let b = min (1023, int (float64 (k) * 1.1225 + 0.5));
+            let mean = float64 (this.tailE[1].re.at (b) - this.tailE[1].re.at (a - 1)) / float64 (b - a + 1);
+            peak = max (peak, mean);
+        }
+
+        return float (min (min (1.0 / sqrt (pink), 1.4125 / sqrt (peak)), 1.0 / float64 (this.bPeak)));
+    }
+
+    /// Taps synthesised (or resampled) per block: about 10 us of work (measured as for the costs).
+    int synthBudget (const Convolver& this)
+    {
+        let k = this.syn.kind;
+
+        if (k == impulse::file)      return max (16, int (130.0 * min (1.0, 1.0 / this.srcStep)));
+        if (k == impulse::spring)    return 180;
+        if (k == impulse::metalTank) return 220;
+        if (k == impulse::room)      return 260;
+        if (k == impulse::hall)      return 400;
+        if (k == impulse::cathedral) return 420;
+        if (k == impulse::cab1x12 || k == impulse::cab4x12 || k == impulse::telephone) return 1024;
+        return 650;
+    }
+
+    /// One block's share of the build (about 10 us of work, three times that when idle): taps of
+    /// synthesis or resampling, steps of the measurement, or 4 head partitions; then the switch
+    /// starts (directly when idle).
+    void buildWork (Convolver& this, float64 sr, bool direct)
+    {
+        if (this.bPhase == 1)
+        {
+            let budget = this.synthBudget() * (direct ? 3 : 1);      // idle blocks can do more
+
+            for (int i = 0; i < budget && this.syn.pos < this.syn.length; ++i)
+            {
+                let v = this.synthTap (sr);
+                let j = this.syn.pos & 2047;
+                this.workH.re.at (j) = v[0];
+                this.workH.im.at (j) = v[1];
+                this.syn.pos++;
+
+                if ((this.syn.pos & 2047) == 0 || this.syn.pos == this.syn.length)
+                    this.stageFlush ((this.syn.pos - 1) >> 11, j + 1);
+            }
+
+            if (this.syn.pos >= this.syn.length)
+            {
+                this.stageValid = true;
+                this.stageImpulse = this.syn.kind;
+                this.stageVersion = this.bFileVersion;
+                this.stageSr = sr;
+                this.bPhase = this.bMeasure ? 2 : 3;
+            }
+
+            return;
+        }
+
+        if (this.bPhase == 2)
+        {
+            float spent = 0;
+
+            while (spent < (direct ? 300.0f : 100.0f) && this.bPhase == 2)
+                spent += this.measureStep (sr);
+
+            return;
+        }
+
+        if (this.bPhase == 3)
+        {
+            let parts = min (convHeadParts, (this.srcLk + 63) / 64);
+            let end = min (parts, this.bPos + 4);
+
+            for (int p = this.bPos; p < end; ++p)
+                this.headPartition (p, 1 - this.headSide);
+
+            this.bPos = end;
+
+            if (end >= parts)
+                this.startSwitch (direct);
+        }
+    }
+
+    /// The new impulse's head is ready: switch to it, crossfading the input from the next segment
+    /// on, or directly when nothing is ringing.
+    void startSwitch (Convolver& this, bool direct)
+    {
+        let n = this.blockCount;
+        let c = n >> 4;
+        let lk = this.srcLk;
+        let nw = 1 - this.headSide;
+
+        this.headParts[nw] = min (convHeadParts, (lk + 63) / 64);
+        this.newTailParts = clamp ((lk - 2048 + 1023) / 1024, 0, convTailParts);
+        this.committed = 0;
+        this.lkNew = lk;
+        this.lkPlay = max (this.lkPlay, lk);
+        this.curImpulse = this.bImpulse;
+        this.curLk = this.bLk;
+        this.curReverse = this.bReverse;
+        this.curSr = this.bSr;
+        this.curFileVersion = this.bFileVersion;
+        this.bPhase = 0;
+
+        if (direct)
+        {
+            this.headSide = nw;
+            this.headLo = n;
+            this.mode = convFill;
+            this.fillNext = 0;
+            this.pjActive = false;
+            this.tailLo = c;
+            this.lkPlay = lk;
+            this.settle();
+        }
+        else
+        {
+            this.xfS = c + 2;
+            this.headB0 = (c + 1) * 16;
+            this.headXfade = true;
+            this.mode = convXfade;
+        }
+    }
+
+    //==============================================================================
+    // Built-in impulses
+
+    float convOnePole (float64 hz, float64 sr)
+    {
+        return float (1.0 - exp (-2.0 * convPi * min (hz, 0.45 * sr) / sr));
+    }
+
+    float convRand01 (Lcg& rng)
+    {
+        return 0.5f + 0.5f * rng.nextSigned();
+    }
+
+    /// Two-band decaying noise: the reverbs' diffuse part (and the swell's, growing).
+    void initDecay (ConvSynth& s, float64 sr, float64 t60Lo, float64 t60Hi, float64 xoverHz,
+                    float64 lpHz, float64 hpHz, float64 preMs, float64 attackMs)
+    {
+        s.envLo = 1.0;
+        s.envHi = 1.0;
+        s.kLo = pow (10.0, -3.0 / (t60Lo * sr));
+        s.kHi = pow (10.0, -3.0 / (t60Hi * sr));
+        s.split = convOnePole (xoverHz, sr);
+        s.toneLp = convOnePole (lpHz, sr);
+        s.toneHp = convOnePole (hpHz, sr);
+        s.pre = int (preMs * 0.001 * sr);
+        s.attack = max (1, int (attackMs * 0.001 * sr));
+    }
+
+    /// Early reflections: short noise bursts at jittered times between two delays.
+    void initEchoes (ConvSynth& s, float64 sr, int count, float64 fromMs, float64 toMs,
+                     float g0, float g1, float64 smearMs)
+    {
+        s.erCount = count;
+        s.erDecay = float (exp (-1.0 / (smearMs * 0.001 * sr)));
+
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            for (int k = 0; k < count; ++k)
+            {
+                let u = float64 (convRand01 (s.rng.at (ch + 2)));
+                let ms = fromMs + (toMs - fromMs) * (float64 (k) + 0.8 * u) / float64 (count);
+                let g = g0 + (g1 - g0) * float (k) / float (max (1, count - 1));
+                s.erTime.at (ch * 16 + k) = int (ms * 0.001 * sr);
+                s.erGain.at (ch * 16 + k) = g * (0.7f + 0.3f * convRand01 (s.rng.at (ch + 2)));
+            }
+        }
+    }
+
+    float<2> decayTap (ConvSynth& s, int t)
+    {
+        let onset = t < s.pre ? 0.0f : convSmoothStep (float (t - s.pre) / float (s.attack));
+        float<2> out;
+
+        for (wrap<2> ch)
+        {
+            let n = s.rng[ch].nextSigned();
+            s.splitS[ch] += s.split * (n - s.splitS[ch]);
+            let lo = s.splitS[ch];
+            var x = (lo * float (s.envLo) + (n - lo) * float (s.envHi)) * onset;
+
+            let k = s.erNext[ch];
+
+            if (k < s.erCount && t >= s.erTime.at (ch * 16 + k))
+            {
+                s.erEnv[ch] += s.erGain.at (ch * 16 + k);
+                s.erNext[ch] = k + 1;
+            }
+
+            x += s.erEnv[ch] * s.rng[ch + 2].nextSigned();
+            s.erEnv[ch] *= s.erDecay;
+
+            s.lp1[ch] += s.toneLp * (x - s.lp1[ch]);
+            s.lp2[ch] += s.toneLp * (s.lp1[ch] - s.lp2[ch]);
+            s.hpS[ch] += s.toneHp * (s.lp2[ch] - s.hpS[ch]);
+            out[ch] = s.lp2[ch] - s.hpS[ch];
+        }
+
+        s.envLo *= s.kLo;
+        s.envHi *= s.kHi;
+        return out;
+    }
+
+    /// RBJ biquad i of the cascade: type 0 low-pass, 1 high-pass, 2 peak.
+    void setBiquad (ConvSynth& s, int i, int type, float64 hz, float64 q, float64 dB, float64 sr)
+    {
+        let w = 2.0 * convPi * min (hz, 0.45 * sr) / sr;
+        let cw = cos (w);
+        let alpha = sin (w) / (2.0 * q);
+        let A = pow (10.0, dB / 40.0);
+        var b0 = 1.0, b1 = -2.0 * cw, b2 = 1.0, a0 = 1.0 + alpha, a2 = 1.0 - alpha;
+
+        if (type == 0)      { b0 = (1.0 - cw) * 0.5; b1 = 1.0 - cw; b2 = b0; }
+        else if (type == 1) { b0 = (1.0 + cw) * 0.5; b1 = -(1.0 + cw); b2 = b0; }
+        else                { b0 = 1.0 + alpha * A; b2 = 1.0 - alpha * A; a0 = 1.0 + alpha / A; a2 = 1.0 - alpha / A; }
+
+        s.b0.at (i) = b0 / a0;
+        s.b1.at (i) = b1 / a0;
+        s.b2.at (i) = b2 / a0;
+        s.a1.at (i) = -2.0 * cw / a0;
+        s.a2.at (i) = a2 / a0;
+        s.biquads = max (s.biquads, i + 1);
+    }
+
+    void setTap (ConvSynth& s, float64 ms, float gain, float64 sr)
+    {
+        s.tapTime.at (s.taps) = int (ms * 0.001 * sr + 0.5);
+        s.tapGain.at (s.taps) = gain;
+        s.taps++;
+    }
+
+    /// Cabinets and telephone: a few taps through a biquad cascade (mono).
+    float<2> cascadeTap (ConvSynth& s, int t)
+    {
+        float64 x = 0;
+
+        for (int k = 0; k < s.taps; ++k)
+            if (s.tapTime.at (k) == t)
+                x += float64 (s.tapGain.at (k));
+
+        for (int i = 0; i < s.biquads; ++i)
+        {
+            let y = s.b0.at (i) * x + s.z1.at (i);
+            s.z1.at (i) = s.b1.at (i) * x - s.a1.at (i) * y + s.z2.at (i);
+            s.z2.at (i) = s.b2.at (i) * x - s.a2.at (i) * y;
+            x = y;
+        }
+
+        return float<2> (float (x));
+    }
+
+    /// Metal tank: inharmonic decaying modes, a short clang and a little diffuse noise.
+    float<2> metalTap (ConvSynth& s)
+    {
+        let re = s.mRe * s.mCr - s.mIm * s.mCi;
+        let im = s.mRe * s.mCi + s.mIm * s.mCr;
+        s.mRe = re;
+        s.mIm = im;
+        let l = sum (im * s.mL + re * s.mLq);
+        let r = sum (im * s.mR + re * s.mRq);
+
+        float<2> out;
+
+        for (wrap<2> ch)
+        {
+            let clang = s.rng[ch].nextSigned() * float (s.envHi);
+            s.hpS[ch] += s.toneHp * (clang - s.hpS[ch]);
+            let diffuse = s.rng[ch + 2].nextSigned() * float (s.envLo) * 0.04f;
+            out[ch] = (ch == 0 ? l : r) + (clang - s.hpS[ch]) * 0.6f + diffuse;
+        }
+
+        s.envLo *= s.kLo;
+        s.envHi *= s.kHi;
+        return out;
+    }
+
+    // The spring's loops live in ring (unused while building).
+    float springLine (const Convolver& this, int ch, int i)
+    {
+        let e = ch * 4 + (i >> 11);
+        let o = i & 2047;
+        return o < 1024 ? this.ring.at (e).re.at (o) : this.ring.at (e).im.at (o - 1024);
+    }
+
+    void setSpringLine (Convolver& this, int ch, int i, float v)
+    {
+        let e = ch * 4 + (i >> 11);
+        let o = i & 2047;
+
+        if (o < 1024) this.ring.at (e).re.at (o) = v;
+        else          this.ring.at (e).im.at (o - 1024) = v;
+    }
+
+    /// Spring: an impulse circulating in a loop through a chain of stretched allpasses, which
+    /// smear each round trip into a descending chirp.
+    float<2> springTap (Convolver& this, int t)
+    {
+        let K = this.syn.spK;
+        let p = this.syn.spPos;
+        float<2> x;
+
+        for (wrap<2> ch)
+        {
+            let fb = this.springLine (ch, t % this.syn.spD[ch]);
+            this.syn.spLp[ch] += this.syn.spLpA * (fb - this.syn.spLp[ch]);
+            this.syn.spDc[ch] += this.syn.spDcA * (this.syn.spLp[ch] - this.syn.spDc[ch]);
+            let drip = this.syn.rng[ch].nextSigned() * float (this.syn.envLo) * 0.01f;
+            x[ch] = (t == 0 ? 1.0f : 0.0f) + drip + this.syn.spG * (this.syn.spLp[ch] - this.syn.spDc[ch]);
+        }
+
+        let a = this.syn.spA;
+
+        for (int i = 0; i < this.syn.spM; ++i)
+        {
+            let j = i * K + p;
+            let old = this.syn.spAp.at (j);
+            let v = x - a * old;
+            x = a * v + old;
+            this.syn.spAp.at (j) = v;
+        }
+
+        float<2> out;
+
+        for (wrap<2> ch)
+        {
+            this.setSpringLine (ch, t % this.syn.spD[ch], x[ch]);
+            this.syn.spOut1[ch] += this.syn.spOutA * (x[ch] - this.syn.spOut1[ch]);
+            this.syn.spOut2[ch] += this.syn.spOutA * (this.syn.spOut1[ch] - this.syn.spOut2[ch]);
+            this.syn.hpS[ch] += this.syn.toneHp * (this.syn.spOut2[ch] - this.syn.hpS[ch]);
+            out[ch] = this.syn.spOut2[ch] - this.syn.hpS[ch];
+        }
+
+        this.syn.spPos = p + 1 >= K ? 0 : p + 1;
+        this.syn.envLo *= this.syn.kLo;
+        return out;
+    }
+
+    /// Noise bloom: noise through a wandering band-pass plus a soft noise bed, under a slow swell
+    /// and decay with a grainy amplitude flutter.
+    float<2> bloomTap (ConvSynth& s, int t, float64 sr)
+    {
+        var env = 0.0f;
+
+        if (t < s.peak)
+        {
+            let u = float (t) / float (s.peak);
+            env = sin (float (convPi) * 0.5f * u) * sin (float (convPi) * 0.5f * u);
+        }
+        else
+        {
+            env = float (s.envLo);
+            s.envLo *= s.kLo;
+        }
+
+        let amPeriod = max (1, int (0.03 * sr));
+        let bpPeriod = max (1, int (0.15 * sr));
+        float<2> out;
+
+        for (wrap<2> ch)
+        {
+            if (t % amPeriod == 0)
+                s.amTarget[ch] = 0.15f + 0.85f * convRand01 (s.rng[ch + 2]);
+
+            if (t % bpPeriod == 0)
+                s.bpTarget[ch] = log (250.0f) + convRand01 (s.rng[ch + 2]) * log (2800.0f / 250.0f);
+
+            if ((t & 31) == 0)
+            {
+                s.bpLog[ch] += (s.bpTarget[ch] - s.bpLog[ch]) * 0.03f;
+                let g = float (tan (convPi * min (float64 (exp (s.bpLog[ch])), 0.45 * sr) / sr));
+                s.bpA1[ch] = 1.0f / (1.0f + g * (g + s.bpK));
+                s.bpA2[ch] = g * s.bpA1[ch];
+                s.bpA3[ch] = g * s.bpA2[ch];
+            }
+
+            s.amCur[ch] += s.amA * (s.amTarget[ch] - s.amCur[ch]);
+
+            let n = s.rng[ch].nextSigned();
+            let v3 = n - s.bpS2[ch];
+            let v1 = s.bpA1[ch] * s.bpS1[ch] + s.bpA2[ch] * v3;
+            let v2 = s.bpS2[ch] + s.bpA2[ch] * s.bpS1[ch] + s.bpA3[ch] * v3;
+            s.bpS1[ch] = 2.0f * v1 - s.bpS1[ch];
+            s.bpS2[ch] = 2.0f * v2 - s.bpS2[ch];
+
+            s.nLp[ch] += s.nLpA * (s.rng[ch + 2].nextSigned() - s.nLp[ch]);
+            out[ch] = env * s.amCur[ch] * (0.7f * v1 * s.bpK + 0.6f * s.nLp[ch]);
+        }
+
+        return out;
+    }
+
+    /// Starts synthesising built-in `kind` into staging (or resampling the file into it).
+    void synthStart (Convolver& this, int kind, float64 sr)
+    {
+        this.syn = ConvSynth();
+        this.syn.kind = kind;
+        this.syn.length = kind == impulse::file ? this.bBase : convBuiltinLength (kind, sr);
+
+        for (wrap<4> i)
+            this.syn.rng[i].state = 1234567 + 7919 * (kind * 4 + int (i));
+
+        if (kind == impulse::room)
+        {
+            initDecay (this.syn, sr, 0.42, 0.26, 3000.0, 6000.0, 90.0, 2.5, 6.0);
+            initEchoes (this.syn, sr, 10, 1.5, 22.0, 4.0f, 1.5f, 0.4);
+        }
+        else if (kind == impulse::hall)
+        {
+            initDecay (this.syn, sr, 2.3, 1.3, 2500.0, 5000.0, 50.0, 18.0, 50.0);
+            initEchoes (this.syn, sr, 14, 8.0, 85.0, 3.0f, 1.2f, 1.5);
+        }
+        else if (kind == impulse::cathedral)
+        {
+            initDecay (this.syn, sr, 6.0, 3.2, 1800.0, 3500.0, 40.0, 55.0, 350.0);
+            initEchoes (this.syn, sr, 9, 45.0, 420.0, 6.0f, 3.0f, 5.0);
+        }
+        else if (kind == impulse::plate)
+        {
+            initDecay (this.syn, sr, 2.0, 1.6, 5000.0, 12000.0, 140.0, 0.0, 0.3);
+        }
+        else if (kind == impulse::swell)
+        {
+            // a reversed hall: both bands grow, the highs later, then a quick cut
+            let T = float64 (this.syn.length) / sr;
+            initDecay (this.syn, sr, 1.7, 0.9, 2500.0, 9000.0, 60.0, 0.0, 10.0);
+            this.syn.envLo = pow (10.0, -3.0 * T / 1.7);
+            this.syn.envHi = pow (10.0, -3.0 * T / 0.9);
+            this.syn.kLo = 1.0 / this.syn.kLo;
+            this.syn.kHi = 1.0 / this.syn.kHi;
+            this.syn.fadeOut = max (1, int (0.03 * sr));
+        }
+        else if (kind == impulse::spring)
+        {
+            let s = this.syn.length;
+            this.syn.spK = clamp (int (sr / 9000.0 + 0.5), 1, 25);
+            this.syn.spM = 20;
+            this.syn.spD[0] = clamp (int (0.0313 * sr), 2, 8191);
+            this.syn.spD[1] = clamp (int (0.0367 * sr), 2, 8191);
+            this.syn.spA = float<2> (-0.75f, -0.78f);
+            let trip = float64 (this.syn.spD[0]) + 3.0 * float64 (this.syn.spK * this.syn.spM);
+            this.syn.spG = float (pow (10.0, -3.0 * trip / (2.2 * sr)));
+            this.syn.spLpA = convOnePole (4000.0, sr);
+            this.syn.spDcA = convOnePole (40.0, sr);
+            this.syn.spOutA = convOnePole (4500.0, sr);
+            this.syn.toneHp = convOnePole (100.0, sr);
+            this.syn.envLo = 1.0;
+            this.syn.kLo = exp (-1.0 / (0.08 * sr));
+
+            for (wrap<8> i) this.ring[i] = ConvSpectrum();
+            this.syn.length = s;
+        }
+        else if (kind == impulse::cab1x12)
+        {
+            setTap (this.syn, 0.0, 1.0f, sr);
+            setTap (this.syn, 1.1, -0.3f, sr);
+            setTap (this.syn, 2.7, 0.12f, sr);
+            setBiquad (this.syn, 0, 1, 75.0, 0.8, 0.0, sr);
+            setBiquad (this.syn, 1, 2, 110.0, 1.4, 6.0, sr);
+            setBiquad (this.syn, 2, 2, 400.0, 1.0, -3.0, sr);
+            setBiquad (this.syn, 3, 2, 1800.0, 1.5, 3.0, sr);
+            setBiquad (this.syn, 4, 2, 3000.0, 2.5, 5.0, sr);
+            setBiquad (this.syn, 5, 2, 4200.0, 4.0, -6.0, sr);
+            setBiquad (this.syn, 6, 0, 5200.0, 1.0, 0.0, sr);
+            setBiquad (this.syn, 7, 0, 6000.0, 0.6, 0.0, sr);
+        }
+        else if (kind == impulse::cab4x12)
+        {
+            // four speakers at slightly different distances: comb-like cancellations
+            setTap (this.syn, 0.0, 0.30f, sr);
+            setTap (this.syn, 0.19, 0.28f, sr);
+            setTap (this.syn, 0.42, 0.27f, sr);
+            setTap (this.syn, 0.61, 0.26f, sr);
+            setTap (this.syn, 1.6, 0.2f, sr);
+            setBiquad (this.syn, 0, 1, 70.0, 0.8, 0.0, sr);
+            setBiquad (this.syn, 1, 2, 95.0, 1.2, 5.0, sr);
+            setBiquad (this.syn, 2, 2, 220.0, 0.8, 2.0, sr);
+            setBiquad (this.syn, 3, 2, 700.0, 1.0, -2.0, sr);
+            setBiquad (this.syn, 4, 2, 2200.0, 2.0, 3.0, sr);
+            setBiquad (this.syn, 5, 0, 3800.0, 0.9, 0.0, sr);
+            setBiquad (this.syn, 6, 0, 4500.0, 0.6, 0.0, sr);
+            setBiquad (this.syn, 7, 0, 7000.0, 0.7, 0.0, sr);
+        }
+        else if (kind == impulse::telephone)
+        {
+            setTap (this.syn, 0.0, 1.0f, sr);
+            setTap (this.syn, 0.45, -0.35f, sr);
+            setTap (this.syn, 1.0, 0.2f, sr);
+            setBiquad (this.syn, 0, 1, 300.0, 0.7, 0.0, sr);
+            setBiquad (this.syn, 1, 1, 320.0, 1.0, 0.0, sr);
+            setBiquad (this.syn, 2, 0, 3400.0, 0.7, 0.0, sr);
+            setBiquad (this.syn, 3, 0, 3300.0, 1.1, 0.0, sr);
+            setBiquad (this.syn, 4, 2, 1000.0, 1.0, 4.0, sr);
+            setBiquad (this.syn, 5, 2, 2500.0, 2.0, 2.0, sr);
+        }
+        else if (kind == impulse::metalTank)
+        {
+            for (wrap<48> k)
+            {
+                let u = float64 (convRand01 (this.syn.rng[2]));
+                let f = min (140.0 * pow (7500.0 / 140.0, (float64 (k) + 0.85 * u) / 48.0), 0.45 * sr);
+                let t60 = 3.3 * pow (f / 140.0, -0.28);
+                let a = (0.6 + 0.4 * float64 (convRand01 (this.syn.rng[3]))) / sqrt (t60);   // even energy per octave
+                let rr = pow (10.0, -3.0 / (t60 * sr));
+                let w = 2.0 * convPi * f / sr;
+                this.syn.mCr[k] = float (rr * cos (w));
+                this.syn.mCi[k] = float (rr * sin (w));
+                this.syn.mRe[k] = float (a);
+                this.syn.mIm[k] = 0;
+                let pl = 2.0 * convPi * float64 (convRand01 (this.syn.rng[2]));
+                let pr = 2.0 * convPi * float64 (convRand01 (this.syn.rng[3]));
+                this.syn.mL[k] = float (cos (pl));
+                this.syn.mLq[k] = float (sin (pl));
+                this.syn.mR[k] = float (cos (pr));
+                this.syn.mRq[k] = float (sin (pr));
+            }
+
+            this.syn.envHi = 1.0;
+            this.syn.kHi = exp (-1.0 / (0.004 * sr));
+            this.syn.envLo = 1.0;
+            this.syn.kLo = pow (10.0, -3.0 / (1.5 * sr));
+            this.syn.toneHp = convOnePole (1000.0, sr);
+        }
+        else if (kind == impulse::noiseBloom)
+        {
+            let T = float64 (this.syn.length);
+            this.syn.peak = max (1, int (0.38 * T));
+            this.syn.envLo = 1.0;
+            this.syn.kLo = exp (-5.5 / (T - float64 (this.syn.peak)));
+            this.syn.amA = convOnePole (13.0, sr);
+            this.syn.bpK = 1.0f / 3.0f;
+            this.syn.nLpA = convOnePole (5000.0, sr);
+
+            for (wrap<2> ch)
+            {
+                this.syn.amCur[ch] = 0.5f;
+                this.syn.bpLog[ch] = log (800.0f);
+            }
+        }
+    }
+
+    /// The next tap of the built-in being synthesised.
+    float<2> synthTap (Convolver& this, float64 sr)
+    {
+        let k = this.syn.kind;
+        let t = this.syn.pos;
+
+        if (k == impulse::file)
+            return this.resampleTap (t);
+
+        if (k == impulse::spring)
+            return this.springTap (t);
+
+        if (k == impulse::metalTank)
+            return metalTap (this.syn);
+
+        if (k == impulse::cab1x12 || k == impulse::cab4x12 || k == impulse::telephone)
+            return cascadeTap (this.syn, t);
+
+        if (k == impulse::noiseBloom)
+            return bloomTap (this.syn, t, sr);
+
+        var v = decayTap (this.syn, t);
+
+        if (k == impulse::swell)
+            v *= convSmoothStep (float (this.syn.length - t) / float (this.syn.fadeOut));
+
+        return v;
+    }
+
+    /// The input `delay` samples ago.
+    float<2> predelayed (const Convolver& this, int delay)
+    {
+        let i = this.pdPos >= delay ? this.pdPos - delay : this.pdPos - delay + convPredelayMax;
+        return float<2> (this.pdL.at (i), this.pdR.at (i));
+    }
+
+    //==============================================================================
+    /// The idle effect's work: the build, and filling in a new impulse.
+    void idleWork (Convolver& this, float64 sr)
+    {
+        if (this.headXfade || this.mode == convXfade)
+            this.settle();
+
+        if (this.bPhase != 0)
+            this.buildWork (sr, true);
+
+        if (this.mode == convFill)
+        {
+            float spent = 0;
+
+            while (spent < 160.0f && this.mode == convFill)
+            {
+                spent += this.pjActive ? pjobStepCost (this.pjStep) : 1.0f;
+                this.pjobStep();
+            }
+        }
+    }
+
+    bool process (Convolver& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
+    {
+        if (! this.prepared)
+            this.prepare();
+
+        this.updateWanted (P, sr);
+
+        if (! active && this.idle)
+        {
+            this.idleWork (sr);
+            return false;
+        }
+
+        let n = this.blockCount;
+        let c = n >> 4;
+        let b = int (n & 15);
+
+        // targets
+        let mixT = clamp (P[slot::Cv_Mix], 0.0f, 1.0f);
+        let gainT = float (pow (10.0, float64 (clamp (P[slot::Cv_Gain], -24.0f, 24.0f)) / 20.0));
+        let widthT = clamp (P[slot::Cv_Width], 0.0f, 1.0f);
+        let pdT = clamp (int (float64 (P[slot::Cv_Predelay]) * 0.001 * sr + 0.5), 0, convPredelayMax - 1);
+        let lc = P[slot::Cv_LowCut];
+        let hc = P[slot::Cv_HighCut];
+        let hpOn = lc > 0.005f;             // the cuts are bypassed near their extremes
+        let lpOn = hc < 0.995f;
+        let hpT = log (expKnob (20.0f, 20000.0f, lc));
+        let lpT = log (min (expKnob (20.0f, 20000.0f, hc), float (0.45 * sr)));
+
+        if (this.mixCur < 0)
+        {
+            this.mixCur = mixT; this.gainCur = gainT; this.widthCur = widthT;
+            this.pdCur = pdT; this.hpLog = hpT; this.lpLog = lpT;
+            this.hpAmt = hpOn ? 1.0f : 0.0f;
+            this.lpAmt = lpOn ? 1.0f : 0.0f;
+        }
+
+        // predelay (a 20 ms crossfade to a new length), into the convolver's input history
+        let fadeStep = float (1.0 / (0.02 * sr));
+        let t0 = n * 64;
+
+        for (wrap<blockSize> i)
+        {
+            let x = active ? buf[i] : float<2>();
+            this.pdL.at (this.pdPos) = x[0];
+            this.pdR.at (this.pdPos) = x[1];
+
+            if (! this.pdFading && pdT != this.pdCur)
+            {
+                this.pdNext = pdT;
+                this.pdFade = 0;
+                this.pdFading = true;
+            }
+
+            var v = this.predelayed (this.pdCur);
+
+            if (this.pdFading)
+            {
+                v += (this.predelayed (this.pdNext) - v) * this.pdFade;
+                this.pdFade += fadeStep;
+
+                if (this.pdFade >= 1.0f)
+                {
+                    this.pdCur = this.pdNext;
+                    this.pdFading = false;
+                }
+            }
+
+            if (abs (v[0]) < 1.0e-20f) v[0] = 0;      // keep denormals out of the FFTs
+            if (abs (v[1]) < 1.0e-20f) v[1] = 0;
+
+            let k = int ((t0 + i) & 4095);
+            this.inL.at (k) = v[0];
+            this.inR.at (k) = v[1];
+            this.pdPos = this.pdPos + 1 >= convPredelayMax ? 0 : this.pdPos + 1;
+        }
+
+        // head and tail
+        float<2>[blockSize] wet;
+        this.headBlock (n, wet);
+
+        if (b == 0)
+            this.tailSetup (c);
+
+        this.tailWork (b);
+
+        if (this.mode == convFill && this.fillNext < this.newTailParts && this.tailLo + this.fillNext <= c)
+        {
+            // the next segment needs this partition (a fill that started mid-segment): finish it
+            let left = this.pjActive ? 16 - this.pjStep : 16;
+            let quota = (left + 15 - b) / (16 - b);
+
+            for (int i = 0; i < quota; ++i)
+                this.pjobStep();
+        }
+
+        let ob = int (c & 1) * 1024 + b * 64;
+
+        for (wrap<blockSize> i)
+            wet[i] += float<2> (this.outL.at (ob + i), this.outR.at (ob + i));
+
+        // the wet's cuts (12 dB/oct state-variable filters), width, gain; the mix
+        // cutoffs smoothed per block, their coefficients interpolated across it
+        let fa = float (1.0 - exp (-float64 (blockSize) / (0.02 * sr)));
+        let gh0 = float (tan (convPi * float64 (exp (this.hpLog)) / sr));
+        let gl0 = float (tan (convPi * float64 (exp (this.lpLog)) / sr));
+        this.hpLog += (hpT - this.hpLog) * fa;
+        this.lpLog += (lpT - this.lpLog) * fa;
+        let dgh = (float (tan (convPi * float64 (exp (this.hpLog)) / sr)) - gh0) * (1.0f / float (blockSize));
+        let dgl = (float (tan (convPi * float64 (exp (this.lpLog)) / sr)) - gl0) * (1.0f / float (blockSize));
+        let kq = 1.41421356f;
+        let doHp = hpOn || this.hpAmt > 0;
+        let doLp = lpOn || this.lpAmt > 0;
+        let hpTo = hpOn ? 1.0f : 0.0f;
+        let lpTo = lpOn ? 1.0f : 0.0f;
+        let sa = float (1.0 - exp (-1.0 / (0.005 * sr)));     // 5 ms smoothing
+
+        for (wrap<blockSize> i)
+        {
+            var w = wet[i];
+            let fi = float (i + 1);
+
+            if (doHp)
+            {
+                this.hpAmt += (hpTo - this.hpAmt) * sa;
+                let g = gh0 + dgh * fi;
+                let h1 = 1.0f / (1.0f + g * (g + kq)), h2 = g * h1, h3 = g * h2;
+
+                for (wrap<2> ch)
+                {
+                    let v3 = w[ch] - this.hp2[ch];
+                    let v1 = h1 * this.hp1[ch] + h2 * v3;
+                    let v2 = this.hp2[ch] + h2 * this.hp1[ch] + h3 * v3;
+                    this.hp1[ch] = 2.0f * v1 - this.hp1[ch];
+                    this.hp2[ch] = 2.0f * v2 - this.hp2[ch];
+                    w[ch] += this.hpAmt * (-kq * v1 - v2);
+                }
+            }
+
+            if (doLp)
+            {
+                this.lpAmt += (lpTo - this.lpAmt) * sa;
+                let g = gl0 + dgl * fi;
+                let l1 = 1.0f / (1.0f + g * (g + kq)), l2 = g * l1, l3 = g * l2;
+
+                for (wrap<2> ch)
+                {
+                    let v3 = w[ch] - this.lp2[ch];
+                    let v1 = l1 * this.lp1[ch] + l2 * v3;
+                    let v2 = this.lp2[ch] + l2 * this.lp1[ch] + l3 * v3;
+                    this.lp1[ch] = 2.0f * v1 - this.lp1[ch];
+                    this.lp2[ch] = 2.0f * v2 - this.lp2[ch];
+                    w[ch] += this.lpAmt * (v2 - w[ch]);
+                }
+            }
+
+            this.mixCur += (mixT - this.mixCur) * sa;
+            this.gainCur += (gainT - this.gainCur) * sa;
+            this.widthCur += (widthT - this.widthCur) * sa;
+
+            let mid = (w[0] + w[1]) * 0.5f;
+            let side = (w[0] - w[1]) * 0.5f * this.widthCur;
+            let dry = buf[i];
+            buf[i] = dry + (float<2> (mid + side, mid - side) * this.gainCur - dry) * this.mixCur;
+        }
+
+        // settle the smoothers and the bypassed filters
+        if (abs (this.hpAmt - hpTo) < 1.0e-4f) this.hpAmt = hpTo;
+        if (abs (this.lpAmt - lpTo) < 1.0e-4f) this.lpAmt = lpTo;
+        if (abs (this.mixCur - mixT) < 1.0e-6f) this.mixCur = mixT;
+        if (abs (this.gainCur - gainT) < 1.0e-6f * gainT) this.gainCur = gainT;
+        if (abs (this.widthCur - widthT) < 1.0e-6f) this.widthCur = widthT;
+
+        for (wrap<2> ch)
+        {
+            if (this.hpAmt == 0 || abs (this.hp1[ch]) + abs (this.hp2[ch]) < 1.0e-20f) { this.hp1[ch] = 0; this.hp2[ch] = 0; }
+            if (this.lpAmt == 0 || abs (this.lp1[ch]) + abs (this.lp2[ch]) < 1.0e-20f) { this.lp1[ch] = 0; this.lp2[ch] = 0; }
+        }
+
+        if (this.bPhase != 0)
+            this.buildWork (sr, false);
+
+        this.blockCount = n + 1;
+
+        // idle once the input has been silent for longer than the impulse can ring
+        this.silentCount = active ? 0 : this.silentCount + blockSize;
+
+        if (active || anyAbove (buf, 1e-8f))
+        {
+            this.idle = false;
+            return true;
+        }
+
+        if (this.silentCount >= max (this.pdCur, this.pdNext) + this.lkPlay + 3 * 1024 + 2 * blockSize)
+            this.idle = true;
+
+        return false;
+    }
+}

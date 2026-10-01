@@ -13,11 +13,15 @@ graph Porridge  [[ main ]]
     input event porridge::Shape shapeIn;
     input event porridge::Curve curveIn;
     input event porridge::Tuning tuningIn;
+    input event porridge::ImpulseChunk impulseIn;
+    input event int impulseView;
     input event int panic;
 
     output stream float<2> out                            [[ name: "Audio Out" ]];
     output event float<2> xyOut;
     output event int ccOut;
+    output event porridge::CompMeter compMeterOut;
+    output event porridge::ImpulseView impulseViewOut;
 
     node params = ParamStore;
     node synth  = porridge::Synth;
@@ -30,9 +34,13 @@ graph Porridge  [[ main ]]
         shapeIn         -> synth.shapeIn;
         curveIn         -> synth.curveIn;
         tuningIn        -> synth.tuningIn;
+        impulseIn       -> synth.impulseIn;
+        impulseView     -> synth.impulseViewIn;
         panic           -> synth.panicIn;
         synth.out       -> out;
         synth.xyOut     -> xyOut;
         synth.ccOut     -> ccOut;
+        synth.compMeterOut -> compMeterOut;
+        synth.impulseViewOut -> impulseViewOut;
     }
 }

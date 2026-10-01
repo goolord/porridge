@@ -1,6 +1,7 @@
-//  Voice filter (16 types, and Porridge's zero-delay-feedback types 16..21) and distortion, following Oatmeal's per-block structure: cutoff and
-//  resonance are computed once per block (64 samples, or shorter where sample-accurate MIDI
-//  splits a block); smoothed coefficients ramp per sample.
+//  Voice filter (16 types, Porridge's zero-delay-feedback types 16..21 and its further types
+//  22..59) and distortion, following Oatmeal's per-block structure: cutoff and resonance are
+//  computed once per block (64 samples, or shorter where sample-accurate MIDI splits a block);
+//  smoothed coefficients ramp per sample.
 
 namespace porridge
 {
@@ -40,6 +41,13 @@ namespace porridge
         float[combSize] comb;
         int combPos;
         float combD;
+
+        // types 22..59: last block's coefficients (each block ramps from them, except the first
+        // after a reset or a change of type), and their integrator, allpass and one-pole states
+        bool xFirst;
+        int xType;
+        float<16> xc;
+        float[16] xs;
     }
 
     let combSize = 2048;
@@ -62,6 +70,7 @@ namespace porridge
         this.f8 = 1e-4f; this.q8 = 1.0f;
         this.f9 = 1e-4f; this.q9 = 1.0f;
         this.zFirst = true;
+        this.xFirst = true;
     }
 
     /// The classic types' smoothing of their coefficients over an n-sample block; tabulated
@@ -79,12 +88,18 @@ namespace porridge
     }
 
     /// Filters one block in place. hz = modulated cutoff (>= 5), res = 0..1, morph = 0..1 (the
-    /// zero-delay-feedback types).
-    void process (Filter& this, const FxTables& tables, int t, float hz, float res, float morph, float64 sampleRate,
-                  float[blockSize]& buf, int n)
+    /// zero-delay-feedback types), drive = 0..1 (0 .. +24 dB into the analog types 32..41).
+    void process (Filter& this, const FxTables& tables, int t, float hz, float res, float morph, float drive,
+                  float64 sampleRate, float[blockSize]& buf, int n)
     {
-        if (t <= filterType::off || t > filterType::formant)
+        if (t <= filterType::off || t > filterType::last)
             return;
+
+        if (t >= filterType::bp12)
+        {
+            this.processExtra (tables, t, hz, res, morph, drive, sampleRate, buf, n);
+            return;
+        }
 
         if (t >= filterType::svf)
         {
@@ -373,7 +388,7 @@ namespace porridge
     //  integrators solved together with their feedback, so they stay stable however fast the
     //  cutoff moves. The coefficients are worked out per block and ramped per sample.
 
-    bool isZdfFilter (int t)        { return t >= filterType::svf && t <= filterType::formant; }
+    bool isZdfFilter (int t)        { return t >= filterType::svf && t <= filterType::last; }
 
     /// 2 tanh (x / 2), from the table: soft saturation that leaves small signals alone.
     float softSat (const FxTables& t, float x)      { return 2.0f * tanhTable (t, 0.5f * x); }
@@ -646,6 +661,865 @@ namespace porridge
         this.fs = s;
         this.fg = gs;
         this.fa = amps;
+    }
+
+    //==============================================================================
+    //  Types 22..59: zero-delay-feedback filters, analog models, delay-line and other effects.
+    //  Each works out its coefficients once per block into a float<16> and ramps them per
+    //  sample from the last block's; the first block after a reset or a change of type jumps.
+    //  They work at the true sample rate.
+
+    /// The start of a block's coefficient ramp (last block's c, or c itself on a first block);
+    /// sets the per-sample step and keeps c for the next block.
+    float<16> rampFrom (Filter& this, float<16> c, bool first, int n, float<16>& step)
+    {
+        let c0 = first ? c : this.xc;
+        step = (c - c0) * (1.0f / float (n));
+        this.xc = c;
+        return c0;
+    }
+
+    /// Makes entries 2 (the drive) and 3 (its make-up gain) of a ramp geometric, so that their
+    /// product stays between its ends when the drive jumps; returns their per-sample factors.
+    float<2> filterDriveRamp (float<16> c, float<16> c0, float<16>& step, int n)
+    {
+        step[2] = 0.0f;
+        step[3] = 0.0f;
+        let e = 1.0 / float64 (n);
+        return float<2> (float (pow (float64 (c[2] / c0[2]), e)), float (pow (float64 (c[3] / c0[3]), e)));
+    }
+
+    /// tanh, as a rational curve that reaches +-1 with zero slope at +-3: exactly odd and smooth
+    /// down to zero (the table's tanh has a dead zone and steps below ~1e-6, which leave limit
+    /// cycles in feedback loops).
+    float filterTanh (float x)
+    {
+        let c = clamp (x, -3.0f, 3.0f);
+        return c * (27.0f + c * c) / (27.0f + 9.0f * c * c);
+    }
+
+    /// filterTanh (x) / x (1 at 0): a saturator's gain at the level x.
+    float filterTanhGain (float x)
+    {
+        let a = abs (x);
+        return a < 3.0f ? (27.0f + a * a) / (27.0f + 9.0f * a * a) : 1.0f / a;
+    }
+
+    /// 2 filterTanh (x / 2), like softSat.
+    float filterSoftSat (float x)       { return 2.0f * filterTanh (0.5f * x); }
+
+    /// Flushes a feedback value that would decay into denormals.
+    float filterFlush (float v)     { return abs (v) < 1e-20f ? 0.0f : v; }
+
+    /// The drive's input gain: 0 .. +24 dB.
+    float filterDriveGain (float drive)     { return float (pow (10.0, 1.2 * float64 (clamp (drive, 0.0f, 1.0f)))); }
+
+    /// The output gain that keeps a driven type's loudness roughly level: all the drive's gain
+    /// (-24 drive dB) while the type is linear, levelling off at -ceilingDb as it saturates
+    /// (fitted to a saw at a few levels, cutoffs and resonances).
+    float filterDriveComp (float drive, float ceilingDb)
+    {
+        let d = float64 (clamp (drive, 0.0f, 1.0f));
+        let c = float64 (ceilingDb);
+        return float (pow (10.0, -c * (1.0 - exp (-24.0 * d / c)) / 20.0));
+    }
+
+    /// Hard-ish clipper: slope 1 at 0, reaches 1 with zero slope at 1.5.
+    float filterClip (float v)
+    {
+        let c = clamp (v, -1.5f, 1.5f);
+        return c - c * c * c * (1.0f / 6.75f);
+    }
+
+    /// 4-point Hermite read d samples behind pos (d >= 3) in the comb line's part base .. base + mask.
+    float combReadHermite (Filter& this, int pos, float d, int base, int mask)
+    {
+        let rp = float (pos) - d;
+        let fl = floor (rp);
+        let i = int (fl);
+        let f = rp - fl;
+        let ym1 = this.comb.at (base + ((i - 1) & mask));
+        let y0 = this.comb.at (base + (i & mask));
+        let y1 = this.comb.at (base + ((i + 1) & mask));
+        let y2 = this.comb.at (base + ((i + 2) & mask));
+        let c1 = 0.5f * (y1 - ym1);
+        let c2 = ym1 - 2.5f * y0 + 2.0f * y1 - 0.5f * y2;
+        let c3 = 0.5f * (y2 - ym1) + 1.5f * (y0 - y1);
+        return ((c3 * f + c2) * f + c1) * f + y0;
+    }
+
+    /// Linearly interpolated read d samples behind pos (d >= 2) in the comb line's part base .. base + mask.
+    float combReadLinear (Filter& this, int pos, float d, int base, int mask)
+    {
+        let rp = float (pos) - d;
+        let fl = floor (rp);
+        let i = int (fl);
+        let f = rp - fl;
+        let a = this.comb.at (base + (i & mask));
+        return a + (this.comb.at (base + ((i + 1) & mask)) - a) * f;
+    }
+
+    /// Types 22..59 (process has checked the range).
+    void processExtra (Filter& this, const FxTables& tables, int t, float hz, float res, float morph, float drive,
+                       float64 sr, float[blockSize]& buf, int n)
+    {
+        let first = this.xFirst || this.xType != t;
+        this.xFirst = false;
+        this.xType = t;
+
+        if (t <= filterType::npn || (t >= filterType::lowEq && t <= filterType::highEq))
+            this.extraSvf (t, hz, res, morph, sr, buf, n, first);
+        else if (t <= filterType::mgDirty)
+            this.extraLadder (t, hz, res, drive, sr, buf, n, first);
+        else if (t == filterType::acid)
+            this.extraAcid (hz, res, morph, drive, sr, buf, n, first);
+        else if (t <= filterType::pzSvf)
+            this.extraAnalog (t, hz, res, morph, drive, sr, buf, n, first);
+        else if (t <= filterType::flangerMinus)
+            this.extraComb (t, hz, res, morph, sr, buf, n, first);
+        else if (t <= filterType::phaserMinus)
+            this.extraPhaser (t, hz, res, morph, sr, buf, n, first);
+        else if (t <= filterType::formant3)
+            this.extraFormant (t, hz, res, morph, sr, buf, n, first);
+        else if (t == filterType::ringMod)
+            this.extraRing (tables, hz, res, morph, sr, buf, n, first);
+        else if (t == filterType::sampleHold)
+            this.extraHold (hz, res, morph, sr, buf, n, first);
+        else if (t == filterType::diffusor)
+            this.extraDiffusor (hz, res, morph, sr, buf, n, first);
+        else
+            this.extraReverb (hz, res, morph, sr, buf, n, first);
+
+        for (wrap<16> j)
+            this.xs[j] = filterFlush (this.xs[j]);
+    }
+
+    /// 22..31 and the EQs 53..55: one or two state-variable stages (the second at the same
+    /// frequency), each output a mix of the stage's input x, band v1 and low v2 (hp = x - k v1 - v2,
+    /// unity band = k v1). c: g kA a0 a1 a2 (stage A: a0 x + a1 v1 + a2 v2), kB bx b0 b1 b2
+    /// (stage B: bx x + b0 a + b1 w1 + b2 w2).
+    void extraSvf (Filter& this, int t, float hz, float res, float morph, float64 sr,
+                   float[blockSize]& buf, int n, bool first)
+    {
+        let lpW = max (0.0f, 1.0f - 2.0f * morph);
+        let hpW = max (0.0f, 2.0f * morph - 1.0f);
+        let midW = 1.0f - lpW - hpW;
+        let boost = float (pow (10.0, float64 (3.0f + 21.0f * res) * 0.05)) - 1.0f;    // the peaks: +3 .. +24 dB
+        let kPeak = 1.0f / (0.7f * float (pow (16.0, float64 (res))));                   // and Q 0.7 .. 11
+        let cascade = t == filterType::bp24 || t == filterType::peak24 || t == filterType::notch24 || t == filterType::lbh24;
+        float<16> c;
+        c[0] = prewarp (hz, sr);
+
+        if (t == filterType::bp12 || t == filterType::bp24)
+        {
+            let k = 2.0f / float (pow (50.0, float64 (res)));      // Q 0.5 .. 25
+            c[1] = k; c[3] = k;
+            c[5] = k; c[8] = k;
+        }
+        else if (t == filterType::peak12)
+        {
+            c[1] = kPeak; c[2] = 1.0f; c[3] = boost * kPeak;
+        }
+        else if (t == filterType::peak24)
+        {
+            // dry plus two cascaded bands
+            c[1] = kPeak; c[3] = kPeak;
+            c[5] = kPeak; c[6] = 1.0f; c[8] = boost * kPeak;
+        }
+        else if (t == filterType::notch12 || t == filterType::notch24)
+        {
+            let k = 2.0f / float (pow (40.0, float64 (res)));      // Q 0.5 .. 20
+            c[1] = k; c[2] = 1.0f; c[3] = -k;
+            c[5] = k; c[7] = 1.0f; c[8] = -k;
+        }
+        else if (t == filterType::lbh24)
+        {
+            // a Butterworth pair whose second stage resonates
+            let kA = 1.848f;
+            let kB = 0.765f - 0.725f * res;
+            c[1] = kA; c[2] = hpW; c[3] = kA * (midW - hpW); c[4] = lpW - hpW;
+            c[5] = kB; c[7] = hpW; c[8] = kB * (midW - hpW); c[9] = lpW - hpW;
+        }
+        else if (t == filterType::lnh)
+        {
+            let k = 2.0f - 1.96f * res;
+            c[1] = k; c[2] = midW + hpW; c[3] = -k * (midW + hpW); c[4] = lpW - hpW;
+        }
+        else if (t == filterType::bpb || t == filterType::npn)
+        {
+            // the band slides from an octave below the cutoff to an octave above; in the middle
+            // it becomes a peak (dry plus the band)
+            c[0] = prewarp (hz * float (pow (2.0, float64 (2.0f * morph - 1.0f))), sr);
+            let peakW = 1.0f - abs (2.0f * morph - 1.0f);
+            c[1] = kPeak;
+
+            if (t == filterType::bpb) { c[2] = peakW; c[3] = kPeak * (1.0f - peakW + peakW * boost); }
+            else                       { c[2] = 1.0f;  c[3] = kPeak * (peakW * boost - (1.0f - peakW)); }
+        }
+        else
+        {
+            // shelves and bell (Simper's SVF forms); gain from +24 dB (morph 0) to -24 dB (1)
+            let A = float (pow (10.0, float64 (24.0f * res * (1.0f - 2.0f * morph)) / 40.0));
+
+            if (t == filterType::bandEq)
+            {
+                let k = 1.0f / (1.4f * A);
+                c[1] = k; c[2] = 1.0f; c[3] = k * (A * A - 1.0f);
+            }
+            else if (t == filterType::lowEq)
+            {
+                c[0] = c[0] / sqrt (A);
+                c[1] = 1.4142f; c[2] = 1.0f; c[3] = 1.4142f * (A - 1.0f); c[4] = A * A - 1.0f;
+            }
+            else
+            {
+                c[0] = c[0] * sqrt (A);
+                c[1] = 1.4142f; c[2] = A * A; c[3] = 1.4142f * (1.0f - A) * A; c[4] = 1.0f - A * A;
+            }
+        }
+
+        float<16> dc;
+        var cc = this.rampFrom (c, first, n, dc);
+        var s1 = this.xs[0], s2 = this.xs[1], s3 = this.xs[2], s4 = this.xs[3];
+
+        for (int i = 0; i < n; ++i)
+        {
+            cc += dc;
+            let x = buf.at (i);
+            let g = cc[0];
+            let v1 = (s1 + g * (x - s2)) / (1.0f + g * (g + cc[1]));
+            let v2 = s2 + g * v1;
+            s1 = 2.0f * v1 - s1;
+            s2 = 2.0f * v2 - s2;
+            var y = cc[2] * x + cc[3] * v1 + cc[4] * v2;
+
+            if (cascade)
+            {
+                let w1 = (s3 + g * (y - s4)) / (1.0f + g * (g + cc[5]));
+                let w2 = s4 + g * w1;
+                s3 = 2.0f * w1 - s3;
+                s4 = 2.0f * w2 - s4;
+                y = cc[6] * x + cc[7] * y + cc[8] * w1 + cc[9] * w2;
+            }
+
+            buf.at (i) = y;
+        }
+
+        this.xs[0] = s1; this.xs[1] = s2; this.xs[2] = s3; this.xs[3] = s4;
+    }
+
+    /// 32..36: Moog-style transistor ladder, four one-pole stages with feedback from the fourth
+    /// (k up to 4.1: oscillates from res ~0.98), the input saturated and the stages mildly so;
+    /// 32..35 tap stage 1..4. 36 (dirty): tanh stages, a clipped feedback path and part of the
+    /// lost bass fed back in. c: g k drive output
+    void extraLadder (Filter& this, int t, float hz, float res, float drive, float64 sr,
+                      float[blockSize]& buf, int n, bool first)
+    {
+        let dirty = t == filterType::mgDirty;
+        let tap = dirty ? 4 : t - filterType::mg6 + 1;
+        let dg = filterDriveGain (drive);
+        float<16> c;
+        c[0] = prewarp (hz, sr);
+        c[1] = (dirty ? 4.4f : 4.1f) * res;
+        c[2] = dg;
+        c[3] = filterDriveComp (drive, dirty ? 7.0f : 30.0f - 2.0f * float (tap));
+
+        float<16> dc;
+        var cc = this.rampFrom (c, first, n, dc);
+        let gr = filterDriveRamp (c, cc, dc, n);
+        var s1 = this.xs[0], s2 = this.xs[1], s3 = this.xs[2], s4 = this.xs[3];
+
+        for (int i = 0; i < n; ++i)
+        {
+            cc += dc;
+            cc[2] *= gr[0];
+            cc[3] *= gr[1];
+            let G = cc[0] / (1.0f + cc[0]);
+            let H = 1.0f - G;
+            let k = cc[1];
+            let S = ((H * s1 * G + H * s2) * G + H * s3) * G + H * s4;    // y4 = G^4 u + S
+            let G4 = G * G * G * G;
+            let x = buf.at (i) * cc[2];
+            float y;
+
+            if (dirty)
+            {
+                let xb = x * (1.0f + 0.5f * k);
+                let y4 = G4 * (xb - k * S) / (1.0f + k * G4) + S;
+                let u = filterTanh (xb - 1.2f * filterClip (k * y4 * (1.0f / 1.2f)));
+                let v1 = (u - s1) * G;                      let y1 = v1 + s1;   s1 = y1 + v1;
+                let v2 = (filterTanh (y1) - s2) * G;        let y2 = v2 + s2;   s2 = y2 + v2;
+                let v3 = (filterTanh (y2) - s3) * G;        let y3 = v3 + s3;   s3 = y3 + v3;
+                let v4 = (filterTanh (y3) - s4) * G;        let y4n = v4 + s4;  s4 = y4n + v4;
+                y = y4n * (1.0f + 0.25f * k);
+            }
+            else
+            {
+                let u = filterSoftSat ((x - k * S) / (1.0f + k * G4));
+                let v1 = (u - s1) * G;                                          let y1 = v1 + s1;  s1 = y1 + v1;
+                let v2 = (3.0f * filterTanh (y1 * (1.0f / 3.0f)) - s2) * G;     let y2 = v2 + s2;  s2 = y2 + v2;
+                let v3 = (3.0f * filterTanh (y2 * (1.0f / 3.0f)) - s3) * G;     let y3 = v3 + s3;  s3 = y3 + v3;
+                let v4 = (3.0f * filterTanh (y3 * (1.0f / 3.0f)) - s4) * G;     let y4 = v4 + s4;  s4 = y4 + v4;
+                y = (tap == 1 ? y1 : (tap == 2 ? y2 : (tap == 3 ? y3 : y4))) * (1.0f + 0.65f * k);
+            }
+
+            buf.at (i) = y * cc[3];
+        }
+
+        this.xs[0] = s1; this.xs[1] = s2; this.xs[2] = s3; this.xs[3] = s4;
+    }
+
+    // the acid ladder's feedback at res 0: no resonance, a flat passband up to the cutoff
+    let filterAcidK0 = 7.0f;
+
+    /// 37: acid ladder: the diode ladder (as type 18, sharing its states) with a high-pass in the
+    /// feedback, so the resonance leaves the bass alone, and the fed-back signal added to the
+    /// output, (1 + k hp) y, which gives back the passband the feedback takes (the input's
+    /// saturation still sees the plain ladder). Squash (morph): the resonant part of the
+    /// feedback falls as the output level rises. c: k feedbackHpG drive output squash
+
+    void extraAcid (Filter& this, float hz, float res, float morph, float drive, float64 sr,
+                    float[blockSize]& buf, int n, bool first)
+    {
+        float[20] m;
+        solveZdf (m, diodeA, prewarp (hz, sr) / diodePeak, 4);
+        var m0 = first ? m : this.zm;
+        float[20] dm;
+
+        for (wrap<20> j)
+            dm[j] = (m[j] - m0[j]) * (1.0f / float (n));
+
+        let dg = filterDriveGain (drive);
+        let gh = prewarp (min (hz * 0.25f, 120.0f), sr);
+        float<16> c;
+        c[0] = filterAcidK0 + (diodeOsc - 0.4f - filterAcidK0) * res;
+        c[1] = gh / (1.0f + gh);
+        c[2] = dg;
+        c[3] = 1.0f / dg;                                       // its level stays linear in the drive
+        c[4] = morph * 8.0f;
+
+        float<16> dc;
+        var cc = this.rampFrom (c, first, n, dc);
+        let gr = filterDriveRamp (c, cc, dc, n);
+        var s = this.zs;
+        var sh = this.xs[4], env = this.xs[5];
+        let att = float (1.0 - exp (-1.0 / (0.001 * sr)));
+        let rel = float (1.0 - exp (-1.0 / (0.04 * sr)));
+
+        for (int i = 0; i < n; ++i)
+        {
+            for (wrap<20> j)
+                m0[j] += dm[j];
+
+            cc += dc;
+            cc[2] *= gr[0];
+            cc[3] *= gr[1];
+            float[4] ms;
+
+            for (wrap<4> r)
+                ms[r] = m0.at (r * 4) * s[0] + m0.at (r * 4 + 1) * s[1] + m0.at (r * 4 + 2) * s[2] + m0.at (r * 4 + 3) * s[3];
+
+            // feedback k hp (y4), hp (v) = (1 - Gh) (v - sh), solved with y4 = ms3 + m19 u
+            let kh = (filterAcidK0 + (cc[0] - filterAcidK0) / (1.0f + cc[4] * env)) * (1.0f - cc[1]);
+            let u = filterSoftSat ((buf.at (i) * cc[2] - kh * (ms[3] - sh)) / (1.0f + kh * m0[19]));
+
+            for (wrap<4> r)
+            {
+                let y = ms[r] + m0.at (16 + r) * u;
+                s[r] = 2.0f * y - s[r];
+                ms[r] = y;
+            }
+
+            let fed = kh * (ms[3] - sh);
+            sh += 2.0f * (ms[3] - sh) * cc[1];
+            let e = abs (ms[3]);
+            env += (e > env ? att : rel) * (e - env);
+            buf.at (i) = (ms[3] + fed) * cc[3];
+        }
+
+        for (wrap<4> r)
+            s[r] = filterFlush (s[r]);
+
+        this.zs = s;
+        this.zm = m;
+        this.xs[4] = sh; this.xs[5] = env;
+    }
+
+    /// 38..41: two-pole analog models; morph lowpass > bandpass > highpass (not 39).
+    /// 38 French (Steiner-Parker-ish): damping 2 less a resonance fed back through an asymmetric
+    ///    (diode) clipper, taken by its gain at the last sample's band level; oscillates from res 0.945.
+    /// 39 German (MS-20-ish, Korg 35): two lowpasses with a high-passed, hard-clipped resonance
+    ///    feedback around the second; oscillates from res 0.96.
+    /// 40 clean drive: a soft-clipping drive in front of a state-variable filter whose band
+    ///    integrator saturates gently; clean at drive 0.
+    /// 41 PZ SVF: a state-variable filter with tanh integrators (taken by their gain at the last
+    ///    sample's level) and a saturating band.
+    /// c: g k drive output lpW bpW hpW clipLevel
+    void extraAnalog (Filter& this, int t, float hz, float res, float morph, float drive, float64 sr,
+                      float[blockSize]& buf, int n, bool first)
+    {
+        let dg = filterDriveGain (drive);
+        float<16> c;
+        c[0] = prewarp (hz, sr);
+        c[2] = dg;
+        c[4] = max (0.0f, 1.0f - 2.0f * morph);
+        c[6] = max (0.0f, 2.0f * morph - 1.0f);
+        let midW = 1.0f - c[4] - c[6];
+
+        if (t == filterType::french)
+        {
+            c[1] = 2.12f * res;
+            c[3] = filterDriveComp (drive, 22.0f);
+            c[5] = midW * 2.0f / (1.0f + c[1]);
+        }
+        else if (t == filterType::german)
+        {
+            c[0] = c[0] / (1.0f + c[0]);
+            c[1] = 2.08f * res;
+            c[4] = 1.0f; c[5] = 0.0f; c[6] = 0.0f;              // lowpass only
+            c[3] = filterDriveComp (drive, 22.0f);
+        }
+        else if (t == filterType::cleanDrive)
+        {
+            c[1] = 2.0f - 1.96f * res;
+            // the clipper's knee falls from 8 to 1 as the drive rises; a full-scale input keeps
+            // its peak level
+            let d = clamp (drive, 0.0f, 1.0f);
+            c[7] = 8.0f - 7.0f * d;
+            c[3] = float (pow (10.0, -0.3 * float64 (d * d))) / (c[7] * filterTanh (dg / c[7]));
+            c[5] = midW * (1.0f + 0.5f * c[1]);
+        }
+        else
+        {
+            c[1] = 2.0f - 1.96f * res;
+            c[3] = 1.0f / dg;                                   // it saturates by slowing down, not by getting quieter
+            c[5] = midW * (1.0f + 0.5f * c[1]);
+        }
+
+        float<16> dc;
+        var cc = this.rampFrom (c, first, n, dc);
+        let gr = filterDriveRamp (c, cc, dc, n);
+        var s1 = this.xs[0], s2 = this.xs[1], s3 = this.xs[2], p1 = this.xs[3];
+
+        for (int i = 0; i < n; ++i)
+        {
+            cc += dc;
+            cc[2] *= gr[0];
+            cc[3] *= gr[1];
+            let g = cc[0];
+            let k = cc[1];
+            var x = buf.at (i) * cc[2];
+            float lp, bp, hp;
+
+            if (t == filterType::french)
+            {
+                // p1: last band value; the clipper passes 1.6 tanh (v / 1.6) up, 0.8 tanh (v / 0.8) down
+                let sigma = filterTanhGain (p1 / (p1 >= 0.0f ? 1.6f : 0.8f));
+                let ke = 2.0f - k * sigma;
+                x = filterSoftSat (x);
+                bp = (s1 + g * (x - s2)) / (1.0f + g * (g + ke));
+                lp = s2 + g * bp;
+                s1 = 2.0f * bp - s1;
+                s2 = 2.0f * lp - s2;
+                hp = x - ke * bp - lp;
+                p1 = bp;
+            }
+            else if (t == filterType::german)
+            {
+                // g holds G = g / (1 + g); s1, s2: the lowpasses, s3: the feedback high-pass
+                let H = 1.0f - g;
+                x = filterSoftSat (x);
+                let v0 = (x - s1) * g;
+                let y1 = v0 + s1;
+                s1 = y1 + v0;
+                let ul = (y1 + H * (k * H * s2 - s3)) / (1.0f - k * g * H);
+                let u = y1 + filterClip (ul - y1);
+                let v2 = (u - s2) * g;
+                lp = v2 + s2;
+                s2 = lp + v2;
+                let vh = (k * lp - s3) * g;
+                s3 = 2.0f * vh + s3;
+                bp = 0.0f;
+                hp = 0.0f;
+            }
+            else if (t == filterType::cleanDrive)
+            {
+                let L = cc[7];
+                x = L * filterTanh (x / L);
+                var v1 = (s1 + g * (x - s2)) / (1.0f + g * (g + k));
+                v1 = 4.0f * filterTanh (v1 * 0.25f);
+                lp = s2 + g * v1;
+                s1 = 2.0f * v1 - s1;
+                s2 = 2.0f * lp - s2;
+                hp = x - k * v1 - lp;
+                bp = v1;
+            }
+            else
+            {
+                // p1: last high-pass value; both integrators' gains are scaled by the first one's
+                // tanh, 1.5 tanh (v / 1.5) / v at its input's last value (the same scale for both
+                // keeps the damping, so the filter slows down rather than ringing harder), and
+                // the band integrator's output saturates (3 tanh (v / 3)), which holds the resonance
+                let ge = g * filterTanhGain (p1 * (1.0f / 1.5f));
+                bp = (s1 + ge * (x - s2)) / (1.0f + ge * (ge + k));
+                bp = 3.0f * filterTanh (bp * (1.0f / 3.0f));
+                lp = s2 + ge * bp;
+                s1 = 2.0f * bp - s1;
+                s2 = 2.0f * lp - s2;
+                hp = x - k * bp - lp;
+                p1 = hp;
+            }
+
+            buf.at (i) = (cc[4] * lp + cc[5] * bp + cc[6] * hp) * cc[3];
+        }
+
+        this.xs[0] = s1; this.xs[1] = s2; this.xs[2] = s3; this.xs[3] = p1;
+    }
+
+    /// 42..46: the comb line, one cutoff period long (Hermite-interpolated).
+    /// 42/43 comb +/-: feedback +-0.99 res through a damping lowpass (morph: bright .. dark).
+    /// 44 flanger: x + g d (notch depth g from res); 45: plus feedback 0.97 res; 46: x - d with
+    /// feedback -0.97 res. Morph fades the notched sum to the delayed signal (with the sign of
+    /// the feed-forward, so the fade doesn't cancel). Levels are normalised for white noise.
+    /// c: delay feedback damping notchedGain wetGain depth
+    void extraComb (Filter& this, int t, float hz, float res, float morph, float64 sr,
+                    float[blockSize]& buf, int n, bool first)
+    {
+        let isComb = t <= filterType::combMinus;
+        let sign = (t == filterType::combMinus || t == filterType::flangerMinus) ? -1.0f : 1.0f;
+        float<16> c;
+        c[0] = clamp (float (sr) / max (hz, 1.0f), 3.0f, float (combSize - 4));
+
+        if (isComb)
+        {
+            let fb = 0.99f * res;
+            c[1] = sign * fb;
+            let a = exp (-2.0 * float64 (piF) * 500.0 * pow (100.0, float64 (1.0f - morph)) / sr);
+            c[2] = float (a);
+            c[3] = sqrt (1.0f - fb * fb) * (1.0f + fb * c[2]);         // less, damped: the loop loses level
+
+            // the damping lowpass delays the loop: shorten the line by its phase delay at the
+            // loop's fundamental (the cutoff for +, half of it for -)
+            let w = 2.0 * float64 (piF) * float64 (hz) / sr * (sign > 0.0f ? 1.0 : 0.5);
+            let lag = atan2 (a * sin (w), 1.0 - a * cos (w)) / w;
+            c[0] = clamp (float (float64 (c[0]) - lag), 3.0f, float (combSize - 4));
+        }
+        else
+        {
+            let fb = t == filterType::flanger ? 0.0f : 0.97f * res;
+            let g = t == filterType::flanger ? 0.25f + 0.75f * res : 1.0f;
+            c[1] = sign * fb;
+            c[5] = sign * g;
+            c[3] = (1.0f - morph) / sqrt (1.0f + g * g / (1.0f - fb * fb));
+            c[4] = sign * morph * sqrt (1.0f - fb * fb);
+        }
+
+        float<16> dc;
+        var cc = this.rampFrom (c, first, n, dc);
+        var pos = this.combPos;
+        var lp = this.xs[0];
+
+        for (int i = 0; i < n; ++i)
+        {
+            cc += dc;
+            let x = buf.at (i);
+            let d = this.combReadHermite (pos, cc[0], 0, combSize - 1);
+
+            if (isComb)
+            {
+                lp = d + cc[2] * (lp - d);
+                let y = x + cc[1] * lp;
+                this.comb.at (pos) = filterFlush (4.0f * filterTanh (y * 0.25f));
+                buf.at (i) = y * cc[3];
+            }
+            else
+            {
+                this.comb.at (pos) = filterFlush (4.0f * filterTanh ((x + cc[1] * d) * 0.25f));
+                buf.at (i) = (x + cc[5] * d) * cc[3] + d * cc[4];
+            }
+
+            pos = (pos + 1) & (combSize - 1);
+        }
+
+        this.combPos = pos;
+        this.combD = c[0];
+        this.xs[0] = lp;
+    }
+
+    /// 47..49: first-order allpasses (4, 8, 8) with feedback (+0.9, +0.97, -0.97 res), mixed half
+    /// and half with the input; morph spreads the stages from all at the cutoff to +-2 octaves.
+    /// c: the stages' G = g / (1 + g), then feedback, level
+    void extraPhaser (Filter& this, int t, float hz, float res, float morph, float64 sr,
+                      float[blockSize]& buf, int n, bool first)
+    {
+        let N = t == filterType::phaser ? 4 : 8;
+        let fb = t == filterType::phaser ? 0.9f * res : (t == filterType::phaserPlus ? 0.97f * res : -0.97f * res);
+        float<16> c;
+
+        for (int k = 0; k < N; ++k)
+        {
+            let g = prewarp (hz * float (pow (2.0, float64 (2.0f * morph * (2.0f * float (k) / float (N - 1) - 1.0f)))), sr);
+            c.at (k) = g / (1.0f + g);
+        }
+
+        c[8] = fb;
+        c[9] = 0.5f * sqrt (2.0f / (1.0f + 1.0f / (1.0f - fb * fb)));     // white noise keeps the no-feedback level
+
+        float<16> dc;
+        var cc = this.rampFrom (c, first, n, dc);
+        var y = this.xs[8];
+
+        for (int i = 0; i < n; ++i)
+        {
+            cc += dc;
+            let x = buf.at (i);
+            var u = x + cc[8] * filterSoftSat (y);
+
+            for (int k = 0; k < N; ++k)
+            {
+                let v = (u - this.xs.at (k)) * cc.at (k);
+                let l = v + this.xs.at (k);
+                this.xs.at (k) = l + v;
+                u = 2.0f * l - u;
+            }
+
+            y = u;
+            buf.at (i) = (x + y) * cc[9];
+        }
+
+        this.xs[8] = y;
+    }
+
+    // Female (brighter) vowels: (F1, F2, F3) Hz and levels for A, E, I, O, U
+    let filterVowelFemaleF = float[15] (850.0f, 1220.0f, 2810.0f,  610.0f, 2330.0f, 2990.0f,  310.0f, 2790.0f, 3310.0f,
+                                        590.0f, 920.0f, 2710.0f,  370.0f, 950.0f, 2670.0f);
+    let filterVowelFemaleA = float[15] (1.0f, 0.7f, 0.35f,  1.0f, 0.6f, 0.4f,  1.0f, 0.45f, 0.4f,
+                                        1.0f, 0.6f, 0.15f,  1.0f, 0.4f, 0.12f);
+
+    /// 50..52: vowel formants as band-passes; morph goes A, E, I, O, U, the cutoff shifts them
+    /// (1 kHz: as spoken) and res sharpens them. 50: F1 and F2; 51: three female formants
+    /// over some dry body; 52 (talk box): three narrow, loud formants and a nasal
+    /// anti-resonance between F1 and F2. c: g1 g2 g3 a1 a2 a3 k gNotch
+    void extraFormant (Filter& this, int t, float hz, float res, float morph, float64 sr,
+                       float[blockSize]& buf, int n, bool first)
+    {
+        let shift = clamp (hz / 1000.0f, 0.25f, 4.0f);
+        let v = clamp (morph, 0.0f, 1.0f) * 4.0f;
+        let vi = min (int (v), 3);
+        let vf = v - float (vi);
+        let female = t == filterType::formant2;
+        let bands = t == filterType::formant1 ? 2 : 3;
+        let Q = t == filterType::formant3 ? 8.0f + 32.0f * res : (female ? 4.0f + 12.0f * res : 5.0f + 15.0f * res);
+        let gain = (t == filterType::formant3 ? 3.0f : (female ? 1.4f : 2.5f)) * sqrt (Q * 0.2f);     // narrower: louder peaks
+        float<16> c;
+
+        for (int b = 0; b < bands; ++b)
+        {
+            let i0 = vi * 3 + b;
+            let f = female ? filterVowelFemaleF.at (i0) * (1.0f - vf) + filterVowelFemaleF.at (i0 + 3) * vf
+                           : vowelF.at (i0) * (1.0f - vf) + vowelF.at (i0 + 3) * vf;
+            let a = female ? filterVowelFemaleA.at (i0) * (1.0f - vf) + filterVowelFemaleA.at (i0 + 3) * vf
+                           : vowelA.at (i0) * (1.0f - vf) + vowelA.at (i0 + 3) * vf;
+            c.at (b) = prewarp (f * shift, sr);
+            c.at (3 + b) = a * gain / Q;
+        }
+
+        c[6] = 1.0f / Q;
+        c[7] = prewarp (sqrt ((vowelF.at (vi * 3) * (1.0f - vf) + vowelF.at (vi * 3 + 3) * vf)
+                              * (vowelF.at (vi * 3 + 1) * (1.0f - vf) + vowelF.at (vi * 3 + 4) * vf)) * shift, sr);
+
+        float<16> dc;
+        var cc = this.rampFrom (c, first, n, dc);
+        let dry = female ? 0.25f : 0.0f;
+
+        for (int i = 0; i < n; ++i)
+        {
+            cc += dc;
+            var x = buf.at (i);
+
+            if (t == filterType::formant3)
+            {
+                // nasal anti-resonance: a wide notch, three-quarters deep
+                let g = cc[7];
+                let v1 = (this.xs[6] + g * (x - this.xs[7])) / (1.0f + g * (g + 1.0f));
+                let v2 = this.xs[7] + g * v1;
+                this.xs[6] = 2.0f * v1 - this.xs[6];
+                this.xs[7] = 2.0f * v2 - this.xs[7];
+                x = x - 0.75f * v1;
+            }
+
+            var y = dry * x;
+            let k = cc[6];
+
+            for (int b = 0; b < bands; ++b)
+            {
+                let g = cc.at (b);
+                let v1 = (this.xs.at (b * 2) + g * (x - this.xs.at (b * 2 + 1))) / (1.0f + g * (g + k));
+                let v2 = this.xs.at (b * 2 + 1) + g * v1;
+                this.xs.at (b * 2) = 2.0f * v1 - this.xs.at (b * 2);
+                this.xs.at (b * 2 + 1) = 2.0f * v2 - this.xs.at (b * 2 + 1);
+                y += cc.at (3 + b) * v1;
+            }
+
+            buf.at (i) = y;
+        }
+    }
+
+    /// 56: ring modulation by a carrier at the cutoff; morph shapes it from sine to square
+    /// (tanh (K sin) / tanh K), res blends toward AM. c: phase step, K, res
+    void extraRing (Filter& this, const FxTables& tables, float hz, float res, float morph, float64 sr,
+                    float[blockSize]& buf, int n, bool first)
+    {
+        float<16> c;
+        c[0] = min (float (float64 (hz) / sr), 0.5f);
+        c[1] = 0.01f + 7.99f * morph;
+        c[2] = res;
+
+        float<16> dc;
+        var cc = this.rampFrom (c, first, n, dc);
+        var ph = this.xs[0];
+
+        for (int i = 0; i < n; ++i)
+        {
+            cc += dc;
+            ph += cc[0];
+            ph -= floor (ph);
+            let u = ph * 32768.0f;
+            let j = int (u);
+            let s = 2.0f * (tables.lfoSine.at (j) + (tables.lfoSine.at (j + 1) - tables.lfoSine.at (j)) * (u - float (j))) - 1.0f;
+            let car = filterTanh (cc[1] * s) / filterTanh (cc[1]);
+            buf.at (i) = buf.at (i) * ((1.0f - cc[2]) * car + cc[2] * 0.5f * (1.0f + car));
+        }
+
+        this.xs[0] = ph;
+    }
+
+    /// 57: sample-rate reduction: holds a sample every sr / cutoff samples, reduces the bits
+    /// (res: none .. 3 bits) and smooths the steps (morph: a one-pole lowpass, from none down to
+    /// a quarter of the hold rate). c: phase step, quantisation levels, smoothing coefficient
+    void extraHold (Filter& this, float hz, float res, float morph, float64 sr,
+                    float[blockSize]& buf, int n, bool first)
+    {
+        float<16> c;
+        c[0] = float (float64 (hz) / sr);
+        c[1] = float (pow (2.0, float64 (15.0f - 13.0f * res)));
+        c[2] = float (pow (1.0 - exp (-0.5 * float64 (piF) * min (float64 (hz) / sr, 1.0)), float64 (morph)));
+
+        float<16> dc;
+        var cc = this.rampFrom (c, first, n, dc);
+        var ph = first ? 1.0f : this.xs[0];
+        var held = this.xs[1], s = this.xs[2];
+
+        for (int i = 0; i < n; ++i)
+        {
+            cc += dc;
+            ph += cc[0];
+
+            if (ph >= 1.0f)
+            {
+                ph -= floor (ph);
+                held = res > 0.0f ? floor (buf.at (i) * cc[1] + 0.5f) / cc[1] : buf.at (i);
+            }
+
+            s += (held - s) * cc[2];
+            buf.at (i) = s;
+        }
+
+        this.xs[0] = ph; this.xs[1] = held; this.xs[2] = s;
+    }
+
+    // the diffusor's allpasses: delays (in cutoff periods) and their parts of the comb line
+    let filterDiffusorRatio = float[6] (1.0f, 0.77f, 0.59f, 0.43f, 0.31f, 0.23f);
+    let filterDiffusorBase = int[6] (0, 512, 1024, 1280, 1536, 1792);
+    let filterDiffusorMask = int[6] (511, 511, 255, 255, 255, 255);
+
+    /// 58: six Schroeder allpasses in series, delays from one cutoff period down (the period is
+    /// held to 14 .. 428 samples so they fit; Hermite reads, as linear ones would dull them),
+    /// coefficient 0.3 + 0.6 res; morph fades to dry.
+    /// c: period, coefficient, morph
+    void extraDiffusor (Filter& this, float hz, float res, float morph, float64 sr,
+                        float[blockSize]& buf, int n, bool first)
+    {
+        float<16> c;
+        c[0] = clamp (float (sr) / max (hz, 1.0f), 14.0f, 428.0f);
+        c[1] = 0.3f + 0.6f * res;
+        c[2] = morph;
+
+        float<16> dc;
+        var cc = this.rampFrom (c, first, n, dc);
+        var pos = this.combPos;
+
+        for (int i = 0; i < n; ++i)
+        {
+            cc += dc;
+            let x = buf.at (i);
+            var v = x;
+
+            for (wrap<6> k)
+            {
+                let base = filterDiffusorBase[k];
+                let mask = filterDiffusorMask[k];
+                let d = this.combReadHermite (pos, cc[0] * filterDiffusorRatio[k], base, mask);
+                let w = v + cc[1] * d;
+                this.comb.at (base + (pos & mask)) = filterFlush (w);
+                v = d - cc[1] * w;
+            }
+
+            buf.at (i) = (1.0f - cc[2]) * v + cc[2] * x;
+            pos = (pos + 1) & (combSize - 1);
+        }
+
+        this.combPos = pos;
+    }
+
+    // the reverb's line lengths, in cutoff periods
+    let filterReverbRatio = float[4] (1.0f, 1.187f, 1.413f, 1.677f);
+
+    /// 59: a four-line feedback delay network (Hadamard), 512 samples of the comb line each,
+    /// lengths from the cutoff period (lower: a bigger space), decay 0.97 res, a 6 kHz damping
+    /// lowpass in each line; morph fades to dry. c: period, feedback, damping, wet level, morph
+    void extraReverb (Filter& this, float hz, float res, float morph, float64 sr,
+                      float[blockSize]& buf, int n, bool first)
+    {
+        float<16> c;
+        let fb = 0.97f * res;
+        c[0] = clamp (float (sr) / max (hz, 1.0f), 2.0f, 302.0f);
+        c[1] = fb;
+        c[2] = float (exp (-2.0 * float64 (piF) * min (6000.0, 0.45 * sr) / sr));
+        c[3] = 1.4f * sqrt (1.0f - fb * fb);
+        c[4] = morph;
+
+        float<16> dc;
+        var cc = this.rampFrom (c, first, n, dc);
+        var pos = this.combPos;
+        var l0 = this.xs[0], l1 = this.xs[1], l2 = this.xs[2], l3 = this.xs[3];
+
+        for (int i = 0; i < n; ++i)
+        {
+            cc += dc;
+            let x = buf.at (i);
+            let d0 = this.combReadLinear (pos, cc[0] * filterReverbRatio[0], 0, 511);
+            let d1 = this.combReadLinear (pos, cc[0] * filterReverbRatio[1], 512, 511);
+            let d2 = this.combReadLinear (pos, cc[0] * filterReverbRatio[2], 1024, 511);
+            let d3 = this.combReadLinear (pos, cc[0] * filterReverbRatio[3], 1536, 511);
+            let a = cc[2];
+            l0 = d0 + a * (l0 - d0);
+            l1 = d1 + a * (l1 - d1);
+            l2 = d2 + a * (l2 - d2);
+            l3 = d3 + a * (l3 - d3);
+            let g = cc[1] * 0.5f;
+            let w = pos & 511;
+            this.comb.at (w)        = filterFlush (0.5f * x + g * (l0 + l1 + l2 + l3));
+            this.comb.at (512 + w)  = filterFlush (-0.5f * x + g * (l0 - l1 + l2 - l3));
+            this.comb.at (1024 + w) = filterFlush (0.5f * x + g * (l0 + l1 - l2 - l3));
+            this.comb.at (1536 + w) = filterFlush (-0.5f * x + g * (l0 - l1 - l2 + l3));
+            let wet = (d0 - d1 + d2 - d3) * 0.5f * cc[3];          // taps with the input's signs
+            buf.at (i) = (1.0f - cc[4]) * wet + cc[4] * x;
+            pos = (pos + 1) & (combSize - 1);
+        }
+
+        this.combPos = pos;
+        this.xs[0] = l0; this.xs[1] = l1; this.xs[2] = l2; this.xs[3] = l3;
     }
 
     //==============================================================================

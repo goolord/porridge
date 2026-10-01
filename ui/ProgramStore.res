@@ -17,6 +17,8 @@ type t = {
   // whether the patch is known to hold `shapes` (until then a program sends all its tables)
   mutable shapesKnown: bool,
   mutable tuning: option<Scala.source>,
+  mutable impulses: array<option<Impulse.t>>,
+  impulseListeners: array<unit => unit>,
   // what the view last stored under each key, to tell the host's echo from a new value
   stored: Map.t<StoredState.key, string>,
   pendingSend: Set.t<table>,
@@ -37,6 +39,8 @@ let make = (pc, model, ~onMessage) => {
     shapes: Preset.copyTables((programs->Array.getUnsafe(0)).tables),
     shapesKnown: false,
     tuning: None,
+    impulses: Impulse.none(),
+    impulseListeners: [],
     stored: Map.make(),
     pendingSend: Set.make(),
     learning: None,
@@ -72,6 +76,9 @@ let onState = (t, {key, value}: PatchConnection.storedStateEvent) =>
   | (Some(StoredState.Tuning), String(s)) =>
     t.tuning = s == "" ? None : Bank.decodeTuning(s)
     changed(t)
+  | (Some(StoredState.Impulses), String(s)) =>
+    t.impulses = Impulse.decode(s)
+    t.impulseListeners->Array.forEach(fn => fn())
   | (Some(StoredState.Shapes), String(shapes)) =>
     Bank.decodeShapes(shapes)->Option.forEach(shapes => {
       t.shapes = shapes
@@ -152,6 +159,7 @@ let captureCurrent = (t): Preset.t => {
   values: Map.fromArray(t.model.values->Map.entries->Array.fromIterator),
   tables: Preset.copyTables(t.shapes),
   tuning: t.tuning,
+  impulses: t.impulses,
 }
 
 let storeBank = t => store(t, StoredState.Bank, Preset.encodeBank(t.programs))
@@ -161,9 +169,24 @@ let sendTuning = t => {
   store(t, StoredState.Tuning, Bank.encodeTuning(t.tuning))
 }
 
+let onImpulses = (t, fn) => t.impulseListeners->Array.push(fn)
+
+// Sends the convolvers' impulses to the patch, and stores them.
+let sendImpulses = t => {
+  t.impulses->Array.forEachWithIndex((imp, which) => Impulse.send(t.pc, which, imp))
+  store(t, StoredState.Impulses, Impulse.encode(t.impulses))
+  t.impulseListeners->Array.forEach(fn => fn())
+}
+
 let apply = (t, preset: Preset.t) => {
   t.tuning = preset.tuning
   sendTuning(t)
+  // (an impulse is sent again only when it changes: it takes a moment to arrive)
+  let changedImpulses = preset.impulses->Array.someWithIndex((imp, i) => t.impulses[i]->Option.flatMap(x => x) !== imp)
+  t.impulses = preset.impulses
+  if changedImpulses {
+    sendImpulses(t)
+  }
   t.model->ParamModel.setAll(preset.values)
   let before = t.shapes
   t.shapes = Preset.copyTables(preset.tables)
@@ -222,6 +245,15 @@ let setMacroName = (t, i, name) => {
 let setTuning = (t, tuning) => {
   t.tuning = tuning
   sendTuning(t)
+  t.programs->Array.setUnsafe(t.current, captureCurrent(t))
+  storeBank(t)
+  changed(t)
+}
+
+// Loads convolver `which`'s impulse from a file (and selects it).
+let setImpulse = (t, which, imp) => {
+  t.impulses = t.impulses->Array.mapWithIndex((x, i) => i == which ? imp : x)
+  sendImpulses(t)
   t.programs->Array.setUnsafe(t.current, captureCurrent(t))
   storeBank(t)
   changed(t)
@@ -364,4 +396,26 @@ let exportOatmealBank = t => {
 let learn = (t, ccId) => {
   t.learning = Some(ccId)
   t.message("Move a controller to assign it to " ++ String.replace(ccId, "CC", "slot "))
+}
+
+// An audio file as convolver `which`'s impulse, which it then plays (Cv_Impulse "file").
+let loadImpulseFile = async (t, which, file) => {
+  let name = file->Web.fileName
+  try {
+    let bytes = Uint8Array.fromBuffer(await file->Web.arrayBuffer)
+    switch await AudioFile.decode(bytes, name) {
+    | Error(e) => t.message(e)
+    | Ok(audio) =>
+      switch Impulse.fromAudio(name, audio) {
+      | None => t.message(`${name} is silent`)
+      | Some(imp) =>
+        setImpulse(t, which, Some(imp))
+        let param = which == 0 ? "Cv_Impulse" : PorridgeParams.copyId("Cv_Impulse", which + 1)
+        t.model->ParamModel.gestureSet(param, Int.toFloat(PorridgeParams.impulseFile))
+        t.message(`Loaded ${name} (${Float.toFixed(Impulse.seconds(imp), ~digits=2)} s) into the convolver`)
+      }
+    }
+  } catch {
+  | JsExn(e) => t.message(`Couldn't read ${name}: ${e->JsExn.message->Option.getOr("")}`)
+  }
 }

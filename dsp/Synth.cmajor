@@ -18,6 +18,8 @@ namespace porridge
         input event Shape shapeIn;
         input event Curve curveIn;
         input event Tuning tuningIn;
+        input event ImpulseChunk impulseIn;
+        input event int impulseViewIn;
         input event int panicIn;
 
         // test-only: lets the offline test graph replace the voices with a recorded signal
@@ -27,6 +29,8 @@ namespace porridge
         output stream float<2> out;
         output event float<2> xyOut;
         output event int ccOut;
+        output event CompMeter compMeterOut;
+        output event ImpulseView impulseViewOut;
 
         // MIDI is applied a block late (see the top of this file)
         processor.latency = blockSize;
@@ -69,6 +73,21 @@ namespace porridge
         Reverb[rack::reverbCount] reverbs;
         EQ[rack::eqCount] eqs;
         Distortion[rack::distortionCount] distortions;
+
+        // Porridge's own effects (ui/PorridgeParams.res newKinds): each kind's first, then its copies
+        Flanger[rack::flangerCount] flangers;
+        Phaser[rack::phaserCount] phasers;
+        Compressor[rack::compressorCount] compressors;
+        Space[rack::spaceCount] spaces;
+        Convolver[rack::convolveCount] convolvers;
+        Bode[rack::bodeCount] bodes;
+        FilterFx[rack::filterCount] filterFxs;
+        Utility[rack::utilityCount] utilities;
+        float noteHz;                               // the newest note's frequency (phaser tracking)
+        int meterCount;                             // blocks until the compressors' meters go out
+        int blockCount;                             // blocks rendered
+        int[rack::convolveCount] convolverRan;      // the block each convolver last ran in
+        int[rack::convolveCount] viewSent;          // the impulse each convolver last showed the view
 
         // every distortion's custom shape (Oatmeal's first), rendered when its points change
         float[1026][1 + rack::distortionCount] shaperTables;
@@ -194,6 +213,19 @@ namespace porridge
 
         event tempoIn (std::timeline::Tempo t)          { if (t.bpm > 0) bpm = t.bpm; }
         event panicIn (int x)                           { panicPending = true; }
+
+        /// The view asks for the convolvers' impulses again (a tab opened).
+        event impulseViewIn (int x)
+        {
+            for (wrap<rack::convolveCount> k)
+                viewSent[k] = -1;
+        }
+
+        event impulseIn (ImpulseChunk c)
+        {
+            if (c.which >= 0 && c.which < rack::convolveCount)
+                convolvers.at (c.which).loadImpulse (c);
+        }
         event testModeIn (int x)                        { useTestInput = x != 0; }
 
         event midiIn (std::midi::Message m)
@@ -260,6 +292,7 @@ namespace porridge
 
             for (wrap<rack::delayCount> k)   delays[k].prepare();
             for (wrap<rack::reverbCount> k)  reverbs[k].prepare();
+            for (wrap<rack::convolveCount> k)  convolvers[k].prepare();
             clearCopies();
 
             for (wrap<maxVoices> i)
@@ -298,6 +331,15 @@ namespace porridge
 
             for (wrap<rack::eqCount> k)          eqs[k].clearState();
             for (wrap<rack::distortionCount> k)  distortions[k].clearState();
+
+            for (wrap<rack::flangerCount> k)     flangers[k].clearState();
+            for (wrap<rack::phaserCount> k)      phasers[k].clearState();
+            for (wrap<rack::compressorCount> k)  compressors[k].clearState();
+            for (wrap<rack::spaceCount> k)       spaces[k].clearState();
+            for (wrap<rack::convolveCount> k)    convolvers[k].clearState();
+            for (wrap<rack::bodeCount> k)        bodes[k].clearState();
+            for (wrap<rack::filterCount> k)      filterFxs[k].clearState();
+            for (wrap<rack::utilityCount> k)     utilities[k].clearState();
         }
 
         /// Swaps copy k's parameters with the first effect's, so that the first's code runs the
@@ -314,6 +356,14 @@ namespace porridge
                 P.at (a) = P.at (b);
                 P.at (b) = x;
             }
+        }
+
+        /// Swaps entry k of one of Porridge's own effects into the first's slots: entry 0 is the
+        /// first itself, entries 1.. its copies.
+        void swapOwn (const int[] first, const int[] copies, int k)
+        {
+            if (k > 0)
+                swapParams (first, copies, k - 1);
         }
 
         /// Runs one of Oatmeal's four effects (0 chorus, 1 delay, 2 reverb, 3 EQ).
@@ -392,6 +442,76 @@ namespace porridge
                 useShaper (k + 1);
                 if (P[slot::Sat_Type] != 0) distortions.at (k).processStereo (distTables, P, 0.0f, sampleRate, mix);
                 swapParams (rack::distortionFirst, rack::distortionCopies, k);
+            }
+            else if (fx >= rack::flangerValue && fx < rack::flangerValue + rack::flangerCount)
+            {
+                let k = fx - rack::flangerValue;
+                swapOwn (rack::flangerFirst, rack::flangerCopies, k);
+                if (P[slot::Fl_On] != 0) out = flangers.at (k).process (mix, active, P, sampleRate);
+                swapOwn (rack::flangerFirst, rack::flangerCopies, k);
+            }
+            else if (fx >= rack::phaserValue && fx < rack::phaserValue + rack::phaserCount)
+            {
+                let k = fx - rack::phaserValue;
+                swapOwn (rack::phaserFirst, rack::phaserCopies, k);
+                if (P[slot::Ph_On] != 0) out = phasers.at (k).process (mix, active, P, sampleRate, noteHz);
+                swapOwn (rack::phaserFirst, rack::phaserCopies, k);
+            }
+            else if (fx >= rack::compressorValue && fx < rack::compressorValue + rack::compressorCount)
+            {
+                let k = fx - rack::compressorValue;
+                swapOwn (rack::compressorFirst, rack::compressorCopies, k);
+                if (P[slot::Cp_On] != 0)
+                {
+                    out = compressors.at (k).process (mix, active, P, sampleRate);
+
+                    if (meterCount == 0)
+                        compMeterOut <- CompMeter (k, compressors.at (k).levelDb, compressors.at (k).gainDb);
+                }
+                swapOwn (rack::compressorFirst, rack::compressorCopies, k);
+            }
+            else if (fx >= rack::spaceValue && fx < rack::spaceValue + rack::spaceCount)
+            {
+                let k = fx - rack::spaceValue;
+                swapOwn (rack::spaceFirst, rack::spaceCopies, k);
+                if (P[slot::Rv_On] != 0) out = spaces.at (k).process (mix, active, P, sampleRate);
+                swapOwn (rack::spaceFirst, rack::spaceCopies, k);
+            }
+            else if (fx >= rack::convolveValue && fx < rack::convolveValue + rack::convolveCount)
+            {
+                let k = fx - rack::convolveValue;
+                swapOwn (rack::convolveFirst, rack::convolveCopies, k);
+                if (P[slot::Cv_On] != 0)
+                {
+                    // switched back on, or back in the rack: its old tail is gone
+                    if (convolverRan.at (k) != blockCount - 1)
+                        convolvers.at (k).clearState();
+
+                    convolverRan.at (k) = blockCount;
+                    out = convolvers.at (k).process (mix, active, P, sampleRate);
+                }
+                swapOwn (rack::convolveFirst, rack::convolveCopies, k);
+            }
+            else if (fx >= rack::bodeValue && fx < rack::bodeValue + rack::bodeCount)
+            {
+                let k = fx - rack::bodeValue;
+                swapOwn (rack::bodeFirst, rack::bodeCopies, k);
+                if (P[slot::Bd_On] != 0) out = bodes.at (k).process (mix, active, P, sampleRate);
+                swapOwn (rack::bodeFirst, rack::bodeCopies, k);
+            }
+            else if (fx >= rack::filterValue && fx < rack::filterValue + rack::filterCount)
+            {
+                let k = fx - rack::filterValue;
+                swapOwn (rack::filterFirst, rack::filterCopies, k);
+                if (P[slot::Ff_On] != 0) out = filterFxs.at (k).process (fxTables, mix, active, P, sampleRate);
+                swapOwn (rack::filterFirst, rack::filterCopies, k);
+            }
+            else if (fx >= rack::utilityValue && fx < rack::utilityValue + rack::utilityCount)
+            {
+                let k = fx - rack::utilityValue;
+                swapOwn (rack::utilityFirst, rack::utilityCopies, k);
+                if (P[slot::Ut_On] != 0) out = utilities.at (k).process (mix, active, P, sampleRate);
+                swapOwn (rack::utilityFirst, rack::utilityCopies, k);
             }
 
             return out;
@@ -1656,11 +1776,11 @@ namespace porridge
             {
                 paramsChanged = false;
                 let fr = P[slot::F_Speed];
-                ampC   = makeEnvCoefs (P, slot::Attack, slot::Curve_Amp_Attack, sampleRate, 1.0f);
-                filtC  = makeEnvCoefs (P, slot::F_Attack, slot::Curve_Filter_Attack, sampleRate, 1.0f);
-                filt2C = makeEnvCoefs (P, slot::F_Attack, slot::Curve_Filter_Attack, sampleRate, fr > 0 ? fr : 1.0f);
-                mod1C  = makeEnvCoefs (P, slot::M1_Attack, slot::Curve_Mod1_Attack, sampleRate, 1.0f);
-                mod2C  = makeEnvCoefs (P, slot::M2_Attack, slot::Curve_Mod2_Attack, sampleRate, 1.0f);
+                ampC   = makeEnvCoefs (P, slot::Attack, slot::Curve_Amp_Attack, slot::Curve_Amp_Decay1, sampleRate, 1.0f);
+                filtC  = makeEnvCoefs (P, slot::F_Attack, slot::Curve_Filter_Attack, slot::Curve_Filter_Decay1, sampleRate, 1.0f);
+                filt2C = makeEnvCoefs (P, slot::F_Attack, slot::Curve_Filter_Attack, slot::Curve_Filter_Decay1, sampleRate, fr > 0 ? fr : 1.0f);
+                mod1C  = makeEnvCoefs (P, slot::M1_Attack, slot::Curve_Mod1_Attack, slot::Curve_Mod1_Decay1, sampleRate, 1.0f);
+                mod2C  = makeEnvCoefs (P, slot::M2_Attack, slot::Curve_Mod2_Attack, slot::Curve_Mod2_Decay1, sampleRate, 1.0f);
                 penvC  = makePitchEnvCoefs (P, float64 (srInt));
             }
 
@@ -2861,16 +2981,17 @@ namespace porridge
 
             let hz = cutoffHz (isF2, isZdfFilter (type), env, vel, at, keyFreq, Rg, X, Y, lfo1, lfo2, semisMod);
             let morph = P[slot::F_Morph];
+            let drive = P[slot::F_Drive];
 
             if (isF2)
             {
-                if (right) v.f2R.process (fxTables, type, hz, res, morph, sampleRate, buf, n);
-                else       v.f2L.process (fxTables, type, hz, res, morph, sampleRate, buf, n);
+                if (right) v.f2R.process (fxTables, type, hz, res, morph, drive, sampleRate, buf, n);
+                else       v.f2L.process (fxTables, type, hz, res, morph, drive, sampleRate, buf, n);
             }
             else
             {
-                if (right) v.f1R.process (fxTables, type, hz, res, morph, sampleRate, buf, n);
-                else       v.f1L.process (fxTables, type, hz, res, morph, sampleRate, buf, n);
+                if (right) v.f1R.process (fxTables, type, hz, res, morph, drive, sampleRate, buf, n);
+                else       v.f1L.process (fxTables, type, hz, res, morph, drive, sampleRate, buf, n);
             }
         }
 
@@ -3011,6 +3132,10 @@ namespace porridge
                     globalDist.processStereo (distTables, P, xySum (xyTgt::distortion, curX, curY) + ccSum[ccTgt::distortion], sampleRate, mix);
             }
 
+            // the newest note, which the phasers' tracking follows
+            if (numActive > 0)
+                noteHz = voices.at (order.at (0)).freq;
+
             // the rack, in the program's order (Oatmeal's: chorus, delay, reverb, EQ); each effect
             // says whether its output still sounds, and the last one's answer gates the output.
             // The slots naming one of Oatmeal's four take them in FX_Order's order.
@@ -3021,7 +3146,7 @@ namespace porridge
                 firsts[k] = fxOrders.at (order * 4 + k);
 
             int numFirsts = 0;
-            int ran = 0;    // the copies already run, as bits of their rack values
+            bool[rack::numEntries] ran;     // the copies already run, by their rack values
 
             for (wrap<rack::slots.size> k)
             {
@@ -3035,10 +3160,24 @@ namespace porridge
                         ++numFirsts;
                     }
                 }
-                else if (fx >= 5 && fx < 31 && (ran & (1 << fx)) == 0)
+                else if (fx >= 5 && fx < rack::numEntries && ! ran.at (fx))
                 {
-                    ran |= 1 << fx;
+                    ran.at (fx) = true;
                     active = runCopy (fx, active);
+                }
+            }
+
+            // the compressors' meters, about 90 times a second at 48 kHz
+            meterCount = meterCount > 0 ? meterCount - 1 : 7;
+            ++blockCount;
+
+            // a convolver's impulse when it changes
+            for (wrap<rack::convolveCount> k)
+            {
+                if (convolvers[k].viewVersion != viewSent[k])
+                {
+                    viewSent[k] = convolvers[k].viewVersion;
+                    impulseViewOut <- ImpulseView (int (k), convolvers[k].viewSeconds, convolvers[k].viewPeaks);
                 }
             }
 

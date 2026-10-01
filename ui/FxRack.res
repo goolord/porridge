@@ -1,16 +1,47 @@
 // The effects rack (PorridgeParams.rackKinds): up to eight effects on the whole sound, in the
 // order they run, each kind up to four times. The first chorus, delay, reverb and EQ are
 // Oatmeal's; the others are numbered copies with parameters of their own (D_Wet: D2_Wet ...).
+// Porridge's own effects (flanger, phaser, compressor, algo reverb, convolve, bode, filter,
+// utility) are numbered the same way from their first (Fl_Rate, Fl2_Rate ...).
 //
 // The rack is FX_Rack_1..8 together with FX_Order: slots holding one of Oatmeal's four take them
 // in FX_Order's order, as the DSP does, so writing the rack writes both.
 
-type kind = [#chorus | #delay | #reverb | #eq | #distortion]
+type kind = [
+  | #chorus
+  | #delay
+  | #reverb
+  | #eq
+  | #distortion
+  | #flanger
+  | #phaser
+  | #compressor
+  | #space
+  | #convolve
+  | #bode
+  | #filter
+  | #utility
+]
 
-// copy 1 is Oatmeal's (the rack's distortions start at 2: Oatmeal's distortion isn't in it)
+// copy 1 is Oatmeal's for its four, or the first of Porridge's own (the rack's distortions start
+// at 2: Oatmeal's distortion isn't in it)
 type effect = {kind: kind, copy: int}
 
-let kinds: array<kind> = [#chorus, #delay, #reverb, #eq, #distortion]
+let kinds: array<kind> = [
+  #chorus,
+  #delay,
+  #reverb,
+  #eq,
+  #distortion,
+  #flanger,
+  #phaser,
+  #compressor,
+  #space,
+  #convolve,
+  #bode,
+  #filter,
+  #utility,
+]
 
 let key = (k: kind) =>
   switch k {
@@ -19,12 +50,28 @@ let key = (k: kind) =>
   | #reverb => "reverb"
   | #eq => "eq"
   | #distortion => "distortion"
+  | #flanger => "flanger"
+  | #phaser => "phaser"
+  | #compressor => "compressor"
+  | #space => "space"
+  | #convolve => "convolve"
+  | #bode => "bode"
+  | #filter => "filter"
+  | #utility => "utility"
   }
 
 let kindName = (k: kind) =>
   switch k {
   | #eq => "EQ"
+  | #space => "algo reverb"
   | k => key(k)
+  }
+
+// Oatmeal's chorus, delay, reverb and EQ (and its distortion, before the rack)
+let isOatmeal = (k: kind) =>
+  switch k {
+  | #chorus | #delay | #reverb | #eq | #distortion => true
+  | _ => false
   }
 
 let kindOfKey = s => kinds->Array.find(k => key(k) == s)
@@ -43,7 +90,7 @@ let ofValue = v => entries[v]->Option.flatMap(e => e)
 
 // Oatmeal's four, by their place in FX_Order's permutations (PorridgeParams.fxNames)
 let firsts = [{kind: #chorus, copy: 1}, {kind: #delay, copy: 1}, {kind: #reverb, copy: 1}, {kind: #eq, copy: 1}]
-let isFirst = e => e.copy == 1
+let isFirst = e => e.copy == 1 && isOatmeal(e.kind)
 
 // This effect's parameter for the first's (e.g. "D_Wet" for delay copy 3 is "D3_Wet").
 let id = (e, first) => e.copy == 1 ? first : PorridgeParams.copyId(first, e.copy)
@@ -60,6 +107,14 @@ let switchId = e =>
   | #reverb => id(e, "R_On")
   | #distortion => id(e, "Sat_Type")
   | #eq => id(e, "EQ_On")
+  | #flanger => id(e, "Fl_On")
+  | #phaser => id(e, "Ph_On")
+  | #compressor => id(e, "Cp_On")
+  | #space => id(e, "Rv_On")
+  | #convolve => id(e, "Cv_On")
+  | #bode => id(e, "Bd_On")
+  | #filter => id(e, "Ff_On")
+  | #utility => id(e, "Ut_On")
   }
 
 let eqBandTypes = e => [1, 2, 3, 4, 5]->Array.map(b => id(e, `EQ_${Int.toString(b)}_Type`))
@@ -130,6 +185,10 @@ let label = (rack, e) => {
   }
 }
 
-// The names of its host parameters, for hover texts: "Delay 3 …", Oatmeal's "D …".
+// The names of its host parameters, for hover texts: "Delay 3 …", Oatmeal's "D …", "Flanger …".
 let hostName = e =>
-  e.copy == 1 ? "Oatmeal's " ++ kindName(e.kind) : `${spec(e.kind).name} ${Int.toString(e.copy)}`
+  switch e.copy {
+  | 1 if isOatmeal(e.kind) => "Oatmeal's " ++ kindName(e.kind)
+  | 1 => spec(e.kind).name
+  | n => `${spec(e.kind).name} ${Int.toString(n)}`
+  }

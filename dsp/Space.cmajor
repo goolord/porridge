@@ -1,0 +1,1009 @@
+//  Space: Porridge's algorithmic reverb (a rack effect, apart from Oatmeal's own Reverb), with
+//  five models over one delay pool:
+//    hall     input diffusion, early reflections and a 16-line Hadamard FDN with modulated lines
+//    plate    Dattorro's figure-of-eight tank, modulated allpasses, output taps all over the tank
+//    nitrous  an 8-line FDN with a nested allpass in every line, a high-shelf lift into the tank
+//    basin    a long input diffusion chain (the attack swells in), long lines, a dark loop
+//    vintage  an early-80s digital reverb: the tank runs at a lower rate, band-limited to ~9 kHz,
+//             with gain-ranged 12-bit truncation and stepped random modulation
+//  The decay is exact: every delay inside a tank (allpasses included) is scaled by rho^length,
+//  rho = 10^(-3 / (RT60 * rate)), which turns the lossless tank's response into one that falls
+//  60 dB in RT60 seconds whatever the topology. The damping is a one-pole lowpass per loop whose
+//  loss is in proportion to the loop's length, so that the decay at the damping frequency is
+//  half of RT60 (and shorter above it) in every line alike.
+
+namespace porridge
+{
+    let spacePoolSize = 524288;     // 2^19 floats: every delay line of the current model
+    let spaceMaxLines = 40;
+
+    /// The algorithmic reverb.
+    struct Space
+    {
+        float[spacePoolSize] pool;
+        int[spaceMaxLines] base, cap, wp;       // a line's start in the pool, capacity and write index
+        float64[spaceMaxLines] d, dInc;         // its delay (samples, fractional) and per-sample ramp
+        float64[spaceMaxLines] nominal;         // its delay at scale 1 (samples)
+        bool[spaceMaxLines] scaled;             // whether Rv_Size scales it
+        float[spaceMaxLines] modMs, modRate, modPhase;      // modulation depth at Rv_Mod 1, rate, phase
+        float[spaceMaxLines] rndCur, rndStep;   // vintage's random glides (in units of modMs)
+        int[spaceMaxLines] rndLeft;
+        float[spaceMaxLines] lp, lpP, g;        // damping state and pole, decay gain rho^length
+        float[spaceMaxLines] lpInc, gInc;       // and their per-sample ramps
+        bool fresh;                             // just laid out: no ramps from the old values
+        float[spaceMaxLines] specMs;            // the layout being built
+        bool[spaceMaxLines] specFull;           // runs at the host rate (the predelay) or the tank's
+        int numLines;
+        int model;                              // -1: not laid out yet
+        float64 sr, rate;                       // the host's rate and the tank's (lower for vintage)
+        int decim, phase;
+        float64 scale, scaleInc, scaleMax, scaleStepMax, erScale, erInc, pdTarget;
+        float rtLog, rtSlow, fdLog, lcLog, width, mix, modDepth;
+        float[2] inLp, shelfLp;                 // input filter states, per channel
+        float[4] svf;                           // the low cut's states
+        float[9] bs1, bs2;                      // vintage's resampling biquads (states)
+        float[3] bb0, bb1, bb2, ba1, ba2;       // and their coefficients
+        float qStep, qPeak;
+        float fade;                             // the wet's fade-out when the model changes
+        float inFade;                           // and the input's fade-in into the new one
+        float level;                            // the wet's level make-up for decay and size
+        float lcG;                              // the low cut's tan (pi fc / sr)
+        Lcg rng;
+        float dc;
+        bool idle, clean;
+        int silentCount;
+    }
+
+    //==============================================================================
+    // Model tables (milliseconds at scale 1 unless noted)
+
+    let spaceScaleLo = float64[5] (0.25, 0.4, 0.3, 0.6, 0.35);      // Rv_Size 0 .. 1 maps lo .. hi
+    let spaceScaleHi = float64[5] (1.5625, 2.5, 1.5, 1.8, 1.75);
+    let spaceWetGain = float[5] (1.0f, 1.19f, 0.89f, 2.0f, 1.33f);    // about the same loudness at 2 s
+
+    let spaceHallDiffMs = float[8] (3.13f, 4.71f, 9.37f, 13.19f,  3.41f, 5.07f, 8.69f, 12.43f);
+    let spaceHallDiffG = float[4] (0.7f, 0.7f, 0.62f, 0.62f);
+    let spaceHallErMsL = float[8] (7.1f, 13.3f, 19.9f, 26.7f, 33.1f, 41.9f, 51.3f, 62.9f);
+    let spaceHallErMsR = float[8] (8.9f, 11.7f, 22.3f, 29.3f, 36.7f, 45.1f, 55.7f, 67.3f);
+    let spaceHallErGL = float[8] (0.62f, -0.55f, 0.49f, 0.44f, -0.38f, 0.33f, -0.28f, 0.22f);
+    let spaceHallErGR = float[8] (0.6f, 0.53f, -0.5f, 0.42f, 0.37f, -0.32f, 0.27f, -0.21f);
+    let spaceHallErSrcL = int[8] (0, 1, 0, 0, 1, 0, 1, 0);      // which predelay line a tap reads
+    let spaceHallErSrcR = int[8] (1, 0, 1, 1, 0, 1, 0, 1);
+    let spaceHallLineMs = float[16] (40.1f, 75.7f, 51.1f, 103.3f, 46.3f, 88.9f, 59.9f, 121.1f,
+                                43.7f, 80.3f, 54.3f, 110.3f, 63.7f, 94.1f, 69.1f, 129.7f);
+    let spaceHallIn = float[16] (1, 1, -1, 1, 1, -1, 1, 1, -1, -1, 1, -1, 1, 1, -1, -1);    // L feeds the even lines, R the odd
+    let spaceHallOutL = float[16] (1, -1, 1, 1, -1, 1, 1, -1, 1, 1, -1, -1, 1, -1, -1, 1);
+    let spaceHallOutR = float[16] (1, 1, 1, -1, -1, -1, 1, 1, 1, -1, -1, 1, 1, 1, -1, -1);
+
+    let spacePlateRef = 29761.0f;    // Dattorro's sample rate: the plate's lengths below are in its samples
+    let spacePlateDiff = float[6] (142.0f, 107.0f, 379.0f, 277.0f, 613.0f, 457.0f);     // Dattorro's four, and two more
+    let spacePlateDiffG = float[6] (0.75f, 0.75f, 0.625f, 0.625f, 0.6f, 0.6f);
+    let spacePlateTank = float[8] (672.0f, 4453.0f, 1800.0f, 3720.0f, 908.0f, 4217.0f, 2656.0f, 3163.0f);
+
+    let spaceNitrousDiffMs = float[8] (1.31f, 2.87f, 4.33f, 6.91f,  1.53f, 2.39f, 4.79f, 7.37f);
+    let spaceNitrousLineMs = float[8] (21.7f, 25.3f, 29.9f, 33.1f, 38.3f, 42.7f, 48.1f, 53.9f);
+    let spaceNitrousOuterMs = float[8] (7.3f, 8.9f, 6.1f, 10.3f, 5.3f, 9.7f, 11.9f, 6.7f);
+    let spaceNitrousInnerMs = float[8] (1.9f, 2.3f, 1.3f, 2.9f, 1.7f, 2.7f, 3.1f, 1.1f);
+    let spaceNitrousIn = float[8] (1, 1, -1, 1, 1, -1, -1, -1);
+    let spaceNitrousOutL = float[8] (1, -1, 1, 1, -1, -1, 1, -1);
+    let spaceNitrousOutR = float[8] (1, 1, -1, 1, 1, -1, -1, -1);
+
+    let spaceBasinDiffMs = float[12] (11.3f, 17.9f, 26.3f, 37.1f, 52.7f, 71.3f,  12.7f, 19.1f, 24.7f, 39.9f, 49.3f, 74.9f);
+    let spaceBasinDiffG = 0.72f;
+    let spaceBasinLineMs = float[8] (97.3f, 109.1f, 126.7f, 139.3f, 157.1f, 172.9f, 191.3f, 211.7f);
+    let spaceBasinIn = float[8] (1, -1, 1, 1, -1, 1, 1, 1);
+    let spaceBasinOutL = float[8] (1, 1, -1, 1, -1, 1, -1, -1);
+    let spaceBasinOutR = float[8] (1, -1, 1, 1, 1, 1, -1, 1);
+
+    let spaceVintageDiffMs = float[4] (4.71f, 3.59f, 12.73f, 9.31f);
+    let spaceVintageDiffG = float[4] (0.72f, 0.72f, 0.62f, 0.62f);
+    let spaceVintageLineMs = float[4] (59.3f, 71.9f, 83.7f, 97.1f);
+    let spaceVintageApMs = float[4] (13.1f, 17.3f, 19.9f, 23.7f);
+    let spaceVintageIn = float[4] (1, -1, 1, 1);
+
+    //==============================================================================
+    // Delay lines in the pool
+
+    float spaceTap (const Space& this, int j, int delay)
+    {
+        var i = this.wp.at (j) - delay;
+        if (i < 0) i += this.cap.at (j);
+        return this.pool.at (this.base.at (j) + i);
+    }
+
+    /// A fractional delay with 4-point Hermite interpolation (delay >= 3 when read before the write).
+    float spaceRead (const Space& this, int j, float64 delay)
+    {
+        let di = int (delay);
+        let f = float (1.0 - (delay - float64 (di)));      // from sample i towards i + 1
+        let c = this.cap.at (j);
+        let b = this.base.at (j);
+        var i = this.wp.at (j) - di - 1;
+        if (i < 0) i += c;
+        let im = i == 0 ? c - 1 : i - 1;
+        let i1 = i + 1 == c ? 0 : i + 1;
+        let i2 = i1 + 1 == c ? 0 : i1 + 1;
+        let xm = this.pool.at (b + im);
+        let x0 = this.pool.at (b + i);
+        let x1 = this.pool.at (b + i1);
+        let x2 = this.pool.at (b + i2);
+        let c1 = 0.5f * (x1 - xm);
+        let c2 = xm - 2.5f * x0 + 2.0f * x1 - 0.5f * x2;
+        let c3 = 0.5f * (x2 - xm) + 1.5f * (x0 - x1);
+        return ((c3 * f + c2) * f + c1) * f + x0;
+    }
+
+    /// A fractional delay with linear interpolation (delay >= 1 when read before the write).
+    float spaceReadLin (const Space& this, int j, float64 delay)
+    {
+        let di = int (delay);
+        let f = float (delay - float64 (di));
+        let c = this.cap.at (j);
+        let b = this.base.at (j);
+        var i = this.wp.at (j) - di;
+        if (i < 0) i += c;
+        let older = this.pool.at (b + (i == 0 ? c - 1 : i - 1));
+        let newer = this.pool.at (b + i);
+        return newer + f * (older - newer);
+    }
+
+    void spaceWrite (Space& this, int j, float x)
+    {
+        this.pool.at (this.base.at (j) + this.wp.at (j)) = x;
+    }
+
+    /// A Schroeder allpass on line j (fixed whole-sample delay), outside a tank.
+    float spaceAllpass (Space& this, int j, float x, float coef)
+    {
+        let z = this.spaceTap (j, int (this.d.at (j)));
+        let v = x + coef * z;
+        this.spaceWrite (j, v);
+        return z - coef * v;
+    }
+
+    /// An allpass inside a tank: its delay is scaled by rho^length (g[j]).
+    float spaceAllpassTank (Space& this, int j, float x, float coef)
+    {
+        let z = this.g.at (j) * this.spaceTap (j, int (this.d.at (j)));
+        let v = x + coef * z;
+        this.spaceWrite (j, v);
+        return z - coef * v;
+    }
+
+    /// The same with a moving (modulated or scaled) delay.
+    float spaceAllpassMod (Space& this, int j, float x, float coef)
+    {
+        let z = this.g.at (j) * this.spaceRead (j, this.d.at (j));
+        let v = x + coef * z;
+        this.spaceWrite (j, v);
+        return z - coef * v;
+    }
+
+    /// One sample on: lines from .. to - 1 move their write index and delay ramp.
+    void spaceStep (Space& this, int from, int to)
+    {
+        for (int j = from; j < to; ++j)
+        {
+            this.d.at (j) += this.dInc.at (j);
+            this.g.at (j) += this.gInc.at (j);
+            this.lpP.at (j) += this.lpInc.at (j);
+            let w = this.wp.at (j) + 1;
+            this.wp.at (j) = w >= this.cap.at (j) ? 0 : w;
+        }
+    }
+
+    void spaceHadamard16 (float[16]& v)
+    {
+        for (int h = 1; h < 16; h *= 2)
+            for (int i = 0; i < 16; i += 2 * h)
+                for (int k = i; k < i + h; ++k)
+                {
+                    let a = v.at (k);
+                    let b = v.at (k + h);
+                    v.at (k) = a + b;
+                    v.at (k + h) = a - b;
+                }
+    }
+
+    void spaceHadamard8 (float[8]& v)
+    {
+        for (int h = 1; h < 8; h *= 2)
+            for (int i = 0; i < 8; i += 2 * h)
+                for (int k = i; k < i + h; ++k)
+                {
+                    let a = v.at (k);
+                    let b = v.at (k + h);
+                    v.at (k) = a + b;
+                    v.at (k + h) = a - b;
+                }
+    }
+
+    /// The pole of a one-pole lowpass (unity at DC) in a loop of loopLen samples: the damping
+    /// adds as much loss at fd as the decay itself (RT60 halves there), rising with f^2 below.
+    /// A one-pole follows f^2 only while its loss is small, so it is matched where the law asks
+    /// for 3 dB per pass at most (above that it loses less than the law, never the mids more).
+    float spaceDampPole (float64 loopLen, float64 rt, float64 rate, float64 fd)
+    {
+        let lossDb = 60.0 * loopLen / (rate * rt);
+        let fm = min (min (fd, 0.2 * rate), fd * sqrt (3.0 / lossDb));     // (a one-pole is f^2-like well below Nyquist)
+        let r = fm / fd;
+        let g2 = pow (10.0, -lossDb * r * r * 0.1);
+        let a = 1.0 - g2;
+
+        if (a < 1e-9)
+            return 0.0f;
+
+        let b = 1.0 - g2 * cos (2.0 * pi * fm / rate);
+        return float ((b - sqrt (max (b * b - a * a, 0.0))) / a);
+    }
+
+    /// An RBJ lowpass biquad's coefficients into section k.
+    void spaceBiquad (Space& this, int k, float64 fc, float64 q, float64 sr)
+    {
+        let w = 2.0 * pi * fc / sr;
+        let alpha = sin (w) / (2.0 * q);
+        let cs = cos (w);
+        let a0 = 1.0 + alpha;
+        this.bb0.at (k) = float ((1.0 - cs) * 0.5 / a0);
+        this.bb1.at (k) = float ((1.0 - cs) / a0);
+        this.bb2.at (k) = float ((1.0 - cs) * 0.5 / a0);
+        this.ba1.at (k) = float (-2.0 * cs / a0);
+        this.ba2.at (k) = float ((1.0 - alpha) / a0);
+    }
+
+    /// Runs x through the three resampling sections from state s0 (0 anti-alias, 3 left, 6 right).
+    float spaceBiquads (Space& this, int s0, float x)
+    {
+        var v = x;
+
+        for (int k = 0; k < 3; ++k)
+        {
+            let s = s0 + k;
+            let y = this.bb0.at (k) * v + this.bs1.at (s);
+            this.bs1.at (s) = this.bb1.at (k) * v - this.ba1.at (k) * y + this.bs2.at (s);
+            this.bs2.at (s) = this.bb2.at (k) * v - this.ba2.at (k) * y;
+            v = y;
+        }
+
+        return v;
+    }
+
+    //==============================================================================
+    // Layout
+
+    void spaceSpec (Space& this, float ms, bool scaled, float modMs, float modRate, bool fullRate)
+    {
+        let j = this.numLines;
+        this.specMs.at (j) = ms;
+        this.scaled.at (j) = scaled;
+        this.modMs.at (j) = modMs;
+        this.modRate.at (j) = modRate;
+        this.modPhase.at (j) = float (j) * 0.2903f;
+        this.specFull.at (j) = fullRate;
+        this.numLines = j + 1;
+    }
+
+    /// Lays the model's lines out in the pool (silent), shrinking the largest sizes if the pool
+    /// can't hold them at this rate.
+    void spaceSetup (Space& this, int model, float64 sr, float size, float predelayMs)
+    {
+        this.model = model;
+        this.sr = sr;
+        this.decim = model == reverbModel::vintage ? (sr < 64000.0 ? 2 : (sr < 128000.0 ? 4 : 8)) : 1;
+        this.rate = sr / float64 (this.decim);
+        this.phase = 0;
+        this.numLines = 0;
+
+        // 0, 1: the predelay (the hall also reads its early reflections from it)
+        let pdMs = model == reverbModel::hall ? 336.0f : 252.0f;
+        this.spaceSpec (pdMs, false, 0, 0, true);
+        this.spaceSpec (pdMs, false, 0, 0, true);
+
+        if (model == reverbModel::hall)
+        {
+            for (wrap<8> k) this.spaceSpec (spaceHallDiffMs[k], false, 0, 0, false);    // 2 .. 9
+            this.spaceSpec (2.9f, false, 0, 0, false);                             // 10, 11: ER smear
+            this.spaceSpec (3.7f, false, 0, 0, false);
+            for (wrap<16> k) this.spaceSpec (spaceHallLineMs[k], true, (int (k) & 1) != 0 ? 1.1f : 0.0f, 0.23f + 0.043f * float (k), false);   // 12 .. 27: every other one modulated
+        }
+        else if (model == reverbModel::plate)
+        {
+            let ms = 1000.0f / spacePlateRef;
+            for (wrap<6> k) this.spaceSpec (spacePlateDiff[k] * ms, false, 0, 0, false);    // 2 .. 7
+            for (wrap<8> k)                                                         // 8 .. 15
+            {
+                let modMs = k == 0 || k == 4 ? 1.0f : 0.0f;
+                let modRate = k == 0 ? 0.9f : 1.13f;
+                this.spaceSpec (spacePlateTank[k] * ms, true, modMs, modRate, false);
+            }
+        }
+        else if (model == reverbModel::nitrous)
+        {
+            for (wrap<8> k) this.spaceSpec (spaceNitrousDiffMs[k], false, 0, 0, false);     // 2 .. 9
+            for (wrap<8> k) this.spaceSpec (spaceNitrousLineMs[k], true, 0.3f, 1.3f + 0.27f * float (k), false);  // 10 .. 17
+            for (wrap<8> k) this.spaceSpec (spaceNitrousOuterMs[k], false, 0, 0, false);    // 18 .. 25
+            for (wrap<8> k) this.spaceSpec (spaceNitrousInnerMs[k], false, 0, 0, false);    // 26 .. 33
+        }
+        else if (model == reverbModel::basin)
+        {
+            for (wrap<12> k) this.spaceSpec (spaceBasinDiffMs[k], false, 0, 0, false);      // 2 .. 13
+            for (wrap<8> k) this.spaceSpec (spaceBasinLineMs[k], true, 1.8f, 0.06f + 0.03f * float (k), false);   // 14 .. 21
+        }
+        else
+        {
+            for (wrap<4> k) this.spaceSpec (spaceVintageDiffMs[k], false, 0, 0, false);     // 2 .. 5
+            for (wrap<4> k) this.spaceSpec (spaceVintageLineMs[k], true, 1.4f, 0, false);   // 6 .. 9
+            for (wrap<4> k) this.spaceSpec (spaceVintageApMs[k], false, 0, 0, false);       // 10 .. 13
+        }
+
+        // fit the pool: fixed lines and modulation margins first, the rest for the scaled lines
+        float64 fixedLen = 0, scaledSum = 0, nominalMax = 1;
+        this.scaleMax = spaceScaleHi.at (model);
+
+        for (int j = 0; j < this.numLines; ++j)
+        {
+            let r = this.specFull.at (j) ? sr : this.rate;
+            let len = float64 (this.specMs.at (j)) * r * 0.001;
+            fixedLen += float64 (this.modMs.at (j)) * r * 0.001 + 8.0;
+
+            if (this.scaled.at (j))
+            {
+                scaledSum += len;
+                nominalMax = max (nominalMax, len);
+            }
+            else
+            {
+                fixedLen += len;
+            }
+        }
+
+        if (fixedLen + scaledSum * this.scaleMax > float64 (spacePoolSize - 64))
+            this.scaleMax = (float64 (spacePoolSize - 64) - fixedLen) / scaledSum;
+
+        let lo = spaceScaleLo.at (model);
+        this.scale = min (lo * pow (spaceScaleHi.at (model) / lo, float64 (size)), this.scaleMax);
+        this.scaleInc = 0;
+        this.scaleStepMax = 0.04 * float64 (blockSize / this.decim) / nominalMax;   // 4% pitch at most
+        this.erScale = 0.75 + 0.5 * float64 (size);
+        this.erInc = 0;
+
+        int top = 0;
+
+        for (int j = 0; j < this.numLines; ++j)
+        {
+            let r = this.specFull.at (j) ? sr : this.rate;
+            var len = float64 (this.specMs.at (j)) * r * 0.001;
+            let s = this.scaled.at (j) ? this.scaleMax : 1.0;
+
+            if (! this.scaled.at (j) && ! this.specFull.at (j))
+                len = max (float64 (int (len + 0.5)), 1.0);     // fixed allpasses: whole samples
+
+            this.base.at (j) = top;
+            this.cap.at (j) = int (len * s + float64 (this.modMs.at (j)) * r * 0.001) + 8;
+            top += this.cap.at (j);
+            this.wp.at (j) = 0;
+            this.nominal.at (j) = len;
+            this.d.at (j) = this.scaled.at (j) ? len * this.scale : len;
+            this.dInc.at (j) = 0;
+            this.lp.at (j) = 0;
+            this.lpP.at (j) = 0;
+            this.g.at (j) = 1.0f;
+            this.rndCur.at (j) = 0;
+            this.rndStep.at (j) = 0;
+            this.rndLeft.at (j) = 0;
+        }
+
+        this.pdTarget = max (4.0, float64 (predelayMs) * sr * 0.001);
+        this.d[0] = this.pdTarget;
+
+        if (! this.clean)
+            for (int i = 0; i < top; ++i)
+                this.pool.at (i) = 0;
+
+        this.clean = false;
+        this.inLp[0] = 0; this.inLp[1] = 0;
+        this.shelfLp[0] = 0; this.shelfLp[1] = 0;
+        this.qStep = 1e-7f / 2048.0f;
+        this.qPeak = 0;
+
+        for (wrap<9> k) { this.bs1[k] = 0; this.bs2[k] = 0; }
+
+        if (model == reverbModel::vintage)
+        {
+            let fc = min (9000.0, 0.4 * this.rate);
+            this.spaceBiquad (0, fc, 0.5176, sr);
+            this.spaceBiquad (1, fc, 0.7071, sr);
+            this.spaceBiquad (2, fc, 1.9319, sr);
+        }
+
+        for (wrap<4> k) this.svf[k] = 0;
+
+        this.fade = 1.0f;
+        this.inFade = this.idle ? 1.0f : 0.0f;     // into a running effect, the input fades in
+        this.level = 0;
+        this.fresh = true;
+    }
+
+    void clearState (Space& this)
+    {
+        for (int i = 0; i < spacePoolSize; ++i)
+            this.pool.at (i) = 0;
+
+        this.clean = true;
+        this.model = -1;
+        this.numLines = 0;
+        this.idle = true;
+        this.silentCount = 0;
+        this.dc = 1e-15f;
+        this.rng.state = 0x2545f491;
+        this.mix = -1.0f;       // marks the smoothed values as unset
+        this.lcG = 0;
+        for (wrap<4> k) this.svf[k] = 0;
+    }
+
+    //==============================================================================
+    // Models: each runs the block from `pre` (predelayed input) into `wet`
+
+    void spaceHall (Space& this, const float<2>[blockSize]& pre, const float<2>[blockSize]& er,
+                    float<2>[blockSize]& wet)
+    {
+        let inGain = 0.5f;
+
+        for (wrap<blockSize> i)
+        {
+            var xL = pre[i][0];
+            var xR = pre[i][1];
+
+            for (wrap<4> k)
+            {
+                xL = this.spaceAllpass (2 + int (k), xL, spaceHallDiffG[k]);
+                xR = this.spaceAllpass (6 + int (k), xR, spaceHallDiffG[k]);
+            }
+
+            let eL = this.spaceAllpass (10, er[i][0], 0.5f);
+            let eR = this.spaceAllpass (11, er[i][1], 0.5f);
+
+            float[16] y;
+            float oL = 0, oR = 0;
+
+            for (wrap<16> k)
+            {
+                let j = 12 + int (k);
+                let r = this.spaceRead (j, this.d.at (j));
+                let s = r + this.lpP.at (j) * (this.lp.at (j) - r);
+                this.lp.at (j) = s;
+                y[k] = s * this.g.at (j);
+                oL += spaceHallOutL[k] * y[k];
+                oR += spaceHallOutR[k] * y[k];
+            }
+
+            spaceHadamard16 (y);
+
+            for (wrap<16> k)
+                this.spaceWrite (12 + int (k), 0.25f * y[k] + spaceHallIn[k] * inGain * ((int (k) & 1) == 0 ? xL : xR));
+
+            wet[i] = float<2> (oL * 0.25f + eL, oR * 0.25f + eR);
+            this.spaceStep (2, 28);
+        }
+    }
+
+    void spacePlate (Space& this, const float<2>[blockSize]& pre, float<2>[blockSize]& wet, float bw)
+    {
+        let t = float64 (this.rate / float64 (spacePlateRef));   // Dattorro's samples to ours
+
+        for (wrap<blockSize> i)
+        {
+            this.inLp[0] += (0.5f * (pre[i][0] + pre[i][1]) - this.inLp[0]) * bw;
+            var x = this.inLp[0];
+
+            for (wrap<6> k)
+                x = this.spaceAllpass (2 + int (k), x, spacePlateDiffG[k]);
+
+            let l1 = this.g[9] * this.spaceRead (9, this.d[9]);
+            let l2 = this.g[11] * this.spaceRead (11, this.d[11]);
+            let r1 = this.g[13] * this.spaceRead (13, this.d[13]);
+            let r2 = this.g[15] * this.spaceRead (15, this.d[15]);
+
+            // left half: modulated allpass, delay, damping, allpass, delay, over to the right
+            this.spaceWrite (9, this.spaceAllpassMod (8, x + r2, -0.7f));
+            this.lp[9] = l1 + this.lpP[9] * (this.lp[9] - l1);
+            this.spaceWrite (11, this.spaceAllpassMod (10, this.lp[9], 0.5f));
+
+            this.spaceWrite (13, this.spaceAllpassMod (12, x + l2, -0.7f));
+            this.lp[13] = r1 + this.lpP[13] * (this.lp[13] - r1);
+            this.spaceWrite (15, this.spaceAllpassMod (14, this.lp[13], 0.5f));
+
+            // Dattorro's output taps, moved with the size
+            let u = (this.scale + this.scaleInc * float64 (int (i))) * t;
+
+            let yL = this.spaceRead (13, 266.0 * u) + this.spaceRead (13, 2974.0 * u)
+                   - this.spaceRead (14, 1913.0 * u) + this.spaceRead (15, 1996.0 * u)
+                   - this.spaceRead (9, 1990.0 * u) - this.spaceRead (10, 187.0 * u)
+                   - this.spaceRead (11, 1066.0 * u);
+            let yR = this.spaceRead (9, 353.0 * u) + this.spaceRead (9, 3627.0 * u)
+                   - this.spaceRead (10, 1228.0 * u) + this.spaceRead (11, 2673.0 * u)
+                   - this.spaceRead (13, 2111.0 * u) - this.spaceRead (14, 335.0 * u)
+                   - this.spaceRead (15, 121.0 * u);
+
+            wet[i] = float<2> (yL, yR) * 0.6f;
+            this.spaceStep (2, 16);
+        }
+    }
+
+    void spaceNitrous (Space& this, const float<2>[blockSize]& pre, float<2>[blockSize]& wet, float kShelf)
+    {
+        let inGain = 0.5f;
+
+        for (wrap<blockSize> i)
+        {
+            // high-shelf lift (about +5 dB above 3 kHz) into the diffusers
+            this.shelfLp[0] += (pre[i][0] - this.shelfLp[0]) * kShelf;
+            this.shelfLp[1] += (pre[i][1] - this.shelfLp[1]) * kShelf;
+            var xL = pre[i][0] + 0.8f * (pre[i][0] - this.shelfLp[0]);
+            var xR = pre[i][1] + 0.8f * (pre[i][1] - this.shelfLp[1]);
+
+            for (wrap<4> k)
+            {
+                xL = this.spaceAllpass (2 + int (k), xL, 0.75f);
+                xR = this.spaceAllpass (6 + int (k), xR, 0.75f);
+            }
+
+            float[8] y;
+            float oL = 0, oR = 0;
+
+            for (wrap<8> k)
+            {
+                let j = 10 + int (k);
+                let z = this.g.at (j) * this.spaceRead (j, this.d.at (j));
+
+                // nested allpass: the outer one's delay runs through the inner one
+                let jo = 18 + int (k);
+                let zo = this.spaceAllpassTank (26 + int (k), this.g.at (jo) * this.spaceTap (jo, int (this.d.at (jo))), 0.5f);
+                let v = z + 0.62f * zo;
+                this.spaceWrite (jo, v);
+                let a = zo - 0.62f * v;
+
+                let s = a + this.lpP.at (j) * (this.lp.at (j) - a);
+                this.lp.at (j) = s;
+                y[k] = s;
+                oL += spaceNitrousOutL[k] * s;
+                oR += spaceNitrousOutR[k] * s;
+            }
+
+            spaceHadamard8 (y);
+
+            for (wrap<8> k)
+                this.spaceWrite (10 + int (k), 0.35355339f * y[k] + spaceNitrousIn[k] * inGain * ((int (k) & 1) == 0 ? xL : xR));
+
+            wet[i] = float<2> (oL, oR) * 0.35355339f;
+            this.spaceStep (2, 34);
+        }
+    }
+
+    void spaceBasin (Space& this, const float<2>[blockSize]& pre, float<2>[blockSize]& wet, float kIn)
+    {
+        let inGain = 0.5f;
+        float directL = 1, directR = 1;     // the chains' undelayed part: the product of (-g)
+
+        for (wrap<6> k)
+        {
+            directL *= this.g.at (2 + int (k));
+            directR *= this.g.at (8 + int (k));
+        }
+
+        for (wrap<blockSize> i)
+        {
+            this.inLp[0] += (pre[i][0] - this.inLp[0]) * kIn;
+            this.inLp[1] += (pre[i][1] - this.inLp[1]) * kIn;
+            var xL = this.inLp[0];
+            var xR = this.inLp[1];
+
+            for (wrap<6> k)
+            {
+                xL = this.spaceAllpass (2 + int (k), xL, this.g.at (2 + int (k)));
+                xR = this.spaceAllpass (8 + int (k), xR, this.g.at (8 + int (k)));
+            }
+
+            // take the chain's undelayed part out, so that nothing comes through at once
+            xL -= directL * this.inLp[0];
+            xR -= directR * this.inLp[1];
+
+            float[8] y;
+            float oL = 0, oR = 0;
+
+            for (wrap<8> k)
+            {
+                let j = 14 + int (k);
+                let r = this.spaceRead (j, this.d.at (j));
+                let s = r + this.lpP.at (j) * (this.lp.at (j) - r);
+                this.lp.at (j) = s;
+                y[k] = s * this.g.at (j);
+                oL += spaceBasinOutL[k] * y[k];
+                oR += spaceBasinOutR[k] * y[k];
+            }
+
+            spaceHadamard8 (y);
+
+            for (wrap<8> k)
+                this.spaceWrite (14 + int (k), 0.35355339f * y[k] + spaceBasinIn[k] * inGain * ((int (k) & 1) == 0 ? xL : xR));
+
+            wet[i] = float<2> (oL, oR) * 0.35355339f;
+            this.spaceStep (2, 22);
+        }
+    }
+
+    /// Magnitude truncation to vintage's gain-ranged 12-bit step (decays to exact zero).
+    float spaceQuantise (Space& this, float x)
+    {
+        this.qPeak = max (this.qPeak, abs (x));
+        let inv = 1.0f / this.qStep;
+        return x >= 0 ? floor (x * inv) * this.qStep : -floor (-x * inv) * this.qStep;
+    }
+
+    /// One sample of vintage's tank at its own rate.
+    float<2> spaceVintageTick (Space& this, float x0)
+    {
+        var x = x0;
+
+        for (wrap<4> k)
+            x = this.spaceAllpass (2 + int (k), x, spaceVintageDiffG[k]);
+
+        float[4] y;
+
+        for (wrap<4> k)
+        {
+            let j = 6 + int (k);
+            let r = this.g.at (j) * this.spaceReadLin (j, this.d.at (j));
+            let a = this.spaceAllpassTank (10 + int (k), r, 0.55f);
+            let s = a + this.lpP.at (j) * (this.lp.at (j) - a);
+            this.lp.at (j) = s;
+            y[k] = s;
+        }
+
+        // output taps: the line ends plus one tap inside each other line
+        let oL = y[0] - y[2] + 0.7f * this.spaceReadLin (7, 0.43 * this.d[7]) - 0.7f * this.spaceReadLin (9, 0.61 * this.d[9]);
+        let oR = y[1] - y[3] + 0.7f * this.spaceReadLin (6, 0.51 * this.d[6]) - 0.7f * this.spaceReadLin (8, 0.37 * this.d[8]);
+
+        let h = 0.5f * (y[0] + y[1] + y[2] + y[3]);     // Householder: y - 2/4 * sum
+
+        for (wrap<4> k)
+            this.spaceWrite (6 + int (k), this.spaceQuantise (y[k] - h + spaceVintageIn[k] * 0.5f * x));
+
+        this.spaceStep (2, 14);
+        return float<2> (oL, oR);
+    }
+
+    void spaceVintage (Space& this, const float<2>[blockSize]& pre, float<2>[blockSize]& wet)
+    {
+        let up = float (this.decim);
+
+        for (wrap<blockSize> i)
+        {
+            let x = this.spaceBiquads (0, 0.5f * (pre[i][0] + pre[i][1]));
+            var u = float<2> ();
+
+            if (this.phase == 0)
+                u = this.spaceVintageTick (x) * up;
+
+            this.phase = this.phase + 1 == this.decim ? 0 : this.phase + 1;
+            wet[i] = float<2> (this.spaceBiquads (3, u[0] + this.dc), this.spaceBiquads (6, u[1] + this.dc));
+        }
+
+        this.qStep = max (this.qPeak, 1e-7f) * (1.0f / 2048.0f);
+        this.qPeak = 0;
+    }
+
+    //==============================================================================
+    bool process (Space& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
+    {
+        if (! active && this.idle)
+            return false;
+
+        let want = clamp (int (P[slot::Rv_Model]), 0, 4);
+        let size = clamp (P[slot::Rv_Size], 0.0f, 1.0f);
+        let predelay = clamp (P[slot::Rv_Predelay], 0.0f, 250.0f);
+
+        // a new model starts on an empty tank once the old one's wet has faded out
+        if (this.model < 0 || sr != this.sr || (want != this.model && (this.idle || this.fade <= 0.0f)))
+            this.spaceSetup (want, sr, size, predelay);
+
+        this.idle = false;
+        this.dc = -this.dc;
+
+        let model = this.model;
+        let n = blockSize / this.decim;
+        let nf = float64 (n);
+        let rate = this.rate;
+        let a50 = float (1.0 - exp (-float64 (blockSize) / (sr * 0.05)));
+        let a100 = 1.0 - exp (-float64 (blockSize) / (sr * 0.1));
+
+        // decay, damping and low cut glide in the log domain
+        let rtT = log (expKnob (0.1f, 30.0f, P[slot::Rv_Decay]));
+        let fdT = log (expKnob (20.0f, 20000.0f, P[slot::Rv_Damp]));
+        let lcT = log (expKnob (20.0f, 20000.0f, P[slot::Rv_LowCut]));
+        let widthT = clamp (P[slot::Rv_Width], 0.0f, 1.0f);
+        let mixT = clamp (P[slot::Rv_Mix], 0.0f, 1.0f);
+        let modT = clamp (P[slot::Rv_Mod], 0.0f, 1.0f);
+
+        if (this.mix < 0.0f)
+        {
+            this.rtLog = rtT; this.rtSlow = rtT; this.fdLog = fdT; this.lcLog = lcT;
+            this.width = widthT; this.mix = mixT; this.modDepth = modT;
+        }
+
+        this.rtLog += (rtT - this.rtLog) * a50;
+        this.rtSlow += (rtT - this.rtSlow) * a50 * 0.15f;     // basin's diffusers follow slowly
+        this.fdLog += (fdT - this.fdLog) * a50;
+        this.lcLog += (lcT - this.lcLog) * a50;
+        this.modDepth += (modT - this.modDepth) * a50;
+        let width0 = this.width, mix0 = this.mix;
+        this.width += (widthT - this.width) * a50;
+        this.mix += (mixT - this.mix) * a50;
+
+        // size: an exponential glide, never faster than 4% pitch on the longest line
+        let lo = spaceScaleLo.at (model);
+        let scaleT = min (lo * pow (spaceScaleHi.at (model) / lo, float64 (size)), this.scaleMax);
+        var scaleStep = clamp ((scaleT - this.scale) * a100, -this.scaleStepMax, this.scaleStepMax);
+        let settled = abs (scaleT - this.scale) < 1e-5 * scaleT;
+
+        if (settled)
+            scaleStep = scaleT - this.scale;
+        this.scaleInc = scaleStep / nf;
+        let erStep = (0.75 + 0.5 * float64 (size) - this.erScale) * a100;
+        this.erInc = erStep / float64 (blockSize);
+
+        // predelay: glides at up to 25% pitch
+        let pdT = max (4.0, float64 (predelay) * sr * 0.001);
+        this.pdTarget += clamp ((pdT - this.pdTarget) * float64 (a50), -0.25 * float64 (blockSize), 0.25 * float64 (blockSize));
+        this.dInc[0] = (this.pdTarget - this.d[0]) / float64 (blockSize);
+
+        // every other line's delay: size times its nominal length plus modulation
+        let modScale = float64 (this.modDepth) * rate * 0.001;
+        let modOn = this.modDepth > 1e-3f;
+
+        for (int j = 2; j < this.numLines; ++j)
+        {
+            var target = this.scaled.at (j) ? this.nominal.at (j) * (this.scale + scaleStep) : this.nominal.at (j);
+            let depth = modOn ? this.modMs.at (j) : 0.0f;
+
+            // a still line reads whole samples: no interpolation loss in the loop
+            if (depth <= 0 && settled && this.scaled.at (j))
+                target = floor (target + 0.5);
+
+            if (depth > 0)
+            {
+                if (model == reverbModel::vintage)
+                {
+                    // stepped random glides: a new target every 30 .. 90 ms
+                    if (this.rndLeft.at (j) <= 0)
+                    {
+                        let blocks = max (1, int ((0.03 + 0.06 * float64 (this.rng.nextSigned() * 0.5f + 0.5f)) * rate / nf));
+                        this.rndStep.at (j) = (this.rng.nextSigned() - this.rndCur.at (j)) / float (blocks);
+                        this.rndLeft.at (j) = blocks;
+                    }
+
+                    this.rndCur.at (j) += this.rndStep.at (j);
+                    this.rndLeft.at (j) -= 1;
+                    target += modScale * float64 (depth * this.rndCur.at (j));
+                }
+                else
+                {
+                    var ph = this.modPhase.at (j) + this.modRate.at (j) * float (nf / rate);
+                    ph -= floor (ph);
+                    this.modPhase.at (j) = ph;
+                    target += modScale * float64 (depth) * sin (2.0 * pi * float64 (ph));
+                }
+            }
+
+            this.dInc.at (j) = (target - this.d.at (j)) / nf;
+        }
+
+        // decay gains rho^length for the tank's delays, and the damping per loop
+        let rtSet = exp (float64 (this.rtLog));
+        var rt = rtSet;
+        let fdSet = exp (float64 (this.fdLog));
+        var fd = fdSet;
+        let fChar = model == reverbModel::basin ? 3000.0 : (model == reverbModel::vintage ? 7000.0 : 0.0);
+
+        if (fChar > 0)
+        {
+            // the model's own darkness joins the damping, but leaves the decay at 1 kHz as set
+            fd = 1.0 / sqrt (1.0 / (fd * fd) + 1.0 / (fChar * fChar));
+            rt *= (1.0 + 1.0e6 / (fd * fd)) / (1.0 + 1.0e6 / (fdSet * fdSet));
+        }
+
+        let k60 = -6.907755 / (rt * rate);
+        let tankFrom = model == reverbModel::hall ? 12 : (model == reverbModel::plate ? 8 :
+                       (model == reverbModel::nitrous ? 10 : (model == reverbModel::basin ? 14 : 6)));
+
+        // targets for the block's end; the gains and poles ramp to them sample by sample
+        float[spaceMaxLines] gT, pT;
+
+        for (int j = 2; j < this.numLines; ++j)
+        {
+            let e = this.d.at (j) + nf * this.dInc.at (j);
+            gT.at (j) = j >= tankFrom ? float (exp (k60 * e)) : 1.0f;
+
+            if (model == reverbModel::basin && j < 14)
+            {
+                // the diffusers ring no longer than half the decay (less bloom for short ones)
+                gT.at (j) = float (min (float64 (spaceBasinDiffG), pow (10.0, -3.0 * e / (rate * 0.5 * exp (float64 (this.rtSlow))))));
+            }
+
+            if (model == reverbModel::vintage && j >= 6 && j < 10)
+            {
+                // make up for the linear interpolation's loss at 1 kHz
+                let fr = e - floor (e);
+                gT.at (j) = float (float64 (gT.at (j)) / sqrt (1.0 - 2.0 * fr * (1.0 - fr) * (1.0 - cos (2.0 * pi * 1000.0 / rate))));
+            }
+        }
+
+        if (model == reverbModel::plate)
+        {
+            pT[9] = spaceDampPole (this.d[8] + this.d[9] + this.d[10] + this.d[11], rt, rate, fd);
+            pT[13] = spaceDampPole (this.d[12] + this.d[13] + this.d[14] + this.d[15], rt, rate, fd);
+        }
+        else
+        {
+            let lines = model == reverbModel::hall ? 16 : (model == reverbModel::vintage ? 4 : 8);
+
+            for (int k = 0; k < lines; ++k)
+            {
+                let j = tankFrom + k;
+                var loopLen = this.d.at (j);
+
+                if (model == reverbModel::nitrous) loopLen += this.d.at (j + 8) + this.d.at (j + 16);
+                if (model == reverbModel::vintage) loopLen += this.d.at (j + 4);
+
+                pT.at (j) = spaceDampPole (loopLen, rt, rate, fd);
+            }
+        }
+
+        for (int j = 2; j < this.numLines; ++j)
+        {
+            if (this.fresh)
+            {
+                this.g.at (j) = gT.at (j);
+                this.lpP.at (j) = pT.at (j);
+            }
+
+            this.gInc.at (j) = (gT.at (j) - this.g.at (j)) / float (nf);
+            this.lpInc.at (j) = (pT.at (j) - this.lpP.at (j)) / float (nf);
+        }
+
+        this.fresh = false;
+
+        // predelay (and the hall's early reflections, read from the same lines)
+        float<2>[blockSize] pre, er, wet;
+        let dc = this.dc;
+        let erG = model == reverbModel::hall ? 0.5f : 0.0f;
+        let msS = sr * 0.001;
+        let inStep = float (1.0 / (0.01 * sr));
+
+        for (wrap<blockSize> i)
+        {
+            this.inFade = min (this.inFade + inStep, 1.0f);
+            this.spaceWrite (0, buf[i][0] * this.inFade + dc);
+            this.spaceWrite (1, buf[i][1] * this.inFade + dc);
+            let pd = this.d[0];
+            pre[i] = float<2> (this.spaceRead (0, pd), this.spaceRead (1, pd));
+
+            if (erG > 0)
+            {
+                let es = this.erScale * msS;
+                float eL = 0, eR = 0;
+
+                for (wrap<8> k)
+                {
+                    eL += spaceHallErGL[k] * this.spaceReadLin (spaceHallErSrcL[k], pd + float64 (spaceHallErMsL[k]) * es);
+                    eR += spaceHallErGR[k] * this.spaceReadLin (spaceHallErSrcR[k], pd + float64 (spaceHallErMsR[k]) * es);
+                }
+
+                er[i] = float<2> (eL, eR) * erG;
+                this.erScale += this.erInc;
+            }
+
+            this.d[0] += this.dInc[0];
+            let w0 = this.wp[0] + 1;
+            this.wp[0] = w0 >= this.cap[0] ? 0 : w0;
+            this.wp[1] = this.wp[0];
+        }
+
+        if (model == reverbModel::hall)
+        {
+            this.spaceHall (pre, er, wet);
+        }
+        else if (model == reverbModel::plate)
+        {
+            this.spacePlate (pre, wet, float (1.0 - exp (-2.0 * pi * min (13000.0, 0.45 * sr) / sr)));
+        }
+        else if (model == reverbModel::nitrous)
+        {
+            this.spaceNitrous (pre, wet, float (1.0 - exp (-2.0 * pi * 3000.0 / sr)));
+        }
+        else if (model == reverbModel::basin)
+        {
+            this.spaceBasin (pre, wet, float (1.0 - exp (-2.0 * pi * min (6500.0, 0.45 * sr) / sr)));
+        }
+        else
+        {
+            this.spaceVintage (pre, wet);
+        }
+
+        this.scale += scaleStep;
+
+        // low cut (12 dB/oct, TPT state variable), width, mix
+        var gc0 = this.lcG;
+        this.lcG = float (tan (pi * min (exp (float64 (this.lcLog)), 0.45 * sr) / sr));
+
+        if (gc0 <= 0)
+            gc0 = this.lcG;
+
+        let ck = 1.41421356f;
+
+        let wantFade = want == model ? 1.0f : 0.0f;
+        let fadeStep = float (1.0 / (0.015 * sr));
+        let inv = 1.0f / float (blockSize);
+
+        // longer decays and smaller rooms come out louder (the tank holds more energy for its
+        // length): take part of that back, so that the knobs mostly change the sound
+        var level0 = this.level;
+        let mid = sqrt (lo * spaceScaleHi.at (model));
+        this.level = spaceWetGain.at (model) * float (pow (2.0 / rtSet, 0.2) * pow (this.scale / mid, 0.35));
+
+        if (level0 <= 0)
+            level0 = this.level;
+
+        let wet0 = float (sin (float64 (mix0) * pi * 0.5)) * level0;
+        let wet1 = float (sin (float64 (this.mix) * pi * 0.5)) * this.level;
+        let dry0 = float (cos (float64 (mix0) * pi * 0.5)), dry1 = float (cos (float64 (this.mix) * pi * 0.5));
+
+        for (wrap<blockSize> i)
+        {
+            let t = float (int (i) + 1) * inv;
+            let wd = width0 + (this.width - width0) * t;
+            let gc = gc0 + (this.lcG - gc0) * t;
+            let c1 = 1.0f / (1.0f + gc * (gc + ck));
+            let c2 = gc * c1;
+            let c3 = gc * c2;
+
+            float[2] v;
+
+            for (wrap<2> c)
+            {
+                let x = wet[i][c] + dc;
+                let ci = int (c) * 2;
+                let s1 = this.svf.at (ci), s2 = this.svf.at (ci + 1);
+                let v3 = x - s2;
+                let v1 = c1 * s1 + c2 * v3;
+                let v2 = s2 + c2 * s1 + c3 * v3;
+                this.svf.at (ci) = 2.0f * v1 - s1;
+                this.svf.at (ci + 1) = 2.0f * v2 - s2;
+                v[c] = x - ck * v1 - v2;
+            }
+
+            let m = 0.5f * (v[0] + v[1]);
+            let s = 0.5f * (v[0] - v[1]) * wd;
+
+            this.fade = wantFade > this.fade ? min (this.fade + fadeStep, 1.0f) : max (this.fade - fadeStep, wantFade);
+            let wetG = (wet0 + (wet1 - wet0) * t) * this.fade;
+            let dryG = dry0 + (dry1 - dry0) * t;
+
+            buf[i] = buf[i] * dryG + float<2> (m + s, m - s) * wetG;
+        }
+
+        if (active || anyAbove (buf, 1e-8f))
+        {
+            this.silentCount = 0;
+            return true;
+        }
+
+        this.silentCount += blockSize;
+
+        // silent for longer than anything in the predelay and the diffusers can take to come out
+        if (float64 (this.silentCount) >= this.d[0] + sr)
+            this.idle = true;
+
+        return false;
+    }
+}

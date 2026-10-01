@@ -58,11 +58,12 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
   let lengthId = side => id(side == 0 ? "D_LengthL" : "D_LengthR")
   let feedbackId = side => id(side == 0 ? "D_FeedbackL" : "D_FeedbackR")
   let reverseId = side => id(side == 0 ? "D_ReverseL" : "D_ReverseR")
-  // a side's first echo, before the rotation mixes the sides
-  let first = side => {
+  // a side's first echo per unit of wet level, and the echo, before the rotation mixes the sides
+  let firstPerWet = side => {
     let reversed = value(reverseId(side)) == 1.
-    (reversed ? 1. : loss()) * panGain(side) * get("D_Wet")
+    (reversed ? 1. : loss()) * panGain(side)
   }
+  let first = side => firstPerWet(side) * get("D_Wet")
   // where a side's feedback point sits: what the next pass would leave of the first echo
   let feedbackRef = side => Math.max(first(side) * loss(), 0.25 * scale.contents)
 
@@ -221,7 +222,8 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
         let (x0, y0) = origin.contents
         let t = (x0 + dx - left) / (right - left) * span.contents
         model->ParamModel.set(lengthId(side), quantized() ? Math.round(t) : t)
-        let per = first(side) / Math.max(1e-9, get("D_Wet"))
+        // (from the gain per unit of wet, so that a wet of 0 (-inf dB) can be dragged up again)
+        let per = firstPerWet(side)
         if per > 0.05 {
           model->ParamModel.set(id("D_Wet"), Math.max(0., ampAt(side, y0 + dy) / per))
         }

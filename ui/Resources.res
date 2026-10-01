@@ -5,6 +5,8 @@ open PatchConnection
 
 type response
 @get_index external member: (resource, string) => unknown = ""
+@get external readResourceMember: t => unknown = "readResource"
+@val external fetch: string => promise<resource> = "fetch"
 external asResponse: resource => response = "%identity"
 @get external ok: response => option<bool> = "ok"
 @send external arrayBuffer: response => promise<ArrayBuffer.t> = "arrayBuffer"
@@ -68,13 +70,20 @@ let toText = async (data: resource) =>
   | _ => None
   }
 
+// The native view's connection has no readResource, but its web view serves the patch's
+// files, so it fetches them.
+let readResource = (pc, path) =>
+  Type.typeof(pc->readResourceMember) == #function
+    ? pc->PatchConnection.readResource(path)
+    : fetch(pc->getResourceAddress(path))
+
 // Reads a resource with `convert`, trying the path as it is, then from the root.
 let read = async (pc, path, convert, ~isEmpty) => {
   let rec attempt = async paths =>
     switch paths {
     | list{} => None
     | list{p, ...rest} =>
-      let content = try await convert(await pc->readResource(p)) catch {
+      let content = try await convert(await readResource(pc, p)) catch {
       | _ => None
       }
       switch content {

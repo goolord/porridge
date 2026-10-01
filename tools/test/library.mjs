@@ -54,11 +54,11 @@ const names = (text, filters = Library.noFilters) =>
 // matching
 {
     check (names ("").length === all.length, "an empty search finds everything");
-    check (names ("keys")[0] === "Vanilla Keys", "name: " + names ("keys")[0]);
+    check (names ("felt")[0] === "Felt Piano", "name: " + names ("felt")[0]);
     check (names ("tag:microtuning").join () === "Just Bells", "tag filter");
-    check (names ("cat:bass").length === 5, "category filter: " + names ("cat:bass").length);
+    check (names ("cat:bass").length === 6, "category filter: " + names ("cat:bass").length);
     check (names ("author:porridge").length === vanilla.presets.length, "author filter");
-    check (names ("tremolo").includes ("Vanilla Keys"), "description words match");
+    check (names ("tremolo").includes ("Spring Twang"), "description words match");
     check (names ("oatmeal factory").length === 17, "source names match: " + names ("oatmeal factory").length);
     check (names ("bassmeh").length === 2, "the bank and the bundled copy");
     check (names ("pan wide").every (n => names ("pan").includes (n)), "every word must match");
@@ -81,14 +81,14 @@ const names = (text, filters = Library.noFilters) =>
     const t = { ...Library.noFilters, tags: ["per-voice pan", "per-voice drive"] };
     const both = names ("", t);
     check (both.length > 0 && both.every (n => names ('tag:"per-voice pan"').includes (n) && names ('tag:"per-voice drive"').includes (n)), "tags are all-of");
-    check (names ("", { ...Library.noFilters, source: "vanilla" }).length === 32, "source filter");
+    check (names ("", { ...Library.noFilters, source: "vanilla" }).length === 34, "source filter");
     const toggled = Library.toggleFacet (Library.toggleFacet (Library.noFilters, "Tag", "x"), "Tag", "x");
     check (toggled.tags.length === 0, "toggling twice removes a facet value");
 
     // counts ignore the facet's own picks, so the other values stay pickable
     const counts = Library.facetCounts (all, Library.parse (""), { ...Library.noFilters, categories: ["pad"] }, "Category");
     const pad = counts.find (([key]) => key === "pad"), bass = counts.find (([key]) => key === "bass");
-    check (pad && pad[2] === 6 && bass && bass[2] === 5, "category counts: " + JSON.stringify (counts.slice (0, 3)));
+    check (pad && pad[2] === 7 && bass && bass[2] === 6, "category counts: " + JSON.stringify (counts.slice (0, 3)));
     const tagCounts = Library.facetCounts (all, Library.parse ("cat:pad"), Library.noFilters, "Tag");
     check (tagCounts[0][0] === "per-voice drive" || tagCounts[0][0] === "per-voice pan", "tag counts follow the search: " + tagCounts[0][0]);
     const picked = Library.facetCounts (all, Library.parse ("zzzz"), { ...Library.noFilters, tags: ["wide"] }, "Tag");

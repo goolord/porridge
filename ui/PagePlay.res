@@ -2,7 +2,7 @@
 
 open! Web
 
-let hint = "Click a step to pick it from a list, right-click to step through them (shift goes back). Drag the XY pad; right-drag keeps its distance from the centre."
+let hint = "Click a step to pick it from a list, right-click to step through them (shift goes back). Drag the XY pad; right-drag keeps its distance from the centre. The pitch wheel springs back when you let go; the mod wheel stays."
 
 let build = (ctx: Ctx.t, page) => {
   let margin = 6.
@@ -46,4 +46,8 @@ let build = (ctx: Ctx.t, page) => {
   let g = Grid.make(ctx, xy.el, ~x=left)
   g->Grid.param("XY_Var_Radius", 0, 6, "rand radius")
   g->Grid.param("XY_Var_Rate", 1, 6, "rand rate")
+
+  // the pitch and mod wheels, at the panel's right edge
+  let wheelsWidth = 108.
+  Wheels.make(ctx, xy.el, {x: width - 14. - wheelsWidth, y: 27., w: wheelsWidth, h: side})
 }

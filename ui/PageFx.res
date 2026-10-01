@@ -50,12 +50,27 @@ let build = (ctx: Ctx.t, page) => {
         panel->Panel.headerToggle(ctx, FxRack.id(e, "EQ_On"), ~label="on")
         EqEditor.make(ctx, panel.el, {x: 8., y: 25., w: w - 18., h: bodyH - 35.}, ~id=FxRack.id(e, ...))
         () => ()
+      | #compressor => CompEditor.make(ctx, body, e)
+      | _ => FxPanels.make(ctx, body, e)
       }
     }
     bodies->Map.set(destKey(dest), (body, refresh))
     (body, refresh)
   }
   let routingMaker = ref(_ => () => ())
+
+  // a convolver's "load file…" button
+  let impulseFor = ref(0)
+  let pickImpulse = FilePicker.make(page, ~accept=AudioFile.extensions->Array.join(","), file =>
+    ctx.programs->ProgramStore.loadImpulseFile(impulseFor.contents, file)->Promise.ignore
+  )
+  FxPanels.loadImpulse :=
+    (
+      e => {
+        impulseFor := e.copy - 1
+        pickImpulse()
+      }
+    )
 
   let select = dest => {
     current := dest
@@ -241,7 +256,7 @@ let build = (ctx: Ctx.t, page) => {
     }
 
   let addTab = el("div", ~cls="fxtab add", ~text="+")
-  addTab->onMouse(#mouseenter, _ => status("Add an effect to the end of the rack: up to eight, each kind up to four times"))
+  addTab->onMouse(#mouseenter, _ => status("Add an effect to the end of the rack: up to eight, each kind up to four times (convolve twice)"))
   addTab->onMouse(#mouseleave, _ => ctx.status->Status.clear)
   addTab->onPointer(#pointerdown, ev => {
     ev->preventDefault
