@@ -278,7 +278,11 @@ ModMatrix.targets.forEach ((t, i) =>
         if (! d || ! f) throw new Error (`unknown modulation target ${law._0}`);
         targetSlot.push (f.slot);
         targetRow.push (rows.length);
-        rows.push (Array.from ({ length: TABLE }, (_, k) => cf (d.fromNorm (k / (TABLE - 1)))));
+        const row = Array.from ({ length: TABLE }, (_, k) => cf (d.fromNorm (k / (TABLE - 1))));
+        // a pulse width is a 32-bit phase, so the top of its knob (100 %) wraps to 0: end the
+        // table on its last step instead, or the inverse lookup lands at the wrong end
+        if (/_PWM_W$/.test (law._0)) row[TABLE - 1] = row[TABLE - 2];
+        rows.push (row);
         rowNames.push (law._0);
     }
     else

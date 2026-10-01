@@ -117,16 +117,12 @@ let envCubic = (l: float, lo: float, hi: float) =>
       6. * lo * hi * l +
       (lo + hi) * lo * hi) / ((hi - lo) * (hi - lo))
 
-// The DSP's stage curves: the distance left to a stage's end level, raised to 8^curve.
-let bend = (level: float, from: float, to: float, curve: float) =>
-  curve == 0. || from == to
-    ? level
-    : to +
-      (from - to) *
-        Math.pow(
-          Float.clamp((level - to) / (from - to), ~min=0., ~max=1.),
-          ~exp=Math.pow(8., ~exp=curve),
-        )
+// The DSP's stage curves: a stage's progress p along Oatmeal's path, warped by k = 8^curve.
+// The inverse is the warp by -curve.
+let warp = (p: float, curve: float) => {
+  let k = Math.pow(8., ~exp=curve)
+  k * p / (1. + (k - 1.) * p)
+}
 
 // The envelope a parameter prefix belongs to, as PorridgeParams names it.
 let envName = prefix =>
@@ -196,7 +192,7 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
     }
     let (ca, cd1, cd2, cr) = (curve(attackCurve), curve(decay1Curve), curve(decay2Curve), curve(releaseCurve))
     let attackMid = sample(x0, xa, t => {
-      let a = bend(t, 0., 1., ca)
+      let a = warp(t, ca)
       (2. - a) * a
     })
     points->Array.push((xh, yOf(1.)))
@@ -205,26 +201,26 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
       points->Array.push((xb, yOf(1.)))
       ((xh + xb) / 2., yOf(1.))
     } else {
-      sample(xh, xb, t => bend(envCubic(Math.pow(bp, ~exp=t), bp, 1.), 1., bp, cd1))
+      sample(xh, xb, t => envCubic(Math.pow(bp, ~exp=warp(t, cd1)), bp, 1.))
     }
     let lo = Math.max(sus, 1e-4)
-    let decay2Mid = sample(xb, xs, t => bend(envCubic(bp * Math.pow(lo / bp, ~exp=t), lo, bp), bp, lo, cd2))
+    let decay2Mid = sample(xb, xs, t => envCubic(bp * Math.pow(lo / bp, ~exp=warp(t, cd2)), lo, bp))
     points->Array.push((xs, yOf(sus)))
-    // The release time is a 60 dB fall from the top, so from the sustain level the curve
-    // reaches the bottom of the graph (0, or -60 dB for the amp) after this fraction of it.
-    // The curve is stretched to end at the release point, and the time axis says when it
-    // really ends.
+    // The release falls 60 dB in its time, from the sustain level to 0.001, where it ends: this
+    // fraction of its time. Its curve warps its progress along that path, and it reaches the
+    // bottom of the graph (0, or -60 dB for the amp) at progress `bottom`. The curve is
+    // stretched to end there, and the time axis says when that is.
     let k = sus / (sus - 0.001)
-    let fall = if sus <= 0.001 {
-      1.
+    let (path, bottom) = if sus <= 0.001 {
+      (1., 1.)
     } else {
+      let path = Math.log10(sus / 0.001) / 3.
       let floor = decibels ? 0.001 : 0.
-      // the level before the bend, and the falling exponential, at the bottom
-      let level = sus * Math.pow(floor / sus, ~exp=1. / Math.pow(8., ~exp=cr))
-      Math.min(1., Math.log10(sus / (level / k + 0.001)) / 3.)
+      (path, warp(Math.log10(sus / (floor / k + 0.001)) / 3. / path, -.cr))
     }
+    let fall = Math.min(1., path * bottom)
     let releaseMid = sample(xs, xr, t =>
-      sus <= 0.001 ? 0. : bend((sus * Math.pow(10., ~exp=-3. * fall * t) - 0.001) * k, sus, 0., cr)
+      sus <= 0.001 ? 0. : (sus * Math.pow(10., ~exp=-3. * path * warp(t * bottom, cr)) - 0.001) * k
     )
     let ta = get("Attack")
     let th = ta + get("Hold")

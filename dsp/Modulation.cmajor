@@ -6,9 +6,11 @@
 //  is the filter's, at F_Speed. The derived coefficients are computed into EnvCoefs whenever a
 //  parameter changes.
 //
-//  Porridge adds a curve to each stage (attack, decay 1, decay 2, release): the level's
-//  remaining distance to the stage's end is raised to a power e = 8^curve, so 0 is Oatmeal's
-//  shape and positive curves leave the start level faster.
+//  Porridge adds a curve to each stage (attack, decay 1, decay 2, release). It warps the stage's
+//  progress along Oatmeal's path, so the stage keeps its end levels and its length: with
+//  k = 8^curve, progress p becomes kp / (1 + (k - 1) p). 0 is Oatmeal's shape, positive curves
+//  leave the start level faster (a slope k times Oatmeal's) and arrive slower, negative ones the
+//  other way round. The decays and the release are exponential, so their progress is in dB.
 
 namespace porridge
 {
@@ -16,7 +18,7 @@ namespace porridge
     {
         float killDec, attInc, d1coef, d2coef, relCoef, bp, sus;
         int holdSamples;
-        float eA, eD1, eD, eR;  // curve exponents (1: Oatmeal's); eD is decay 2's
+        float kA, kD1, kD, kR;  // curve factors 8^curve (1: Oatmeal's); kD is decay 2's
     }
 
     /// attackSlot: the envelope's block, from its attack time (slot::Attack, F_Attack, M1_Attack, M2_Attack).
@@ -45,23 +47,30 @@ namespace porridge
         c.d1coef = float (pow (max (float64 (bp), 1e-6), 1.0 / max (sr * d1 * 0.001, 1.0)));
         c.d2coef = float (pow (max (float64 (sus) / max (float64 (bp), 1e-6), 1e-6), 1.0 / max (sr * d2 * 0.001, 1.0)));
         c.relCoef = float (pow (10.0, -3.0 / max (sr * release * 0.001, 1.0)));
-        c.eA = curveExponent (P.at (curveSlot));
-        c.eD1 = curveExponent (P.at (decay1CurveSlot));
-        c.eD = curveExponent (P.at (curveSlot + 1));
-        c.eR = curveExponent (P.at (curveSlot + 2));
+        c.kA = curveFactor (P.at (curveSlot));
+        c.kD1 = curveFactor (P.at (decay1CurveSlot));
+        c.kD = curveFactor (P.at (curveSlot + 1));
+        c.kR = curveFactor (P.at (curveSlot + 2));
         return c;
     }
 
-    float curveExponent (float curve)       { return curve == 0 ? 1.0f : float (pow (8.0, float64 (curve))); }
+    float curveFactor (float curve)         { return curve == 0 ? 1.0f : float (pow (8.0, float64 (curve))); }
 
-    /// A level between from and to, with its remaining distance to `to` bent by e.
-    float bend (float level, float from, float to, float e)
+    /// A stage's progress p (0..1) warped by its curve factor k; k = 1 leaves it as it is.
+    float64 warp (float64 p, float64 k)     { return k * p / (1.0 + (k - 1.0) * p); }
+
+    /// The length of an exponential path from one level to another (both above 0), in nepers.
+    float64 span (float from, float to)     { return log (float64 (to) / float64 (from)); }
+
+    /// A level on a stage's exponential path from `from`, `span` long, moved along the path by
+    /// the stage's curve factor k: its progress in dB is warped.
+    float warpPath (float L, float from, float64 span, float k)
     {
-        if (e == 1.0f || from == to)
-            return level;
+        if (k == 1.0f || span == 0)
+            return L;
 
-        let u = clamp ((level - to) / (from - to), 0.0f, 1.0f);
-        return to + (from - to) * float (pow (float64 (u), float64 (e)));
+        let p = clamp (log (float64 (L) / float64 (from)) / span, 0.0, 1.0);
+        return float (float64 (from) * exp (warp (p, float64 (k)) * span));
     }
 
     /// Envelope stages (Env.stage).
@@ -91,6 +100,22 @@ namespace porridge
                         / max ((hi - lo) * (hi - lo), 1e-8));
     }
 
+    /// Where the stage's curve has moved L to on Oatmeal's path, which a release or a retrigger
+    /// carries on from. The amp envelope (renderAmp) and the block ones (renderBlock) clamp the
+    /// breakpoint and sustain levels differently.
+    float curvedL (const Env& this, const EnvCoefs& c, bool blockEnv)
+    {
+        let bp = max (c.bp, blockEnv ? 1e-6f : 1e-4f);
+        let sus = blockEnv ? max (c.sus, bp * 1e-6f) : max (c.sus, 1e-4f);
+
+        if (this.stage == envStage::attack)                                             return float (warp (this.L, c.kA));
+        if (this.stage == envStage::decay1)                                             return warpPath (this.L, 1.0f, span (1.0f, bp), c.kD1);
+        if (this.stage == envStage::decay2Down || this.stage == envStage::decay2Up)     return warpPath (this.L, bp, span (bp, sus), c.kD);
+        if (this.stage == envStage::release)                                            return warpPath (this.L, this.X, span (this.X, 0.001f), c.kR);
+        return this.L;
+    }
+
+    /// fade: retrigger through the 'kill' fade, as the block envelopes do.
     void trigger (Env& this, const EnvCoefs& c, bool fade)
     {
         if (this.stage == envStage::off)
@@ -98,13 +123,14 @@ namespace porridge
             this.y = 0;
             this.L = 0;
         }
-        else if (this.stage == envStage::decay1)
+        else
         {
-            this.L = envCubic (this.L, c.bp, 1.0);
-        }
-        else if (this.stage == envStage::decay2Down || this.stage == envStage::decay2Up)
-        {
-            this.L = envCubic (this.L, c.sus, c.bp);
+            this.L = this.curvedL (c, fade);
+
+            if (this.stage == envStage::decay1)
+                this.L = envCubic (this.L, c.bp, 1.0);
+            else if (this.stage == envStage::decay2Down || this.stage == envStage::decay2Up)
+                this.L = envCubic (this.L, c.sus, c.bp);
         }
 
         if (this.stage != envStage::off && this.stage != envStage::kill && this.stage != envStage::attack)
@@ -112,6 +138,10 @@ namespace porridge
 
         this.holdCnt = 0;
         this.stage = (fade && this.stage != envStage::off) ? envStage::kill : envStage::attack;
+
+        // the attack's own progress that its curve moves to this level
+        if (this.stage == envStage::attack)
+            this.L = float (warp (this.L, 1.0 / float64 (c.kA)));
     }
 
     /// The stage after the attack (and hold): decay 1, or straight on to decay 2 or the sustain
@@ -144,6 +174,7 @@ namespace porridge
         {
             if (this.stage != envStage::off)
             {
+                this.L = this.curvedL (c, true);
                 this.stage = envStage::release;
                 this.X = this.L;
             }
@@ -153,6 +184,8 @@ namespace porridge
 
         if (this.stage == envStage::off || this.stage >= envStage::release)
             return;
+
+        this.L = this.curvedL (c, false);
 
         if (this.stage == envStage::kill || this.stage == envStage::attack)                 this.L = (2.0f - this.L) * this.L;
         else if (this.stage == envStage::decay1)                                            this.L = envCubic (this.L, c.bp, 1.0);
@@ -191,6 +224,9 @@ namespace porridge
         let d1 = float (pow (float64 (c.d1coef), speed));
         let d2 = float (pow (float64 (c.d2coef), speed));
         let rel = float (pow (float64 (c.relCoef), pedalDown ? speed * 0.0078125 : speed));
+        let spanD1 = span (1.0f, bp);
+        let spanD2 = span (bp, sus);
+        let spanR = span (max (this.X, 0.001f), 0.001f);
 
         this.settleDecay2 (bp, sus);
 
@@ -211,7 +247,7 @@ namespace porridge
             }
             else if (s == envStage::attack)
             {
-                let a = bend (this.L, 0.0f, 1.0f, c.eA);
+                let a = float (warp (this.L, c.kA));
                 this.y += ((2.0f - a) * a - this.y) * sm;
                 out.at (i) = this.y;
                 this.L += att;
@@ -242,14 +278,14 @@ namespace porridge
             }
             else if (s == envStage::decay1)
             {
-                this.y += (bend (envCubic (this.L, bp, 1.0), 1.0f, bp, c.eD1) - this.y) * sm;
+                this.y += (envCubic (warpPath (this.L, 1.0f, spanD1, c.kD1), bp, 1.0) - this.y) * sm;
                 out.at (i) = this.y;
                 this.L *= d1;
                 if (this.L <= bp) { this.L = bp; this.stage = stageAfterBreakpoint (bp, sus); continue; }
             }
             else if (s == envStage::decay2Down || s == envStage::decay2Up)
             {
-                this.y += (bend (envCubic (this.L, sus, bp), bp, sus, c.eD) - this.y) * sm;
+                this.y += (envCubic (warpPath (this.L, bp, spanD2, c.kD), sus, bp) - this.y) * sm;
                 out.at (i) = this.y;
                 this.L *= d2;
 
@@ -277,7 +313,7 @@ namespace porridge
             {
                 if (this.L > 0.001f)
                 {
-                    this.y += (bend ((this.L - 0.001f) * this.k, this.X, 0.0f, c.eR) - this.y) * sm;
+                    this.y += ((warpPath (this.L, this.X, spanR, c.kR) - 0.001f) * this.k - this.y) * sm;
                     this.L *= rel;
                 }
                 else
@@ -383,12 +419,7 @@ namespace porridge
             if (this.L < 0.001f) { this.L = 0; this.stage = envStage::off; }
         }
 
-        if (this.stage == envStage::attack)                                             return bend (this.L, 0.0f, 1.0f, c.eA);
-        if (this.stage == envStage::decay1)                                             return bend (this.L, 1.0f, bp, c.eD1);
-        if (this.stage == envStage::decay2Down || this.stage == envStage::decay2Up)     return bend (this.L, bp, sus, c.eD);
-        if (this.stage == envStage::release)                                            return bend (this.L, this.X, 0.0f, c.eR);
-
-        return this.L;
+        return this.curvedL (c, true);
     }
 
     float velScale (float vel, float vs)
