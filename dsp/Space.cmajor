@@ -40,7 +40,7 @@ namespace porridge
         float64 scale, scaleInc, scaleMax, scaleStepMax, erScale, erInc, pdTarget;
         float rtLog, rtSlow, fdLog, lcLog, width, mix, modDepth;
         float[2] inLp, shelfLp;                 // input filter states, per channel
-        float[4] svf;                           // the low cut's states
+        Svf lowCut;
         float[9] bs1, bs2;                      // vintage's resampling biquads (states)
         float[3] bb0, bb1, bb2, ba1, ba2;       // and their coefficients
         float qStep, qPeak;
@@ -123,14 +123,7 @@ namespace porridge
         let im = i == 0 ? c - 1 : i - 1;
         let i1 = i + 1 == c ? 0 : i + 1;
         let i2 = i1 + 1 == c ? 0 : i1 + 1;
-        let xm = this.pool.at (b + im);
-        let x0 = this.pool.at (b + i);
-        let x1 = this.pool.at (b + i1);
-        let x2 = this.pool.at (b + i2);
-        let c1 = 0.5f * (x1 - xm);
-        let c2 = xm - 2.5f * x0 + 2.0f * x1 - 0.5f * x2;
-        let c3 = 0.5f * (x2 - xm) + 1.5f * (x0 - x1);
-        return ((c3 * f + c2) * f + c1) * f + x0;
+        return hermite (this.pool.at (b + im), this.pool.at (b + i), this.pool.at (b + i1), this.pool.at (b + i2), f);
     }
 
     /// A fractional delay with linear interpolation (delay >= 1 when read before the write).
@@ -152,31 +145,39 @@ namespace porridge
         this.pool.at (this.base.at (j) + this.wp.at (j)) = x;
     }
 
-    /// A Schroeder allpass on line j (fixed whole-sample delay), outside a tank.
-    float spaceAllpass (Space& this, int j, float x, float coef)
+    /// A Schroeder allpass on line j, whose delayed value z has been read: writes the line's
+    /// input and returns the output.
+    float spaceApCore (Space& this, int j, float x, float z, float coef)
     {
-        let z = this.spaceTap (j, int (this.d.at (j)));
         let v = x + coef * z;
         this.spaceWrite (j, v);
         return z - coef * v;
+    }
+
+    /// A Schroeder allpass on line j (fixed whole-sample delay), outside a tank.
+    float spaceAllpass (Space& this, int j, float x, float coef)
+    {
+        return this.spaceApCore (j, x, this.spaceTap (j, int (this.d.at (j))), coef);
     }
 
     /// An allpass inside a tank: its delay is scaled by rho^length (g[j]).
     float spaceAllpassTank (Space& this, int j, float x, float coef)
     {
-        let z = this.g.at (j) * this.spaceTap (j, int (this.d.at (j)));
-        let v = x + coef * z;
-        this.spaceWrite (j, v);
-        return z - coef * v;
+        return this.spaceApCore (j, x, this.g.at (j) * this.spaceTap (j, int (this.d.at (j))), coef);
     }
 
     /// The same with a moving (modulated or scaled) delay.
     float spaceAllpassMod (Space& this, int j, float x, float coef)
     {
-        let z = this.g.at (j) * this.spaceRead (j, this.d.at (j));
-        let v = x + coef * z;
-        this.spaceWrite (j, v);
-        return z - coef * v;
+        return this.spaceApCore (j, x, this.g.at (j) * this.spaceRead (j, this.d.at (j)), coef);
+    }
+
+    /// Line j's damping (a one-pole lowpass with the pole lpP[j]) on x.
+    float spaceDamp (Space& this, int j, float x)
+    {
+        let s = x + this.lpP.at (j) * (this.lp.at (j) - x);
+        this.lp.at (j) = s;
+        return s;
     }
 
     /// One sample on: lines from .. to - 1 move their write index and delay ramp.
@@ -192,10 +193,13 @@ namespace porridge
         }
     }
 
-    void spaceHadamard16 (float[16]& v)
+    /// The (unnormalised) Hadamard transform of v, in place; v.size a power of two.
+    void spaceHadamard<A> (A& v)
     {
-        for (int h = 1; h < 16; h *= 2)
-            for (int i = 0; i < 16; i += 2 * h)
+        let n = v.size;
+
+        for (int h = 1; h < n; h *= 2)
+            for (int i = 0; i < n; i += 2 * h)
                 for (int k = i; k < i + h; ++k)
                 {
                     let a = v.at (k);
@@ -205,17 +209,27 @@ namespace porridge
                 }
     }
 
-    void spaceHadamard8 (float[8]& v)
+    /// An FDN's lines from `first` on into y, read through their damping and decay gains;
+    /// sums them into the outputs by the signs outL, outR.
+    void spaceFdnRead<A> (Space& this, int first, A& y, const A& outL, const A& outR, float& oL, float& oR)
     {
-        for (int h = 1; h < 8; h *= 2)
-            for (int i = 0; i < 8; i += 2 * h)
-                for (int k = i; k < i + h; ++k)
-                {
-                    let a = v.at (k);
-                    let b = v.at (k + h);
-                    v.at (k) = a + b;
-                    v.at (k + h) = a - b;
-                }
+        for (int k = 0; k < y.size; ++k)
+        {
+            let j = first + k;
+            y.at (k) = this.spaceDamp (j, this.spaceRead (j, this.d.at (j))) * this.g.at (j);
+            oL += outL.at (k) * y.at (k);
+            oR += outR.at (k) * y.at (k);
+        }
+    }
+
+    /// Writes an FDN's lines from `first` on: the mixed y scaled, plus the input (the left
+    /// channel into the even lines, the right into the odd) by the signs `in`.
+    void spaceFdnWrite<A> (Space& this, int first, const A& y, float scale, const A& in, float xL, float xR)
+    {
+        let inGain = 0.5f;
+
+        for (int k = 0; k < y.size; ++k)
+            this.spaceWrite (first + k, scale * y.at (k) + in.at (k) * inGain * ((k & 1) == 0 ? xL : xR));
     }
 
     /// The pole of a one-pole lowpass (unity at DC) in a loop of loopLen samples: the damping
@@ -416,8 +430,7 @@ namespace porridge
             this.spaceBiquad (2, fc, 1.9319, sr);
         }
 
-        for (wrap<4> k) this.svf[k] = 0;
-
+        this.lowCut = Svf();
         this.fade = 1.0f;
         this.inFade = this.idle ? 1.0f : 0.0f;     // into a running effect, the input fades in
         this.level = 0;
@@ -438,7 +451,7 @@ namespace porridge
         this.rng.state = 0x2545f491;
         this.mix = -1.0f;       // marks the smoothed values as unset
         this.lcG = 0;
-        for (wrap<4> k) this.svf[k] = 0;
+        this.lowCut = Svf();
     }
 
     //==============================================================================
@@ -447,8 +460,6 @@ namespace porridge
     void spaceHall (Space& this, const float<2>[blockSize]& pre, const float<2>[blockSize]& er,
                     float<2>[blockSize]& wet)
     {
-        let inGain = 0.5f;
-
         for (wrap<blockSize> i)
         {
             var xL = pre[i][0];
@@ -465,22 +476,9 @@ namespace porridge
 
             float[16] y;
             float oL = 0, oR = 0;
-
-            for (wrap<16> k)
-            {
-                let j = 12 + int (k);
-                let r = this.spaceRead (j, this.d.at (j));
-                let s = r + this.lpP.at (j) * (this.lp.at (j) - r);
-                this.lp.at (j) = s;
-                y[k] = s * this.g.at (j);
-                oL += spaceHallOutL[k] * y[k];
-                oR += spaceHallOutR[k] * y[k];
-            }
-
-            spaceHadamard16 (y);
-
-            for (wrap<16> k)
-                this.spaceWrite (12 + int (k), 0.25f * y[k] + spaceHallIn[k] * inGain * ((int (k) & 1) == 0 ? xL : xR));
+            this.spaceFdnRead (12, y, spaceHallOutL, spaceHallOutR, oL, oR);
+            spaceHadamard (y);
+            this.spaceFdnWrite (12, y, 0.25f, spaceHallIn, xL, xR);
 
             wet[i] = float<2> (oL * 0.25f + eL, oR * 0.25f + eR);
             this.spaceStep (2, 28);
@@ -506,12 +504,10 @@ namespace porridge
 
             // left half: modulated allpass, delay, damping, allpass, delay, over to the right
             this.spaceWrite (9, this.spaceAllpassMod (8, x + r2, -0.7f));
-            this.lp[9] = l1 + this.lpP[9] * (this.lp[9] - l1);
-            this.spaceWrite (11, this.spaceAllpassMod (10, this.lp[9], 0.5f));
+            this.spaceWrite (11, this.spaceAllpassMod (10, this.spaceDamp (9, l1), 0.5f));
 
             this.spaceWrite (13, this.spaceAllpassMod (12, x + l2, -0.7f));
-            this.lp[13] = r1 + this.lpP[13] * (this.lp[13] - r1);
-            this.spaceWrite (15, this.spaceAllpassMod (14, this.lp[13], 0.5f));
+            this.spaceWrite (15, this.spaceAllpassMod (14, this.spaceDamp (13, r1), 0.5f));
 
             // Dattorro's output taps, moved with the size
             let u = (this.scale + this.scaleInc * float64 (int (i))) * t;
@@ -532,8 +528,6 @@ namespace porridge
 
     void spaceNitrous (Space& this, const float<2>[blockSize]& pre, float<2>[blockSize]& wet, float kShelf)
     {
-        let inGain = 0.5f;
-
         for (wrap<blockSize> i)
         {
             // high-shelf lift (about +5 dB above 3 kHz) into the diffusers
@@ -559,21 +553,14 @@ namespace porridge
                 // nested allpass: the outer one's delay runs through the inner one
                 let jo = 18 + int (k);
                 let zo = this.spaceAllpassTank (26 + int (k), this.g.at (jo) * this.spaceTap (jo, int (this.d.at (jo))), 0.5f);
-                let v = z + 0.62f * zo;
-                this.spaceWrite (jo, v);
-                let a = zo - 0.62f * v;
-
-                let s = a + this.lpP.at (j) * (this.lp.at (j) - a);
-                this.lp.at (j) = s;
+                let s = this.spaceDamp (j, this.spaceApCore (jo, z, zo, 0.62f));
                 y[k] = s;
                 oL += spaceNitrousOutL[k] * s;
                 oR += spaceNitrousOutR[k] * s;
             }
 
-            spaceHadamard8 (y);
-
-            for (wrap<8> k)
-                this.spaceWrite (10 + int (k), 0.35355339f * y[k] + spaceNitrousIn[k] * inGain * ((int (k) & 1) == 0 ? xL : xR));
+            spaceHadamard (y);
+            this.spaceFdnWrite (10, y, 0.35355339f, spaceNitrousIn, xL, xR);
 
             wet[i] = float<2> (oL, oR) * 0.35355339f;
             this.spaceStep (2, 34);
@@ -582,7 +569,6 @@ namespace porridge
 
     void spaceBasin (Space& this, const float<2>[blockSize]& pre, float<2>[blockSize]& wet, float kIn)
     {
-        let inGain = 0.5f;
         float directL = 1, directR = 1;     // the chains' undelayed part: the product of (-g)
 
         for (wrap<6> k)
@@ -610,22 +596,9 @@ namespace porridge
 
             float[8] y;
             float oL = 0, oR = 0;
-
-            for (wrap<8> k)
-            {
-                let j = 14 + int (k);
-                let r = this.spaceRead (j, this.d.at (j));
-                let s = r + this.lpP.at (j) * (this.lp.at (j) - r);
-                this.lp.at (j) = s;
-                y[k] = s * this.g.at (j);
-                oL += spaceBasinOutL[k] * y[k];
-                oR += spaceBasinOutR[k] * y[k];
-            }
-
-            spaceHadamard8 (y);
-
-            for (wrap<8> k)
-                this.spaceWrite (14 + int (k), 0.35355339f * y[k] + spaceBasinIn[k] * inGain * ((int (k) & 1) == 0 ? xL : xR));
+            this.spaceFdnRead (14, y, spaceBasinOutL, spaceBasinOutR, oL, oR);
+            spaceHadamard (y);
+            this.spaceFdnWrite (14, y, 0.35355339f, spaceBasinIn, xL, xR);
 
             wet[i] = float<2> (oL, oR) * 0.35355339f;
             this.spaceStep (2, 22);
@@ -654,10 +627,7 @@ namespace porridge
         {
             let j = 6 + int (k);
             let r = this.g.at (j) * this.spaceReadLin (j, this.d.at (j));
-            let a = this.spaceAllpassTank (10 + int (k), r, 0.55f);
-            let s = a + this.lpP.at (j) * (this.lp.at (j) - a);
-            this.lp.at (j) = s;
-            y[k] = s;
+            y[k] = this.spaceDamp (j, this.spaceAllpassTank (10 + int (k), r, 0.55f));
         }
 
         // output taps: the line ends plus one tap inside each other line
@@ -915,7 +885,7 @@ namespace porridge
         }
         else if (model == reverbModel::plate)
         {
-            this.spacePlate (pre, wet, float (1.0 - exp (-2.0 * pi * min (13000.0, 0.45 * sr) / sr)));
+            this.spacePlate (pre, wet, onePoleCoef (13000.0, sr));
         }
         else if (model == reverbModel::nitrous)
         {
@@ -923,7 +893,7 @@ namespace porridge
         }
         else if (model == reverbModel::basin)
         {
-            this.spaceBasin (pre, wet, float (1.0 - exp (-2.0 * pi * min (6500.0, 0.45 * sr) / sr)));
+            this.spaceBasin (pre, wet, onePoleCoef (6500.0, sr));
         }
         else
         {
@@ -962,25 +932,10 @@ namespace porridge
         {
             let t = float (int (i) + 1) * inv;
             let wd = width0 + (this.width - width0) * t;
-            let gc = gc0 + (this.lcG - gc0) * t;
-            let c1 = 1.0f / (1.0f + gc * (gc + ck));
-            let c2 = gc * c1;
-            let c3 = gc * c2;
-
-            float[2] v;
-
-            for (wrap<2> c)
-            {
-                let x = wet[i][c] + dc;
-                let ci = int (c) * 2;
-                let s1 = this.svf.at (ci), s2 = this.svf.at (ci + 1);
-                let v3 = x - s2;
-                let v1 = c1 * s1 + c2 * v3;
-                let v2 = s2 + c2 * s1 + c3 * v3;
-                this.svf.at (ci) = 2.0f * v1 - s1;
-                this.svf.at (ci + 1) = 2.0f * v2 - s2;
-                v[c] = x - ck * v1 - v2;
-            }
+            let x = wet[i] + dc;
+            float<2> lp, bp;
+            this.lowCut.tick (svfCoefs (gc0 + (this.lcG - gc0) * t, ck), x, lp, bp);
+            let v = x - ck * bp - lp;
 
             let m = 0.5f * (v[0] + v[1]);
             let s = 0.5f * (v[0] - v[1]) * wd;
@@ -992,13 +947,8 @@ namespace porridge
             buf[i] = buf[i] * dryG + float<2> (m + s, m - s) * wetG;
         }
 
-        if (active || anyAbove (buf, 1e-8f))
-        {
-            this.silentCount = 0;
+        if (stillSounding (this.idle, this.silentCount, active || anyAbove (buf, 1e-8f)))
             return true;
-        }
-
-        this.silentCount += blockSize;
 
         // silent for longer than anything in the predelay and the diffusers can take to come out
         if (float64 (this.silentCount) >= this.d[0] + sr)

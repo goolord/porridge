@@ -20,9 +20,7 @@ let categories = [
   "other",
 ]
 
-@set external setPlaceholder: (element, string) => unit = "placeholder"
 @set external setId: (element, string) => unit = "id"
-@send external setAttributeString: (element, string, string) => unit = "setAttribute"
 
 let show = (ctx: Ctx.t, stage) => {
   let meta = ctx.programs->ProgramStore.meta
@@ -49,7 +47,7 @@ let show = (ctx: Ctx.t, stage) => {
   let list = el("datalist", ~parent=d)
   list->setId("pv-categories")
   categories->Array.forEach(c => el("option", ~parent=list)->setValue(c))
-  category->setAttributeString("list", "pv-categories")
+  category->setAttribute("list", Str("pv-categories"))
   let tags = field("tags", meta.tags->Array.join(", "), ~placeholder="comma separated")
   let description = row("description", el("textarea"))
   description->setValue(meta.description)

@@ -7,49 +7,37 @@
 // owns the window size there.
 
 type t = {
-  pc: PatchConnection.t,
+  channel: HostChannel.t,
   // the saved settings, once the plugin has answered
   mutable saved: option<Dict.t<JSON.t>>,
   mutable zoom: float,
   mutable listeners: array<unit => unit>,
-  mutable stateListener: option<PatchConnection.storedStateEvent => unit>,
 }
 
 let zoomSteps = [0.75, 1., 1.25, 1.5, 1.75, 2., 2.5, 3.]
 
-let requestPrefix = "porridge:settings?"
-let replyKey = "porridge:settings"
+let request = (t, what) => t.channel->HostChannel.request(what)
 
-let request = (t, what) => t.pc->PatchConnection.requestStoredStateValue(requestPrefix ++ what)
-
-let onState = (t, {key, value}: PatchConnection.storedStateEvent) =>
-  switch (key, value) {
-  | (key, Object(reply)) if key == replyKey =>
-    t.saved = switch reply->Dict.get("settings") {
-    | Some(Object(saved)) => Some(saved)
-    | _ => Some(Dict.make())
-    }
-    switch reply->Dict.get("zoom") {
-    | Some(Number(zoom)) if Float.isFinite(zoom) => t.zoom = zoom
-    | _ => ()
-    }
-    t.listeners->Array.forEach(fn => fn())
+let onReply = (t, reply: dict<JSON.t>) => {
+  t.saved = switch reply->Dict.get("settings") {
+  | Some(Object(saved)) => Some(saved)
+  | _ => Some(Dict.make())
+  }
+  switch reply->Dict.get("zoom") {
+  | Some(Number(zoom)) if Float.isFinite(zoom) => t.zoom = zoom
   | _ => ()
   }
+  t.listeners->Array.forEach(fn => fn())
+}
 
 let make = pc => {
-  let t = {pc, saved: None, zoom: 1., listeners: [], stateListener: None}
-  let listener = ev => onState(t, ev)
-  t.stateListener = Some(listener)
-  pc->PatchConnection.addStoredStateValueListener(listener)
+  let t = {channel: HostChannel.make(pc, "settings"), saved: None, zoom: 1., listeners: []}
+  t.channel->HostChannel.listen(onReply(t, _))
   request(t, "get")
   t
 }
 
-let dispose = t =>
-  t.stateListener->Option.forEach(listener =>
-    t.pc->PatchConnection.removeStoredStateValueListener(listener)
-  )
+let dispose = t => t.channel->HostChannel.dispose
 
 // whether the plugin keeps the settings and sizes the window
 let available = t => t.saved != None
@@ -63,11 +51,20 @@ let listen = (t, fn) => {
 
 let refresh = t => request(t, "get")
 
+let savedValue = (t, key) => t.saved->Option.flatMap(Dict.get(_, key))
+
 // the size new windows open at
 let savedZoom = t =>
-  switch t.saved->Option.flatMap(Dict.get(_, "zoom")) {
+  switch savedValue(t, "zoom") {
   | Some(Number(zoom)) if Float.isFinite(zoom) => zoom
   | _ => 1.
+  }
+
+// a saved switch
+let bool = (t, key, ~default) =>
+  switch savedValue(t, key) {
+  | Some(Boolean(on)) => on
+  | _ => default
   }
 
 // asks the host to resize this window

@@ -37,21 +37,22 @@ type table =
 
 let allTables = [Wave1, Wave2, LfoShape1, LfoShape2, VelocityCurve, AftertouchCurve]
 
-let tableOffset = table =>
+// Where each table is: its byte offset in the program and length in floats, its key in Porridge
+// presets, and the patch endpoint that takes it (and its index there).
+type tableInfo = {offset: int, length: int, key: string, endpoint: string, which: int}
+
+let tableInfo = table =>
   switch table {
-  | Wave1 => 32
-  | Wave2 => 2080
-  | LfoShape1 => 4136
-  | LfoShape2 => 6184
-  | VelocityCurve => 9596
-  | AftertouchCurve => 9852
+  | Wave1 => {offset: 32, length: 512, key: "wave1", endpoint: "shapeIn", which: 0}
+  | Wave2 => {offset: 2080, length: 512, key: "wave2", endpoint: "shapeIn", which: 1}
+  | LfoShape1 => {offset: 4136, length: 512, key: "lfoShape1", endpoint: "shapeIn", which: 2}
+  | LfoShape2 => {offset: 6184, length: 512, key: "lfoShape2", endpoint: "shapeIn", which: 3}
+  | VelocityCurve => {offset: 9596, length: 64, key: "velocityCurve", endpoint: "curveIn", which: 0}
+  | AftertouchCurve => {offset: 9852, length: 64, key: "aftertouchCurve", endpoint: "curveIn", which: 1}
   }
 
-let tableLength = table =>
-  switch table {
-  | Wave1 | Wave2 | LfoShape1 | LfoShape2 => 512
-  | VelocityCurve | AftertouchCurve => 64
-  }
+let tableOffset = table => tableInfo(table).offset
+let tableLength = table => tableInfo(table).length
 
 // Old program layouts accepted by the DLL.  All versions share the v38 field offsets; older versions
 // are simply shorter (fields were only ever appended), so conversion = "defaults, then memcpy the old
@@ -103,9 +104,7 @@ let modTargetRemapV34 = [
   21,
   21,
 ]
-let xyTargetRemapV34 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
 let modTargetOffsets = [9392, 9396, 9400, 9404, 9488, 9492, 9496, 9500] // M1 target 1..4, M2 target 1..4
-let xyTargetOffsets = [9160, 9164, 9168, 9172, 9196, 9200, 9204, 9208] // X target 1..4, Y target 1..4
 
 // Non-zero dwords written by the DLL's default-program initialiser 0x10052d70 (outside the tables).
 // Everything else in [16, 10352) is 0, except the tables (see makeDefaultProgram) and three padding
@@ -114,49 +113,29 @@ let xyTargetOffsets = [9160, 9164, 9168, 9172, 9196, 9200, 9204, 9208] // X targ
 // values are what the DLL computes at 44100 Hz.
 type dword = F(float) | I(int) | U(float)
 
+// An envelope's 64 bytes from its base offset (the same defaults for all five).
+let envDefaults = base =>
+  [
+    (0, F(4.)), // fade time
+    (4, F(5.)), // attack
+    (12, F(40.)), // decay 1
+    (16, F(1000.)), // decay 2
+    (20, F(50.)), // release
+    (24, F(20.)), // release (the second field)
+    (28, F(0.0056689344)), // derived coef
+    (32, F(0.0045351475)), // derived coef
+    (40, F(1.)), // derived coef
+    (44, F(1.)), // breakpoint
+    (48, F(0.99998426)), // derived coef
+    (52, F(0.5)), // sustain
+    (56, F(0.9968721)), // derived coef
+    (60, F(0.993754)), // derived coef
+  ]->Array.map(((offset, value)) => (base + offset, value))
+
 let defaultDwords = [
-  (8232, F(4.)), // amp env +0 fade time
-  (8236, F(5.)), // p60:Attack
-  (8244, F(40.)), // p62:Decay 1
-  (8248, F(1000.)), // p64:Decay 2
-  (8252, F(50.)), // p66:Release
-  (8256, F(20.)), // p66:Release
-  (8260, F(0.0056689344)), // amp env +28 derived coef
-  (8264, F(0.0045351475)), // amp env +32 derived coef
-  (8272, F(1.)), // amp env +40 derived coef
-  (8276, F(1.)), // p63:Breakpoint
-  (8280, F(0.99998426)), // amp env +48 derived coef
-  (8284, F(0.5)), // p65:Sustain
-  (8288, F(0.9968721)), // amp env +56 derived coef
-  (8292, F(0.993754)), // amp env +60 derived coef
-  (8300, F(4.)), // filter env +0 fade time
-  (8304, F(5.)), // p45:F attack
-  (8312, F(40.)), // p47:F decay 1
-  (8316, F(1000.)), // p49:F decay 2
-  (8320, F(50.)), // p51:F release
-  (8324, F(20.)), // p51:F release
-  (8328, F(0.0056689344)), // filter env +28 derived coef
-  (8332, F(0.0045351475)), // filter env +32 derived coef
-  (8340, F(1.)), // filter env +40 derived coef
-  (8344, F(1.)), // p48:F breakpoint
-  (8348, F(0.99998426)), // filter env +48 derived coef
-  (8352, F(0.5)), // p50:F sustain
-  (8356, F(0.9968721)), // filter env +56 derived coef
-  (8360, F(0.993754)), // filter env +60 derived coef
-  (8364, F(4.)), // filter2 env (derived) +0 fade time
-  (8368, F(5.)), // filter2 env (derived) +4
-  (8376, F(40.)), // filter2 env (derived) +12
-  (8380, F(1000.)), // filter2 env (derived) +16
-  (8384, F(50.)), // filter2 env (derived) +20
-  (8388, F(20.)), // filter2 env (derived) +24
-  (8392, F(0.0056689344)), // filter2 env (derived) +28 derived coef
-  (8396, F(0.0045351475)), // filter2 env (derived) +32 derived coef
-  (8404, F(1.)), // filter2 env (derived) +40 derived coef
-  (8408, F(1.)), // filter2 env (derived) +44
-  (8412, F(0.99998426)), // filter2 env (derived) +48 derived coef
-  (8416, F(0.5)), // filter2 env (derived) +52
-  (8420, F(0.9968721)), // filter2 env (derived) +56 derived coef
-  (8424, F(0.993754)), // filter2 env (derived) +60 derived coef
+  ...envDefaults(8232), // amp env (p60..p66)
+  ...envDefaults(8300), // filter env (p45..p51)
+  ...envDefaults(8364), // filter 2 env (derived from the filter env)
   (8432, F(0.5)), // p43:Cutoff
   (8448, F(0.29166666)), // p55:F split
   (8452, F(2.)), // p56:F envspeed
@@ -228,60 +207,11 @@ let defaultDwords = [
   (9068, F(0.6931472)), // derived ln(octave)
   (9076, F(-9.)), // p181:Pan reference
   (9128, F(12.)), // p194:Bend range
-  (9232, F(1000.)), // p218:EQ 1 freq
-  (9236, F(1000.)), // p219:EQ 2 freq
-  (9240, F(1000.)), // p220:EQ 3 freq
-  (9244, F(1000.)), // p221:EQ 4 freq
-  (9248, F(1000.)), // p222:EQ 5 freq
-  (9272, F(1.)), // p228:EQ 1 slope
-  (9276, F(1.)), // p229:EQ 2 slope
-  (9280, F(1.)), // p230:EQ 3 slope
-  (9284, F(1.)), // p231:EQ 4 slope
-  (9288, F(1.)), // p232:EQ 5 slope
-  (9312, F(4.)), // mod env 1 +0 fade time
-  (9316, F(5.)), // p238:M1 attack
-  (9324, F(40.)), // p240:M1 decay 1
-  (9328, F(1000.)), // p242:M1 decay 2
-  (9332, F(50.)), // p244:M1 release
-  (9336, F(20.)), // p244:M1 release
-  (9340, F(0.0056689344)), // mod env 1 +28 derived coef
-  (9344, F(0.0045351475)), // mod env 1 +32 derived coef
-  (9352, F(1.)), // mod env 1 +40 derived coef
-  (9356, F(1.)), // p241:M1 breakpoint
-  (9360, F(0.99998426)), // mod env 1 +48 derived coef
-  (9364, F(0.5)), // p243:M1 sustain
-  (9368, F(0.9968721)), // mod env 1 +56 derived coef
-  (9372, F(0.993754)), // mod env 1 +60 derived coef
-  (9408, F(4.)), // mod env 2 +0 fade time
-  (9412, F(5.)), // p254:M2 attack
-  (9420, F(40.)), // p256:M2 decay 1
-  (9424, F(1000.)), // p258:M2 decay 2
-  (9428, F(50.)), // p260:M2 release
-  (9432, F(20.)), // p260:M2 release
-  (9436, F(0.0056689344)), // mod env 2 +28 derived coef
-  (9440, F(0.0045351475)), // mod env 2 +32 derived coef
-  (9448, F(1.)), // mod env 2 +40 derived coef
-  (9452, F(1.)), // p257:M2 breakpoint
-  (9456, F(0.99998426)), // mod env 2 +48 derived coef
-  (9460, F(0.5)), // p259:M2 sustain
-  (9464, F(0.9968721)), // mod env 2 +56 derived coef
-  (9468, F(0.993754)), // mod env 2 +60 derived coef
-  (9528, I(1)), // p270:MIDI channel 1
-  (9532, I(1)), // p271:MIDI channel 2
-  (9536, I(1)), // p272:MIDI channel 3
-  (9540, I(1)), // p273:MIDI channel 4
-  (9544, I(1)), // p274:MIDI channel 5
-  (9548, I(1)), // p275:MIDI channel 6
-  (9552, I(1)), // p276:MIDI channel 7
-  (9556, I(1)), // p277:MIDI channel 8
-  (9560, I(1)), // p278:MIDI channel 9
-  (9564, I(1)), // p279:MIDI channel 10
-  (9568, I(1)), // p280:MIDI channel 11
-  (9572, I(1)), // p281:MIDI channel 12
-  (9576, I(1)), // p282:MIDI channel 13
-  (9580, I(1)), // p283:MIDI channel 14
-  (9584, I(1)), // p284:MIDI channel 15
-  (9588, I(1)), // p285:MIDI channel 16
+  ...Array.fromInitializer(~length=5, i => (9232 + 4 * i, F(1000.))), // p218..p222:EQ 1..5 freq
+  ...Array.fromInitializer(~length=5, i => (9272 + 4 * i, F(1.))), // p228..p232:EQ 1..5 slope
+  ...envDefaults(9312), // mod env 1 (p238..p244)
+  ...envDefaults(9408), // mod env 2 (p254..p260)
+  ...Array.fromInitializer(~length=16, i => (9528 + 4 * i, I(1))), // p270..p285:MIDI channel 1..16
   (9592, I(1)), // p286:Sustain pedal
   (10328, I(1)), // p124:U voices
   (10332, F(1.)), // p125:U detune
@@ -502,14 +432,11 @@ type program = {name: string, bytes: Uint8Array.t}
 type converted = {bytes: Uint8Array.t, name: string, version: int, warnings: array<string>}
 type convertedBank = {version: int, programs: array<program>, warnings: array<string>}
 
-let remapTargetsV34 = p => {
-  let remap = (offsets, table) =>
-    offsets->Array.forEach(offset =>
-      table[p->getI32(offset)]->Option.forEach(target => p->setI32(offset, target))
-    )
-  remap(modTargetOffsets, modTargetRemapV34)
-  remap(xyTargetOffsets, xyTargetRemapV34)
-}
+// (the XY targets' remap is the identity, so they are left as they are)
+let remapTargetsV34 = p =>
+  modTargetOffsets->Array.forEach(offset =>
+    modTargetRemapV34[p->getI32(offset)]->Option.forEach(target => p->setI32(offset, target))
+  )
 
 // Convert one native program chunk ("Oatmeal.prgm", versions 31..38) to a v38 program.
 // Mirrors setChunk(isPreset=true) 0x1004f880:

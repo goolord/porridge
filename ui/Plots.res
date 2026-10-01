@@ -110,8 +110,7 @@ let wave = (ctx: Ctx.t, parent, osc, box) => {
     curve->setAttribute("d", Str(pathFrom(points)))
   }
 
-  ctx.model->ParamModel.listen(prefix ++ "Waveform", draw)
-  ctx.model->ParamModel.listen(prefix ++ "PWM_W", draw)
+  ctx.model->ParamModel.listenEach([prefix ++ "Waveform", prefix ++ "PWM_W"], draw)
   ctx.programs->ProgramStore.onShapes(draw)
   draw()
 }
@@ -129,10 +128,7 @@ let lfo = (ctx: Ctx.t, parent, lfo, box) => {
     let (w, h) = (box.w - 6., box.h - 7.)
     let n = 2 * 64
     // deterministic pseudo-random values for the random shapes' preview
-    let random = k => {
-      let x = Math.sin(k * 12.9898 + Int.toFloat(lfo) * 78.233) * 43758.5453
-      x - Math.floor(x)
-    }
+    let random = FxDsp.hash(_, Int.toFloat(lfo))
     let points = Array.fromInitializer(~length=n + 1, k => {
       let f = Int.toFloat(k) / Int.toFloat(n)
       let phase = Float.mod(f * 2., 1.)

@@ -146,34 +146,24 @@ let send = (pc, which, imp: option<t>) =>
 //==============================================================================
 // encoding: { "name", "rate", "left": base64 float32, "right"?: ... }
 
-let encodeData = (d: Float32Array.t) =>
-  Bank.toBase64(Uint8Array.fromBuffer(d->TypedArray.copy->TypedArray.buffer))
-
-let decodeData = s => {
-  let bytes = Bank.fromBase64(s)
-  let n = TypedArray.length(bytes) / 4
-  let aligned = Uint8Array.fromLength(n * 4)
-  aligned->ByteView.blit(bytes->TypedArray.subarray(~start=0, ~end=n * 4), 0)
-  Float32Array.fromBuffer(aligned->TypedArray.buffer, ~length=n)
-}
-
-let toJson = (imp: t): JSON.t => {
-  let fields = Dict.make()
-  fields->Dict.set("name", JSON.String(imp.name))
-  fields->Dict.set("rate", JSON.Number(imp.rate))
-  fields->Dict.set("left", JSON.String(encodeData(imp.left)))
-  imp.right->Option.forEach(r => fields->Dict.set("right", JSON.String(encodeData(r))))
-  JSON.Object(fields)
-}
+let toJson = (imp: t): JSON.t =>
+  JSON.Object(
+    Dict.fromArray([
+      ("name", JSON.String(imp.name)),
+      ("rate", JSON.Number(imp.rate)),
+      ("left", JSON.String(Bank.floatsToBase64(imp.left))),
+      ...imp.right->Option.mapOr([], r => [("right", JSON.String(Bank.floatsToBase64(r)))]),
+    ]),
+  )
 
 let fromJson = (j: JSON.t): option<t> =>
   switch j {
   | Object(d) =>
     switch (d->Dict.get("name"), d->Dict.get("rate"), d->Dict.get("left")) {
     | (Some(String(name)), Some(Number(rate)), Some(String(left))) if rate > 0. =>
-      let (left, rate) = fit(decodeData(left), rate)
+      let (left, rate) = fit(Bank.floatsFromBase64(left), rate)
       let right = switch d->Dict.get("right") {
-      | Some(String(r)) => Some(fit(decodeData(r), rate)->Pair.first)
+      | Some(String(r)) => Some(fit(Bank.floatsFromBase64(r), rate)->Pair.first)
       | _ => None
       }
       TypedArray.length(left) > 0 ? Some({name, rate, left, right}) : None

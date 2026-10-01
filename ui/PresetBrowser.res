@@ -7,8 +7,6 @@
 
 open! Web
 
-@set external setPlaceholder: (element, string) => unit = "placeholder"
-@set external setMultiple: (element, bool) => unit = "multiple"
 @set external setSpellcheck: (element, bool) => unit = "spellcheck"
 @set external setScrollTop: (element, float) => unit = "scrollTop"
 @get external scrollTop: element => float = "scrollTop"
@@ -79,13 +77,8 @@ let readFiles = async (t, files: array<file>) => {
   let added = []
   for i in 0 to Array.length(files) - 1 {
     let file = files->Array.getUnsafe(i)
-    let result = try {
-      Preset.parseFile(Uint8Array.fromBuffer(await file->arrayBuffer))
-    } catch {
-    | JsExn(e) => Error(e->JsExn.message->Option.getOr("unreadable"))
-    }
-    switch result {
-    | Ok({presets}) if presets != [] =>
+    switch (await readBytes(file))->Result.flatMap(Preset.parseForLoading(_, file->fileName)) {
+    | Ok({presets}) =>
       t.nextFileId = t.nextFileId + 1
       let source = Library.makeSource(
         ~id="file" ++ Int.toString(t.nextFileId),
@@ -95,8 +88,7 @@ let readFiles = async (t, files: array<file>) => {
       )
       t.opened = [...t.opened, source]
       added->Array.push(source)
-    | Ok(_) => t.ctx.toast(`${file->fileName} has no programs in it`)
-    | Error(e) => t.ctx.toast(`${file->fileName} isn't a Porridge or Oatmeal program or bank (${e})`)
+    | Error(e) => t.ctx.toast(e)
     }
   }
   added
@@ -104,13 +96,7 @@ let readFiles = async (t, files: array<file>) => {
 
 let previewSetting = "browserPreview"
 
-let previewOn = t =>
-  switch t.settings.saved->Option.flatMap(Dict.get(_, previewSetting)) {
-  | Some(Boolean(on)) => on
-  | _ => true
-  }
-
-let pad2 = i => Int.toString(i)->String.padStart(2, "0")
+let previewOn = t => t.settings->Settings.bool(previewSetting, ~default=true)
 
 // at most this many rows are built; the rest wait for a narrower search
 let maxRows = 400
@@ -159,12 +145,6 @@ let show = t => {
   let cancelButton = el("button", ~cls="btn", ~text="Cancel", ~parent=foot)
   let loadButton = el("button", ~cls="btn brw-load", ~text="Load", ~parent=foot)
 
-  let fileInput = el("input", ~parent=root)
-  fileInput->setInputType("file")
-  fileInput->setMultiple(true)
-  fileInput->setAccept(".porridge,.json,.omp,.omb,.fxp,.fxb,.dat")
-  fileInput->setStyle("display", "none")
-
   // the search result and the selection in it
   let results = ref([])
   let selected: ref<option<Library.entry>> = ref(None)
@@ -209,13 +189,27 @@ let show = t => {
         programs->ProgramStore.select(e.index, ~keepEdits=false)
       | Bundled | File =>
         programs->ProgramStore.loadIntoCurrent(e.preset)
-        ctx.toast(`Loaded "${Preset.name(e.preset)}" into program ${pad2(programs.current + 1)}`)
+        ctx.toast(`Loaded "${Preset.name(e.preset)}" into program ${ProgramStore.number(programs.current)}`)
       }
       close()
     })
 
   let render = ref(() => ())
   let rerender = () => render.contents()
+
+  let addFiles = files =>
+    readFiles(t, files)
+    ->Promise.thenResolve(added => {
+      switch added {
+      | [one] => t.filters = {...t.filters, source: Some(one.id)}
+      | [] => ()
+      | _ => t.filters = {...t.filters, source: None}
+      }
+      rerender()
+    })
+    ->Promise.ignore
+
+  let openFiles = FilePicker.makeMultiple(root, ~accept=Preset.extensions->Array.join(","), addFiles)
 
   let setFilters = f => {
     t.filters = f
@@ -246,7 +240,7 @@ let show = t => {
       let line = [
         meta.author != "" ? Some("by " ++ meta.author) : None,
         meta.category != "" ? Some(meta.category) : None,
-        Some(source.kind == Bank ? `program ${pad2(index + 1)} in this bank` : source.name),
+        Some(source.kind == Bank ? `program ${ProgramStore.number(index)} in this bank` : source.name),
       ]->Array.filterMap(x => x)
       el("div", ~cls="brw-isub", ~text=line->Array.join(" · "), ~parent=info)->ignore
       if meta.tags != [] {
@@ -276,9 +270,9 @@ let show = t => {
 
   let updateLoadButton = () => {
     let label = switch selected.contents {
-    | Some({source: {kind: Bank}, index}) if index == programs.current => "Keep program " ++ pad2(index + 1)
-    | Some({source: {kind: Bank}, index}) => "Go to program " ++ pad2(index + 1)
-    | Some(_) => "Load into program " ++ pad2(programs.current + 1)
+    | Some({source: {kind: Bank}, index}) if index == programs.current => "Keep program " ++ ProgramStore.number(index)
+    | Some({source: {kind: Bank}, index}) => "Go to program " ++ ProgramStore.number(index)
+    | Some(_) => "Load into program " ++ ProgramStore.number(programs.current)
     | None => "Load"
     }
     loadButton->setTextContent(label)
@@ -386,7 +380,7 @@ let show = t => {
       }
     })
     let add = el("div", ~cls="brw-srow brw-open", ~text="+ open files…", ~parent=side)
-    add->onMouse(#click, _ => fileInput->click)
+    add->onMouse(#click, _ => openFiles())
 
     let facet = (title, which: Library.facet, picked) => {
       let values = Library.facetCounts(all, q, t.filters, which)
@@ -437,7 +431,7 @@ let show = t => {
           let r = el("div", ~cls="brw-row", ~parent=list)
           let isCurrent = e.source.kind == Bank && e.index == programs.current
           r->toggleClass("cur", isCurrent)
-          el("span", ~cls="brw-num", ~text=e.source.kind == Bank ? pad2(e.index + 1) : "", ~parent=r)->ignore
+          el("span", ~cls="brw-num", ~text=e.source.kind == Bank ? ProgramStore.number(e.index) : "", ~parent=r)->ignore
           el("span", ~cls="brw-name", ~text=e.preset.meta.name == "" ? "(no name)" : e.preset.meta.name, ~parent=r)->ignore
           el("span", ~cls="brw-cat", ~text=e.preset.meta.category, ~parent=r)->ignore
           let tags = el("span", ~cls="brw-tags", ~parent=r)
@@ -496,25 +490,6 @@ let show = t => {
 
   //==============================================================================
   // events
-
-  let addFiles = files =>
-    readFiles(t, files)
-    ->Promise.thenResolve(added => {
-      switch added {
-      | [one] => t.filters = {...t.filters, source: Some(one.id)}
-      | [] => ()
-      | _ => t.filters = {...t.filters, source: None}
-      }
-      rerender()
-    })
-    ->Promise.ignore
-
-  fileInput->onEvent(#change, _ => {
-    fileInput
-    ->files
-    ->Option.forEach(list => addFiles(Array.fromInitializer(~length=list->fileCount, i => list->item(i)->Option.getUnsafe)))
-    fileInput->setValue("")
-  })
 
   let updatePreviewToggle = () => previewToggle->toggleClass("on", previewOn(t))
   previewToggle->onMouse(#click, _ => {
@@ -578,11 +553,7 @@ let show = t => {
     | _ => input->focus
     }
   )
-  shade->onPointer(#pointerdown, ev =>
-    if ev->target === Obj.magic(shade) {
-      cancel()
-    }
-  )
+  shade->Dialog.closeOnShade(cancel)
 
   t.refresh = Some(rerender)
   t.addFiles = Some(addFiles)

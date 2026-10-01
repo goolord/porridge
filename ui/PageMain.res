@@ -34,11 +34,8 @@ let envelope = (ctx, parent, prefix, box: box, ~name) =>
     ~name,
   )
 
-let oscillator = (ctx: Ctx.t, body, n) => {
-  let osc = Int.toString(n)
-  let prefix = `O${osc}_`
-  let plot = {x: 8., y: 27., w: 340., h: 110.}
-  Plots.wave(ctx, body, n - 1, plot)
+// The button in the corner of a plot that opens its table on the Shapes page.
+let drawButton = (ctx: Ctx.t, body, plot: box, ~status, table) =>
   Controls.button(
     ctx,
     body,
@@ -46,9 +43,16 @@ let oscillator = (ctx: Ctx.t, body, n) => {
     ~x=plot.x + plot.w - 48.,
     ~y=plot.y + plot.h - 23.,
     ~w=44.,
-    ~status=`Draw oscillator ${osc}'s user waveform`,
-    () => ctx.openShape(n == 1 ? Wave1 : Wave2),
+    ~status,
+    () => ctx.openShape(table),
   )->ignore
+
+let oscillator = (ctx: Ctx.t, body, n) => {
+  let osc = Int.toString(n)
+  let prefix = `O${osc}_`
+  let plot = {x: 8., y: 27., w: 340., h: 110.}
+  Plots.wave(ctx, body, n - 1, plot)
+  drawButton(ctx, body, plot, ~status=`Draw oscillator ${osc}'s user waveform`, n == 1 ? Wave1 : Wave2)
   let g = Grid.make(ctx, body, ~y=plot.y + plot.h + 8.)
   g->Grid.choice(prefix ++ "Waveform", 0, 0, "waveform")
   g->Grid.param(prefix ++ "Amp", 1, 0, "amp")
@@ -81,16 +85,7 @@ let lfo = (ctx: Ctx.t, body, n, box: box) => {
   let lfo = Int.toString(n)
   let prefix = `LFO_${lfo}_`
   Plots.lfo(ctx, body, n - 1, box)
-  Controls.button(
-    ctx,
-    body,
-    "draw",
-    ~x=box.x + box.w - 48.,
-    ~y=box.y + box.h - 23.,
-    ~w=44.,
-    ~status=`Draw LFO ${lfo}'s user shape`,
-    () => ctx.openShape(n == 1 ? LfoShape1 : LfoShape2),
-  )->ignore
+  drawButton(ctx, body, box, ~status=`Draw LFO ${lfo}'s user shape`, n == 1 ? LfoShape1 : LfoShape2)
   let g = Grid.make(ctx, body, ~x=box.x + box.w + 10.)
   g->Grid.choice(prefix ++ "Shape", 0, 0, "shape")
   g->Grid.choice(prefix ++ "Sync", 1, 0, "mode", ~span=2)
@@ -115,7 +110,7 @@ let scale = (ctx: Ctx.t, body, g: Grid.t) => {
   el("div", ~cls="sep", ~parent=body)->place(g->Grid.cx(0) + 3., g->Grid.cy(4) - 1., ~w=4. * g.cw - 8.)->ignore
   g->Grid.claim(0, 4, ~span=2, "the scale name")
   let name = el("div", ~cls="scale", ~parent=body)->placeBox(g->Grid.cell(0, 4, ~span=2))
-  let pickScale = FilePicker.make(body, ~accept=".scl,.kbm", file =>
+  let pickScale = FilePicker.make(body, ~accept=Scala.extensions->Array.join(","), file =>
     ctx.programs->ProgramStore.loadUserFile(file)->Promise.ignore
   )
   // the 12 note offsets don't apply while a scale is loaded
@@ -247,18 +242,17 @@ let build = (ctx: Ctx.t, page) => {
   resp->Grid.param("Resonance", 3, 0, "reso")
   let get = id => ctx.model->ParamModel.get(id)
   let graphTop = Grid.padTop + Grid.rowHeight + 4.
-  // the knob's law: cubic, up to 11 kHz for Oatmeal's types and 20 kHz for Porridge's
-  let range = () => get("Filter") >= 16. ? 19980. : 10980.
+  let filterType = () => Float.toInt(get("Filter"))
   refreshResponse :=
     FilterGraph.make(
       ctx,
       response,
       {x: 8., y: graphTop, w: columnWidth - 18., h: rowHeight - graphTop - 10.},
       {
-        typeOf: () => Float.toInt(get("Filter")),
+        typeOf: filterType,
         cutoff: "Cutoff",
-        toHz: c => c * c * c * range() + 20.,
-        ofHz: hz => Math.cbrt(Math.max(0., Math.min(1., (hz - 20.) / range()))),
+        toHz: c => FilterTypes.cutoffHz(~filterType=filterType(), c),
+        ofHz: hz => FilterTypes.cutoffOfHz(~filterType=filterType(), hz),
         res: "Resonance",
         morph: "F_Morph",
         drive: "F_Drive",
@@ -266,14 +260,14 @@ let build = (ctx: Ctx.t, page) => {
         spread: None,
         // filter 2, when doubling: its type (or filter 1's) an octave up per half of the split
         second: () => {
-          let t1 = Float.toInt(get("Filter"))
+          let t1 = filterType()
           let t2 = Float.toInt(get("Filter2"))
           get("F_Double") == 0.
             ? None
-            : {
-                let c = get("Cutoff")
-                Some((t2 == 0 ? t1 : t2, (c * c * c * range() + 20.) * Math.pow(2., ~exp=2. * get("F_Split"))))
-              }
+            : Some((
+                t2 == 0 ? t1 : t2,
+                FilterTypes.cutoffHz(~filterType=t1, get("Cutoff")) * Math.pow(2., ~exp=2. * get("F_Split")),
+              ))
         },
         alsoIds: ["Filter", "Filter2", "F_Double", "F_Split"],
       },

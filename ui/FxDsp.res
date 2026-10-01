@@ -3,11 +3,16 @@
 // dsp/Effects.cmajor and dsp/Filter.cmajor (docs/internals/effects.md), in internal values.
 
 let pi = Math.Constants.pi
-let clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x))
+let clamp = (x: float, lo, hi) => Math.max(lo, Math.min(hi, x))
 let sq = (x: float) => x * x
+// a gain in dB, down to -180
+let db = (x: float) => x <= 1e-9 ? -180. : 20. * Math.log10(x)
 
-@get_index external at: (Float32Array.t, int) => float = ""
-@set_index external put: (Float32Array.t, int, float) => unit = ""
+// A deterministic scatter: 0..1 for each k and seed.
+let hash = (k: float, seed: float) => {
+  let x = Math.sin(k * 12.9898 + seed * 78.233) * 43758.5453
+  x - Math.floor(x)
+}
 
 //==============================================================================
 // The one-pole filters of the delay and reverb loops (bilinear, prewarped)
@@ -237,16 +242,19 @@ let reverbImpulse = (s: reverbSettings, ~sr: float, ~seconds: float) => {
   let lastTap = Math.Int.maxMany(Array.concat(tapsL, tapsR))
   let ap = Array.make(~length=8, 0.)
   let u = Array.make(~length=8, 0.)
+  // the early reflections' taps on the impulse, at sample i
+  let er = (taps, gains, i) =>
+    i > lastTap ? 0. : taps->Array.reduceWithIndex(0., (acc, t, k) => t == i ? acc + gains->Array.getUnsafe(k) : acc)
+  let uu = Array.getUnsafe(u, ...)
+  let apu = Array.getUnsafe(ap, ...)
+  let write = (j, v) => lines->Array.getUnsafe(j)->ByteView.setUnsafe(pos->Array.getUnsafe(j), v)
   for i in 0 to n - 1 {
-    // the impulse, and the early reflections' taps on it
     let x = i == 0 ? 1. : 0.
-    let er = (taps, gains) =>
-      i > lastTap ? 0. : taps->Array.reduceWithIndex(0., (acc, t, k) => t == i ? acc + gains->Array.getUnsafe(k) : acc)
-    let aL = (1. - e) * x + e * er(tapsL, erGainL)
-    let aR = (1. - e) * x + e * er(tapsR, erGainR)
+    let aL = (1. - e) * x + e * er(tapsL, erGainL, i)
+    let aR = (1. - e) * x + e * er(tapsR, erGainR, i)
     for j in 0 to 7 {
       let line = lines->Array.getUnsafe(j)
-      let r = line->at(pos->Array.getUnsafe(j))
+      let r = line->ByteView.getUnsafe(pos->Array.getUnsafe(j))
       let y = (r + lpx->Array.getUnsafe(j)) * kLP + pLP * lpy->Array.getUnsafe(j)
       lpy->Array.setUnsafe(j, y)
       lpx->Array.setUnsafe(j, r)
@@ -259,7 +267,6 @@ let reverbImpulse = (s: reverbSettings, ~sr: float, ~seconds: float) => {
       ap->Array.setUnsafe(j, a)
       u->Array.setUnsafe(j, h * g->Array.getUnsafe(j))
     }
-    let uu = Array.getUnsafe(u, ...)
     let a0 = aL + mm(0, 2) * uu(0) + mm(1, 2) * uu(1) + mm(2, 2) * uu(2) + mm(3, 2) * uu(3)
     let a1 = mm(0, 3) * uu(0) + mm(1, 3) * uu(1) + mm(2, 3) * uu(2) + mm(3, 3) * uu(3)
     let a2 = mm(0, 0) * uu(0) + mm(1, 0) * uu(1) + mm(2, 0) * uu(2) + mm(3, 0) * uu(3)
@@ -268,7 +275,6 @@ let reverbImpulse = (s: reverbSettings, ~sr: float, ~seconds: float) => {
     let b1 = mm(0, 0) * uu(4) + mm(0, 1) * uu(5) + mm(0, 2) * uu(6) + mm(0, 3) * uu(7)
     let b2 = aR + mm(1, 0) * uu(4) + mm(1, 1) * uu(5) + mm(1, 2) * uu(6) + mm(1, 3) * uu(7)
     let b3 = mm(2, 0) * uu(4) + mm(2, 1) * uu(5) + mm(2, 2) * uu(6) + mm(2, 3) * uu(7)
-    let write = (j, v) => lines->Array.getUnsafe(j)->put(pos->Array.getUnsafe(j), v)
     write(0, c * a0 - si * b1)
     write(1, c * a1 + si * b2)
     write(2, si * b3 + c * a2)
@@ -277,9 +283,8 @@ let reverbImpulse = (s: reverbSettings, ~sr: float, ~seconds: float) => {
     write(5, c * b1 + si * a0)
     write(6, c * b2 - si * a1)
     write(7, c * b3 - si * a2)
-    let apu = Array.getUnsafe(ap, ...)
-    outL->put(i, apu(0) + apu(1) + apu(2) + apu(3))
-    outR->put(i, apu(4) + apu(5) + apu(6) + apu(7))
+    outL->ByteView.setUnsafe(i, apu(0) + apu(1) + apu(2) + apu(3))
+    outR->ByteView.setUnsafe(i, apu(4) + apu(5) + apu(6) + apu(7))
     for j in 0 to 7 {
       let next = pos->Array.getUnsafe(j) + 1
       pos->Array.setUnsafe(j, next >= len->Array.getUnsafe(j) ? 0 : next)
@@ -318,10 +323,7 @@ let chorusOffsets = (~stereo, ~voices) => {
 // speed, bounces off both ends, and gets new speeds every period. t and the result in periods
 // and 0..1 of the range.
 let chorusWalk = (seed: float, t: float) => {
-  let random = k => {
-    let x = Math.sin(k * 12.9898 + seed * 78.233) * 43758.5453
-    x - Math.floor(x)
-  }
+  let random = hash(_, seed)
   let pos = ref(random(0.5))
   let cycles = Float.toInt(Math.floor(t))
   let steps = 24

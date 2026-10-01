@@ -11,13 +11,13 @@ let hint = "Drag a side's first echo sideways for its length, up or down for the
 
 let laneLabel = 22. // room for the L / R labels left of time 0
 
-let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
+let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
   let id = FxRack.id(e, ...)
   let model = ctx.model
   let get = x => model->ParamModel.get(id(x))
   // for ids that are already this delay's
   let value = x => model->ParamModel.get(x)
-  let (gap, w) = (Grid.gap, Style.designWidth - 12.)
+  let gap = Grid.gap
   let topHeight = 330.
 
   //==============================================================================
@@ -25,7 +25,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
 
   let panel = Panel.make(body, ~title="echoes", ~x=0., ~y=0., ~w, ~h=topHeight)
   panel->Panel.headerToggle(ctx, id("D_On"), ~label="on")
-  let g = FxGraph.make(ctx, panel.el, {x: 8., y: 25., w: w - 18., h: topHeight - 35.})
+  let g = FxGraph.inPanel(ctx, panel, ~hint)
   let (left, right) = (laneLabel + 10., g.w - 10.)
   let axisHeight = 14.
   let laneHeight = (g.h - axisHeight) / 2.
@@ -39,13 +39,10 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
   let yOf = (side, amp) => centre(side) - FxDsp.clamp(amp / scale.contents, -1.08, 1.08) * halfLane
   let ampAt = (side, y) => (centre(side) - y) / halfLane * scale.contents
 
-  let grid = FxGraph.group(g.svg)
-  let stems = FxGraph.group(g.svg)
-  let glyphs = FxGraph.group(g.svg)
-  let marks = FxGraph.group(g.svg)
-  let layer = FxGraph.group(g.svg)
-  let hits = FxGraph.group(g.svg)
-  let readout = svgEl(hits, "text", [("class", Str("readout"))])
+  let grid = FxGraph.group(g.under)
+  let stems = FxGraph.group(g.under)
+  let glyphs = FxGraph.group(g.under)
+  let marks = FxGraph.group(g.under)
 
   let unit = () => Float.toInt(get("D_Unit"))
   let quantized = () => get("D_Quantize") != 0.
@@ -87,7 +84,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
   // a length in the unit, as text: "3 16ths (0.75 beats)", "250 ms"
   let lengthText = units => {
     let n = Float.toFixed(units, ~digits=quantized() || Math.round(units) == units ? 0 : 2)
-    let name = (model->ParamModel.def(id("D_Unit"))).shortText(Int.toFloat(unit()))
+    let name = model->ParamModel.shortText(id("D_Unit"))
     switch FxDsp.unitLength(unit()) {
     | Ms(ms) => FxGraph.msText(units * ms)
     | Beats(b) =>
@@ -125,35 +122,26 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     switch FxDsp.unitLength(unit()) {
     | Ms(ms) =>
       let total = span.contents * ms
-      let step = FxGraph.niceStep(total, 8.)
-      let t = ref(0.)
-      while t.contents <= total +. 1e-9 {
-        let x = xOf(t.contents / ms)
+      FxGraph.ticks(~until=total +. 1e-9, ~step=FxGraph.niceStep(total, 8.), t => {
+        let x = xOf(t / ms)
         FxGraph.line(grid, ~cls="axis", x, bottom, x, bottom + 4.)
-        FxGraph.text(grid, ~anchor="middle", x, g.h - 2., FxGraph.msText(t.contents))
-        t := t.contents + step
-      }
+        FxGraph.text(grid, ~anchor="middle", x, g.h - 2., FxGraph.msText(t))
+      })
     | Beats(b) =>
       let total = span.contents * b
       let step = Math.max(0.25, FxGraph.niceStep(total, 10.))
-      let t = ref(0.)
-      while t.contents <= total +. 1e-9 {
-        let x = xOf(t.contents / b)
-        let whole = Math.abs(t.contents - Math.round(t.contents)) < 1e-6
+      FxGraph.ticks(~until=total +. 1e-9, ~step, t => {
+        let x = xOf(t / b)
+        let whole = Math.abs(t - Math.round(t)) < 1e-6
         FxGraph.line(grid, ~cls=whole ? "axis" : "axis faint", x, whole ? 1. : bottom - 4., x, bottom + 4.)
         if whole || step < 1. {
-          FxGraph.text(grid, ~anchor="middle", x, g.h - 2., Float.toString(t.contents))
+          FxGraph.text(grid, ~anchor="middle", x, g.h - 2., Float.toString(t))
         }
-        t := t.contents + step
-      }
+      })
       FxGraph.text(grid, ~anchor="end", right, g.h - 2. - 11., "beats")
     }
   }
 
-  let focus = ref(None)
-  let dragging = ref(false)
-  let draw = ref(() => ())
-  let request = ref(() => ())
   // the echoes drawn last, and the one under the pointer
   let drawn = ref([])
   let pointed = ref(None)
@@ -186,221 +174,161 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     )->ignore
   }
 
-  let status = ids =>
-    ctx.status->Status.show(
-      ids->Array.map(i => (model->ParamModel.def(i)).longText(model->ParamModel.get(i)))->Array.join("    "),
-    )
-
-  let hover = (key, ids, on) => {
-    focus := (on ? Some(key) : None)
-    on ? status(ids) : ctx.status->Status.show(hint)
-    draw.contents()
-  }
-  let start = () => dragging := true
   let finish = () => {
-    dragging := false
     fit()
     drawGrid()
-    draw.contents()
+    g.redraw()
   }
-
   // a side's first echo: length sideways, wet up and down
-  let echoHandle = side => {
-    let origin = ref((0., 0.))
-    let self = ref(None)
-    let ids = [lengthId(side), id("D_Wet")]
-    let h = FxGraph.handle(
+  let echoHandles = [0, 1]->Array.map(side =>
+    FxGraph.handle(
       g,
-      ~layer,
-      ~hits,
-      ~ids,
-      ~start=() => {
-        start()
-        origin := self.contents->Option.mapOr((0., 0.), (h: FxGraph.handle) => (h.x, h.y))
-      },
-      ~drag=((dx, dy)) => {
-        let (x0, y0) = origin.contents
-        let t = (x0 + dx - left) / (right - left) * span.contents
+      ~ids=[lengthId(side), id("D_Wet")],
+      ~key=`echo${Int.toString(side)}`,
+      ~drag=({x, y}) => {
+        let t = (x - left) / (right - left) * span.contents
         model->ParamModel.set(lengthId(side), quantized() ? Math.round(t) : t)
         // (from the gain per unit of wet, so that a wet of 0 (-inf dB) can be dragged up again)
         let per = firstPerWet(side)
         if per > 0.05 {
-          model->ParamModel.set(id("D_Wet"), Math.max(0., ampAt(side, y0 + dy) / per))
+          model->ParamModel.set(id("D_Wet"), Math.max(0., ampAt(side, y) / per))
         }
       },
       ~finish,
-      ~hover=hover(`echo${Int.toString(side)}`, ids, ...),
     )
-    self := Some(h)
-    h
-  }
+  )
   // a side's feedback: up and down
-  let feedbackHandle = side => {
-    let y0 = ref(0.)
-    let self = ref(None)
+  let feedbackHandles = [0, 1]->Array.map(side => {
     let fid = feedbackId(side)
-    let h = FxGraph.handle(
+    FxGraph.handle(
       g,
-      ~layer,
-      ~hits,
       ~cls="node hollow",
       ~cursor="ns-resize",
       ~ids=[fid],
-      ~start=() => {
-        start()
-        y0 := self.contents->Option.mapOr(0., (h: FxGraph.handle) => h.y)
-      },
-      ~drag=((_, dy)) => model->ParamModel.set(fid, ampAt(side, y0.contents + dy) / feedbackRef(side)),
+      ~key=`feedback${Int.toString(side)}`,
+      ~drag=({y}) => model->ParamModel.set(fid, ampAt(side, y) / feedbackRef(side)),
       ~finish,
-      ~wheel=d => FxGraph.setNorm(g, fid, FxGraph.norm(g, fid) + d),
-      ~hover=hover(`feedback${Int.toString(side)}`, [fid], ...),
+      ~wheel=fid,
     )
-    self := Some(h)
-    h
-  }
+  })
   // the dry signal at 0, on both sides
-  let dryHandle = side => {
-    let y0 = ref(0.)
-    let self = ref(None)
+  let dryHandles = [0, 1]->Array.map(side => {
     let dry = id("D_Dry")
-    let h = FxGraph.handle(
+    FxGraph.handle(
       g,
-      ~layer,
-      ~hits,
       ~cls="node faint",
       ~r=4.5,
       ~cursor="ns-resize",
       ~ids=[dry],
-      ~start=() => {
-        start()
-        y0 := self.contents->Option.mapOr(0., (h: FxGraph.handle) => h.y)
-      },
-      ~drag=((_, dy)) => model->ParamModel.set(dry, Math.max(0., ampAt(side, y0.contents + dy))),
+      ~key="dry",
+      ~drag=({y}) => model->ParamModel.set(dry, Math.max(0., ampAt(side, y))),
       ~finish,
-      ~hover=hover("dry", [dry], ...),
     )
-    self := Some(h)
-    h
-  }
-  let echoHandles = [echoHandle(0), echoHandle(1)]
-  let feedbackHandles = [feedbackHandle(0), feedbackHandle(1)]
-  let dryHandles = [dryHandle(0), dryHandle(1)]
+  })
 
-  draw :=
-    () => {
-      let on = get("D_On") != 0.
-      g.svg->toggleClass("off", !on)
-      stems->setTextContent("")
-      glyphs->setTextContent("")
-      marks->setTextContent("")
-      let s = settings()
-      let echoes = FxDsp.echoes(s, ~until=span.contents)
-      drawn := echoes
-      // a tone above every echo with room for it
-      let lastGlyph = [-100., -100.]
-      echoes->Array.forEach(echo => {
-        let x = xOf(echo.time)
-        if x - lastGlyph->Array.getUnsafe(echo.side) >= 26. && Math.abs(echo.amp) > scale.contents * 0.06 {
-          lastGlyph->Array.setUnsafe(echo.side, x)
-          glyph(x, yOf(echo.side, echo.amp), echo.passes, ~below=echo.amp < 0.)
-        }
-      })
-      pointed.contents->Option.forEach((echo: FxDsp.echo) => {
-        let x = xOf(echo.time)
+  let draw = () => {
+    let on = get("D_On") != 0.
+    g.svg->toggleClass("off", !on)
+    stems->setTextContent("")
+    glyphs->setTextContent("")
+    marks->setTextContent("")
+    let s = settings()
+    let echoes = FxDsp.echoes(s, ~until=span.contents)
+    drawn := echoes
+    // a tone above every echo with room for it
+    let lastGlyph = [-100., -100.]
+    echoes->Array.forEach(echo => {
+      let x = xOf(echo.time)
+      if x - lastGlyph->Array.getUnsafe(echo.side) >= 26. && Math.abs(echo.amp) > scale.contents * 0.06 {
+        lastGlyph->Array.setUnsafe(echo.side, x)
+        glyph(x, yOf(echo.side, echo.amp), echo.passes, ~below=echo.amp < 0.)
+      }
+    })
+    pointed.contents->Option.forEach((echo: FxDsp.echo) => {
+      let x = xOf(echo.time)
+      svgEl(
+        marks,
+        "circle",
+        [("class", Str("pointed")), ("cx", Num(x)), ("cy", Num(yOf(echo.side, echo.amp))), ("r", Num(5.))],
+      )->ignore
+    })
+    let dry = get("D_Dry")
+    [0, 1]->Array.forEach(side => {
+      let y0 = centre(side)
+      // dry
+      let x = xOf(0.)
+      FxGraph.line(stems, ~cls="stem dry", x, y0, x, yOf(side, dry))
+      dryHandles->Array.getUnsafe(side)->FxGraph.place(x, yOf(side, dry))
+    })
+    echoes->Array.forEach(echo => {
+      let x = xOf(echo.time)
+      let y0 = centre(echo.side)
+      let y = yOf(echo.side, echo.amp)
+      let reversed = value(reverseId(echo.side)) != 0.
+      if reversed {
+        // a reversed echo swells into its time
+        let length = echo.side == 0 ? s.lengthL : s.lengthR
+        let x1 = Math.max(left, xOf(echo.time - length * 0.6))
         svgEl(
-          marks,
-          "circle",
-          [("class", Str("pointed")), ("cx", Num(x)), ("cy", Num(yOf(echo.side, echo.amp))), ("r", Num(5.))],
+          stems,
+          "path",
+          [
+            ("class", Str("swell")),
+            ("d", Str(`M${Float.toString(x1)} ${Float.toString(y0)}L${Float.toString(x)} ${Float.toString(y)}L${Float.toString(x)} ${Float.toString(y0)}Z`)),
+          ],
         )->ignore
-      })
-      let dry = get("D_Dry")
-      [0, 1]->Array.forEach(side => {
-        let y0 = centre(side)
-        // dry
-        let x = xOf(0.)
-        FxGraph.line(stems, ~cls="stem dry", x, y0, x, yOf(side, dry))
-        dryHandles->Array.getUnsafe(side)->FxGraph.place(x, yOf(side, dry))
-      })
-      echoes->Array.forEach(echo => {
+      } else {
+        FxGraph.line(stems, ~cls="stem", x, y0, x, y)
+        svgEl(stems, "circle", [("class", Str("head")), ("cx", Num(x)), ("cy", Num(y)), ("r", Num(2.2))])->ignore
+      }
+      if Math.abs(echo.amp) > scale.contents * 1.08 {
+        FxGraph.text(marks, ~cls="clip", ~anchor="middle", x, echo.amp > 0. ? y - 3. : y + 9., "▲")
+      }
+    })
+    [0, 1]->Array.forEach(side => {
+      let length = side == 0 ? s.lengthL : s.lengthR
+      let x = xOf(length)
+      let e = echoHandles->Array.getUnsafe(side)
+      e->FxGraph.place(x, yOf(side, first(side)))
+      let f = feedbackHandles->Array.getUnsafe(side)
+      let fx = xOf(2. * length)
+      f->FxGraph.show(fx <= right + 1.)
+      let fy = yOf(side, value(feedbackId(side)) * feedbackRef(side))
+      f->FxGraph.place(fx, fy)
+      if fx <= right + 1. {
+        FxGraph.line(marks, ~cls="link", e.x, e.y, fx, fy)
+      }
+    })
+    switch g.focus {
+    | Some(key) =>
+      let side = String.endsWith(key, "1") ? 1 : 0
+      let sideName = side == 0 ? "L" : "R"
+      let (h: FxGraph.handle, text) = if String.startsWith(key, "echo") {
+        (
+          echoHandles->Array.getUnsafe(side),
+          `${sideName} ${lengthText(side == 0 ? s.lengthL : s.lengthR)}  ·  wet ${FxGraph.short(g, id("D_Wet"))}`,
+        )
+      } else if String.startsWith(key, "feedback") {
+        (feedbackHandles->Array.getUnsafe(side), `${sideName} feedback ${FxGraph.short(g, feedbackId(side))}`)
+      } else {
+        (dryHandles->Array.getUnsafe(0), `dry ${FxGraph.short(g, id("D_Dry"))}`)
+      }
+      g->FxGraph.readout(~x=h.x, ~y=h.y, text)
+    | None =>
+      switch pointed.contents {
+      | Some(echo) =>
         let x = xOf(echo.time)
-        let y0 = centre(echo.side)
-        let y = yOf(echo.side, echo.amp)
-        let reversed = value(reverseId(echo.side)) != 0.
-        if reversed {
-          // a reversed echo swells into its time
-          let length = echo.side == 0 ? s.lengthL : s.lengthR
-          let x1 = Math.max(left, xOf(echo.time - length * 0.6))
-          svgEl(
-            stems,
-            "path",
-            [
-              ("class", Str("swell")),
-              ("d", Str(`M${Float.toString(x1)} ${Float.toString(y0)}L${Float.toString(x)} ${Float.toString(y)}L${Float.toString(x)} ${Float.toString(y0)}Z`)),
-            ],
-          )->ignore
-        } else {
-          FxGraph.line(stems, ~cls="stem", x, y0, x, y)
-          svgEl(stems, "circle", [("class", Str("head")), ("cx", Num(x)), ("cy", Num(y)), ("r", Num(2.2))])->ignore
-        }
-        if Math.abs(echo.amp) > scale.contents * 1.08 {
-          FxGraph.text(marks, ~cls="clip", ~anchor="middle", x, echo.amp > 0. ? y - 3. : y + 9., "▲")
-        }
-      })
-      [0, 1]->Array.forEach(side => {
-        let length = side == 0 ? s.lengthL : s.lengthR
-        let x = xOf(length)
-        let e = echoHandles->Array.getUnsafe(side)
-        e->FxGraph.place(x, yOf(side, first(side)))
-        let f = feedbackHandles->Array.getUnsafe(side)
-        let fx = xOf(2. * length)
-        f->FxGraph.show(fx <= right + 1.)
-        let fy = yOf(side, value(feedbackId(side)) * feedbackRef(side))
-        f->FxGraph.place(fx, fy)
-        if fx <= right + 1. {
-          FxGraph.line(marks, ~cls="link", e.x, e.y, fx, fy)
-        }
-        let key = Int.toString(side)
-        e->FxGraph.setClass(focus.contents == Some("echo" ++ key) ? "node hot" : "node")
-        f->FxGraph.setClass(focus.contents == Some("feedback" ++ key) ? "node hollow hot" : "node hollow")
-        dryHandles->Array.getUnsafe(side)->FxGraph.setClass(focus.contents == Some("dry") ? "node faint hot" : "node faint")
-      })
-      switch focus.contents {
-      | Some(key) =>
-        let side = String.endsWith(key, "1") ? 1 : 0
-        let sideName = side == 0 ? "L" : "R"
-        let (h: FxGraph.handle, text) = if String.startsWith(key, "echo") {
-          (
-            echoHandles->Array.getUnsafe(side),
-            `${sideName} ${lengthText(side == 0 ? s.lengthL : s.lengthR)}  ·  wet ${FxGraph.short(g, id("D_Wet"))}`,
-          )
-        } else if String.startsWith(key, "feedback") {
-          (feedbackHandles->Array.getUnsafe(side), `${sideName} feedback ${FxGraph.short(g, feedbackId(side))}`)
-        } else {
-          (dryHandles->Array.getUnsafe(0), `dry ${FxGraph.short(g, id("D_Dry"))}`)
-        }
-        g->FxGraph.readout(readout, ~x=h.x, ~y=h.y, text)
-        if dragging.contents {
-          status(
-            String.startsWith(key, "echo")
-              ? [lengthId(side), id("D_Wet")]
-              : String.startsWith(key, "feedback") ? [feedbackId(side)] : [id("D_Dry")],
-          )
-        }
-      | None =>
-        switch pointed.contents {
-        | Some(echo) =>
-          let x = xOf(echo.time)
-          let db = FxGraph.gainDb(Math.abs(echo.amp))
-          g->FxGraph.readout(
-            readout,
-            ~x,
-            ~y=yOf(echo.side, echo.amp),
-            `${echo.side == 0 ? "L" : "R"} at ${lengthText(echo.time)}  ·  ${FxGraph.dbText(db)}  ·  ${Int.toString(echo.passes)}× through the filters`,
-          )
-        | None => readout->setTextContent("")
-        }
+        let db = FxGraph.gainDb(Math.abs(echo.amp))
+        g->FxGraph.readout(
+          ~x,
+          ~y=yOf(echo.side, echo.amp),
+          `${echo.side == 0 ? "L" : "R"} at ${lengthText(echo.time)}  ·  ${FxGraph.dbText(db)}  ·  ${Int.toString(echo.passes)}× through the filters`,
+        )
+      | None => g->FxGraph.hideReadout
       }
     }
+  }
+  g.redraw = draw
 
   // the echo under the pointer: its tone in the tone graph
   g.svg->onMouse(#mousemove, ev => {
@@ -409,7 +337,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     let (px, py) = ((ev->clientX - r.left) * k, (ev->clientY - r.top) * k)
     let side = py < laneHeight ? 0 : 1
     let near =
-      dragging.contents || focus.contents != None
+      g.dragging || g.focus != None
         ? None
         : drawn.contents
           ->Array.filter(e => e.side == side && Math.abs(xOf(e.time) - px) < 8.)
@@ -422,7 +350,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     if near != pointed.contents {
       pointed := near
       highlight := near->Option.map(e => (`this echo: ${Int.toString(e.passes)}×`, Int.toFloat(e.passes)))
-      draw.contents()
+      draw()
       toneRequest.contents()
     }
   })
@@ -430,19 +358,18 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     if pointed.contents != None {
       pointed := None
       highlight := None
-      draw.contents()
+      draw()
       toneRequest.contents()
     }
   )
 
   let echoRedraw = FxGraph.redraw(g, () => {
-    if !dragging.contents {
+    if !g.dragging {
       fit()
       drawGrid()
     }
-    draw.contents()
+    draw()
   })
-  request := echoRedraw.request
   let delayIds =
     [
       "D_On",
@@ -462,20 +389,17 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
       "D_Wet",
     ]->Array.map(id)
   g->FxGraph.listen(delayIds, echoRedraw.request)
-  g.svg->onMouse(#mouseenter, _ => ctx.status->Status.show(hint))
-  g.svg->onMouse(#mouseleave, _ => ctx.status->Status.clear)
 
   //==============================================================================
   // tone, stereo and settings
 
   let bottomY = topHeight + gap
-  let bottomHeight = Style.pageHeight - 6. - 34. - bottomY
+  let bottomHeight = h - bottomY
   let toneWidth = 300.
   let tone = Panel.make(body, ~title="feedback tone", ~x=0., ~y=bottomY, ~w=toneWidth, ~h=bottomHeight)
   let toneRedraw = LoopTone.make(
     ctx,
-    tone.el,
-    {x: 8., y: 25., w: toneWidth - 18., h: bottomHeight - 35.},
+    tone,
     {
       lowpass: id("D_LP"),
       highpass: id("D_HP"),
@@ -500,8 +424,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
   )
   let stereoRedraw = DelayStereo.make(
     ctx,
-    stereo.el,
-    {x: 8., y: 25., w: stereoWidth - 18., h: bottomHeight - 35.},
+    stereo,
     ~pan=id("D_InputPan"),
     ~rotation=id("D_Rotation"),
     ~feedbackL=id("D_FeedbackL"),

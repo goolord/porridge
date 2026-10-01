@@ -194,16 +194,6 @@ let toOatmeal = p => {
 //==============================================================================
 // JSON
 
-let tableKey = table =>
-  switch table {
-  | Wave1 => "wave1"
-  | Wave2 => "wave2"
-  | LfoShape1 => "lfoShape1"
-  | LfoShape2 => "lfoShape2"
-  | VelocityCurve => "velocityCurve"
-  | AftertouchCurve => "aftertouchCurve"
-  }
-
 // The shortest decimal that reads back as the same parameter value, so files stay
 // readable ("0.3", not "0.30000001192092896").
 let shortNumberWith = (canonical, x) =>
@@ -231,85 +221,66 @@ let sameTable = (a: Float32Array.t, b: Float32Array.t) =>
       ByteView.bitsOfFloat32(x) == ByteView.bitsOfFloat32(ByteView.getUnsafe(b, i))
     )
 
-// (a copy has a buffer of its own, so the bytes are exactly the table's)
-let encodeTable = (data: Float32Array.t) =>
-  Bank.toBase64(Uint8Array.fromBuffer(data->TypedArray.copy->TypedArray.buffer))
-
 let decodeTable = (s, length) => {
-  let bytes = Bank.fromBase64(s)
-  if TypedArray.length(bytes) < length * 4 {
-    None
-  } else {
-    // copy into an aligned buffer before viewing it as floats
-    let aligned = Uint8Array.fromLength(length * 4)
-    aligned->ByteView.blit(bytes->TypedArray.subarray(~start=0, ~end=length * 4), 0)
-    Some(Float32Array.fromBuffer(aligned->TypedArray.buffer, ~length))
-  }
+  let data = Bank.floatsFromBase64(s)
+  TypedArray.length(data) < length ? None : Some(data->TypedArray.slice(~start=0, ~end=length))
 }
 
 let str = s => JSON.String(s)
 let num = x => JSON.Number(x)
 
 let toJson = (p, ~header=true) => {
-  let fields = Dict.make()
-  if header {
-    fields->Dict.set("porridge", str("preset"))
-    fields->Dict.set("version", num(Int.toFloat(formatVersion)))
-  }
-  fields->Dict.set("name", str(p.meta.name))
-  fields->Dict.set("author", str(p.meta.author))
-  fields->Dict.set("category", str(p.meta.category))
-  fields->Dict.set("tags", JSON.Array(p.meta.tags->Array.map(str)))
-  fields->Dict.set("description", str(p.meta.description))
-
-  let params = Dict.make()
-  Lazy.get(defs)->Array.forEach(d =>
-    if !ModMatrix.isSlotParam(d.id) {
-      p.values->Map.get(d.id)->Option.forEach(x => params->Dict.set(d.id, num(shortNumber(d, x))))
-    }
+  let params = Lazy.get(defs)->Array.filterMap(d =>
+    ModMatrix.isSlotParam(d.id)
+      ? None
+      : p.values->Map.get(d.id)->Option.map(x => (d.id, num(shortNumber(d, x))))
   )
-  fields->Dict.set("params", JSON.Object(params))
 
-  let value = id => p.values->Map.get(id)->Option.getOr(0.)
   let modulations = ModMatrix.slotNumbers->Array.filterMap(k => {
-    let source = ModMatrix.sources[Float.toInt(value(ModMatrix.sourceId(k)))]
-    let target = ModMatrix.targets[Float.toInt(value(ModMatrix.targetId(k)))]
-    switch (source, target) {
+    let slot = ModMatrix.readSlot(id => p.values->Map.get(id)->Option.getOr(0.), k)
+    switch (ModMatrix.sources[slot.source], ModMatrix.targets[slot.target]) {
     | (Some(source), Some(target)) if source.key != "none" && target.key != "none" =>
-      let m = Dict.make()
-      m->Dict.set("source", str(source.key))
-      m->Dict.set("target", str(target.key))
-      m->Dict.set("amount", num(Math.fround(value(ModMatrix.amountId(k)))->shortFloat))
-      switch ModMatrix.sources[Float.toInt(value(ModMatrix.viaId(k)))] {
-      | Some(via) if via.key != "none" => m->Dict.set("via", str(via.key))
-      | _ => ()
+      let via = switch ModMatrix.sources[slot.via] {
+      | Some(via) if via.key != "none" => [("via", str(via.key))]
+      | _ => []
       }
-      Some(JSON.Object(m))
+      Some(
+        JSON.Object(
+          Dict.fromArray([
+            ("source", str(source.key)),
+            ("target", str(target.key)),
+            ("amount", num(Math.fround(slot.amount)->shortFloat)),
+            ...via,
+          ]),
+        ),
+      )
     | _ => None
     }
   })
-  fields->Dict.set("modulations", JSON.Array(modulations))
-  fields->Dict.set("macros", JSON.Array(p.meta.macroNames->Array.map(str)))
 
-  let tables = Dict.make()
-  allTables->Array.forEach(table => {
+  let tables = allTables->Array.filterMap(table => {
     let data = p.tables->getTable(table)
-    if !sameTable(data, Lazy.get(defaultTables)->getTable(table)) {
-      tables->Dict.set(tableKey(table), str(encodeTable(data)))
-    }
+    sameTable(data, Lazy.get(defaultTables)->getTable(table))
+      ? None
+      : Some((tableInfo(table).key, str(Bank.floatsToBase64(data))))
   })
-  fields->Dict.set("tables", JSON.Object(tables))
 
-  p.tuning->Option.forEach(({scl, kbm}) => {
-    let t = Dict.make()
-    t->Dict.set("scl", str(scl))
-    t->Dict.set("kbm", str(kbm))
-    fields->Dict.set("tuning", JSON.Object(t))
-  })
-  if !Impulse.isEmpty(p.impulses) {
-    fields->Dict.set("impulses", Impulse.listToJson(p.impulses))
-  }
-  JSON.Object(fields)
+  JSON.Object(
+    Dict.fromArray([
+      ...(header ? [("porridge", str("preset")), ("version", num(Int.toFloat(formatVersion)))] : []),
+      ("name", str(p.meta.name)),
+      ("author", str(p.meta.author)),
+      ("category", str(p.meta.category)),
+      ("tags", JSON.Array(p.meta.tags->Array.map(str))),
+      ("description", str(p.meta.description)),
+      ("params", JSON.Object(Dict.fromArray(params))),
+      ("modulations", JSON.Array(modulations)),
+      ("macros", JSON.Array(p.meta.macroNames->Array.map(str))),
+      ("tables", JSON.Object(Dict.fromArray(tables))),
+      ...p.tuning->Option.mapOr([], t => [("tuning", Scala.toJson(t))]),
+      ...(Impulse.isEmpty(p.impulses) ? [] : [("impulses", Impulse.listToJson(p.impulses))]),
+    ]),
+  )
 }
 
 let getString = (d, key) =>
@@ -344,7 +315,7 @@ let fromJsonObject = (d: dict<JSON.t>) => {
   | _ => Dict.make()
   }
   let tables = tablesFrom(table =>
-    switch given->Dict.get(tableKey(table)) {
+    switch given->Dict.get(tableInfo(table).key) {
     | Some(String(s)) => decodeTable(s, tableLength(table))
     | _ => None
     }->Option.getOr(Lazy.get(defaultTables)->getTable(table)->TypedArray.copy)
@@ -412,24 +383,23 @@ let fromJsonObject = (d: dict<JSON.t>) => {
     },
     values,
     tables,
-    tuning: switch d->Dict.get("tuning") {
-    | Some(Object(t)) =>
-      let source: Scala.source = {scl: getString(t, "scl"), kbm: getString(t, "kbm")}
-      Scala.table(source)->Result.isOk ? Some(source) : None
-    | _ => None
-    },
+    tuning: d
+    ->Dict.get("tuning")
+    ->Option.flatMap(Scala.fromJson)
+    ->Option.filter(source => Scala.table(source)->Result.isOk),
     impulses: d->Dict.get("impulses")->Option.mapOr(Impulse.none(), Impulse.listFromJson),
   }
 }
 
-let bankToJson = (presets, ~name="") => {
-  let fields = Dict.make()
-  fields->Dict.set("porridge", str("bank"))
-  fields->Dict.set("version", num(Int.toFloat(formatVersion)))
-  fields->Dict.set("name", str(name))
-  fields->Dict.set("presets", JSON.Array(presets->Array.map(toJson(_, ~header=false))))
-  JSON.Object(fields)
-}
+let bankToJson = (presets, ~name="") =>
+  JSON.Object(
+    Dict.fromArray([
+      ("porridge", str("bank")),
+      ("version", num(Int.toFloat(formatVersion))),
+      ("name", str(name)),
+      ("presets", JSON.Array(presets->Array.map(toJson(_, ~header=false)))),
+    ]),
+  )
 
 type kind = Single | Many
 
@@ -484,21 +454,37 @@ let looksLikeJson = (bytes: Uint8Array.t) => {
   first(0)
 }
 
-// Any file Porridge can load: its own presets and banks, and every Oatmeal format.
+// Any file Porridge can load: its own presets and banks, and every Oatmeal format. (Reading a
+// file cut short in the wrong place can throw: that's an error too.)
 let parseFile = (bytes): result<parsed, string> =>
-  if looksLikeJson(bytes) {
-    parseJson(utf8Decode(bytes))
-  } else {
-    switch OatmealFormat.parseFile(bytes) {
-    | Ok({kind, programs, warnings}) =>
-      Ok({
-        kind: kind == Program ? Single : Many,
-        presets: programs->Array.map(p => fromOatmeal(p.bytes)),
-        warnings,
-      })
-    | Error(e) => Error(e)
+  try {
+    if looksLikeJson(bytes) {
+      parseJson(utf8Decode(bytes))
+    } else {
+      switch OatmealFormat.parseFile(bytes) {
+      | Ok({kind, programs, warnings}) =>
+        Ok({
+          kind: kind == Program ? Single : Many,
+          presets: programs->Array.map(p => fromOatmeal(p.bytes)),
+          warnings,
+        })
+      | Error(e) => Error(e)
+      }
     }
+  } catch {
+  | JsExn(e) => Error(e->JsExn.message->Option.getOr("unreadable"))
   }
+
+// A file the user opened, with at least one program in it, or what to tell them.
+let parseForLoading = (bytes, filename) =>
+  switch parseFile(bytes) {
+  | Error(e) => Error(`${filename} isn't a Porridge or Oatmeal program or bank (${e})`)
+  | Ok({presets: []}) => Error(`${filename} has no programs in it`)
+  | parsed => parsed
+  }
+
+// The files parseFile reads, for a file dialog.
+let extensions = [".porridge", ".json", ".omp", ".omb", ".fxp", ".fxb", ".dat"]
 
 let writePreset = p => utf8Encode(JSON.stringify(toJson(p), ~space=1))
 let writeBank = (presets, ~name=?) => utf8Encode(JSON.stringify(bankToJson(presets, ~name?), ~space=1))

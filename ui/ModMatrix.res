@@ -220,6 +220,17 @@ let sourceId = k => `Mod${Int.toString(k)}_Source`
 let targetId = k => `Mod${Int.toString(k)}_Target`
 let amountId = k => `Mod${Int.toString(k)}_Amount`
 let viaId = k => `Mod${Int.toString(k)}_Via`
+let slotIds = k => [sourceId(k), targetId(k), amountId(k), viaId(k)]
+
+// What slot k holds, by source and target index (0 is none), read with get.
+type slot = {source: int, target: int, amount: float, via: int}
+
+let readSlot = (get: string => float, k) => {
+  source: Float.toInt(get(sourceId(k))),
+  target: Float.toInt(get(targetId(k))),
+  amount: get(amountId(k)),
+  via: Float.toInt(get(viaId(k))),
+}
 
 let isSlotParam = id => String.startsWith(id, "Mod") && String.includes(id, "_")
 

@@ -9,7 +9,6 @@ open! Web
 @send external blit: (Float32Array.t, Float32Array.t) => unit = "set"
 
 let at = ByteView.getUnsafe
-let setAt = TypedArray.set
 
 type rec t = {
   ctx: Ctx.t,
@@ -134,7 +133,7 @@ let undoItem = {label: "undo", run: undo}
 let line = (t, (i0, v0), (i1, v1)) => {
   let ((i0, v0), (i1, v1)) = i1 < i0 ? ((i1, v1), (i0, v0)) : ((i0, v0), (i1, v1))
   for i in i0 to i1 {
-    t.data->setAt(i, i1 == i0 ? v1 : v0 + (v1 - v0) * Int.toFloat(i - i0) / Int.toFloat(i1 - i0))
+    t.data->ByteView.setUnsafe(i, i1 == i0 ? v1 : v0 + (v1 - v0) * Int.toFloat(i - i0) / Int.toFloat(i1 - i0))
   }
 }
 
@@ -164,7 +163,7 @@ let smoothAt = (t, i, amount) => {
         })
       }
       let f = weight(k)
-      t.data->setAt(j, src->at(j) * (1. - f) + s.contents / w.contents * f)
+      t.data->ByteView.setUnsafe(j, src->at(j) * (1. - f) + s.contents / w.contents * f)
     }
   }
 }
@@ -277,17 +276,17 @@ let fix = (d: Float32Array.t, ~bipolar) =>
     let mean = sum(d) / Int.toFloat(TypedArray.length(d))
     let peak = ref(0.)
     d->TypedArray.forEachWithIndex((v, i) => {
-      d->setAt(i, v - mean)
+      d->ByteView.setUnsafe(i, v - mean)
       peak := Math.max(peak.contents, Math.abs(d->at(i)))
     })
     if peak.contents > 0. {
-      d->TypedArray.forEachWithIndex((v, i) => d->setAt(i, v / peak.contents))
+      d->TypedArray.forEachWithIndex((v, i) => d->ByteView.setUnsafe(i, v / peak.contents))
     }
   } else {
     let lo = d->TypedArray.reduce((a, v) => Math.min(a, v), Float.Constants.positiveInfinity)
     let hi = d->TypedArray.reduce((a, v) => Math.max(a, v), Float.Constants.negativeInfinity)
     if hi > lo {
-      d->TypedArray.forEachWithIndex((v, i) => d->setAt(i, (v - lo) / (hi - lo)))
+      d->TypedArray.forEachWithIndex((v, i) => d->ByteView.setUnsafe(i, (v - lo) / (hi - lo)))
     }
   }
 
@@ -297,12 +296,12 @@ let soften = (d: Float32Array.t, ~wrap=true) => {
   for i in 0 to n - 1 {
     let a = wrap ? s->at(mod(i - 1 + n, n)) : s->at(Math.Int.max(0, i - 1))
     let b = wrap ? s->at(mod(i + 1, n)) : s->at(Math.Int.min(n - 1, i + 1))
-    d->setAt(i, 0.25 * a + 0.5 * s->at(i) + 0.25 * b)
+    d->ByteView.setUnsafe(i, 0.25 * a + 0.5 * s->at(i) + 0.25 * b)
   }
 }
 
 let invert = (d: Float32Array.t, ~bipolar) =>
-  d->TypedArray.forEachWithIndex((v, i) => d->setAt(i, bipolar ? -v : 1. - v))
+  d->TypedArray.forEachWithIndex((v, i) => d->ByteView.setUnsafe(i, bipolar ? -v : 1. - v))
 
 let reverse = (d: Float32Array.t) => d->TypedArray.reverse
 

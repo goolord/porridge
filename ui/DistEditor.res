@@ -19,12 +19,12 @@ let maxPoints = PorridgeParams.shaperPoints
 
 // `id` maps Oatmeal's distortion's parameters to this one's; `placement` shows where Oatmeal's
 // sits.
-let make = (ctx: Ctx.t, body, ~id: string => string, ~placement) => {
+let make = (ctx: Ctx.t, body, ~id: string => string, ~placement, ~w, ~h) => {
   let model = ctx.model
   let get = x => model->ParamModel.get(id(x))
-  let (gap, w) = (Grid.gap, Style.designWidth - 12.)
-  let settingsHeight = Grid.rowHeight + 2. * Grid.padBottom - Style.controlGap
-  let h = Style.pageHeight - 6. - 34. - settingsHeight - gap
+  let gap = Grid.gap
+  let settingsHeight = Grid.bareHeight(1)
+  let graphHeight = h - settingsHeight - gap
   let half = (w - gap) / 2.
   let f = Float.toFixed(_, ~digits=2)
 
@@ -71,17 +71,18 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement) => {
   }
 
   let pregain = id("Sat_Pregain")
-  let dragging = ref(false)
-  let redraws = []
-  let request = () => redraws->Array.forEach((r: FxGraph.redraw) => r.request())
+  // the two graphs and their redraws
+  let graphs: array<(FxGraph.t, FxGraph.redraw)> = []
+  let dragging = () => graphs->Array.some(((g, _)) => g.dragging)
+  let request = () => graphs->Array.forEach(((_, r)) => r.request())
 
   let graph = (~title, ~x, ~drive: unit => bool, draw) => {
-    let panel = Panel.make(body, ~title, ~x, ~y=0., ~w=half, ~h)
-    let g = FxGraph.make(ctx, panel.el, {x: 8., y: 25., w: half - 18., h: h - 35.})
-    let grid = FxGraph.group(g.svg)
-    let layer = FxGraph.group(g.svg)
+    let panel = Panel.make(body, ~title, ~x, ~y=0., ~w=half, ~h=graphHeight)
+    let g = FxGraph.inPanel(ctx, panel)
+    let grid = FxGraph.group(g.under)
+    let layer = FxGraph.group(g.under)
     let redraw = FxGraph.redraw(g, () => {
-      if !dragging.contents {
+      if !dragging() {
         fit()
       }
       grid->setTextContent("")
@@ -89,12 +90,12 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement) => {
       g.svg->toggleClass("off", get("Sat_Type") == 0.)
       draw(g, grid, layer)
     })
-    redraws->Array.push(redraw)
+    graphs->Array.push((g, redraw))
     // drag up for more drive
     g.svg->onPointer(#pointerdown, ev =>
       if ev->button == 0 && drive() {
         ev->preventDefault
-        dragging := true
+        g.dragging = true
         model->ParamModel.beginGesture(pregain)
         let start = model->ParamModel.get(pregain)
         let k = g.h / (g.svg->getBoundingClientRect).height
@@ -107,11 +108,11 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement) => {
             last := mv->clientY
             travel := travel.contents + (mv->shiftKey ? dy * 0.1 : dy)
             model->ParamModel.set(pregain, start - travel.contents * 0.25)
-            ctx.status->Status.show((model->ParamModel.def(pregain)).longText(model->ParamModel.get(pregain)))
+            ctx.status->Status.show(model->ParamModel.longText(pregain))
           },
           ~onUp=() => {
             model->ParamModel.endGesture(pregain)
-            dragging := false
+            g.dragging = false
             request()
           },
         )
@@ -119,7 +120,7 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement) => {
     )
     g.svg->onMouse(#mousemove, _ => g.svg->setStyle("cursor", drive() ? "ns-resize" : "crosshair"))
     g.svg->onMouse(#mouseenter, _ => ctx.status->Status.show(drive() ? hint : shapeHint))
-    g.svg->onMouse(#mouseleave, _ => if !dragging.contents {
+    g.svg->onMouse(#mouseleave, _ => if !dragging() {
         ctx.status->Status.clear
       })
     (panel, g)
@@ -158,11 +159,6 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement) => {
   })
 
   // the custom shape's points, and a bend point in the middle of every segment
-  let shapeHandles = FxGraph.group(cg.svg)
-  let shapeHits = FxGraph.group(cg.svg)
-  let readout = svgEl(shapeHits, "text", [("class", Str("readout"))])
-  let focus = ref(None)
-  let geometry = ref((x => x, y => y))
   let xAt = px => {
     let (cx, rx) = (cg.w / 2., cg.w / 2. - m)
     (px - cx) / rx
@@ -171,33 +167,23 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement) => {
     let (cy, ry) = (cg.h / 2., cg.h / 2. - m)
     (cy - py) / ry
   }
-  let pointHandles = Array.fromInitializer(~length=maxPoints, k => {
-    let origin = ref((0., 0.))
-    let self = ref(None)
-    let h = FxGraph.handle(
+  let pointHandles = Array.fromInitializer(~length=maxPoints, k =>
+    FxGraph.handle(
       cg,
-      ~layer=shapeHandles,
-      ~hits=shapeHits,
       ~ids=[xId(k), yId(k)],
-      ~start=() => {
-        dragging := true
-        origin := self.contents->Option.mapOr((0., 0.), (h: FxGraph.handle) => (h.x, h.y))
-      },
-      ~drag=((dx, dy)) => {
-        let (x0, y0) = origin.contents
+      ~key=`p${Int.toString(k)}`,
+      ~statusOnDrag=false,
+      ~drag=({x, y}) => {
         let n = count()
         // the ends stay at the ends; the others between their neighbours
         if k > 0 && k < n - 1 {
           let lo = model->ParamModel.get(xId(k - 1)) + 0.005
           let hi = model->ParamModel.get(xId(k + 1)) - 0.005
-          model->ParamModel.set(xId(k), FxDsp.clamp(xAt(x0 + dx), lo, hi))
+          model->ParamModel.set(xId(k), FxDsp.clamp(xAt(x), lo, hi))
         }
-        model->ParamModel.set(yId(k), FxDsp.clamp(yAt(y0 + dy), -1., 1.))
+        model->ParamModel.set(yId(k), FxDsp.clamp(yAt(y), -1., 1.))
       },
-      ~finish=() => {
-        dragging := false
-        request()
-      },
+      ~finish=request,
       // right-click takes a point out (not the ends)
       ~rightClick=() => {
         let n = count()
@@ -205,51 +191,36 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement) => {
           setPoints(points()->Array.filterWithIndex((_, i) => i != k))
         }
       },
-      ~hover=on => {
-        focus := (on ? Some(`p${Int.toString(k)}`) : None)
-        request()
-      },
+      ~hover=_ => (),
     )
-    self := Some(h)
-    h
-  })
+  )
   let bendHandles = Array.fromInitializer(~length=maxPoints, k => {
     let start = ref(0.)
-    let h = FxGraph.handle(
+    FxGraph.handle(
       cg,
-      ~layer=shapeHandles,
-      ~hits=shapeHits,
       ~cls="node bend",
       ~r=4.,
       ~cursor="ns-resize",
       ~ids=[bendId(k)],
-      ~start=() => {
-        dragging := true
-        start := model->ParamModel.get(bendId(k))
-      },
-      ~drag=((_, dy)) => {
+      ~key=`b${Int.toString(k)}`,
+      ~statusOnDrag=false,
+      ~start=() => start := model->ParamModel.get(bendId(k)),
+      ~drag=({dy}) => {
         // up bends towards the later point's level: bend the way the segment rises
         let (_, y0, _) = points()[k - 1]->Option.getOr((0., 0., 0.))
         let (_, y1, _) = points()[k]->Option.getOr((0., 0., 0.))
         let sign = y1 >= y0 ? 1. : -1.
         model->ParamModel.set(bendId(k), FxDsp.clamp(start.contents + dy / 80. * sign, -1., 1.))
       },
-      ~finish=() => {
-        dragging := false
-        request()
-      },
-      ~hover=on => {
-        focus := (on ? Some(`b${Int.toString(k)}`) : None)
-        request()
-      },
+      ~finish=request,
+      ~hover=_ => (),
     )
-    h
   })
+  cg.redraw = request
 
   shapeLayer :=
     Some(
       (xOf, yOf) => {
-        geometry := (xOf, yOf)
         let on = isCustom()
         let list = points()
         let n = Array.length(list)
@@ -258,7 +229,6 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement) => {
           switch list[k] {
           | Some((x, y, _)) =>
             h->FxGraph.place(xOf(x), yOf(y))
-            h->FxGraph.setClass(focus.contents == Some(`p${Int.toString(k)}`) ? "node hot" : "node")
           | None => ()
           }
         })
@@ -268,11 +238,10 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement) => {
           | (Some((x0, _, _)), Some((x1, _, _))) =>
             let x = (x0 + x1) / 2.
             h->FxGraph.place(xOf(x), yOf(FxDsp.customShape(list, x)))
-            h->FxGraph.setClass(focus.contents == Some(`b${Int.toString(k)}`) ? "node bend hot" : "node bend")
           | _ => ()
           }
         })
-        switch focus.contents {
+        switch cg.focus {
         | Some(key) if on =>
           let k = key->String.slice(~start=1)->Int.fromString->Option.getOr(0)
           let isBend = String.startsWith(key, "b")
@@ -282,8 +251,8 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement) => {
             isBend ? `bend ${Float.toFixed(bend * 100., ~digits=0)} %` : `in ${f(x)}  ·  out ${f(y)}`
           | None => ""
           }
-          cg->FxGraph.readout(readout, ~x=h.x, ~y=h.y, text)
-        | _ => readout->setTextContent("")
+          cg->FxGraph.readout(~x=h.x, ~y=h.y, text)
+        | _ => cg->FxGraph.hideReadout
         }
       },
     )
@@ -299,7 +268,7 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement) => {
       if x > -0.99 && x < 0.99 {
         let i = list->Array.findIndex(((px, _, _)) => px > x)
         if i > 0 {
-          let (_, y, _) = (x, FxDsp.customShape(list, x), 0.)
+          let y = FxDsp.customShape(list, x)
           let next = list->Array.copy
           next->Array.splice(~start=i, ~remove=0, ~insert=[(x, y, 0.)])
           setPoints(next)
@@ -351,12 +320,12 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement) => {
     "Sat_Postgain",
     ...PorridgeParams.shaperParams->Array.map(((i, _)) => i),
   ]
-  ids->Array.forEach(i => model->ParamModel.listen(id(i), request))
+  model->ParamModel.listenEach(ids->Array.map(id), request)
   let showReset = () => resetShape->setStyle("display", isCustom() ? "" : "none")
   model->ParamModel.listen(id("Sat_Type"), showReset)
   showReset()
 
-  let settings = Panel.make(body, ~x=0., ~y=h + gap, ~w, ~h=settingsHeight)
+  let settings = Panel.make(body, ~x=0., ~y=graphHeight + gap, ~w, ~h=settingsHeight)
   let s = Grid.make(ctx, settings.el, ~y=Grid.padBottom, ~cw=Grid.fitColumns(w, 8))
   s->Grid.choice(id("Sat_Type"), 0, 0, "type", ~span=2)
   if placement {
@@ -368,7 +337,6 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement) => {
   s->Grid.param(id("Sat_Pregain"), 5, 0, "pregain")
   s->Grid.param(id("Sat_Limit"), 6, 0, "limit")
   s->Grid.param(id("Sat_Postgain"), 7, 0, "postgain")
-  ignore(geometry)
 
-  () => redraws->Array.forEach(r => r.now())
+  () => graphs->Array.forEach(((_, r)) => r.now())
 }

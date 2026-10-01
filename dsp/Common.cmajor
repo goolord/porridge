@@ -1,0 +1,70 @@
+//  Small pieces shared by the effects and the voice filters: Simper's state-variable filter,
+//  4-point Hermite interpolation and a one-pole lowpass coefficient.
+
+namespace porridge
+{
+    /// A stereo trapezoidal state-variable filter (Simper's): the crossovers' building block,
+    /// and the algorithmic reverb's and the convolver's cuts.
+    struct Svf
+    {
+        float<2> ic1, ic2;
+    }
+
+    /// An Svf's coefficients: g = tan (pi f / sr), k = 1 / Q.
+    struct SvfCoefs
+    {
+        float g, k, a1, a2, a3;
+    }
+
+    SvfCoefs svfCoefs (float g, float k)
+    {
+        SvfCoefs c;
+        c.g = g;
+        c.k = k;
+        c.a1 = 1.0f / (1.0f + g * (g + k));
+        c.a2 = g * c.a1;
+        c.a3 = g * c.a2;
+        return c;
+    }
+
+    /// One sample through integrator states ic1, ic2 (one channel's, or a stereo pair's): the
+    /// lowpass and bandpass outputs (highpass = x - k bp - lp).
+    void svfTick<T> (T& ic1, T& ic2, const SvfCoefs& c, T x, T& lp, T& bp)
+    {
+        let v3 = x - ic2;
+        let v1 = c.a1 * ic1 + c.a2 * v3;
+        let v2 = ic2 + c.a2 * ic1 + c.a3 * v3;
+        ic1 = 2.0f * v1 - ic1;
+        ic2 = 2.0f * v2 - ic2;
+        lp = v2;
+        bp = v1;
+    }
+
+    void tick (Svf& this, const SvfCoefs& c, float<2> x, float<2>& lp, float<2>& bp)
+    {
+        svfTick (this.ic1, this.ic2, c, x, lp, bp);
+    }
+
+    /// The 2nd-order allpass with the same coefficients (the phase of a crossover's band sum).
+    float<2> allpass (Svf& this, const SvfCoefs& c, float<2> x)
+    {
+        float<2> lp, bp;
+        this.tick (c, x, lp, bp);
+        return x - 2.0f * c.k * bp;
+    }
+
+    /// 4-point cubic (Catmull-Rom) interpolation between y1 (t = 0) and y2 (t = 1).
+    T hermite<T> (T y0, T y1, T y2, T y3, float t)
+    {
+        let c1 = 0.5f * (y2 - y0);
+        let c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
+        let c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+        return ((c3 * t + c2) * t + c1) * t + y1;
+    }
+
+    /// The coefficient of a one-pole lowpass at hz (kept below 0.45 sr): y += a (x - y).
+    float onePoleCoef (float64 hz, float64 sr)
+    {
+        return float (1.0 - exp (-2.0 * pi * min (hz, 0.45 * sr) / sr));
+    }
+}

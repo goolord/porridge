@@ -855,6 +855,9 @@ let enumText = (prefix, n, labels) =>
     }
 
 let pct = label => (v: float, _) => `${label}: ${fixed(v * 100., 2)} %`
+// a bipolar value's: label: (2v - 1) * scale unit
+let bipText = (label, scale, digits, unit) =>
+  (v: float, _) => `${label}: ${fixed((2. * v - 1.) * scale, digits)} ${unit}`
 let ampText = label =>
   (v: float, _) => v > 0. ? `${label}: ${fixed(v * 90. - 60., 2)} dB` : `${label}: -inf dB`
 let dryWetText = label =>
@@ -1014,7 +1017,7 @@ let def = (i, ~reads=[], spec) => {
     bip(
       8476 + b,
       48.,
-      (v: float, _) => `Aftertouch -> ${osc} pitch: ${fixed((2. * v - 1.) * 48., 2)} semitones`,
+      bipText(`Aftertouch -> ${osc} pitch`, 48., 2, "semitones"),
       ~unit="semitones",
     ),
   )
@@ -1045,36 +1048,17 @@ let def = (i, ~reads=[], spec) => {
       text: (v: float, _) => `${osc} PWM rate: ${fixed(v * 16., 3)} Hz`,
     },
   )
-  def(
-    o + 5,
-    bip(8492 + b, 1., (v: float, _) => `${osc} PWM depth: ${fixed((2. * v - 1.) * 100., 2)} %`),
-  )
+  def(o + 5, bip(8492 + b, 1., bipText(`${osc} PWM depth`, 100., 2, "%")))
 })
 def(
   12,
   bip(8516, 4., ratioText("Transpose", 2, 48., 4.), ~unit="octaves (display: semitones = 12*x)"),
   ~reads=[offOctave],
 )
-def(13, bip(8520, 50., (v: float, _) => `Detune: ${fixed((2. * v - 1.) * 50., 3)} Hz`, ~unit="Hz"))
-def(
-  14,
-  bip(
-    8524,
-    60.,
-    (v: float, _) => `Aftertouch -> osc: ${fixed((2. * v - 1.) * 60., 2)} dB`,
-    ~unit="dB",
-  ),
-)
+def(13, bip(8520, 50., bipText("Detune", 50., 3, "Hz"), ~unit="Hz"))
+def(14, bip(8524, 60., bipText("Aftertouch -> osc", 60., 2, "dB"), ~unit="dB"))
 def(15, amp(8528, ampText("N Amp")))
-def(
-  16,
-  bip(
-    8532,
-    60.,
-    (v: float, _) => `Aftertouch -> noise: ${fixed((2. * v - 1.) * 60., 2)} dB`,
-    ~unit="dB",
-  ),
-)
+def(16, bip(8532, 60., bipText("Aftertouch -> noise", 60., 2, "dB"), ~unit="dB"))
 def(
   17,
   uni(8540, (v: float, _) =>
@@ -1165,24 +1149,8 @@ type lfoOffsets = {
   )
   def(base + 3, sw(o.quantize, 1, Some(lfoQuantize), enumText(`${l}: `, 1, lfoQuantize)))
   def(base + 4, sw(o.mode, 2, Some(lfoModes), enumText(`${l} mode: `, 2, lfoModes)))
-  def(
-    base + 5,
-    bip(
-      o.cut1,
-      1.,
-      (v: float, _) => `${l} -> cutoff 1: ${fixed((2. * v - 1.) * 4., 4)} octaves`,
-      ~unit="x4 octaves",
-    ),
-  )
-  def(
-    base + 6,
-    bip(
-      o.cut2,
-      1.,
-      (v: float, _) => `${l} -> cutoff 2: ${fixed((2. * v - 1.) * 4., 4)} octaves`,
-      ~unit="x4 octaves",
-    ),
-  )
+  def(base + 5, bip(o.cut1, 1., bipText(`${l} -> cutoff 1`, 4., 4, "octaves"), ~unit="x4 octaves"))
+  def(base + 6, bip(o.cut2, 1., bipText(`${l} -> cutoff 2`, 4., 4, "octaves"), ~unit="x4 octaves"))
   def(base + 7, uni(o.res, pct(`${l} -> resonance`)))
   def(
     base + 8,
@@ -1311,26 +1279,10 @@ def(
         : `Env ratio: *${fixed((v - 0.5) * 8. + 1., 3)}`,
   },
 )
-def(
-  57,
-  bip(
-    8440,
-    1.,
-    (v: float, _) => `Env Mod: ${fixed((2. * v - 1.) * 8., 3)} octaves`,
-    ~unit="x8 octaves",
-  ),
-)
-let veloText = (v: float, _) => `Env velocity sensitivity: ${fixed((2. * v - 1.) * 100., 2)} %`
+def(57, bip(8440, 1., bipText("Env Mod", 8., 3, "octaves"), ~unit="x8 octaves"))
+let veloText = bipText("Env velocity sensitivity", 100., 2, "%")
 def(58, bip(9512, 1., veloText))
-def(
-  59,
-  bip(
-    8460,
-    48.,
-    (v: float, _) => `Aftertouch -> cutoff: ${fixed((2. * v - 1.) * 48., 2)} semitones`,
-    ~unit="semitones",
-  ),
-)
+def(59, bip(8460, 48., bipText("Aftertouch -> cutoff", 48., 2, "semitones"), ~unit="semitones"))
 
 def(67, sw(8616, 4, Some(chorusModes), enumText("Chorus mode: ", 4, chorusModes)))
 def(68, sw(8620, 2, Some(chorusStereo), enumText("Chorus mode: ", 2, chorusStereo)))
@@ -1485,10 +1437,7 @@ def(97, rot(8736, "1"))
 def(98, rot(8740, "2"))
 def(99, rot(8744, "3"))
 def(100, rot(8748, "Rotation"))
-def(
-  101,
-  bip(8752, 500., (v: float, _) => `Predelay: ${fixed((2. * v - 1.) * 500., 1)} ms`, ~unit="ms"),
-)
+def(101, bip(8752, 500., bipText("Predelay", 500., 1, "ms"), ~unit="ms"))
 def(102, uni(8756, (v: float, _) => `Early reflections mix: ${fixed(v * 100., 1)} %`))
 def(103, sw(8760, 2, Some(voiceModes), enumText("", 2, voiceModes)))
 def(
@@ -1507,14 +1456,8 @@ def(106, sw(8772, 6, Some(glideModes), enumText("Glide mode: ", 6, glideModes)))
 def(107, amp(8776, ampText("Gain")))
 def(108, bip(8780, 1., (v: float, _) => `Velocity: ${fixed(v * 200. - 100., 1)} %`))
 def(109, sw(8784, 2, Some(aftertouchModes), enumText("Aftertouch mode: ", 2, aftertouchModes)))
-def(
-  110,
-  bip(8788, 1., (v: float, _) => `Frequency pan: ${fixed((2. * v - 1.) * 100., 2)} %/octave`),
-)
-def(
-  111,
-  bip(8792, 1., (v: float, _) => `Frequency env scale: ${fixed((2. * v - 1.) * 200., 2)} %/octave`),
-)
+def(110, bip(8788, 1., bipText("Frequency pan", 100., 2, "%/octave")))
+def(111, bip(8792, 1., bipText("Frequency env scale", 200., 2, "%/octave")))
 def(112, uni(8796, pct("Random pan")))
 def(113, sq(8800, 20., 0., (v: float, _) => `Random amp: ${fixed(v * v * 20., 2)} dB`, ~unit="dB"))
 def(
@@ -1641,62 +1584,19 @@ def(
   ),
 )
 def(166, sq(8996, 9999.8, 0.2, attackText, ~unit="ms"))
-def(
-  167,
-  bip(9004, 48., (v: float, _) => `Peak: ${fixed((2. * v - 1.) * 48., 2)} st`, ~unit="semitones"),
-)
+def(167, bip(9004, 48., bipText("Peak", 48., 2, "st"), ~unit="semitones"))
 def(
   168,
   sq(9012, 19990., 10., (v: float, _) => `Decay: ${fixed(v * v * 19990. + 10., 2)} ms`, ~unit="ms"),
 )
-def(
-  169,
-  bip(
-    9020,
-    48.,
-    (v: float, _) => `Sustain: ${fixed((2. * v - 1.) * 48., 2)} st`,
-    ~unit="semitones",
-  ),
-)
-def(
-  170,
-  bip(
-    9028,
-    48.,
-    (v: float, _) => `Release: ${fixed((2. * v - 1.) * 48., 2)} st/sec`,
-    ~unit="semitones/sec",
-  ),
-)
+def(169, bip(9020, 48., bipText("Sustain", 48., 2, "st"), ~unit="semitones"))
+def(170, bip(9028, 48., bipText("Release", 48., 2, "st/sec"), ~unit="semitones/sec"))
 def(171, bip(9516, 1., veloText))
 def(172, sw(9036, 4, Some(distTypes), enumText("Distortion: ", 4, distTypes)))
 def(173, sw(9040, 3, Some(distModes), enumText("Distortion: ", 3, distModes)))
-def(
-  174,
-  bip(
-    9044,
-    30.,
-    (v: float, _) => `Distortion limit: ${fixed((2. * v - 1.) * 30., 2)} dB`,
-    ~unit="dB",
-  ),
-)
-def(
-  175,
-  bip(
-    9048,
-    60.,
-    (v: float, _) => `Distortion pregain: ${fixed((2. * v - 1.) * 60., 2)} dB`,
-    ~unit="dB",
-  ),
-)
-def(
-  176,
-  bip(
-    9052,
-    60.,
-    (v: float, _) => `Distortion postgain: ${fixed((2. * v - 1.) * 60., 2)} dB`,
-    ~unit="dB",
-  ),
-)
+def(174, bip(9044, 30., bipText("Distortion limit", 30., 2, "dB"), ~unit="dB"))
+def(175, bip(9048, 60., bipText("Distortion pregain", 60., 2, "dB"), ~unit="dB"))
+def(176, bip(9052, 60., bipText("Distortion postgain", 60., 2, "dB"), ~unit="dB"))
 def(177, sw(9056, 3, Some(distOversample), enumText("Distortion oversample: ", 3, distOversample)))
 def(
   178,
@@ -1878,15 +1778,7 @@ for k in 1 to 5 {
       text: (v: float, _) => `EQ ${band} frequency: ${fixed(v * v * v * 19985. + 15., 2)} Hz`,
     },
   )
-  def(
-    222 + k,
-    bip(
-      4 * (222 + k) + 8360,
-      60.,
-      (v: float, _) => `EQ ${band} amp: ${fixed((2. * v - 1.) * 60., 2)} dB`,
-      ~unit="dB",
-    ),
-  )
+  def(222 + k, bip(4 * (222 + k) + 8360, 60., bipText(`EQ ${band} amp`, 60., 2, "dB"), ~unit="dB"))
   def(
     227 + k,
     {

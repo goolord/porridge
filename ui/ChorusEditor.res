@@ -9,16 +9,15 @@ let hint = "Each dot is a voice, as late as its place across: it sweeps between 
 
 let (rateMin, rateMax) = (0.01, 4.)
 
-let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
+let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
   let id = FxRack.id(e, ...)
   let model = ctx.model
   let get = x => model->ParamModel.get(id(x))
-  let w = Style.designWidth - 12.
-  let settingsHeight = Grid.rowHeight + 2. * Grid.padBottom - Style.controlGap
-  let topHeight = Style.pageHeight - 6. - 34. - settingsHeight - Grid.gap
+  let settingsHeight = Grid.bareHeight(1)
+  let topHeight = h - settingsHeight - Grid.gap
 
   let panel = Panel.make(body, ~title="voices", ~x=0., ~y=0., ~w, ~h=topHeight)
-  let g = FxGraph.make(ctx, panel.el, {x: 8., y: 25., w: w - 18., h: topHeight - 35.})
+  let g = FxGraph.inPanel(ctx, panel, ~hint)
   let (left, right) = (40., g.w - 16.)
   let trackY = 14.
   let (top, bottom) = (52., g.h - 22.)
@@ -29,116 +28,62 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
   let msAt = x => (x - left) / (right - left) * ceiling.contents
   // the speed track: rate on a log scale
   let (trackL, trackR) = (left + 50., left + 330.)
-  let rateX = hz =>
-    trackL + Math.log(FxDsp.clamp(hz, rateMin, rateMax) / rateMin) / Math.log(rateMax / rateMin) * (trackR - trackL)
-  let rateAt = x => rateMin * Math.pow(rateMax / rateMin, ~exp=FxDsp.clamp((x - trackL) / (trackR - trackL), 0., 1.))
+  let (rateX, rateAt) = FxGraph.logScale(~lo=rateMin, ~hi=rateMax, ~left=trackL, ~right=trackR)
 
-  let grid = FxGraph.group(g.svg)
-  let band = FxGraph.group(g.svg)
-  let dots = FxGraph.group(g.svg)
-  let layer = FxGraph.group(g.svg)
-  let hits = FxGraph.group(g.svg)
-  let readout = svgEl(hits, "text", [("class", Str("readout"))])
+  let grid = FxGraph.group(g.under)
+  let band = FxGraph.group(g.under)
+  let dots = FxGraph.group(g.under)
 
   let minimum = () => get("C_MinDelay")
   let range = () => get("C_Depth")
   let fit = () => ceiling := Math.max(2., (minimum() + range()) * 1.25)
 
-  let focus = ref(None)
-  let dragging = ref(false)
-  let status = i => ctx.status->Status.show((model->ParamModel.def(i)).longText(model->ParamModel.get(i)))
-  let hover = (i, on) => {
-    focus := (on ? Some(i) : None)
-    on ? status(i) : ctx.status->Status.show(hint)
-  }
-  let finish = () => {
-    dragging := false
-    fit()
-  }
-
-  let edge = (i, ~value: float => float) => {
-    let x0 = ref(0.)
-    let self = ref(None)
-    let h = FxGraph.handle(
+  // the band's edges, and the point on the speed track: value maps where it is dragged to
+  let point = (i, value) =>
+    FxGraph.handle(
       g,
-      ~layer,
-      ~hits,
       ~cursor="ew-resize",
       ~ids=[i],
-      ~start=() => {
-        dragging := true
-        x0 := self.contents->Option.mapOr(0., (h: FxGraph.handle) => h.x)
+      ~drag=({x}) => model->ParamModel.set(i, value(x)),
+      ~finish=() => {
+        fit()
+        g.redraw()
       },
-      ~drag=((dx, _)) => {
-        model->ParamModel.set(i, value(msAt(x0.contents + dx)))
-        status(i)
-      },
-      ~finish,
-      ~wheel=d => FxGraph.setNorm(g, i, FxGraph.norm(g, i) + d),
-      ~hover=hover(i, ...),
+      ~wheel=i,
     )
-    self := Some(h)
-    h
-  }
-  let lowHandle = edge(id("C_MinDelay"), ~value=ms => ms)
-  let highHandle = edge(id("C_Depth"), ~value=ms => ms - minimum())
-
+  let lowHandle = point(id("C_MinDelay"), msAt)
+  let highHandle = point(id("C_Depth"), x => msAt(x) - minimum())
   let rateId = id("C_Rate")
-  let rx0 = ref(0.)
-  let rateSelf = ref(None)
-  let rateHandle = FxGraph.handle(
-    g,
-    ~layer,
-    ~hits,
-    ~cursor="ew-resize",
-    ~ids=[rateId],
-    ~start=() => {
-      dragging := true
-      rx0 := rateSelf.contents->Option.mapOr(0., (h: FxGraph.handle) => h.x)
-    },
-    ~drag=((dx, _)) => {
-      model->ParamModel.set(rateId, rateAt(rx0.contents + dx))
-      status(rateId)
-    },
-    ~finish,
-    ~wheel=d => FxGraph.setNorm(g, rateId, FxGraph.norm(g, rateId) + d),
-    ~hover=hover(rateId, ...),
-  )
-  rateSelf := Some(rateHandle)
+  let rateHandle = point(rateId, rateAt)
 
-  let f = Float.toFixed(_, ~digits=1)
   let sweepText = () => {
     let period = 1. / Math.max(1e-4, get("C_Rate"))
     period >= 1. ? `a sweep every ${Float.toFixed(period, ~digits=1)} s` : `${Float.toFixed(1. / period, ~digits=1)} sweeps a second`
   }
 
-  // everything, for the moment `t` (seconds)
-  let draw = t => {
-    let mode = Float.toInt(get("C_Mode"))
-    g.svg->toggleClass("off", mode == 0)
-    let stereo = Float.toInt(get("C_Stereo"))
-    let voices = Math.Int.max(1, Float.toInt(get("C_Voices")))
-    let mix = get("C_Mix")
+  // each side's lane: its label, middle (both sides: the middle of the two) and height
+  let lanes = () =>
+    get("C_Stereo") == 0.
+      ? [("L+R", top + laneHeight / 2., laneHeight * 2.)]
+      : [("L", top, laneHeight), ("R", top + laneHeight, laneHeight)]
+
+  // everything but the voices
+  let draw = () => {
+    g.svg->toggleClass("off", get("C_Mode") == 0.)
+    let stereo = get("C_Stereo") != 0.
     let (lo, hi) = (minimum(), minimum() + range())
-    let lanes = stereo == 0 ? [("both sides", top + laneHeight / 2., laneHeight * 2.)] : [
-          ("left", top, laneHeight),
-          ("right", top + laneHeight, laneHeight),
-        ]
     grid->setTextContent("")
     // time across
-    let step = FxGraph.niceStep(ceiling.contents, 8.)
-    let ms = ref(0.)
-    while ms.contents <= ceiling.contents {
-      let x = xOf(ms.contents)
+    FxGraph.ticks(~until=ceiling.contents, ~step=FxGraph.niceStep(ceiling.contents, 8.), ms => {
+      let x = xOf(ms)
       FxGraph.line(grid, ~cls="axis faint", x, top, x, bottom)
-      FxGraph.text(grid, ~anchor="middle", x, g.h - 6., FxGraph.msText(ms.contents))
-      ms := ms.contents + step
-    }
+      FxGraph.text(grid, ~anchor="middle", x, g.h - 6., FxGraph.msText(ms))
+    })
     FxGraph.text(grid, ~anchor="end", right, g.h - 6. - 12., "later")
-    lanes->Array.forEach(((name, y, height)) => {
-      let y0 = stereo == 0 ? top : y
+    lanes()->Array.forEach(((name, y, height)) => {
+      let y0 = stereo ? y : top
       FxGraph.line(grid, ~cls="axis", left, y0 + height, right, y0 + height)
-      FxGraph.text(grid, ~cls="tick", 2., y0 + height / 2. + 3., name == "both sides" ? "L+R" : name == "left" ? "L" : "R")
+      FxGraph.text(grid, ~cls="tick", 2., y0 + height / 2. + 3., name)
     })
     // the speed track
     FxGraph.line(grid, ~cls="axis", trackL, trackY, trackR, trackY)
@@ -161,13 +106,30 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     FxGraph.text(band, ~cls="note", ~anchor="end", xl - 9., top - 4., "delay")
     FxGraph.text(band, ~cls="note", xh + 9., top - 4., "range")
 
+    switch g.focus {
+    | Some(k) if k == lowHandle.key =>
+      g->FxGraph.readout(~x=lowHandle.x, ~y=lowHandle.y + 30., `delay ${FxGraph.short(g, k)}`)
+    | Some(k) if k == highHandle.key =>
+      g->FxGraph.readout(~x=highHandle.x, ~y=highHandle.y + 30., `range ${FxGraph.short(g, k)}: up to ${FxGraph.msText(hi)}`)
+    | _ => g->FxGraph.hideReadout
+    }
+  }
+  g.redraw = draw
+
+  // the voices at the moment `t` (seconds)
+  let drawVoices = t => {
+    let mode = Float.toInt(get("C_Mode"))
+    let stereo = Float.toInt(get("C_Stereo"))
+    let voices = Math.Int.max(1, Float.toInt(get("C_Voices")))
+    let mix = get("C_Mix")
+    let (lo, hi) = (minimum(), minimum() + range())
     dots->setTextContent("")
     let offsets = FxDsp.chorusOffsets(~stereo, ~voices)
     let rate = get("C_Rate")
     let at = (seed, off) =>
       mode == 4 ? FxDsp.chorusWalk(seed, t * rate) : FxDsp.chorusLfo(mode, Float.mod(t * rate + off, 1.))
     let size = 3. + 5. * Math.sqrt(mix / Int.toFloat(voices))
-    lanes->Array.forEachWithIndex(((_, y, height), side) => {
+    lanes()->Array.forEachWithIndex(((_, y, height), side) => {
       let yc = stereo == 0 ? y : y + height / 2.
       // the dry sound, at 0
       svgEl(
@@ -183,51 +145,15 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
         svgEl(dots, "circle", [("class", Str("voice")), ("cx", Num(x)), ("cy", Num(yc + spread)), ("r", Num(size))])->ignore
       })
     })
-
-    [(id("C_MinDelay"), lowHandle), (id("C_Depth"), highHandle), (rateId, rateHandle)]->Array.forEach(((i, h)) =>
-      h->FxGraph.setClass(focus.contents == Some(i) ? "node hot" : "node")
-    )
-    switch focus.contents {
-    | Some(i) if i != rateId =>
-      let h = i == id("C_MinDelay") ? lowHandle : highHandle
-      g->FxGraph.readout(
-        readout,
-        ~x=h.x,
-        ~y=h.y + 30.,
-        i == id("C_MinDelay") ? `delay ${FxGraph.short(g, i)}` : `range ${FxGraph.short(g, i)}: up to ${FxGraph.msText(hi)}`,
-      )
-    | _ => readout->setTextContent("")
-    }
-    ignore(f)
   }
 
-  // the dots move while the tab is on screen
-  let running = ref(false)
-  let rec frame = now => {
-    if FxGraph.shown(g) {
-      draw(now / 1000.)
-      requestAnimationFrame(frame)
-    } else {
-      running := false
-    }
-  }
-  let start = () => {
-    if !dragging.contents {
+  let redraw = FxGraph.redraw(g, draw)
+  g->FxGraph.listen(["C_Mode", "C_Stereo", "C_MinDelay", "C_Depth", "C_Rate"]->Array.map(id), redraw.request)
+  // the voices move while the tab is on screen
+  let animate = FxGraph.animate(g, now => drawVoices(now / 1000.))
+  g->FxGraph.listen(["C_MinDelay", "C_Depth"]->Array.map(id), () => if !g.dragging {
       fit()
-    }
-    draw(0.)
-    if !running.contents {
-      running := true
-      requestAnimationFrame(frame)
-    }
-  }
-  g.svg->onMouse(#mouseenter, _ => ctx.status->Status.show(hint))
-  g.svg->onMouse(#mouseleave, _ => ctx.status->Status.clear)
-  ["C_MinDelay", "C_Depth"]->Array.forEach(i =>
-    model->ParamModel.listen(id(i), () => if !dragging.contents {
-        fit()
-      })
-  )
+    })
 
   let settings = Panel.make(body, ~x=0., ~y=topHeight + Grid.gap, ~w, ~h=settingsHeight)
   let s = Grid.make(ctx, settings.el, ~y=Grid.padBottom, ~cw=Grid.fitColumns(w, 8))
@@ -240,5 +166,12 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
   s->Grid.param(id("C_Feedback"), 6, 0, "feedback")
   s->Grid.param(id("C_Mix"), 7, 0, "mix")
 
-  start
+  () => {
+    if !g.dragging {
+      fit()
+    }
+    redraw.now()
+    drawVoices(0.)
+    animate()
+  }
 }

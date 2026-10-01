@@ -27,6 +27,9 @@ let extensions = [
   ".aac",
 ]
 
+// for a file dialog
+let accept = extensions->Array.join(",")
+
 let isAudio = filename => {
   let lower = filename->String.toLowerCase
   extensions->Array.some(ext => lower->String.endsWith(ext))
@@ -117,9 +120,14 @@ let decodeFrames = (b, ~offset, ~bytes, ~channels, ~encoding, ~littleEndian, ~un
   out
 }
 
-// The first two channels of a file with two or more.
-let sidesOf = (decode: int => Float32Array.t, channels) =>
-  channels >= 2 ? Some((decode(0), decode(1))) : None
+// The sound, from decode: the channels mixed (None) or one of them (Some(channel)).
+let decoded = (decode: option<int> => Float32Array.t, ~channels, ~sampleRate, ~frameSize) => Ok({
+  samples: decode(None),
+  sampleRate,
+  frameSize,
+  // the first two channels of a file with two or more
+  sides: channels >= 2 ? Some((decode(Some(0)), decode(Some(1)))) : None,
+})
 
 let supported = encoding =>
   switch encoding {
@@ -173,12 +181,7 @@ let readWav = (b): result<t, string> => {
     | Some(encoding) if supported(encoding) && channels > 0 && sampleRate > 0. =>
       let decode = only =>
         decodeFrames(b, ~offset, ~bytes, ~channels, ~encoding, ~littleEndian=true, ~unsigned8=true, ~only?)
-      Ok({
-        samples: decode(None),
-        sampleRate,
-        frameSize: frameSize.contents,
-        sides: sidesOf(c => decode(Some(c)), channels),
-      })
+      decoded(decode, ~channels, ~sampleRate, ~frameSize=frameSize.contents)
     | _ =>
       Error(`it's a kind of WAV that can't be read here (format ${Int.toString(code)}, ${Int.toString(bits)} bits)`)
     }
@@ -228,12 +231,7 @@ let readAiff = (b, ~compressed): result<t, string> => {
     switch encoding {
     | Some((encoding, littleEndian)) if supported(encoding) && channels > 0 && sampleRate > 0. =>
       let decode = only => decodeFrames(b, ~offset, ~bytes, ~channels, ~encoding, ~littleEndian, ~only?)
-      Ok({
-        samples: decode(None),
-        sampleRate,
-        frameSize: None,
-        sides: sidesOf(c => decode(Some(c)), channels),
-      })
+      decoded(decode, ~channels, ~sampleRate, ~frameSize=None)
     | _ => Error(`it's a compressed AIFF ("${compression}"), which can't be read here`)
     }
   | _ => Error("it's an AIFF file without sound in it")
@@ -299,4 +297,15 @@ let decode = async (bytes, filename): result<t, string> =>
     } catch {
     | _ => Error(`Couldn't decode ${filename}; WAV and AIFF files always work`)
     }
+  }
+
+// Reads and decodes a file the user picked or dropped.
+let readFile = async file =>
+  switch await Web.readBytes(file) {
+  | Ok(bytes) =>
+    // (reading a WAV or AIFF cut short in the wrong place can throw)
+    try await decode(bytes, file->Web.fileName) catch {
+    | JsExn(e) => Error(Web.readError(file, e))
+    }
+  | Error(e) => Error(e)
   }

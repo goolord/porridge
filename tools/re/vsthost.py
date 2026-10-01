@@ -154,6 +154,22 @@ class Host:
             done += n; self.pos += n
         return out
 
+    # ---- convenience helpers ----
+    def flush(self, n=128):
+        self.render([], n)
+
+    def load_chunk(self, data):
+        self.set_chunk(data, True)
+        self.flush()
+
+    def init_patch(self):
+        self.load_chunk(open(os.path.join(HERE, "init_prog.bin"), "rb").read())
+
+    def note(self, key=69, vel=100, on=22050, total=44100, extra=None):
+        ev = [(0, 0x90, key, vel), (on, 0x80, key, 0)]
+        if extra: ev += extra
+        return self.render(ev, total)
+
 # Porridge's offline test host (built by tools/test/build.sh) and its output files
 HOST = os.path.join(REPO, "tools", "test", "build", "host.exe")
 
@@ -173,7 +189,7 @@ def patch_chunk(chunk, fields):
 def write_wav(path, chans, sr):
     import wave
     n = len(chans[0])
-    w = wave.open(path, "wb"); w.setnchannels(len(chans)); w.setsampwidth(4 if False else 2); w.setframerate(int(sr))
+    w = wave.open(path, "wb"); w.setnchannels(len(chans)); w.setsampwidth(2); w.setframerate(int(sr))
     data = bytearray()
     for i in range(n):
         for c in chans:
@@ -184,33 +200,6 @@ def write_f32(path, chans):
     with open(path, "wb") as f:
         f.write(struct.pack("<ii", len(chans), len(chans[0])))
         for c in chans: f.write(struct.pack("<%df" % len(c), *c))
-
-if __name__ == "__main__":
-    h = Host()
-    e = h.e
-    print("numParams", e.numParams, "numPrograms", e.numPrograms, "in", e.numInputs, "out", e.numOutputs,
-          "flags", hex(e.flags), "uid", hex(e.uniqueID), struct.pack(">i", e.uniqueID), "ver", e.version)
-    print("effect", h.dstr(45), "vendor", h.dstr(47), "product", h.dstr(48))
-
-# ---- convenience helpers ----
-def _flush(self, n=128):
-    self.render([], n)
-Host.flush = _flush
-
-def _load_chunk(self, data):
-    self.set_chunk(data, True)
-    self.flush()
-Host.load_chunk = _load_chunk
-
-def _init_patch(self):
-    self.load_chunk(open(os.path.join(HERE, "init_prog.bin"), "rb").read())
-Host.init_patch = _init_patch
-
-def _note(self, key=69, vel=100, on=22050, total=44100, extra=None):
-    ev = [(0, 0x90, key, vel), (on, 0x80, key, 0)]
-    if extra: ev += extra
-    return self.render(ev, total)
-Host.note = _note
 
 def new_host(sr=44100.0, block=64, tempo=120.0):
     """Host with factory bank loaded, then Init patch applied. Ready for experiments."""
@@ -225,3 +214,10 @@ def obj_i32(h, off):
     return ctypes.cast(h.e.object + off, POINTER(ctypes.c_int32))[0]
 def obj_bytes(h, off, n):
     return ctypes.string_at(h.e.object + off, n)
+
+if __name__ == "__main__":
+    h = Host()
+    e = h.e
+    print("numParams", e.numParams, "numPrograms", e.numPrograms, "in", e.numInputs, "out", e.numOutputs,
+          "flags", hex(e.flags), "uid", hex(e.uniqueID), struct.pack(">i", e.uniqueID), "ver", e.version)
+    print("effect", h.dstr(45), "vendor", h.dstr(47), "product", h.dstr(48))

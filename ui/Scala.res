@@ -10,6 +10,26 @@
 
 type source = {scl: string, kbm: string}
 
+// a scale's and a keyboard mapping's, for file dialogs
+let extensions = [".scl", ".kbm"]
+
+// A tuning as JSON, as presets and the stored state keep it: {"scl": text, "kbm": text}. A
+// missing text reads as "".
+let toJson = ({scl, kbm}) =>
+  JSON.Object(Dict.fromArray([("scl", JSON.String(scl)), ("kbm", JSON.String(kbm))]))
+
+let fromJson = (json: JSON.t) =>
+  switch json {
+  | Object(d) =>
+    let text = key =>
+      switch d->Dict.get(key) {
+      | Some(String(s)) => s
+      | _ => ""
+      }
+    Some({scl: text("scl"), kbm: text("kbm")})
+  | _ => None
+  }
+
 type scale = {description: string, cents: array<float>} // cents of degrees 1..N (the last is the period)
 
 type mapping = {

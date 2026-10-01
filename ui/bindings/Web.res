@@ -70,6 +70,8 @@ type rect = {left: float, top: float, width: float, height: float}
 @set external setMaxLength: (element, int) => unit = "maxLength"
 @set external setInputType: (element, string) => unit = "type"
 @set external setAccept: (element, string) => unit = "accept"
+@set external setMultiple: (element, bool) => unit = "multiple"
+@set external setPlaceholder: (element, string) => unit = "placeholder"
 @send external select: element => unit = "select"
 
 // Links
@@ -190,6 +192,22 @@ external offDocumentWheel: (Dom.document, @as("wheel") _, Dom.wheelEvent => unit
 // The tag of an event target, e.g. "INPUT" (None for the document or the window).
 @get @return(nullable) external tagNameOf: Dom.eventTarget => option<string> = "tagName"
 
+// Calls onOutside on a press anywhere but in the elements inside, from the next turn of the event
+// loop on (so not for the press that is opening something now). Returns the function that stops it.
+let onPressOutside = (inside, onOutside) => {
+  let listener = ev => {
+    let target = ev->originalTarget
+    if !(inside->Array.some(e => e->contains(target))) {
+      onOutside()
+    }
+  }
+  let timer = setTimeout(() => document->onDocumentPointerDownCapture(listener), 0)
+  () => {
+    clearTimeout(timer)
+    document->offDocumentPointerDownCapture(listener)
+  }
+}
+
 // Ignores the context menu, so that right-button drags and clicks reach the control.
 let suppressContextMenu = e => e->onMouse(#contextmenu, preventDefault)
 
@@ -211,10 +229,19 @@ type dataTransfer
 @get external fileName: file => string = "name"
 @send external arrayBuffer: file => promise<ArrayBuffer.t> = "arrayBuffer"
 @send @return(nullable) external item: (fileList, int) => option<file> = "item"
-@get external fileCount: fileList => int = "length"
+@val external filesToArray: fileList => array<file> = "Array.from"
 @get @return(nullable) external files: element => option<fileList> = "files"
 @get @return(nullable) external dataTransfer: Dom.dragEvent => option<dataTransfer> = "dataTransfer"
 @get external transferredFiles: dataTransfer => fileList = "files"
+
+// What to tell the user when reading a file threw e.
+let readError = (file, e) => `Couldn't read ${file->fileName}: ${e->JsExn.message->Option.getOr("")}`
+
+// A file's bytes, or the readError.
+let readBytes = async file =>
+  try Ok(Uint8Array.fromBuffer(await file->arrayBuffer)) catch {
+  | JsExn(e) => Error(readError(file, e))
+  }
 
 type blob
 type blobOptions = {@as("type") mimeType: string}

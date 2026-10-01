@@ -397,20 +397,16 @@ let pitch = (ctx: Ctx.t, ~w, ~h): shape => {
 let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, string)>, ~name) => {
   let model = ctx.model
   let ed = NodeEditor.make(ctx, parent, box, ~hint=hintFor(name), ~columns=4)
-  let svgEl = svgEl(ed.svg, ...)
-  let zero = ed.svg->Plots.line(2., 0., box.w - 2., 0.)
-  let fill = svgEl("path", [("class", Str("fill"))])
-  let ticks = svgEl("g", [])
-  let curve = svgEl("path", [("class", Str("curve"))])
-  let layer = svgEl("g", [])
-  let readout = svgEl("text", [("class", Str("readout"))])
+  let zero = ed.g.under->Plots.line(2., 0., box.w - 2., 0.)
+  let fill = FxGraph.path(ed.g.under, ~cls="fill")
+  let ticks = FxGraph.group(ed.g.under)
+  let curve = FxGraph.path(ed.g.under, ~cls="curve")
   fields->Array.forEachWithIndex(((id, label), i) => ed.values->Grid.param(id, mod(i, 4), i / 4, label))
 
   let frame = ref(shape.fit())
   let handles = ref([])
-  let nodes = ref([])
 
-  let statusFor = h => h->handleIds->Array.map(id => model->ParamModel.longText(id))->Array.join("    ")
+  let statusFor = h => model->ParamModel.statusText(handleIds(h))
   let readoutFor = h => h->handleIds->Array.map(id => model->ParamModel.shortText(id))->Array.join("  ·  ")
 
   // a faint line and a label at each tick time that has room, the release's counted from
@@ -430,95 +426,12 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
           let (left, right) = flip ? (x - 3. - width, x) : (x, x + 3. + width)
           if left > 2. && taken->Array.every(((l, r)) => right + 8. < l || left - 8. > r) {
             taken->Array.push((left, right))
-            Web.svgEl(
-              ticks,
-              "line",
-              [("class", Str("axis faint")), ("x1", Num(x)), ("x2", Num(x)), ("y1", Num(1.)), ("y2", Num(box.h - 1.))],
-            )->ignore
-            Web.svgEl(
-              ticks,
-              "text",
-              [
-                ("class", Str("tick")),
-                ("x", Num(flip ? x - 3. : x + 3.)),
-                ("y", Num(box.h - 4.)),
-                ("text-anchor", Str(flip ? "end" : "start")),
-              ],
-            )->setTextContent(text)
+            FxGraph.line(ticks, ~cls="axis faint", x, 1., x, box.h - 1.)
+            FxGraph.text(ticks, ~anchor=flip ? "end" : "start", flip ? x - 3. : x + 3., box.h - 4., text)
           }
         }
       )
     )
-  }
-
-  let draw = () => {
-    let (points, hs, times) = shape.layout(frame.contents)
-    handles := hs
-    drawTicks(times)
-    let d = Plots.pathFrom(points)
-    curve->setAttribute("d", Str(d))
-    switch (points[0], points[Array.length(points) - 1], shape.zero) {
-    | (Some((xa, _)), Some((xb, _)), None) =>
-      let base = Float.toString(bottomOf(box.h))
-      fill->setAttribute(
-        "d",
-        Str(`${d}L${Float.toString(xb)} ${base}L${Float.toString(xa)} ${base}Z`),
-      )
-    | _ => fill->setAttribute("d", Str(""))
-    }
-    switch shape.zero {
-    | Some(y) =>
-      let y = y(frame.contents)
-      zero->setAttribute("y1", Num(y))
-      zero->setAttribute("y2", Num(y))
-    | None => zero->setAttribute("opacity", Num(0.))
-    }
-    ed.svg->toggleClass("off", shape.dimmed())
-
-    nodes.contents->Array.forEachWithIndex(((dot, hit), i) =>
-      hs[i]->Option.forEach(h => {
-        [dot, hit]->Array.forEach(e => {
-          e->setAttribute("cx", Num(h.x))
-          e->setAttribute("cy", Num(h.y))
-          e->setAttribute("display", Str(h.hidden ? "none" : "inline"))
-        })
-        let hot = ed.hover == Some(i) || ed.dragging == Some(i)
-        let isBend = h.curve != None
-        dot->setAttribute(
-          "class",
-          Str("node" ++ (h.hollow ? " hollow" : "") ++ (isBend ? " bend" : "") ++ (hot ? " hot" : "")),
-        )
-        dot->setAttribute("r", Num(isBend ? (hot ? 4.5 : 3.) : hot ? 5.5 : 4.))
-      })
-    )
-
-    switch NodeEditor.focus(ed)->Option.flatMap(i => hs[i]) {
-    | Some(h) =>
-      ctx.status->Status.show(statusFor(h))
-      if ed.dragging != None {
-        ed->NodeEditor.showReadout(
-          readout,
-          readoutFor(h),
-          (h.x, h.y),
-          ~dx=10.,
-          ~above=9.,
-          ~below=18.,
-          ~nearTop=24.,
-        )
-      }
-    | None => ()
-    }
-    if ed.dragging == None {
-      readout->setTextContent("")
-    }
-  }
-
-  // the axis is refitted when a drag ends, never during one
-  let refresh = () => {
-    if ed.dragging == None {
-      frame := shape.fit()
-    }
-    draw()
   }
 
   let startDrag = (i, hit, ev) =>
@@ -542,52 +455,85 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
       })
     })
 
-  let makeNode = i => {
-    let dot = svgEl("circle", [("class", Str("node")), ("r", Num(4.))])
-    let hit = svgEl("circle", [("class", Str("hit")), ("r", Num(8.))])
-    hit->onPointer(#pointerdown, ev => {
-      ev->preventDefault
-      switch ev->button {
-      | 0 => startDrag(i, hit, ev)
-      | 2 =>
+  // every hit area above every dot, so a dot never hides a neighbour's hit area
+  let (_, initial, _) = shape.layout(frame.contents)
+  let nodes = initial->Array.mapWithIndex((h, i) =>
+    ed->NodeEditor.node(
+      i,
+      ~dot=[("class", Str("node")), ("r", Num(4.))],
+      ~hitR=h.curve != None ? 6. : 8.,
+      ~cursor=switch (h.time, h.level) {
+      | (Some(_), Some(_)) => "move"
+      | (Some(_), None) => "ew-resize"
+      | _ => "ns-resize"
+      },
+      ~onDrag=startDrag(i, ...),
+      ~onRightClick=() =>
         handles.contents[i]->Option.forEach(h =>
-          h
-          ->handleIds
-          ->Array.forEach(id => model->ParamModel.gestureSet(id, (model->ParamModel.def(id)).init))
-        )
-      | _ => ()
-      }
-    })
-    ed->NodeEditor.hookNode(hit, i)
-    hit->onWheel(ev => {
-      ev->preventDefault
-      handles.contents[i]->Option.forEach(h =>
-        h.time
-        ->Option.orElse(h.level)
-        ->Option.orElse(h.curve)
-        ->Option.forEach(id => Controls.wheelParam(model, id, ev))
+          h->handleIds->Array.forEach(id => model->ParamModel.gestureSet(id, (model->ParamModel.def(id)).init))
+        ),
+      ~wheel=() => handles.contents[i]->Option.flatMap(h => h.time->Option.orElse(h.level)->Option.orElse(h.curve)),
+    )
+  )
+
+  let draw = () => {
+    let (points, hs, times) = shape.layout(frame.contents)
+    handles := hs
+    drawTicks(times)
+    let d = Plots.pathFrom(points)
+    curve->setAttribute("d", Str(d))
+    switch (points[0], points[Array.length(points) - 1], shape.zero) {
+    | (Some((xa, _)), Some((xb, _)), None) =>
+      let base = Float.toString(bottomOf(box.h))
+      fill->setAttribute(
+        "d",
+        Str(`${d}L${Float.toString(xb)} ${base}L${Float.toString(xa)} ${base}Z`),
       )
-    })
-    (dot, hit)
+    | _ => fill->setAttribute("d", Str(""))
+    }
+    switch shape.zero {
+    | Some(y) =>
+      let y = y(frame.contents)
+      zero->setAttribute("y1", Num(y))
+      zero->setAttribute("y2", Num(y))
+    | None => zero->setAttribute("opacity", Num(0.))
+    }
+    ed.g.svg->toggleClass("off", shape.dimmed())
+
+    nodes->Array.forEachWithIndex((node, i) =>
+      hs[i]->Option.forEach(h => {
+        node->NodeEditor.place(h.x, h.y)
+        [node.dot, node.hit]->Array.forEach(e => e->setAttribute("display", Str(h.hidden ? "none" : "inline")))
+        let hot = ed.hover == Some(i) || ed.dragging == Some(i)
+        let isBend = h.curve != None
+        node.dot->setAttribute(
+          "class",
+          Str("node" ++ (h.hollow ? " hollow" : "") ++ (isBend ? " bend" : "") ++ (hot ? " hot" : "")),
+        )
+        node.dot->setAttribute("r", Num(isBend ? (hot ? 4.5 : 3.) : hot ? 5.5 : 4.))
+      })
+    )
+
+    switch NodeEditor.focus(ed)->Option.flatMap(i => hs[i]) {
+    | Some(h) =>
+      ctx.status->Status.show(statusFor(h))
+      if ed.dragging != None {
+        ed.g->FxGraph.readout(~x=h.x, ~y=h.y, ~dx=10., ~above=9., ~below=18., ~nearTop=24., readoutFor(h))
+      }
+    | None => ()
+    }
+    if ed.dragging == None {
+      ed.g->FxGraph.hideReadout
+    }
   }
 
-  let (_, initial, _) = shape.layout(frame.contents)
-  nodes := initial->Array.mapWithIndex((h, i) => {
-    let (dot, hit) = makeNode(i)
-    let cursor = switch (h.time, h.level) {
-    | (Some(_), Some(_)) => "move"
-    | (Some(_), None) => "ew-resize"
-    | _ => "ns-resize"
+  // the axis is refitted when a drag ends, never during one
+  let refresh = () => {
+    if ed.dragging == None {
+      frame := shape.fit()
     }
-    let isBend = h.curve != None
-    hit->setAttribute("r", Num(isBend ? 6. : 8.))
-    hit->setAttribute("style", Str("cursor:" ++ cursor))
-    (dot, hit)
-  })
-  // every hit area above every dot, so a dot never hides a neighbour's hit area
-  nodes.contents->Array.forEach(((dot, _)) => layer->appendChild(dot))
-  nodes.contents->Array.forEach(((_, hit)) => layer->appendChild(hit))
-  layer->appendChild(readout)
+    draw()
+  }
 
   ed->NodeEditor.start(shape.ids, refresh)
 }

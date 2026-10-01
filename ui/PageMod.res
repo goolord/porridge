@@ -31,6 +31,10 @@ let sourceColor = s =>
 
 type point = {x: float, y: float}
 
+// a source's element on the left: the chip (or a macro's plug), its jack, and a chip's count of
+// connections and label
+type sourceChip = {chip: element, jack: element, count: option<element>, label: option<element>}
+
 // what the target picker is for: connecting a source, or moving connection k
 type mode = Closed | Connect(int) | Retarget(int)
 
@@ -82,8 +86,9 @@ let build = (ctx: Ctx.t, page) => {
   let model = ctx.model
   let get = id => model->ParamModel.get(id)
   let slotNumbers = ModMatrix.slotNumbers
-  let sourceOf = k => Float.toInt(get(ModMatrix.sourceId(k)))
-  let targetOf = k => Float.toInt(get(ModMatrix.targetId(k)))
+  let slot = k => ModMatrix.readSlot(get, k)
+  let sourceOf = k => slot(k).source
+  let targetOf = k => slot(k).target
   let isUsed = k => sourceOf(k) > 0 && targetOf(k) > 0
   let redraw = ref(() => ())
 
@@ -104,11 +109,10 @@ let build = (ctx: Ctx.t, page) => {
     }
   let targetLabel = t => ModMatrix.targets[t]->Option.mapOr("", t => t.label)
   let connectionText = k => {
-    let via = Float.toInt(get(ModMatrix.viaId(k)))
-    let amount = model->ParamModel.def(ModMatrix.amountId(k))
-    `${sourceLabel(sourceOf(k))} → ${targetLabel(targetOf(k))}, ${amount.valueText(
-        get(ModMatrix.amountId(k)),
-      )}` ++ (via > 0 ? ` × ${sourceLabel(via)}` : "")
+    let {source, target, amount, via} = slot(k)
+    let amountText = (model->ParamModel.def(ModMatrix.amountId(k))).valueText(amount)
+    `${sourceLabel(source)} → ${targetLabel(target)}, ${amountText}` ++
+    (via > 0 ? ` × ${sourceLabel(via)}` : "")
   }
   let targetText = t =>
     switch ModMatrix.targets->Array.getUnsafe(t) {
@@ -192,9 +196,11 @@ let build = (ctx: Ctx.t, page) => {
   //==============================================================================
   // sources
 
-  // by source index: the chip (or a macro's plug) and its jack
-  let sourceChips = Map.make()
-  let sourceJack = s => sourceChips->Map.get(s)->Option.map(((_, jack)) => jack)
+  // by source index
+  let sourceChips: Map.t<int, sourceChip> = Map.make()
+  let sourceJack = s => sourceChips->Map.get(s)->Option.map(c => c.jack)
+  // the macro knobs' labels, by macro
+  let macroLabels = []
 
   let startRef = ref((_: Dom.pointerEvent, _: int, _: element) => ())
   let pickRef = ref((_: int) => ())
@@ -224,6 +230,7 @@ let build = (ctx: Ctx.t, page) => {
         knob
         ->querySelector(".l")
         ->Option.forEach(l => {
+          macroLabels->Array.push((m, l))
           l->onMouse(#dblclick, ev => {
             ev->preventDefault
             ev->stopPropagation
@@ -243,20 +250,20 @@ let build = (ctx: Ctx.t, page) => {
         plug->onPointer(#pointerdown, ev => startRef.contents(ev, s, plug))
         plug->onActivate(() => pickRef.contents(s))
         plug->hover(() => `${sourceLabel(s)}: drag to a target to connect it. Double-click the name to rename it.`)
-        sourceChips->Map.set(s, (plug, jack))
+        sourceChips->Map.set(s, {chip: plug, jack, count: None, label: None})
       | None =>
         let chip = el("div", ~cls="src", ~parent=sources.el)->placeBox(b)
         chip->setTabIndex(0)
         el("i", ~cls="sw", ~parent=chip)->setStyle("background", sourceColor(s))
-        el("span", ~cls="lbl", ~text=sourceLabel(s), ~parent=chip)->ignore
-        el("b", ~cls="n", ~parent=chip)->ignore
+        let label = el("span", ~cls="lbl", ~text=sourceLabel(s), ~parent=chip)
+        let count = el("b", ~cls="n", ~parent=chip)
         let jack = el("i", ~cls="jk", ~parent=chip)
         chip->onPointer(#pointerdown, ev => startRef.contents(ev, s, chip))
         chip->onActivate(() => pickRef.contents(s))
         chip->hover(() =>
           `${sourceLabel(s)}: ${source.help}. Drag it to a target, or click it.`
         )
-        sourceChips->Map.set(s, (chip, jack))
+        sourceChips->Map.set(s, {chip, jack, count: Some(count), label: Some(label)})
       }
     })
     y := y.contents + headingHeight + Int.toFloat((Array.length(members) + 1) / 2) * Grid.rowHeight + 4.
@@ -307,11 +314,12 @@ let build = (ctx: Ctx.t, page) => {
   pickerHint->place(listWidth - 80. - 290., 4., ~w=280.)->ignore
   pickerHint->setStyle("text-align", "right")
 
+  // stops closing the picker on a press outside it
   let closer = ref(None)
   let closePicker = () => {
     mode := Closed
     picker.el->removeClass("on")
-    closer.contents->Option.forEach(f => document->offDocumentPointerDownCapture(f))
+    closer.contents->Option.forEach(stop => stop())
     closer := None
     redraw.contents()
   }
@@ -340,18 +348,7 @@ let build = (ctx: Ctx.t, page) => {
     picker.el->addClass("on")
     // a press outside the picker (and the sources) closes it
     if closer.contents == None {
-      let f = ev => {
-        let target = ev->originalTarget
-        if !(picker.el->contains(target)) && !(sources.el->contains(target)) {
-          closePicker()
-        }
-      }
-      setTimeout(() =>
-        if mode.contents != Closed && closer.contents == None {
-          closer := Some(f)
-          document->onDocumentPointerDownCapture(f)
-        }
-      , 0)->ignore
+      closer := Some(onPressOutside([picker.el, sources.el], closePicker))
     }
     redraw.contents()
   }
@@ -485,11 +482,9 @@ let build = (ctx: Ctx.t, page) => {
     g->Grid.button("×", 15, 0, ~status="Remove this connection", () => disconnect(k))
 
     row->onMouse(#mouseenter, _ =>
-      sourceChips->Map.get(sourceOf(k))->Option.forEach(((c, _)) => c->addClass("lit"))
+      sourceChips->Map.get(sourceOf(k))->Option.forEach(c => c.chip->addClass("lit"))
     )
-    row->onMouse(#mouseleave, _ =>
-      sourceChips->Map.forEach(((c, _)) => c->removeClass("lit"))
-    )
+    row->onMouse(#mouseleave, _ => sourceChips->Map.forEach(c => c.chip->removeClass("lit")))
     (k, row, sw, sourceName, targetName, wire)
   })
 
@@ -559,36 +554,29 @@ let build = (ctx: Ctx.t, page) => {
     count->setTextContent(`${Int.toString(n)} of ${Int.toString(ModMatrix.slots)}`)
 
     // the sources: how many connections each has
-    sourceChips->Map.forEachWithKey(((chip, jack), s) => {
-        let c = counts->Map.get(s)->Option.getOr(0)
-        jack->toggleClass("on", c > 0)
-        jack->setStyle("background", c > 0 ? sourceColor(s) : "")
-        chip->querySelector(".n")->Option.forEach(b => {
-          b->setTextContent(c > 1 ? Int.toString(c) : "")
-          b->setStyle("display", c > 1 ? "block" : "none")
-        })
-        chip->querySelector(".lbl")->Option.forEach(l => l->setTextContent(sourceLabel(s)))
-        let picking = switch mode.contents {
-        | Connect(p) => p == s
-        | _ => false
-        }
-        chip->toggleClass("sel", picking)
+    sourceChips->Map.forEachWithKey(({chip, jack, count, label}, s) => {
+      let c = counts->Map.get(s)->Option.getOr(0)
+      jack->toggleClass("on", c > 0)
+      jack->setStyle("background", c > 0 ? sourceColor(s) : "")
+      count->Option.forEach(b => {
+        b->setTextContent(c > 1 ? Int.toString(c) : "")
+        b->setStyle("display", c > 1 ? "block" : "none")
+      })
+      label->Option.forEach(l => l->setTextContent(sourceLabel(s)))
+      let picking = switch mode.contents {
+      | Connect(p) => p == s
+      | _ => false
+      }
+      chip->toggleClass("sel", picking)
     })
-    sources.el
-    ->querySelectorAll(".p .l")
-    ->nodesToArray
-    ->Array.forEachWithIndex((l, i) => l->setTextContent(macroName(i)))
+    macroLabels->Array.forEach(((m, l)) => l->setTextContent(macroName(m)))
   }
 
   // (a timeout rather than an animation frame: a burst of changes draws once, and the page
   // still updates while the window isn't being painted)
   redraw := coalesce(run => setTimeout(run, 0)->ignore, draw)
 
-  slotNumbers->Array.forEach(k =>
-    [ModMatrix.sourceId(k), ModMatrix.targetId(k), ModMatrix.amountId(k), ModMatrix.viaId(k)]->Array.forEach(
-      id => model->ParamModel.listen(id, () => redraw.contents())
-    )
-  )
+  slotNumbers->Array.forEach(k => model->ParamModel.listenEach(ModMatrix.slotIds(k), () => redraw.contents()))
   ctx.programs->ProgramStore.onChanged(() => redraw.contents())
   draw()
 }

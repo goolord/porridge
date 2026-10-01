@@ -98,9 +98,15 @@ let porridgeNames = porridge->Array.map(((long, _, _)) => long)
 let porridgeShort = porridge->Array.map(((_, short, _)) => short)
 
 let all = Array.concat(oatmeal, porridgeNames)
-let allShort = Array.concat(oatmealShort, porridgeShort)
 
 let firstPorridge = Array.length(oatmeal)
+
+// The cutoff knob's law (0..1 to Hz): cubic, up to 11 kHz for Oatmeal's types and 20 kHz for
+// Porridge's (zero-delay-feedback) ones.
+let cutoffRange = filterType => filterType >= firstPorridge ? 19980. : 10980.
+let cutoffHz = (~filterType, c: float) => c * c * c * cutoffRange(filterType) + 20.
+let cutoffOfHz = (~filterType, hz: float) =>
+  Math.cbrt(Math.max(0., Math.min(1., (hz - 20.) / cutoffRange(filterType))))
 
 // The closest type Oatmeal has, for an export.
 let oatmealType = t =>

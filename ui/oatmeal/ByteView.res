@@ -24,9 +24,7 @@ let getU32 = (u, off) => u->view->getUint32(off, true)
 let setU32 = (u, off, x) => u->view->setUint32(off, x, true)
 
 let getF32BE = (u, off) => u->view->getFloat32(off, false)
-let setF32BE = (u, off, x) => u->view->setFloat32(off, x, false)
 let getI32BE = (u, off) => u->view->getInt32(off, false)
-let setI32BE = (u, off, x) => u->view->setInt32(off, x, false)
 
 let scratch = Uint8Array.fromLength(4)
 
@@ -48,6 +46,7 @@ let bitsOfFloat32 = x => {
 
 // Unchecked element access, for the inner loops over shapes.
 @get_index external getUnsafe: (Float32Array.t, int) => float = ""
+@set_index external setUnsafe: (Float32Array.t, int, float) => unit = ""
 @get_index external byteAt: (t, int) => int = ""
 
 // target.set(source, offset)

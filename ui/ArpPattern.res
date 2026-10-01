@@ -95,7 +95,6 @@ let make = (ctx: Ctx.t, parent, box) => {
     ctx.status->Status.clear
   })
 
-  Array.fromInitializer(~length=16, stepId)->Array.forEach(id => model->ParamModel.listen(id, draw))
-  model->ParamModel.listen("Arp_End", draw)
+  model->ParamModel.listenEach([...Array.fromInitializer(~length=16, stepId), "Arp_End"], draw)
   draw()
 }

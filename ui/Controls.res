@@ -11,56 +11,50 @@ let fineCtrl = 0.25
 
 let clamp01 = x => Float.clamp(x, ~min=0., ~max=1.)
 
-let block = (parent, title, ~x, ~y, ~w, ~h, ~titleLeft=false) => {
+let block = (parent, title, ~x, ~y, ~w, ~h) => {
   let e = el("div", ~cls="blk", ~parent)->place(x, y, ~w, ~h)
   if title != "" {
-    el("div", ~cls=titleLeft ? "ttl left" : "ttl", ~text=title, ~parent=e)->ignore
+    el("div", ~cls="ttl", ~text=title, ~parent=e)->ignore
   }
   e
 }
 
-// Shared hover/drag/status handling
+// A control: its parameter, and the status text it shows while hovered or dragged
 type control = {
   ctx: Ctx.t,
   id: string,
   def: ParamDefs.t,
-  mutable hover: bool,
-  mutable dragging: bool,
-}
-
-let control = (ctx: Ctx.t, id) => {
-  ctx,
-  id,
-  def: ctx.model->ParamModel.def(id),
-  hover: false,
-  dragging: false,
+  status: Status.live,
 }
 
 let current = c => c.ctx.model->ParamModel.get(c.id)
 let gestureSet = (c, x) => c.ctx.model->ParamModel.gestureSet(c.id, x)
-let statusText = c => c.def.longText(current(c))
-
-let refreshStatus = c =>
-  if c.hover || c.dragging {
-    c.ctx.status->Status.show(statusText(c))
-  }
-
-let hookStatus = (c, e) => {
-  e->onMouse(#mouseenter, _ => {
-    c.hover = true
-    c.ctx.status->Status.show(statusText(c))
-  })
-  e->onMouse(#mouseleave, _ => {
-    c.hover = false
-    if !c.dragging {
-      c.ctx.status->Status.clear
-    }
-  })
-}
+let refreshStatus = c => c.status.refresh()
 
 // A double right-click opens the host's menu for the parameter (see HostMenu). Hook it before
 // the control's own pointer handlers.
 let hookHostMenu = (c, e) => c.ctx.hostMenu->HostMenu.attach(c.ctx.model, e, c.id)
+
+// A control's element: focusable, with its label (after an on/off box, with ~box), showing the
+// parameter's status text while hovered, and the host's menu on a double right-click.
+let frame = (ctx: Ctx.t, parent, id, ~cls, ~x, ~y, ~w=?, ~label=?, ~labelCls=?, ~box=false) => {
+  let e = el("div", ~cls, ~parent)->place(x, y, ~w?)
+  let def = ctx.model->ParamModel.def(id)
+  let c = {ctx, id, def, status: ctx.status->Status.live(e, () => def.longText(ctx.model->ParamModel.get(id)))}
+  e->setTabIndex(0)
+  if box {
+    el("b", ~parent=e)->ignore
+  }
+  el("span", ~cls=?labelCls, ~text=label->Option.getOr(c.def.name), ~parent=e)->ignore
+  hookHostMenu(c, e)
+  (c, e)
+}
+
+// Runs update now and whenever the control's parameter changes.
+let bind = (c, update) => {
+  c.ctx.model->ParamModel.listen(c.id, update)
+  update()
+}
 
 // Calls onMove for every move of a captured pointer, and onUp once it is released.
 let capturePointer = (e, ev, ~onMove, ~onUp) => {
@@ -102,9 +96,15 @@ let wheelParam = (model, id, ev) => {
 }
 
 // Replaces e with a text field until Enter, Escape or blur; commit gets the text on Enter or blur.
-let editInPlace = (e, text, ~commit) => {
-  let input = el("input", ~cls="entry", ~parent=?e->parentElement)
-  input->place(e->offsetLeft, e->offsetTop, ~w=e->offsetWidth, ~h=e->offsetHeight)->ignore
+// The field goes into e's parent, or over e inside ~within.
+let editInPlace = (e, text, ~commit, ~maxLength=?, ~within=?) => {
+  let input = el("input", ~cls="entry", ~parent=?within->Option.orElse(e->parentElement))
+  let (x, y) = switch within {
+  | Some(ancestor) => e->offsetWithin(ancestor)
+  | None => (e->offsetLeft, e->offsetTop)
+  }
+  input->place(x, y, ~w=e->offsetWidth, ~h=e->offsetHeight)->ignore
+  maxLength->Option.forEach(n => input->setMaxLength(n))
   input->setValue(text)
   input->select
   input->focus
@@ -133,13 +133,11 @@ let editInPlace = (e, text, ~commit) => {
 // The knob range the modulation connections to a target sweep, relative to its knob position
 // (bipolar sources swing both ways), or None if nothing modulates it.
 let modulationRange = (model, target) => {
-  let get = id => model->ParamModel.get(id)
   let (lo, hi, any) = ModMatrix.slotNumbers->Array.reduce((0., 0., false), ((lo, hi, any), k) => {
-    let source = ModMatrix.sources[Float.toInt(get(ModMatrix.sourceId(k)))]
-    let amount = get(ModMatrix.amountId(k))
-    switch source {
-    | Some(source)
-      if source.key != "none" && Float.toInt(get(ModMatrix.targetId(k))) == target && amount != 0. =>
+    let slot = ModMatrix.readSlot(ParamModel.get(model, _), k)
+    let amount = slot.amount
+    switch ModMatrix.sources[slot.source] {
+    | Some(source) if source.key != "none" && slot.target == target && amount != 0. =>
       source.bipolar
         ? (lo - Math.abs(amount), hi + Math.abs(amount), true)
         : (lo + Math.min(amount, 0.), hi + Math.max(amount, 0.), true)
@@ -160,27 +158,18 @@ let onSlotChange = (model, refresh) =>
     let refreshers = [refresh]
     modBars->WeakMap.set(model, refreshers)->ignore
     let refreshAll = perFrame(() => refreshers->Array.forEach(f => f()))
-    ModMatrix.slotNumbers->Array.forEach(k =>
-      [ModMatrix.sourceId(k), ModMatrix.targetId(k), ModMatrix.amountId(k)]->Array.forEach(id =>
-        model->ParamModel.listen(id, refreshAll)
-      )
-    )
+    ModMatrix.slotNumbers->Array.forEach(k => model->ParamModel.listenEach(ModMatrix.slotIds(k), refreshAll))
   }
 
 // A parameter row: label above-left, value right, position track underneath.
 let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
-  let c = control(ctx, id)
-  let e = el("div", ~cls="p", ~parent)->place(x, y, ~w)
-  e->setTabIndex(0)
-  el("span", ~cls="l", ~text=label->Option.getOr(c.def.name), ~parent=e)->ignore
+  let (c, e) = frame(ctx, parent, id, ~cls="p", ~x, ~y, ~w, ~label?, ~labelCls="l")
   let v = el("span", ~cls="v", ~parent=e)
   let track = el("span", ~cls="t", ~parent=e)
   let fill = el("i", ~parent=track)
   // the range modulation connections sweep, for parameters the matrix can reach
   let target = ModMatrix.targetOfParam(id)
   let modBar = target >= 0 ? Some(el("em", ~parent=track)) : None
-  hookStatus(c, e)
-  hookHostMenu(c, e)
 
   let norm = () => c.def.toNorm(current(c))
   let setNorm = n => ctx.model->ParamModel.set(id, c.def.fromNorm(clamp01(n)))
@@ -235,7 +224,7 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
       ev->preventDefault
     | 0 =>
       ev->preventDefault
-      c.dragging = true
+      c.status.setDragging(true)
       e->addClass("drag")
       ctx.model->ParamModel.beginGesture(id)
 
@@ -252,12 +241,9 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
           setNorm(n.contents)
         },
         ~onUp=() => {
-          c.dragging = false
+          c.status.setDragging(false)
           e->removeClass("drag")
           ctx.model->ParamModel.endGesture(id)
-          if !c.hover {
-            ctx.status->Status.clear
-          }
         },
       )
       refreshStatus(c)
@@ -287,11 +273,10 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
     }
   })
 
-  ctx.model->ParamModel.listen(id, update)
   if modBar != None {
     onSlotChange(ctx.model, updateModBar)
   }
-  update()
+  bind(c, update)
   e
 }
 
@@ -350,17 +335,12 @@ let listInput = (ctx: Ctx.t, e, id, ~items, ~upIsNext=false) => {
 // A choice: same footprint as a parameter row; click opens the menu, right click steps
 // through the values (shift goes back).
 let choice = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=76., ~label=?, ~names=?) => {
-  let c = control(ctx, id)
+  let (c, e) = frame(ctx, parent, id, ~cls="p ch", ~x, ~y, ~w, ~label?, ~labelCls="l")
   let menuNames = namesOf(c.def)
   let names = names->Option.orElse(c.def.shortNames)->Option.getOr(menuNames)
-  let e = el("div", ~cls="p ch", ~parent)->place(x, y, ~w)
-  e->setTabIndex(0)
-  el("span", ~cls="l", ~text=label->Option.getOr(c.def.name), ~parent=e)->ignore
   let withIcons = Icons.has(id)
   let v = el("span", ~cls=withIcons ? "v withicon" : "v", ~parent=e)
   let icon = value => Icons.forValue(id, value, menuNames[value]->Option.getOr(""))
-  hookStatus(c, e)
-  hookHostMenu(c, e)
 
   let update = () => {
     let x = current(c)
@@ -393,21 +373,13 @@ let choice = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=76., ~label=?, ~names=?) => {
     ev->preventDefault
     step(ev->deltaY < 0. ? -1. : 1.)
   })
-
-  ctx.model->ParamModel.listen(id, update)
-  update()
+  bind(c, update)
 }
 
 // An on/off box with a label. With a width, it fills it (as in a grid cell); without, it
 // is as wide as its label.
 let toggle = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=?, ~label=?) => {
-  let c = control(ctx, id)
-  let e = el("div", ~cls="tg", ~parent)->place(x, y, ~w?)
-  e->setTabIndex(0)
-  el("b", ~parent=e)->ignore
-  el("span", ~text=label->Option.getOr(c.def.name), ~parent=e)->ignore
-  hookStatus(c, e)
-  hookHostMenu(c, e)
+  let (c, e) = frame(ctx, parent, id, ~cls="tg", ~x, ~y, ~w?, ~label?, ~box=true)
 
   let flip = () => gestureSet(c, current(c) != 0. ? 0. : 1.)
   let update = () => {
@@ -425,9 +397,7 @@ let toggle = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=?, ~label=?) => {
   })
   e->suppressContextMenu
   e->onActivate(flip)
-
-  ctx.model->ParamModel.listen(id, update)
-  update()
+  bind(c, update)
 }
 
 let button = (ctx: Ctx.t, parent, text, ~x, ~y, ~w, ~h=?, ~cls="", ~status=?, onClick) => {

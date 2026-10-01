@@ -11,7 +11,6 @@ open! Web
 let count = 64
 
 let at = ByteView.getUnsafe
-let setAt = TypedArray.set
 let twoPi = 2. * Math.Constants.pi
 
 type scale = Decibels | Linear
@@ -31,8 +30,8 @@ type rec t = {
   amp: array<float>,
   phase: array<float>,
   mutable hover: option<int>,
-  // a measurement is due in the next frame
-  mutable pending: bool,
+  // measures and redraws in the next frame
+  mutable soon: unit => unit,
   onEdit: unit => unit,
   onCommit: unit => unit,
 }
@@ -58,22 +57,13 @@ let fromFraction = (t, f) =>
 // last one it had, so that it comes back with it.
 let analyse = t => {
   let d = t.shape.data
-  let n = TypedArray.length(d)
-  for k in 1 to count {
-    let re = ref(0.)
-    let im = ref(0.)
-    for i in 0 to n - 1 {
-      let a = twoPi * Int.toFloat(k * i) / Int.toFloat(n)
-      let v = d->at(i)
-      re := re.contents + v * Math.cos(a)
-      im := im.contents - v * Math.sin(a)
-    }
-    let amp = 2. * Math.hypot(re.contents, im.contents) / Int.toFloat(n)
-    t.amp->Array.setUnsafe(k - 1, amp)
+  let s = WaveImport.spectrumOfCycle(d, ~start=0, ~n=TypedArray.length(d), ~count)
+  s.amp->Array.forEachWithIndex((amp, i) => {
+    t.amp->Array.setUnsafe(i, amp)
     if amp > 1e-5 {
-      t.phase->Array.setUnsafe(k - 1, Math.atan2(~y=re.contents, ~x=-.im.contents))
+      t.phase->Array.setUnsafe(i, s.phase->Array.getUnsafe(i))
     }
-  }
+  })
 }
 
 let draw = t => {
@@ -133,14 +123,7 @@ let refresh = t => {
 
 // Measures and redraws in the next frame, however often it's asked to before then (while the
 // waveform is being drawn).
-let refreshSoon = t =>
-  if !t.pending {
-    t.pending = true
-    requestAnimationFrame(_ => {
-      t.pending = false
-      refresh(t)
-    })
-  }
+let refreshSoon = t => t.soon()
 
 // Sets harmonic k's amplitude and phase, adding the difference to the waveform.
 let setHarmonic = (t, k, amp, phase) => {
@@ -149,7 +132,7 @@ let setHarmonic = (t, k, amp, phase) => {
   let (amp0, phase0) = (t.amp->Array.getUnsafe(k - 1), t.phase->Array.getUnsafe(k - 1))
   for i in 0 to n - 1 {
     let a = twoPi * Int.toFloat(k * i) / Int.toFloat(n)
-    d->setAt(i, d->at(i) + amp * Math.sin(a + phase) - amp0 * Math.sin(a + phase0))
+    d->ByteView.setUnsafe(i, d->at(i) + amp * Math.sin(a + phase) - amp0 * Math.sin(a + phase0))
   }
   t.amp->Array.setUnsafe(k - 1, amp)
   t.phase->Array.setUnsafe(k - 1, phase)
@@ -271,10 +254,11 @@ let make = (
     amp: Array.make(~length=count, 0.),
     phase: Array.make(~length=count, 0.),
     hover: None,
-    pending: false,
+    soon: () => (),
     onEdit,
     onCommit,
   }
+  t.soon = perFrame(() => refresh(t))
   scaleButton->onMouse(#click, _ => setScale(t, t.scale == Decibels ? Linear : Decibels))
 
   hookCanvas(t, levelsCanvas, ~apply=(k, f, clear) =>

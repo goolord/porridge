@@ -44,17 +44,23 @@ presets/oatmealprs.dat  Oatmeal's factory bank
 presets/vanilla.porridge  Porridge's own bank (built by tools/vanilla-bank.mjs)
 docs/internals/         reverse-engineering notes on the original
 tools/
-  gen.mjs                 regenerates ParamStore/Slots/ModTables from the parameter tables
+  gen.mjs                 regenerates ParamStore/Slots/ModTables from the parameter tables, and
+                          the test host's field table and manifest
   bundle.mjs              bundles the compiled view and worker into bundle/
   clap-patch.mjs          patches the generated CLAP wrapper: aspect-locked resizing, the
                           interface size setting, the host's parameter menu, the
                           64-sample latency, and a faster start (a QuickJS worker, one
                           rebuild per activation)
+  clap/PorridgeBridge.h   the settings file, zoom and host menu code clap-patch.mjs adds
+  sync-dir.mjs            copies the regenerated CLAP project over the old one, touching only
+                          what changed
   test/                   native C++ test host built from the patch (cmaj generate --target=cpp),
                           golden.mjs (bit-exact factory renders, in Oat mode), presets.mjs
                           (format round trips), library.mjs (the preset browser's search),
                           smoke.mjs (Porridge's own effects and filter types sound, stay
-                          bounded and fall silent)
+                          bounded and fall silent), oneshot.mjs (one-shot LFOs hold their
+                          end), levels.mjs (the Vanilla bank's gains, levels and motion);
+                          lib.mjs has what they share
   vanilla-bank.mjs        builds presets/vanilla.porridge
   re/                     comparisons against Oatmeal.dll (32-bit Python) and data checks
   ui-preview/             runs the view in a browser with a mock PatchConnection

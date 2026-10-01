@@ -39,16 +39,11 @@ static std::vector<uint8_t> readFile (const std::string& path)
 
 struct Event { long frame; int status, d1, d2; };
 
-static void sendFloat (Patch& p, const char* id, float v)
+// sends a float or an int32
+template <typename T>
+static void send (Patch& p, const char* id, T v)
 {
-    auto h = Patch::getEndpointHandleForName (id);
-    if (h == 0) { fprintf (stderr, "no endpoint %s\n", id); return; }
-    unsigned char buf[4]; memcpy (buf, &v, 4);
-    p.addEvent (h, 0, buf);
-}
-
-static void sendInt (Patch& p, const char* id, int32_t v)
-{
+    static_assert (sizeof (T) == 4);
     auto h = Patch::getEndpointHandleForName (id);
     if (h == 0) { fprintf (stderr, "no endpoint %s\n", id); return; }
     unsigned char buf[4]; memcpy (buf, &v, 4);
@@ -95,40 +90,35 @@ int main (int argc, char** argv)
     auto patch = std::make_unique<Patch>();
     patch->initialise (1, rate);
 
-    // tempo
-    {
-        auto h = Patch::getEndpointHandleForName ("tempoIn");
-        if (h) { float bpm = (float) tempo; unsigned char b[4]; memcpy (b, &bpm, 4); patch->addEvent (h, 0, b); }
-    }
+    send (*patch, "tempoIn", (float) tempo);
 
     if (! programPath.empty())
     {
         auto prog = readFile (programPath);
-        if (prog.size() < 10376) { fprintf (stderr, "program too short\n"); return 1; }
+        if (prog.size() < programSize) { fprintf (stderr, "program too short\n"); return 1; }
         auto f32 = [&] (int off) { float v; memcpy (&v, prog.data() + off, 4); return v; };
         auto i32 = [&] (int off) { int32_t v; memcpy (&v, prog.data() + off, 4); return v; };
         auto u32 = [&] (int off) { uint32_t v; memcpy (&v, prog.data() + off, 4); return v; };
 
         for (auto& f : porridgeFields)
         {
+            if (f.offset < 0) continue;
             switch (f.type)
             {
-                case FieldType::f32:     sendFloat (*patch, f.id, f32 (f.offset)); break;
-                case FieldType::i32:     sendInt (*patch, f.id, i32 (f.offset)); break;
-                case FieldType::filter1: sendInt (*patch, f.id, i32 (8428) & 0xffff); break;
-                case FieldType::filter2: sendInt (*patch, f.id, (i32 (8428) >> 16) & 0xffff); break;
-                case FieldType::pw:      sendFloat (*patch, f.id, (float) (u32 (f.offset) / 4294967296.0)); break;
+                case FieldType::f32:     send (*patch, f.id, f32 (f.offset)); break;
+                case FieldType::i32:     send (*patch, f.id, i32 (f.offset)); break;
+                case FieldType::filter1: send (*patch, f.id, i32 (f.offset) & 0xffff); break;
+                case FieldType::filter2: send (*patch, f.id, (i32 (f.offset) >> 16) & 0xffff); break;
+                case FieldType::pw:      send (*patch, f.id, (float) (u32 (f.offset) / 4294967296.0)); break;
             }
         }
 
         std::vector<float> tmp (512);
-        const int waveOffsets[4] = { 32, 2080, 4136, 6184 };
         for (int w = 0; w < 4; ++w)
         {
             memcpy (tmp.data(), prog.data() + waveOffsets[w], 512 * 4);
             sendShape (*patch, "shapeIn", w, tmp.data(), 512);
         }
-        const int curveOffsets[2] = { 9596, 9852 };
         for (int c = 0; c < 2; ++c)
         {
             memcpy (tmp.data(), prog.data() + curveOffsets[c], 64 * 4);
@@ -140,11 +130,9 @@ int main (int argc, char** argv)
     {
         bool isInt = false;
         for (auto& f : porridgeFields)
-            if (id == f.id) isInt = (f.type == FieldType::i32 || f.type == FieldType::filter1 || f.type == FieldType::filter2);
-        for (auto& f : porridgeExtras)
             if (id == f.id) isInt = f.isInt;
-        if (isInt) sendInt (*patch, id.c_str(), atoi (val.c_str()));
-        else sendFloat (*patch, id.c_str(), (float) atof (val.c_str()));
+        if (isInt) send (*patch, id.c_str(), atoi (val.c_str()));
+        else send (*patch, id.c_str(), (float) atof (val.c_str()));
     }
 
     // --tuning: 128 numbers, each key's pitch in semitones from 440 Hz
@@ -187,7 +175,7 @@ int main (int argc, char** argv)
         inL.resize (n); inR.resize (n);
         memcpy (inL.data(), d.data() + 8, 4 * n);
         memcpy (inR.data(), d.data() + 8 + (ch > 1 ? 4 * n : 0), 4 * n);
-        sendInt (*patch, "testMode", 1);
+        send (*patch, "testMode", 1);
     }
     const auto inHandle = Patch::getEndpointHandleForName ("testIn");
     std::vector<float> inBlock (2 * Patch::maxFramesPerBlock);

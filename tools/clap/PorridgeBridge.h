@@ -1,0 +1,128 @@
+// Porridge's additions to Cmajor's CLAP wrapper: user settings shared by every instance, the
+// host's parameter menu, and the bridge the view reaches them through. tools/clap-patch.mjs
+// copies this next to helpers/clap/cmaj_CLAPPlugin.h and includes it inside that file's
+// cmaj::plugin::clap::detail namespace, after the headers it needs (choc's files and JSON,
+// <cmath>, <cstdlib>), so it has no includes of its own.
+
+#pragma once
+
+namespace porridge
+{
+    inline const std::string requestPrefix = "porridge:settings?";
+    inline const std::string replyKey = "porridge:settings";
+    inline const std::string hostRequestPrefix = "porridge:host?";
+    inline const std::string hostReplyKey = "porridge:host";
+
+    constexpr double minZoom = 0.5, maxZoom = 3.0;
+
+    inline double clampZoom (double z)
+    {
+        return std::isfinite (z) ? std::clamp (z, minZoom, maxZoom) : 1.0;
+    }
+
+    inline std::filesystem::path settingsFile()
+    {
+       #if CHOC_WINDOWS
+        wchar_t* appData = nullptr;
+        size_t length = 0;
+
+        if (_wdupenv_s (&appData, &length, L"APPDATA") == 0 && appData != nullptr)
+        {
+            std::filesystem::path folder (appData);
+            free (appData);
+            return folder / "Porridge" / "settings.json";
+        }
+       #elif CHOC_OSX
+        if (auto home = std::getenv ("HOME"))
+            return std::filesystem::path (home) / "Library" / "Application Support" / "Porridge" / "settings.json";
+       #else
+        if (auto config = std::getenv ("XDG_CONFIG_HOME"); config != nullptr && *config != 0)
+            return std::filesystem::path (config) / "porridge" / "settings.json";
+
+        if (auto home = std::getenv ("HOME"))
+            return std::filesystem::path (home) / ".config" / "porridge" / "settings.json";
+       #endif
+
+        return {};
+    }
+
+    inline choc::value::Value loadSettings()
+    {
+        try
+        {
+            auto file = settingsFile();
+
+            if (! file.empty() && std::filesystem::exists (file))
+            {
+                auto settings = choc::json::parse (choc::file::loadFileAsString (file));
+
+                if (settings.isObject())
+                    return settings;
+            }
+        }
+        catch (...) {}
+
+        return choc::value::createObject ({});
+    }
+
+    inline void saveSettings (const choc::value::ValueView& settings)
+    {
+        try
+        {
+            auto file = settingsFile();
+
+            if (! file.empty())
+            {
+                std::filesystem::create_directories (file.parent_path());
+                choc::file::replaceFileWithContent (file, choc::json::toString (settings, true));
+            }
+        }
+        catch (...) {}
+    }
+
+    inline double zoomSetting (const choc::value::ValueView& settings)
+    {
+        return clampZoom (settings.isObject() ? settings["zoom"].getWithDefault<double> (1.0) : 1.0);
+    }
+
+    /// The host's context menu extension, if it can show its menu for the plugin.
+    inline const clap_host_context_menu_t* hostContextMenu (const clap_host_t& host)
+    {
+        for (auto id : { CLAP_EXT_CONTEXT_MENU, CLAP_EXT_CONTEXT_MENU_COMPAT })
+        {
+            auto menu = static_cast<const clap_host_context_menu_t*> (host.get_extension (std::addressof (host), id));
+
+            if (menu != nullptr && menu->can_popup != nullptr && menu->popup != nullptr)
+                return menu;
+        }
+
+        return nullptr;
+    }
+
+    /// Listens to what the patch sends its views, and passes on the settings and host requests
+    /// (the whole key).
+    struct RequestBridge  : public cmaj::PatchView
+    {
+        RequestBridge (cmaj::Patch& p, std::function<void(std::string_view)> handleToUse)
+            : cmaj::PatchView (p), handle (std::move (handleToUse))
+        {}
+
+        void sendMessage (const choc::value::ValueView& msg) override
+        {
+            if (! msg.isObject() || msg["type"].toString() != "state_key_value")
+                return;
+
+            auto message = msg["message"];
+
+            if (! message.isObject())
+                return;
+
+            auto key = message["key"].toString();
+
+            if (choc::text::startsWith (key, requestPrefix) || choc::text::startsWith (key, hostRequestPrefix))
+                handle (key);
+        }
+
+        std::function<void(std::string_view)> handle;
+    };
+}

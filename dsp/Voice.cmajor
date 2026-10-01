@@ -21,12 +21,13 @@ namespace porridge
         int uniU;
         float uniD, uniJ, uniCurve, uniOct;
 
-        Filter f1L, f2L, f1R, f2R;
-        Env fenv1L, fenv2L, fenv1R, fenv2R;
-        Distortion distL, distR;
+        // filters 1 and 2 and their envelopes for left (or mono), then for right: [isF2 + 2 right]
+        Filter[4] filt;
+        Env[4] fenv;
+        Distortion[2] dist;             // left (or mono), right
 
         Env ampEnv, modEnv1, modEnv2;
-        LFO lfo1, lfo2;
+        LFO[2] lfo;
         float lfo2Prev;
 
         int relCount;                   // -1 while held, samples since release otherwise
@@ -37,14 +38,15 @@ namespace porridge
         int penvStage;
 
         // modulation matrix sources from the last block, and the volume target's gain
-        float lfo1Raw, lfo2Raw, ampLast, modRand, modGain;
+        float[2] lfoRaw;
+        float ampLast, modRand, modGain;
 
         // MPE: the MIDI channel the note came from (0 = the master channel)
         int chan;
 
         // LFO delay / fade-in: samples since the note started; LFO slew: the smoothed values
         int age;
-        float lfo1Slew, lfo2Slew;
+        float[2] lfoSlew;
 
         // analog drift: slow random values for each unison copy of both oscillators' pitch
         // (0 .. 31) and the cutoff (32)

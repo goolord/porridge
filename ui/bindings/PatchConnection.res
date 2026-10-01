@@ -15,7 +15,6 @@ external addAllParameterListener: (t, parameterEvent => unit) => unit = "addAllP
 @send
 external removeAllParameterListener: (t, parameterEvent => unit) => unit =
   "removeAllParameterListener"
-@send external requestParameterValue: (t, string) => unit = "requestParameterValue"
 
 @send external sendEventOrValue: (t, string, 'value) => unit = "sendEventOrValue"
 // Sends without ramping, and waits up to a second for the patch to accept it.

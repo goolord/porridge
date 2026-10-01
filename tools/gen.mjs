@@ -7,6 +7,8 @@
 //   dsp/ModTables.cmajor   - the modulation matrix's sources and targets (ui/ModMatrix.res), with
 //                            each parameter target's knob law as a table
 //   tools/test/build/fields_gen.h - endpoint -> chunk field table for the C++ test host
+//   tools/test/PorridgeTest.cmajorpatch - the test host's manifest: Porridge.cmajorpatch's
+//                            sources with the test graph in place of dsp/Porridge.cmajor
 //
 // run: node tools/gen.mjs
 
@@ -18,6 +20,7 @@ import { xyTargets, modEnvTargets, ccTargets } from "../ui/oatmeal/OatmealParams
 import { paramInfo } from "../ui/ParamInfo.res.mjs";
 import { all as porridgeParams, slotOf as porridgeSlot, fxOrder, rackId, rackSlots, rackKinds, rackEntries, copyId } from "../ui/PorridgeParams.res.mjs";
 import { makeDefs } from "../ui/ParamDefs.res.mjs";
+import { programSize, tableOffset } from "../ui/oatmeal/OatmealFormat.res.mjs";
 import * as ModMatrix from "../ui/ModMatrix.res.mjs";
 
 const root = join (dirname (fileURLToPath (import.meta.url)), "..");
@@ -59,23 +62,22 @@ function num (x)
 function cf (x)
 {
     if (! Number.isFinite (x)) throw new Error (`not a finite table value: ${x}`);
-    let s = num (x);
-    if (! /[.e]/.test (s)) s += ".0";
-    return s + "f";
+    const s = num (x);
+    return (/[.e]/.test (s) ? s : s + ".0") + "f";
 }
 
 const defs = new Map (makeDefs().map (d => [d.id, d]));
-const endpoints = [], handlers = [], slots = [], cfields = [], cextra = [];
+const endpoints = [], handlers = [], slots = [], cfields = [];
 const slotDefaults = new Array (NUM_SLOTS).fill (0);
-
 
 const all = [
     ...fields.map (f => ({ ...f, slot: slotOf (f) })),
     ...porridgeParams.map ((p, i) => ({ index: fields.length + i, id: p.id, slot: porridgeSlot (i), porridge: true })),
 ];
+const byId = new Map (all.map (f => [f.id, f]));
 const slotById = id =>
 {
-    const f = all.find (f => f.id === id);
+    const f = byId.get (id);
     if (! f) throw new Error (`unknown parameter ${id}`);
     return f.slot;
 };
@@ -106,8 +108,8 @@ for (const f of all)
     }
 
     slots.push (`    let ${id} = ${slot};`);
-    if (f.porridge) cextra.push (`    { "${id}", ${isInt ? "true" : "false"} },`);
-    else cfields.push (`    { "${id}", ${offset}, FieldType::${kind} },`);
+    cfields.push (f.porridge ? `    { "${id}", -1, FieldType::${isInt ? "i32" : "f32"}, ${isInt} },`
+                             : `    { "${id}", ${offset}, FieldType::${kind}, ${isInt} },`);
 }
 
 // A camelCase identifier from a menu label: "LFO 1 speed" -> lfo1Speed, "1 PWM rate" -> osc1PwmRate.
@@ -118,10 +120,9 @@ function labelIdent (label)
     return /^[0-9]/.test (s) ? "osc" + s : s;
 }
 
-function targetConstants (ns, doc, labels)
-{
-    return `/// ${doc}\nnamespace porridge::${ns}\n{\n${labels.map ((l, i) => `    let ${labelIdent (l)} = ${i};`).join ("\n")}\n}\n`;
-}
+const ns = (name, doc, lines) => `/// ${doc}\nnamespace porridge::${name}\n{\n${lines.join ("\n")}\n}\n`;
+
+const targetConstants = (name, doc, labels) => ns (name, doc, labels.map ((l, i) => `    let ${labelIdent (l)} = ${i};`));
 
 // Choice values the DSP compares against, by their menu labels (which must exist).
 const choices = [
@@ -160,19 +161,57 @@ const choices = [
                 both: "double (before filter and global)" } },
 ];
 
-function choiceConstants ({ ns, param, doc, values })
+function choiceConstants ({ ns: name, param, doc, values })
 {
-    const names = paramInfo (all.find (f => f.id === param).index).names;
-    const lines = Object.entries (values).map (([name, label]) =>
+    const names = defs.get (param).names;
+    return ns (name, doc, Object.entries (values).map (([value, label]) =>
     {
         const i = names.indexOf (label);
         if (i < 0) throw new Error (`${param} has no choice "${label}"`);
-        return `    let ${name} = ${i};`;
-    });
-    return `/// ${doc}\nnamespace porridge::${ns}\n{\n${lines.join ("\n")}\n}\n`;
+        return `    let ${value} = ${i};`;
+    }));
 }
 
 const fxOrders = Array.from ({ length: 24 }, (_, k) => fxOrder (k));
+
+// The rack's kinds as tables (porridge::rack), so that the synth runs every copy with one
+// piece of code: each kind's index, the kind a rack value runs (-1 for none: empty, or one of
+// Oatmeal's four firsts), and every kind's first and copies' parameters one after another.
+function rackKindTables ()
+{
+    const firstOffset = [], copiesOffset = [], allFirst = [], allCopies = [];
+
+    for (const k of rackKinds)
+    {
+        firstOffset.push (allFirst.length);
+        copiesOffset.push (allCopies.length);
+        allFirst.push (...k.params.map (([id]) => slotById (id)));
+        allCopies.push (...k.copies.flatMap (n => k.params.map (([id]) => slotById (copyId (id, n)))));
+    }
+
+    const kindValue = rackKinds.map (k => rackEntries.findIndex (e => e && e[0] === k.key && e[1] === (k.firstInRack ? 1 : k.copies[0])));
+    const kindOf = rackEntries.map ((e, v) =>
+    {
+        const i = e ? rackKinds.findIndex (k => k.key === e[0] && (k.firstInRack || k.copies.includes (e[1]))) : -1;
+        const k = rackKinds[i];
+        if (i >= 0 && v - kindValue[i] !== k.copies.indexOf (e[1]) + (k.firstInRack ? 1 : 0))
+            throw new Error (`rack entry ${v} is out of order`);
+        return i;
+    });
+
+    return `
+    /// the kinds above as tables: their indices, the kind each rack value runs (-1: none),
+    /// each kind's first value, whether its first is in the rack (entry 0 runs unswapped),
+    /// and where its parameters start in allFirst and its copies' in allCopies
+${rackKinds.map ((k, i) => `    let ${k.key}Kind = ${i};`).join ("\n")}
+    let kindOf = int[${kindOf.length}] (${kindOf.join (", ")});
+    let kindValue = int[${kindValue.length}] (${kindValue.join (", ")});
+    let kindOwn = bool[${rackKinds.length}] (${rackKinds.map (k => k.firstInRack).join (", ")});
+    let firstOffset = int[${rackKinds.length + 1}] (${[...firstOffset, allFirst.length].join (", ")});
+    let copiesOffset = int[${rackKinds.length}] (${copiesOffset.join (", ")});
+    let allFirst = int[${allFirst.length}] (${allFirst.join (", ")});
+    let allCopies = int[${allCopies.length}] (${allCopies.join (", ")});`;
+}
 
 const header = `//  Generated by tools/gen.mjs - do not edit by hand.\n\n`;
 
@@ -216,22 +255,17 @@ namespace porridge::slot
 ${slots.join ("\n")}
 }
 
-/// The effects rack (ui/PorridgeParams.res): its slots, and for each kind of effect the first's
-/// parameters, every copy's after one another (which the synth swaps in to run that copy), the
-/// value a rack slot holds for its first entry, and how many entries it has. Oatmeal's chorus,
-/// delay, reverb and EQ are values 1..4, so their entries here are the copies; Porridge's own
-/// effects' entries are the first (run unswapped), then the copies.
+/// The effects rack (ui/PorridgeParams.res): its slots, and for each kind of effect how many
+/// entries it has. Oatmeal's chorus, delay, reverb and EQ are values 1..4, so their entries here
+/// are the copies; Porridge's own effects' entries are the first (run unswapped), then the copies.
 namespace porridge::rack
 {
     let slots = int[${rackSlots}] (${Array.from ({ length: rackSlots }, (_, k) => slotById (rackId (k + 1))).join (", ")});
-${rackKinds.map (k =>
-`    let ${k.key}First = int[${k.params.length}] (${k.params.map (([id]) => slotById (id)).join (", ")});
-    let ${k.key}Copies = int[${k.params.length * k.copies.length}] (${k.copies.flatMap (n => k.params.map (([id]) => slotById (copyId (id, n)))).join (", ")});
-    let ${k.key}Value = ${rackEntries.findIndex (e => e && e[0] === k.key && e[1] === (k.firstInRack ? 1 : k.copies[0]))};
-    let ${k.key}Count = ${k.copies.length + (k.firstInRack ? 1 : 0)};`).join ("\n")}
+${rackKinds.map (k => `    let ${k.key}Count = ${k.copies.length + (k.firstInRack ? 1 : 0)};`).join ("\n")}
 
     /// how many values a rack slot can hold
     let numEntries = ${rackEntries.length};
+${rackKindTables()}
 }
 
 ${targetConstants ("xyTgt", "X/Y pad targets (XY_H_Target_n, XY_V_Target_n).", xyTargets)}
@@ -243,18 +277,27 @@ mkdirSync (join (root, "tools", "test", "build"), { recursive: true });
 writeGenerated (join (root, "tools", "test", "build", "fields_gen.h"), header +
 `#pragma once
 enum class FieldType { f32, i32, filter1, filter2, pw };
-struct PorridgeField { const char* id; int offset; FieldType type; };
+// every parameter endpoint and where the program chunk holds it (-1: Porridge's own, not in it)
+struct PorridgeField { const char* id; int offset; FieldType type; bool isInt; };
 static const PorridgeField porridgeFields[] =
 {
 ${cfields.join ("\n")}
 };
-// Porridge's own parameters: endpoint id, int or float
-struct PorridgeExtra { const char* id; bool isInt; };
-static const PorridgeExtra porridgeExtras[] =
-{
-${cextra.join ("\n")}
-};
+static const int programSize = ${programSize};
+static const int waveOffsets[4] = { ${["Wave1", "Wave2", "LfoShape1", "LfoShape2"].map (tableOffset).join (", ")} };
+static const int curveOffsets[2] = { ${["VelocityCurve", "AftertouchCurve"].map (tableOffset).join (", ")} };
 `);
+
+// the test host's manifest: the patch's sources, with the test graph in place of the top level
+const { source } = JSON.parse (readFileSync (join (root, "Porridge.cmajorpatch"), "utf8"));
+writeGenerated (join (root, "tools", "test", "PorridgeTest.cmajorpatch"), JSON.stringify ({
+    CmajorVersion: 1,
+    ID: "dev.porridge.test",
+    version: "1.0",
+    name: "PorridgeTest",
+    isInstrument: true,
+    source: [...source.filter (s => s !== "dsp/Porridge.cmajor").map (s => "../../" + s), "PorridgeTest.cmajor"],
+}, null, 4) + "\n");
 
 //==============================================================================
 // modulation tables
@@ -274,7 +317,7 @@ ModMatrix.targets.forEach ((t, i) =>
     if (tag === "Knob")
     {
         const d = defs.get (law._0);
-        const f = all.find (f => f.id === law._0);
+        const f = byId.get (law._0);
         if (! d || ! f) throw new Error (`unknown modulation target ${law._0}`);
         targetSlot.push (f.slot);
         targetRow.push (rows.length);

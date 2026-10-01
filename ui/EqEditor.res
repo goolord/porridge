@@ -71,13 +71,11 @@ let make = (ctx: Ctx.t, parent, box: box, ~id=x => x) => {
   let model = ctx.model
   let get = id => model->ParamModel.get(id)
   let ed = NodeEditor.make(ctx, parent, box, ~hint, ~columns=5)
-  let svgEl = svgEl(ed.svg, ...)
+  let svgEl = svgEl(ed.g.under, ...)
 
   let (left, right) = (margin, box.w - margin)
   let mid = box.h / 2.
-  let xOf = f => left + Math.log(f / fMin) / Math.log(fMax / fMin) * (right - left)
-  let freqAt = x =>
-    fMin * Math.pow(fMax / fMin, ~exp=Float.clamp((x - left) / (right - left), ~min=0., ~max=1.))
+  let (xOf, freqAt) = FxGraph.logScale(~lo=fMin, ~hi=fMax, ~left, ~right)
   // dB at the top edge, held for the length of a drag
   let limit = ref(24.)
   let yOf = db => mid - Float.clamp(db / limit.contents, ~min=-1., ~max=1.) * (mid - margin)
@@ -85,16 +83,10 @@ let make = (ctx: Ctx.t, parent, box: box, ~id=x => x) => {
 
   // frequency and gain grid
   let gridLayer = svgEl("g", [])
-  let gridLabel = (layer, x, y, text) =>
-    layer->Web.svgEl("text", [("class", Str("tick")), ("x", Num(x)), ("y", Num(y))])->setTextContent(text)
-  [20., 50., 100., 200., 500., 1000., 2000., 5000., 10000.]->Array.forEach(f => {
+  [20., ...FxGraph.frequencies]->Array.forEach(f => {
     let x = xOf(f)
-    gridLayer->Plots.line(x, 1., x, box.h - 1.)->ignore
-    gridLayer->gridLabel(
-      x + 3.,
-      box.h - 4.,
-      f >= 1000. ? Float.toString(f / 1000.) ++ "k" : Float.toString(f),
-    )
+    FxGraph.line(gridLayer, ~cls="axis", x, 1., x, box.h - 1.)
+    FxGraph.text(gridLayer, x + 3., box.h - 4., FxGraph.hzTick(f))
   })
   let gainLayer = svgEl("g", [])
   // the limit the gain grid is drawn for
@@ -103,8 +95,6 @@ let make = (ctx: Ctx.t, parent, box: box, ~id=x => x) => {
   let bandCurve = svgEl("path", [("class", Str("curve faint"))])
   let fill = svgEl("path", [("class", Str("fill"))])
   let curve = svgEl("path", [("class", Str("curve"))])
-  let layer = svgEl("g", [])
-  let readout = svgEl("text", [("class", Str("readout"))])
 
   for b in 0 to 4 {
     let (kind, freq, amp, slope) = ids(b)
@@ -135,15 +125,11 @@ let make = (ctx: Ctx.t, parent, box: box, ~id=x => x) => {
       [-1., -0.5, 0.5, 1.]->Array.forEach(k => {
         let db = k * limit.contents
         let y = yOf(db)
-        gainLayer->Plots.line(~cls="axis faint", 1., y, box.w - 1., y)->ignore
-        gainLayer->gridLabel(
-          4.,
-          k > 0. ? y + 11. : y - 3.,
-          (db > 0. ? "+" : "") ++ Float.toString(db) ++ " dB",
-        )
+        FxGraph.line(gainLayer, ~cls="axis faint", 1., y, box.w - 1., y)
+        FxGraph.text(gainLayer, 4., k > 0. ? y + 11. : y - 3., (db > 0. ? "+" : "") ++ Float.toString(db) ++ " dB")
       })
       let y0 = yOf(0.)
-      gainLayer->Plots.line(1., y0, box.w - 1., y0)->ignore
+      FxGraph.line(gainLayer, ~cls="axis", 1., y0, box.w - 1., y0)
     }
   }
 
@@ -159,8 +145,7 @@ let make = (ctx: Ctx.t, parent, box: box, ~id=x => x) => {
 
   let statusFor = b => {
     let (kind, freq, amp, slope) = ids(b)
-    let text = id => model->ParamModel.longText(id)
-    bandOn(b) ? [kind, freq, amp, slope]->Array.map(text)->Array.join("    ") : text(kind)
+    bandOn(b) ? model->ParamModel.statusText([kind, freq, amp, slope]) : model->ParamModel.longText(kind)
   }
 
   let readoutFor = b => {
@@ -174,85 +159,9 @@ let make = (ctx: Ctx.t, parent, box: box, ~id=x => x) => {
       : `band ${Int.toString(b + 1)} is off: drag to use it`
   }
 
-  let nodes = Array.fromInitializer(~length=5, b => {
-    let dot = svgEl("circle", [("r", Num(7.))])
-    let label = svgEl("text", [("class", Str("nodelabel"))])
-    label->setTextContent(Int.toString(b + 1))
-    let hit = svgEl("circle", [("class", Str("hit")), ("r", Num(11.)), ("style", Str("cursor:move"))])
-    (dot, label, hit)
-  })
-  // hit areas above every dot and label
-  nodes->Array.forEach(((dot, label, _)) => {
-    layer->appendChild(dot)
-    layer->appendChild(label)
-  })
-  nodes->Array.forEach(((_, _, hit)) => layer->appendChild(hit))
-  layer->appendChild(readout)
-
   let position = b => {
     let (_, freq, amp, _) = ids(b)
     bandOn(b) ? (xOf(get(freq)), yOf(get(amp))) : (xOf(restingFreqs->Array.getUnsafe(b)), mid)
-  }
-
-  let draw = () => {
-    let on = Array.fromInitializer(~length=5, i => i)->Array.filter(bandOn)
-    let total = response(on->Array.map(bandFilter))
-    let d = Plots.pathFrom(total)
-    curve->setAttribute("d", Str(d))
-    let y0 = Float.toString(yOf(0.))
-    fill->setAttribute(
-      "d",
-      Str(`${d}L${Float.toString(right)} ${y0}L${Float.toString(left)} ${y0}Z`),
-    )
-    let focus = NodeEditor.focus(ed)
-    bandCurve->setAttribute(
-      "d",
-      Str(
-        switch focus {
-        | Some(b) if bandOn(b) && Array.length(on) > 1 => Plots.pathFrom(response([bandFilter(b)]))
-        | _ => ""
-        },
-      ),
-    )
-
-    nodes->Array.forEachWithIndex(((dot, label, hit), b) => {
-      let (x, y) = position(b)
-      [dot, hit]->Array.forEach(e => {
-        e->setAttribute("cx", Num(x))
-        e->setAttribute("cy", Num(y))
-      })
-      label->setAttribute("x", Num(x))
-      label->setAttribute("y", Num(y + 3.5))
-      let hot = focus == Some(b)
-      dot->setAttribute(
-        "class",
-        Str("band" ++ (bandOn(b) ? "" : " off") ++ (hot ? " hot" : "")),
-      )
-      label->setAttribute("class", Str("nodelabel" ++ (bandOn(b) ? "" : " off") ++ (hot ? " hot" : "")))
-    })
-
-    switch focus {
-    | Some(b) =>
-      ctx.status->Status.show(statusFor(b))
-      ed->NodeEditor.showReadout(
-        readout,
-        readoutFor(b),
-        position(b),
-        ~dx=13.,
-        ~above=12.,
-        ~below=22.,
-        ~nearTop=30.,
-      )
-    | None => readout->setTextContent("")
-    }
-  }
-
-  // the gain axis is refitted when a drag ends, never during one
-  let refresh = () => {
-    if ed.dragging == None {
-      fit()
-    }
-    draw()
   }
 
   // an off band comes on as a flat peak where it was resting
@@ -268,7 +177,7 @@ let make = (ctx: Ctx.t, parent, box: box, ~id=x => x) => {
     let (kind, _, _, _) = ids(b)
     let (x, y) = position(b)
     ctx.menu->Menu.showAt(
-      ed.root,
+      ed.g.root,
       ~x,
       ~y=y + 8.,
       Controls.namesOf(model->ParamModel.def(kind))->Array.mapWithIndex((label, value) => {
@@ -302,21 +211,73 @@ let make = (ctx: Ctx.t, parent, box: box, ~id=x => x) => {
     })
   }
 
-  nodes->Array.forEachWithIndex(((_, _, hit), b) => {
-    hit->onPointer(#pointerdown, ev => {
-      ev->preventDefault
-      switch ev->button {
-      | 0 => startDrag(b, hit, ev)
-      | 2 => typeMenu(b)
-      | _ => ()
-      }
-    })
-    ed->NodeEditor.hookNode(hit, b)
-    hit->onWheel(ev => {
-      let (_, _, _, slope) = ids(b)
-      Controls.wheelParam(model, slope, ev)
-    })
+  // a point per band, numbered; scroll over it for the slope, right-click for the type
+  let nodes = Array.fromInitializer(~length=5, b => {
+    let (_, _, _, slope) = ids(b)
+    let node = ed->NodeEditor.node(
+      b,
+      ~dot=[("r", Num(7.))],
+      ~hitR=11.,
+      ~cursor="move",
+      ~onDrag=startDrag(b, ...),
+      ~onRightClick=() => typeMenu(b),
+      ~wheel=() => Some(slope),
+    )
+    let label = Web.svgEl(ed.g.layer, "text", [("class", Str("nodelabel"))])
+    label->setTextContent(Int.toString(b + 1))
+    (node, label)
   })
+
+  let draw = () => {
+    let on = Array.fromInitializer(~length=5, i => i)->Array.filter(bandOn)
+    let total = response(on->Array.map(bandFilter))
+    let d = Plots.pathFrom(total)
+    curve->setAttribute("d", Str(d))
+    let y0 = Float.toString(yOf(0.))
+    fill->setAttribute(
+      "d",
+      Str(`${d}L${Float.toString(right)} ${y0}L${Float.toString(left)} ${y0}Z`),
+    )
+    let focus = NodeEditor.focus(ed)
+    bandCurve->setAttribute(
+      "d",
+      Str(
+        switch focus {
+        | Some(b) if bandOn(b) && Array.length(on) > 1 => Plots.pathFrom(response([bandFilter(b)]))
+        | _ => ""
+        },
+      ),
+    )
+
+    nodes->Array.forEachWithIndex(((node, label), b) => {
+      let (x, y) = position(b)
+      node->NodeEditor.place(x, y)
+      label->setAttribute("x", Num(x))
+      label->setAttribute("y", Num(y + 3.5))
+      let hot = focus == Some(b)
+      node.dot->setAttribute(
+        "class",
+        Str("band" ++ (bandOn(b) ? "" : " off") ++ (hot ? " hot" : "")),
+      )
+      label->setAttribute("class", Str("nodelabel" ++ (bandOn(b) ? "" : " off") ++ (hot ? " hot" : "")))
+    })
+
+    switch focus {
+    | Some(b) =>
+      ctx.status->Status.show(statusFor(b))
+      let (x, y) = position(b)
+      ed.g->FxGraph.readout(~x, ~y, ~dx=13., ~above=12., readoutFor(b))
+    | None => ed.g->FxGraph.hideReadout
+    }
+  }
+
+  // the gain axis is refitted when a drag ends, never during one
+  let refresh = () => {
+    if ed.dragging == None {
+      fit()
+    }
+    draw()
+  }
 
   ed->NodeEditor.start(
     Array.fromInitializer(~length=5, b => {

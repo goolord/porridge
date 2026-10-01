@@ -11,7 +11,8 @@
 //    request by broadcasting it to its views; a listener view added here acts on them and
 //    replies to the editor with a "porridge:settings" state value
 //    { settings: <the file's object>, zoom: <this window's size> }. Nothing is stored in
-//    the plugin's state. See ui/Settings.res.
+//    the plugin's state. See ui/Settings.res. The code is in tools/clap/PorridgeBridge.h, which
+//    is copied next to the wrapper.
 //  - The host's menu for a parameter (CLAP's context-menu extension; in FL Studio it has
 //    Create automation clip, Link to controller and so on), which a double right-click on a
 //    control opens. The view asks through the same bridge, with keys that start with
@@ -37,7 +38,7 @@
 //
 //   node tools/clap-patch.mjs [path to the generated project]
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, copyFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -78,26 +79,15 @@ const replace = (find, replacement) => {
   source = source.slice(0, at) + replacement + source.slice(at + find.length);
 };
 
-// Replaces everything from `start` up to and including `end`.
-const replaceRange = (start, end, replacement) => {
-  const a = source.indexOf(start);
-  if (a < 0 || source.indexOf(start, a + 1) >= 0) fail(JSON.stringify(start.slice(0, 80)));
-  const b = source.indexOf(end, a);
-  if (b < 0) fail(JSON.stringify(end.slice(0, 80)));
-  source = source.slice(0, a) + replacement + source.slice(b + end.length);
-};
+// Inserts text just before or after the one occurrence of `anchor`.
+const insertBefore = (anchor, text) => replace(anchor, text + anchor);
+const insertAfter = (anchor, text) => replace(anchor, anchor + text);
 
 //==============================================================================
 // Cmajor's Engine
 
 if (open(join(project, "include", "cmajor", "API", "cmaj_Engine.h"))) {
-  replace(
-    `#include <functional>\n`,
-    `#include <functional>
-#include <mutex>
-#include <string>
-`,
-  );
+  insertAfter(`#include <functional>\n`, `#include <mutex>\n#include <string>\n`);
 
   replace(
     `                return choc::json::parse (choc::com::StringPtr (details));\n`,
@@ -128,10 +118,9 @@ if (open(join(project, "include", "cmajor", "API", "cmaj_Engine.h"))) {
 // choc's QuickJS, which runs the patch worker
 
 if (open(join(project, "include", "choc", "choc", "javascript", "choc_javascript_QuickJS.h"))) {
-  replace(
+  insertAfter(
     `    void pumpMessageLoop() override {}\n`,
-    `    void pumpMessageLoop() override {}
-
+    `
     ${marker} runs the promise jobs (await, then) that a call into the script queued, as an
     // event loop does after each task; without this, async code stopped at its first await
     // (added by tools/clap-patch.mjs)
@@ -155,18 +144,10 @@ if (open(join(project, "include", "choc", "choc", "javascript", "choc_javascript
 
   for (const type of ["JS_EVAL_TYPE_MODULE", "JS_EVAL_TYPE_GLOBAL"]) {
     const line = `                auto result = takeValue (JS_Eval (context, code.c_str(), code.size(), "", ${type}));\n`;
-    replace(line, line + `                runPendingJobs();\n`);
+    insertAfter(line, `                runPendingJobs();\n`);
   }
 
-  replace(
-    `        functionArgs.clear();
-        return returnVal.toChocValue();
-`,
-    `        functionArgs.clear();
-        runPendingJobs();
-        return returnVal.toChocValue();
-`,
-  );
+  insertBefore(`        return returnVal.toChocValue();\n`, `        runPendingJobs();\n`);
 
   save();
 }
@@ -176,7 +157,9 @@ if (open(join(project, "include", "choc", "choc", "javascript", "choc_javascript
 
 if (!open(join(project, "helpers", "clap", "cmaj_CLAPPlugin.h"))) process.exit(0);
 
-replace(
+copyFileSync(join(root, "tools", "clap", "PorridgeBridge.h"), join(project, "helpers", "clap", "PorridgeBridge.h"));
+
+insertBefore(
   `#include "cmajor/helpers/cmaj_PluginHelpers.h"\n`,
   `${marker} the patch worker runs in QuickJS, rather than in a hidden web view that takes
 // about a second to start (added by tools/clap-patch.mjs)
@@ -184,168 +167,34 @@ replace(
  #define CMAJ_USE_QUICKJS_WORKER 1
 #endif
 
-#include "cmajor/helpers/cmaj_PluginHelpers.h"
 `,
 );
 
-replace(
-  `#include "choc/gui/choc_DesktopWindow.h"\n`,
-  `#include "choc/gui/choc_DesktopWindow.h"
-#include "choc/text/choc_Files.h"
-#include "choc/text/choc_JSON.h"
-`,
-);
-
-replace(
-  `#include <algorithm>\n`,
-  `#include <algorithm>
-#include <cmath>
-#include <cstdlib>
-`,
-);
+insertAfter(`#include "choc/gui/choc_DesktopWindow.h"\n`, `#include "choc/text/choc_Files.h"\n#include "choc/text/choc_JSON.h"\n`);
+insertAfter(`#include <algorithm>\n`, `#include <cmath>\n#include <cstdlib>\n`);
 
 //==============================================================================
-replace(
+insertAfter(
   `namespace detail
 {
 `,
-  `namespace detail
-{
-
+  `
 ${marker} user settings shared by every instance, the host's parameter menu, and the bridge
-// the view reaches them through (added by tools/clap-patch.mjs).
-namespace porridge
-{
-    inline const std::string requestPrefix = "porridge:settings?";
-    inline const std::string replyKey = "porridge:settings";
-    inline const std::string hostRequestPrefix = "porridge:host?";
-    inline const std::string hostReplyKey = "porridge:host";
-
-    constexpr double minZoom = 0.5, maxZoom = 3.0;
-
-    inline double clampZoom (double z)
-    {
-        return std::isfinite (z) ? std::clamp (z, minZoom, maxZoom) : 1.0;
-    }
-
-    inline std::filesystem::path settingsFile()
-    {
-       #if CHOC_WINDOWS
-        wchar_t* appData = nullptr;
-        size_t length = 0;
-
-        if (_wdupenv_s (&appData, &length, L"APPDATA") == 0 && appData != nullptr)
-        {
-            std::filesystem::path folder (appData);
-            free (appData);
-            return folder / "Porridge" / "settings.json";
-        }
-       #elif CHOC_OSX
-        if (auto home = std::getenv ("HOME"))
-            return std::filesystem::path (home) / "Library" / "Application Support" / "Porridge" / "settings.json";
-       #else
-        if (auto config = std::getenv ("XDG_CONFIG_HOME"); config != nullptr && *config != 0)
-            return std::filesystem::path (config) / "porridge" / "settings.json";
-
-        if (auto home = std::getenv ("HOME"))
-            return std::filesystem::path (home) / ".config" / "porridge" / "settings.json";
-       #endif
-
-        return {};
-    }
-
-    inline choc::value::Value loadSettings()
-    {
-        try
-        {
-            auto file = settingsFile();
-
-            if (! file.empty() && std::filesystem::exists (file))
-            {
-                auto settings = choc::json::parse (choc::file::loadFileAsString (file));
-
-                if (settings.isObject())
-                    return settings;
-            }
-        }
-        catch (...) {}
-
-        return choc::value::createObject ({});
-    }
-
-    inline void saveSettings (const choc::value::ValueView& settings)
-    {
-        try
-        {
-            auto file = settingsFile();
-
-            if (! file.empty())
-            {
-                std::filesystem::create_directories (file.parent_path());
-                choc::file::replaceFileWithContent (file, choc::json::toString (settings, true));
-            }
-        }
-        catch (...) {}
-    }
-
-    inline double zoomSetting (const choc::value::ValueView& settings)
-    {
-        return clampZoom (settings.isObject() ? settings["zoom"].getWithDefault<double> (1.0) : 1.0);
-    }
-
-    /// The host's context menu extension, if it can show its menu for the plugin.
-    inline const clap_host_context_menu_t* hostContextMenu (const clap_host_t& host)
-    {
-        for (auto id : { CLAP_EXT_CONTEXT_MENU, CLAP_EXT_CONTEXT_MENU_COMPAT })
-        {
-            auto menu = static_cast<const clap_host_context_menu_t*> (host.get_extension (std::addressof (host), id));
-
-            if (menu != nullptr && menu->can_popup != nullptr && menu->popup != nullptr)
-                return menu;
-        }
-
-        return nullptr;
-    }
-
-    /// Listens to what the patch sends its views, and passes on the settings and host requests
-    /// (the whole key).
-    struct RequestBridge  : public cmaj::PatchView
-    {
-        RequestBridge (cmaj::Patch& p, std::function<void(std::string_view)> handleToUse)
-            : cmaj::PatchView (p), handle (std::move (handleToUse))
-        {}
-
-        void sendMessage (const choc::value::ValueView& msg) override
-        {
-            if (! msg.isObject() || msg["type"].toString() != "state_key_value")
-                return;
-
-            auto message = msg["message"];
-
-            if (! message.isObject())
-                return;
-
-            auto key = message["key"].toString();
-
-            if (choc::text::startsWith (key, requestPrefix) || choc::text::startsWith (key, hostRequestPrefix))
-                handle (key);
-        }
-
-        std::function<void(std::string_view)> handle;
-    };
-}
+// the view reaches them through (tools/clap/PorridgeBridge.h, added by tools/clap-patch.mjs).
+#include "PorridgeBridge.h"
 `,
 );
 
 //==============================================================================
-replaceRange(
-  `    struct ViewHolder
-    {`,
-  `    std::optional<ViewHolder> editor;
+replace(
+  `        ViewHolder (cmaj::Patch& patchToUse, std::optional<double> initialScaleFactorToUse)
+            : webview (std::make_unique<cmaj::PatchWebView> (patchToUse, findDefaultViewForPatch (patchToUse)))
+        {
+            if (initialScaleFactorToUse)
+                setScaleFactor (*initialScaleFactorToUse);
+        }
 `,
-  `    struct ViewHolder
-    {
-        ViewHolder (cmaj::Patch& patchToUse, std::optional<double> initialScaleFactorToUse, double zoomToUse)
+  `        ViewHolder (cmaj::Patch& patchToUse, std::optional<double> initialScaleFactorToUse, double zoomToUse)
             : webview (std::make_unique<cmaj::PatchWebView> (patchToUse, findDefaultViewForPatch (patchToUse))),
               designWidth (webview->width),
               designHeight (webview->height)
@@ -356,49 +205,13 @@ replaceRange(
             webview->width  = sizeForZoom (zoomToUse).width;
             webview->height = sizeForZoom (zoomToUse).height;
         }
+`,
+);
 
-        struct Size
-        {
-            uint32_t width;
-            uint32_t height;
-        };
-
-        bool setScaleFactor (double factor)
-        {
-            scaleFactor = factor;
-            inverseScaleFactor = 1.0 / factor;
-
-            return true;
-        }
-
-        Size size() const
-        {
-            return { scaled (webview->width),
-                     scaled (webview->height) };
-        }
-
-        bool setSize (const Size& sizeToUse)
-        {
-            webview->width  = unscaled (sizeToUse.width);
-            webview->height = unscaled (sizeToUse.height);
-
-            return updateNativeViewSize();
-        }
-
-        bool resizable() const
-        {
-            return webview->resizable;
-        }
-
-        bool setParent (void* parent)
-        {
-            if (! cmaj::plugin::addChildView (parent, nativeViewHandle()))
-                return false;
-
-            return updateNativeViewSize();
-        }
-
-        ${marker} the view's size relative to the manifest's, which the panel keeps the aspect
+insertBefore(
+  `    private:
+        void* nativeViewHandle() const`,
+  `        ${marker} the view's size relative to the manifest's, which the panel keeps the aspect
         // ratio of
         Size designSize() const     { return { designWidth, designHeight }; }
 
@@ -426,34 +239,21 @@ replaceRange(
 
         cmaj::PatchWebView& getPatchWebView()     { return *webview; }
 
-    private:
-        void* nativeViewHandle() const                  { return webview->getWebView().getViewHandle(); }
-        uint32_t scaled (uint32_t x) const              { return scaleFactor ? toIntegerPixel (*scaleFactor * x) : x; }
-        uint32_t unscaled (uint32_t x) const            { return scaleFactor ? toIntegerPixel (*inverseScaleFactor * x) : x; }
-        static uint32_t toIntegerPixel (double x)       { return static_cast<uint32_t> (0.5 + x); }
-
         Size sizeForZoom (double z) const
         {
             z = porridge::clampZoom (z);
             return { toIntegerPixel (designWidth * z), toIntegerPixel (designHeight * z) };
         }
 
-        bool updateNativeViewSize()
-        {
-            const auto [width, height] = size();
+`,
+);
 
-            return cmaj::plugin::setViewSize (nativeViewHandle(), width, height);
-        }
+insertAfter(`        std::unique_ptr<cmaj::PatchWebView> webview;\n`, `        uint32_t designWidth, designHeight;\n`);
 
-        std::unique_ptr<cmaj::PatchWebView> webview;
-        uint32_t designWidth, designHeight;
-        std::optional<double> scaleFactor;
-        std::optional<double> inverseScaleFactor;
-    };
-
-    std::optional<double> cachedViewScaleFactor; // workaround Bitwig only passing the scale factor the first time the view is shown
-    std::optional<ViewHolder> editor;
-
+insertAfter(
+  `    std::optional<ViewHolder> editor;
+`,
+  `
     ${marker} the size of this instance's editor, kept while it is closed, and the bridge that
     // answers the view's settings and host requests
     std::optional<double> editorZoom;
@@ -552,7 +352,7 @@ inline bool Plugin::Impl::clapGui_adjustSize (uint32_t* width, uint32_t* height)
 }`,
 );
 
-replace(
+insertBefore(
   `inline void Plugin::Impl::resetIfRequestIsPending()
 {`,
   `${marker} a stored-state request from the view (the whole key)
@@ -685,19 +485,16 @@ inline void Plugin::Impl::showPendingHostMenu()
     porridge::hostContextMenu (host)->popup (std::addressof (host), std::addressof (target), 0, request->x, request->y);
 }
 
-inline void Plugin::Impl::resetIfRequestIsPending()
-{`,
+`,
 );
 
-replace(
+insertAfter(
   `inline void Plugin::Impl::clapPlugin_onMainThread()
 {
-}`,
-  `inline void Plugin::Impl::clapPlugin_onMainThread()
-{
-    ${marker} the host's menu that the view asked for
+`,
+  `    ${marker} the host's menu that the view asked for
     showPendingHostMenu();
-}`,
+`,
 );
 
 //==============================================================================
@@ -708,14 +505,11 @@ replace(
 );
 
 //==============================================================================
-replace(
+insertAfter(
   `    bool loadPatch (const std::filesystem::path& pathToManifest, FrequencyAndBlockSize frequencyAndBlockSize)
     {
-        const auto manifest = environment.makePatchManifest (pathToManifest);
 `,
-  `    bool loadPatch (const std::filesystem::path& pathToManifest, FrequencyAndBlockSize frequencyAndBlockSize)
-    {
-        ${marker} a generated plugin's patch never changes, so once it's loaded, activating
+  `        ${marker} a generated plugin's patch never changes, so once it's loaded, activating
         // only needs to rebuild it if the sample rate or block size changed, which
         // setPlaybackParams does (keeping the parameter values). Loading it again from scratch
         // built it three times: preload, setPlaybackParams' rebuild, then loadPatch.
@@ -741,7 +535,6 @@ replace(
             return patch.isPlayable();
         }
 
-        const auto manifest = environment.makePatchManifest (pathToManifest);
 `,
 );
 

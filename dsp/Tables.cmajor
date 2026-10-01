@@ -40,15 +40,14 @@ namespace porridge
     {
         float[32769] sine;
         float[setSize * 4 + 2 * hqLevels * hqStride] sets;
-        float64[2 * 1024] hqSpectrum;   // scratch: harmonics 0 .. 1023 of the waveform being built
         float64[65536] fft;             // scratch: interleaved complex, up to 32768 points
-        float64[514] spectrum;          // scratch: one-sided spectrum (re, im) for up to 256 bins
+        float64[2 * 1024] spectrum;     // scratch: one-sided spectrum (re, im), up to 1024 bins
         float[32768] source;            // scratch: T0 being built
         float[32769 * 4] lfo;           // LFO sine, saw, square, triangle
 
-        // FFT twiddles, cos and sin (2 pi m / fftMax), forward (-) and inverse (+): user
-        // waveforms are rebuilt on the audio thread
-        float64[fftMax / 2] twCosF, twSinF, twCosI, twSinI;
+        // FFT twiddles, cos and sin (-2 pi m / fftMax) (the inverse's are their conjugates):
+        // user waveforms are rebuilt on the audio thread
+        float64[fftMax / 2] twCosF, twSinF;
         int[hqLevels] hqHarm;           // hqLevelHarmonics, by level
     }
 
@@ -61,14 +60,11 @@ namespace porridge
     {
         // the same expression the transform used: (direction * 2 pi) / length
         let angF = -1.0 * twoPi / float64 (fftMax);
-        let angI = 1.0 * twoPi / float64 (fftMax);
 
         for (int m = 0; m < fftMax / 2; ++m)
         {
             this.twCosF.at (m) = cos (angF * float64 (m));
             this.twSinF.at (m) = sin (angF * float64 (m));
-            this.twCosI.at (m) = cos (angI * float64 (m));
-            this.twSinI.at (m) = sin (angI * float64 (m));
         }
     }
 
@@ -105,8 +101,8 @@ namespace porridge
 
             for (int k = 0; k < half; ++k)
             {
-                let wr = inverse ? this.twCosI.at (k * stride) : this.twCosF.at (k * stride);
-                let wi = inverse ? this.twSinI.at (k * stride) : this.twSinF.at (k * stride);
+                let wr = this.twCosF.at (k * stride);
+                let wi = inverse ? -this.twSinF.at (k * stride) : this.twSinF.at (k * stride);
 
                 for (int i = 0; i < n; i += len)
                 {
@@ -121,28 +117,34 @@ namespace porridge
         }
     }
 
-    /// One-sided spectrum c[0..n/2] (c_k = X_k / n) of n samples of set table at 'offset'.
-    void analyse (WaveTables& this, int set, int offset, int n)
+    /// One-sided spectrum c[0 .. bins - 1] (c_k = X_k / n) of the n real samples in fft.
+    void analyseFft (WaveTables& this, int n, int bins)
     {
-        let base = set * setSize + offset;
-
-        for (int i = 0; i < n; ++i)
-        {
-            this.fft.at (2 * i) = float64 (this.sets.at (base + i));
-            this.fft.at (2 * i + 1) = 0;
-        }
-
         this.fftInPlace (n, false);
 
-        for (int k = 0; k <= n / 2; ++k)
+        for (int k = 0; k < bins; ++k)
         {
             this.spectrum.at (2 * k)     = this.fft.at (2 * k) / float64 (n);
             this.spectrum.at (2 * k + 1) = this.fft.at (2 * k + 1) / float64 (n);
         }
     }
 
-    /// Writes the real signal c0 + sum_{k=1..kmax} 2 Re(c_k e^{2 pi i k m / n}) (the k == n/2 term once).
-    void synthesise (WaveTables& this, int n, int kmax, int set, int offset, int decimate)
+    /// One-sided spectrum c[0 .. bins - 1] of n samples of 'sets' from 'first' on.
+    void analyse (WaveTables& this, int first, int n, int bins)
+    {
+        for (int i = 0; i < n; ++i)
+        {
+            this.fft.at (2 * i) = float64 (this.sets.at (first + i));
+            this.fft.at (2 * i + 1) = 0;
+        }
+
+        this.analyseFft (n, bins);
+    }
+
+    /// Writes the real signal c0 + sum_{k=1..kmax} 2 Re(c_k e^{2 pi i k m / n}) (the k == n/2
+    /// term once) into 'sets' from 'dst' on, every decimate-th sample, and the guard sample.
+    /// (A real signal's c0 is real: its imaginary part is +0.)
+    void synthesise (WaveTables& this, int n, int kmax, int dst, int decimate)
     {
         for (int i = 0; i < 2 * n; ++i)
             this.fft.at (i) = 0;
@@ -165,13 +167,12 @@ namespace porridge
 
         this.fftInPlace (n, true);
 
-        let base = set * setSize + offset;
         let outN = n / decimate;
 
         for (int i = 0; i < outN; ++i)
-            this.sets.at (base + i) = float (this.fft.at (2 * i * decimate));
+            this.sets.at (dst + i) = float (this.fft.at (2 * i * decimate));
 
-        this.sets.at (base + outN) = this.sets.at (base);
+        this.sets.at (dst + outN) = this.sets.at (dst);
     }
 
     /// Builds a whole set from the 32768-point table in 'source'.
@@ -182,6 +183,13 @@ namespace porridge
         for (int i = 0; i < 32768; ++i) this.sets.at (base + tabT0 + i) = this.source.at (i);
         this.sets.at (base + tabT0 + 32768) = this.source.at (0);
 
+        this.buildLevels (set);
+    }
+
+    /// The rest of a set from its 32768-point table T0.
+    void buildLevels (WaveTables& this, int set)
+    {
+        let base = set * setSize;
         let offsets = int[7] (tabT0, tabT1, tabT2, tabT3, tabT4, tabT5, tabT6);
 
         for (int lvl = 1; lvl < 7; ++lvl)
@@ -196,16 +204,16 @@ namespace porridge
             this.sets.at (dst + n) = this.sets.at (dst);
         }
 
-        this.analyse (set, tabT6, 512);
+        this.analyse (base + tabT6, 512, 257);
 
         for (int j = 0; j < 127; ++j)
-            this.synthesise (512, 255 - j, set, tabM512 + j * 513, 1);
+            this.synthesise (512, 255 - j, base + tabM512 + j * 513, 1);
 
-        this.synthesise (512, 128, set, tabM256Top, 2);
-        this.analyse (set, tabM256Top, 256);
+        this.synthesise (512, 128, base + tabM256Top, 2);
+        this.analyse (base + tabM256Top, 256, 129);
 
         for (int j = 0; j < 127; ++j)
-            this.synthesise (256, 127 - j, set, tabM256 + j * 257, 1);
+            this.synthesise (256, 127 - j, base + tabM256 + j * 257, 1);
     }
 
     /// User waveform (512 points) -> band-limited 32768-point T0 -> set.
@@ -218,34 +226,9 @@ namespace porridge
             this.fft.at (2 * i + 1) = 0;
         }
 
-        this.fftInPlace (512, false);
-
-        for (int k = 0; k <= 256; ++k)
-        {
-            this.spectrum.at (2 * k) = this.fft.at (2 * k) / 512.0;
-            this.spectrum.at (2 * k + 1) = this.fft.at (2 * k + 1) / 512.0;
-        }
-
-        for (int i = 0; i < 65536; ++i)
-            this.fft.at (i) = 0;
-
-        this.fft.at (0) = this.spectrum.at (0);
-
-        for (int k = 1; k <= 256; ++k)
-        {
-            let re = this.spectrum.at (2 * k), im = this.spectrum.at (2 * k + 1);
-            this.fft.at (2 * k) = re;
-            this.fft.at (2 * k + 1) = im;
-            this.fft.at (2 * (32768 - k)) = re;
-            this.fft.at (2 * (32768 - k) + 1) = -im;
-        }
-
-        this.fftInPlace (32768, true);
-
-        for (int i = 0; i < 32768; ++i)
-            this.source.at (i) = float (this.fft.at (2 * i));
-
-        this.buildSet (set);
+        this.analyseFft (512, 257);
+        this.synthesise (32768, 256, set * setSize + tabT0, 1);
+        this.buildLevels (set);
     }
 
     void buildStatic (WaveTables& this)
@@ -317,49 +300,10 @@ namespace porridge
     /// Builds the HQ tables of a set (saw or triangle) from its 32768-point table.
     void buildHQ (WaveTables& this, int set)
     {
-        let base = set * setSize + tabT0;
-
-        for (int i = 0; i < 32768; ++i)
-        {
-            this.fft.at (2 * i) = float64 (this.sets.at (base + i));
-            this.fft.at (2 * i + 1) = 0;
-        }
-
-        this.fftInPlace (32768, false);
-
-        for (int k = 0; k < 1024; ++k)
-        {
-            this.hqSpectrum.at (2 * k) = this.fft.at (2 * k) / 32768.0;
-            this.hqSpectrum.at (2 * k + 1) = this.fft.at (2 * k + 1) / 32768.0;
-        }
+        this.analyse (set * setSize + tabT0, 32768, 1024);
 
         for (int level = 0; level < hqLevels; ++level)
-        {
-            let K = this.hqHarm.at (level);
-
-            for (int i = 0; i < 2 * hqSize; ++i)
-                this.fft.at (i) = 0;
-
-            this.fft.at (0) = this.hqSpectrum.at (0);
-
-            for (int k = 1; k <= K; ++k)
-            {
-                let re = this.hqSpectrum.at (2 * k), im = this.hqSpectrum.at (2 * k + 1);
-                this.fft.at (2 * k) = re;
-                this.fft.at (2 * k + 1) = im;
-                this.fft.at (2 * (hqSize - k)) = re;
-                this.fft.at (2 * (hqSize - k) + 1) = -im;
-            }
-
-            this.fftInPlace (hqSize, true);
-
-            let out = hqBase + set * hqSetSize + level * hqStride;
-
-            for (int i = 0; i < hqSize; ++i)
-                this.sets.at (out + i) = float (this.fft.at (2 * i));
-
-            this.sets.at (out + hqSize) = this.sets.at (out);
-        }
+            this.synthesise (hqSize, this.hqHarm.at (level), hqBase + set * hqSetSize + level * hqStride, 1);
     }
 
     //==============================================================================

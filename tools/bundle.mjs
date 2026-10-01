@@ -12,25 +12,17 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join (dirname (fileURLToPath (import.meta.url)), "..");
 
-const bundles = [
-    ["ui/Index.res.mjs", "bundle/view.js"],
-    ["worker/PatchWorker.res.mjs", "bundle/worker.js"],
-];
-
-for (const [entry, out] of bundles)
-{
-    await build ({
-        entryPoints: [join (root, entry)],
-        outfile: join (root, out),
-        bundle: true,
-        format: "esm",
-        platform: "browser",
-        target: "es2020",
-        legalComments: "none",
-        logLevel: "warning",
-    });
-    console.log (`${entry} -> ${out}`);
-}
+await build ({
+    entryPoints: { view: join (root, "ui", "Index.res.mjs"), worker: join (root, "worker", "PatchWorker.res.mjs") },
+    outdir: join (root, "bundle"),
+    bundle: true,
+    format: "esm",
+    platform: "browser",
+    target: "es2020",
+    legalComments: "none",
+    logLevel: "warning",
+});
+console.log ("ui/Index.res.mjs -> bundle/view.js, worker/PatchWorker.res.mjs -> bundle/worker.js");
 
 const Preset = await import (pathToFileURL (join (root, "ui", "Preset.res.mjs")).href);
 const factory = Preset.factoryBank (new Uint8Array (readFileSync (join (root, "presets", "oatmealprs.dat"))));

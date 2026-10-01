@@ -13,16 +13,15 @@ open! Complex
 
 let pi = Math.Constants.pi
 let sr = 48000.
-let clamp = (x: float, lo, hi) => Math.max(lo, Math.min(hi, x))
-let db = (x: float) => x <= 1e-9 ? -180. : 20. * Math.log10(x)
+let (clamp, db) = (FxDsp.clamp, FxDsp.db)
 
 type view =
   // the gain at a frequency
   | Magnitude(float => float)
   // spectral lines: frequency, level (dB), and whether it is the input's
   | Lines(array<(float, float, bool)>)
-  // an impulse response at `sr`
-  | Impulse(array<float>)
+  // an impulse response at `sr`, worked out when it is drawn
+  | Impulse(unit => array<float>)
 
 //==============================================================================
 // responses
@@ -63,7 +62,7 @@ let vowelA = [1., 0.5, 0.1, 1., 0.35, 0.25, 1., 0.25, 0.12, 1., 0.4, 0.04, 1., 0
 let femaleF = [850., 1220., 2810., 610., 2330., 2990., 310., 2790., 3310., 470., 1160., 2680., 370., 950., 2670.]
 let femaleA = [1., 0.7, 0.35, 1., 0.6, 0.4, 1., 0.45, 0.4, 1., 0.5, 0.2, 1., 0.3, 0.15]
 
-let formants = (hz: float, ~fc, ~res: float, ~morph, ~bands, ~female, ~q: float) => {
+let formants = (hz: float, ~fc, ~morph, ~bands, ~female, ~q: float) => {
   let shift = clamp(fc / 1000., 0.25, 4.)
   let v = clamp(morph, 0., 1.) * 4.
   let vi = Math.Int.min(Float.toInt(v), 3)
@@ -76,7 +75,6 @@ let formants = (hz: float, ~fc, ~res: float, ~morph, ~bands, ~female, ~q: float)
     let (_, bp, _) = svf(hz, at(fs, b) * shift, q)
     sum := add(sum.contents, scale(bp, at(amps, b)))
   }
-  ignore(res)
   sum.contents
 }
 
@@ -233,10 +231,10 @@ let view = (t, ~fc: float, ~res: float, ~morph: float): view => {
       let a = allpasses(hz, freqs)
       scale(add(one, div(a, add(one, scale(a, -.fb)))), 0.5)
     })
-  | 21 => mag(hz => formants(hz, ~fc, ~res, ~morph, ~bands=3, ~female=false, ~q=4. + 20. * res))
-  | 50 => mag(hz => formants(hz, ~fc, ~res, ~morph, ~bands=2, ~female=false, ~q=5. + 15. * res))
-  | 51 => mag(hz => formants(hz, ~fc, ~res, ~morph, ~bands=3, ~female=true, ~q=4. + 12. * res))
-  | 52 => mag(hz => formants(hz, ~fc, ~res, ~morph, ~bands=3, ~female=false, ~q=8. + 32. * res))
+  | 21 => mag(hz => formants(hz, ~fc, ~morph, ~bands=3, ~female=false, ~q=4. + 20. * res))
+  | 50 => mag(hz => formants(hz, ~fc, ~morph, ~bands=2, ~female=false, ~q=5. + 15. * res))
+  | 51 => mag(hz => formants(hz, ~fc, ~morph, ~bands=3, ~female=true, ~q=4. + 12. * res))
+  | 52 => mag(hz => formants(hz, ~fc, ~morph, ~bands=3, ~female=false, ~q=8. + 32. * res))
   | 24 | 25 =>
     let boost = Math.pow(10., ~exp=24. * res / 20.) - 1.
     mag(hz => {
@@ -290,8 +288,8 @@ let view = (t, ~fc: float, ~res: float, ~morph: float): view => {
         sinc * smooth->Option.mapOr(1., s => abs(onePole(hz, s)))
       },
     )
-  | 58 => Impulse(diffusorImpulse(~fc, ~res, ~morph))
-  | 59 => Impulse(reverbImpulse(~fc, ~res, ~morph))
+  | 58 => Impulse(() => diffusorImpulse(~fc, ~res, ~morph))
+  | 59 => Impulse(() => reverbImpulse(~fc, ~res, ~morph))
   | _ => Magnitude(_ => 1.)
   }
 }
@@ -333,16 +331,14 @@ let make = (ctx: Ctx.t, parent, box: box, src: source) => {
   let model = ctx.model
   let get = id => model->ParamModel.get(id)
   let g = FxGraph.make(ctx, parent, box)
-  let layer = FxGraph.group(g.svg)
-  let dots = FxGraph.group(g.svg)
-  let hits = FxGraph.group(g.svg)
-  let readout = svgEl(hits, "text", [("class", Str("readout"))])
+  let layer = FxGraph.group(g.under)
   let (left, right, top) = (34., g.w - 10., 8.)
   let bottom = g.h - 16.
+  let p: FxGraph.plot = {layer, left, right, top, bottom}
   let (lo, hi) = (-36., 24.)
-  let xOfHz = hz => left + Math.log(clamp(hz, 20., 20000.) / 20.) / Math.log(1000.) * (right - left)
-  let hzAt = x => 20. * Math.pow(1000., ~exp=clamp((x - left) / (right - left), 0., 1.))
-  let yOfDb = v => bottom - (clamp(v, lo, hi) - lo) / (hi - lo) * (bottom - top)
+  let xOfHz = FxGraph.xOfHz(p, _)
+  let hzAt = FxGraph.hzAt(p, _)
+  let yOfDb = v => FxGraph.yOf(p, v, lo, hi)
   let yOfRes = r => bottom - r * (bottom - top - 12.)
   let f1 = Float.toFixed(_, ~digits=1)
 
@@ -354,15 +350,6 @@ let make = (ctx: Ctx.t, parent, box: box, src: source) => {
     })
     FxGraph.path(layer, ~cls)->FxGraph.setPath(Plots.pathFrom(points))
   }
-
-  let frequencyAxis = (~labels) =>
-    [50., 100., 200., 500., 1000., 2000., 5000., 10000.]->Array.forEach(f => {
-      let x = xOfHz(f)
-      FxGraph.line(layer, ~cls="grid", x, top, x, bottom)
-      if labels {
-        FxGraph.text(layer, ~anchor="middle", x, g.h - 3., f >= 1000. ? `${Float.toString(f / 1000.)}k` : Float.toString(f))
-      }
-    })
 
   let drawView = (t, fc, ~cls, ~withMix) => {
     let res = get(src.res)
@@ -380,6 +367,7 @@ let make = (ctx: Ctx.t, parent, box: box, src: source) => {
       )
     | Impulse(h) =>
       // time across the whole graph, the amplitude up and down from the middle
+      let h = h()
       let n = Array.length(h)
       let peak = h->Array.reduce(1e-9, (m, v) => Math.max(m, Math.abs(v)))
       let mid = (top + bottom) / 2.
@@ -412,13 +400,9 @@ let make = (ctx: Ctx.t, parent, box: box, src: source) => {
     | Impulse(_) => true
     | _ => false
     }
-    frequencyAxis(~labels=!impulse)
+    p->FxGraph.frequencyLines(~labelY=g.h - 3., ~labels=!impulse, FxGraph.frequencies)
     if !impulse {
-      [12., 0., -12., -24.]->Array.forEach(v => {
-        let y = yOfDb(v)
-        FxGraph.line(layer, ~cls=v == 0. ? "axis" : "grid", left, y, right, y)
-        FxGraph.text(layer, ~anchor="end", left - 4., y + 4., Float.toString(v))
-      })
+      p->FxGraph.levelLines(~lo, ~hi, [12., 0., -12., -24.])
     }
     src.second()->Option.forEach(((t2, fc2)) => drawView(t2, fc2, ~cls="curve dim", ~withMix=false))
     src.spread->Option.forEach(id => {
@@ -498,29 +482,22 @@ let make = (ctx: Ctx.t, parent, box: box, src: source) => {
     | (Some(_), Some(v)) => yOfLevel(v)
     | _ => yOfRes(get(src.res))
     }
-  let start = ref((0., 0., 0.))
-  let show = () =>
-    ctx.status->Status.show(
-      [src.cutoff, src.res]->Array.map(i => (model->ParamModel.def(i)).longText(get(i)))->Array.join("    "),
-    )
   let hint = "Drag the point: across for the cutoff, up and down for the resonance; scroll for fine resonance, shift for fine steps, right-click to reset"
+  let ids = [src.cutoff, src.res]
+  // the resonance when the drag started
+  let res0 = ref(0.)
   let point = FxGraph.handle(
     g,
-    ~layer=dots,
-    ~hits,
     ~r=7.,
-    ~ids=[src.cutoff, src.res],
-    ~start=() => {
-      let fc = src.toHz(get(src.cutoff))
-      start := (xOfHz(fc), pointY(fc), get(src.res))
-    },
-    ~drag=((dx, dy)) => {
-      let (x0, y0, r0) = start.contents
-      model->ParamModel.set(src.cutoff, src.ofHz(hzAt(x0 + dx)))
+    ~ids,
+    ~hot=false,
+    ~start=() => res0 := get(src.res),
+    ~drag=({x, y, dy}) => {
+      model->ParamModel.set(src.cutoff, src.ofHz(hzAt(x)))
       let fc = src.toHz(get(src.cutoff))
       let res = switch direction(fc) {
       | Some(up) =>
-        let y = clamp(y0 + dy, 0., bottom)
+        let y = clamp(y, 0., bottom)
         // at the edges, the resonance's end
         if y <= 0.5 {
           up ? 1. : 0.
@@ -529,29 +506,30 @@ let make = (ctx: Ctx.t, parent, box: box, src: source) => {
         } else {
           resonanceFor(fc, levelAt(y), up)
         }
-      | None => clamp(r0 - dy / (bottom - top - 12.), 0., 1.)
+      | None => clamp(res0.contents - dy / (bottom - top - 12.), 0., 1.)
       }
       model->ParamModel.set(src.res, res)
-      show()
     },
-    ~wheel=d => FxGraph.setNorm(g, src.res, FxGraph.norm(g, src.res) + d),
-    ~hover=on => on ? show() : ctx.status->Status.show(hint),
+    ~wheel=src.res,
+    ~hover=on => ctx.status->Status.show(on ? model->ParamModel.statusText(ids) : hint),
   )
   let place = () => {
     let fc = src.toHz(get(src.cutoff))
     let x = xOfHz(fc)
     let y = pointY(fc)
     point->FxGraph.place(x, y)
-    FxGraph.readout(g, readout, ~x, ~y, `${FxGraph.hzText(src.toHz(get(src.cutoff)))} · ${FxGraph.short(g, src.res)}`)
+    g->FxGraph.readout(~x, ~y, `${FxGraph.hzText(src.toHz(get(src.cutoff)))} · ${FxGraph.short(g, src.res)}`)
   }
 
   let redraw = FxGraph.redraw(g, () => {
     draw()
     place()
   })
-  [src.cutoff, src.res, src.morph, src.drive, ...src.alsoIds]
-  ->Array.concat(src.mix->Option.mapOr([], m => [m]))
-  ->Array.concat(src.spread->Option.mapOr([], s => [s]))
-  ->Array.forEach(id => model->ParamModel.listen(id, redraw.request))
+  model->ParamModel.listenEach(
+    [src.cutoff, src.res, src.morph, src.drive, ...src.alsoIds]
+    ->Array.concat(src.mix->Option.mapOr([], m => [m]))
+    ->Array.concat(src.spread->Option.mapOr([], s => [s])),
+    redraw.request,
+  )
   redraw.now
 }

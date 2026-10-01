@@ -13,6 +13,14 @@ let make = (stage, title) => {
 
 let remove = d => d.shade->remove
 
+// Calls close on a press on the shade beside the dialog.
+let closeOnShade = (shade, close) =>
+  shade->onPointer(#pointerdown, ev =>
+    if ev->target === Obj.magic(shade) {
+      close()
+    }
+  )
+
 // Adds the buttons, (label, action) pairs, and returns them. Keys stay in the dialog (the host
 // may otherwise take them as shortcuts): Enter does onEnter, except in a text area, and Escape,
 // like a click beside the dialog, does close.
@@ -26,11 +34,7 @@ let finish = (d, buttons, ~onEnter, ~close) => {
     | _ => ()
     }
   })
-  d.shade->onPointer(#pointerdown, ev =>
-    if ev->target === Obj.magic(d.shade) {
-      close()
-    }
-  )
+  d.shade->closeOnShade(close)
   buttons->Array.map(((text, action)) => {
     let b = el("button", ~cls="btn", ~text, ~parent=row)
     b->onMouse(#click, _ => action())

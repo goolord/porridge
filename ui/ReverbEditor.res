@@ -15,14 +15,14 @@ let roomHint = "The room: drag its corner for the size. The rays are the early r
 
 let floorDb = -60.
 
-let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
+let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
   let id = FxRack.id(e, ...)
   let model = ctx.model
   let get = x => model->ParamModel.get(id(x))
-  let (gap, w) = (Grid.gap, Style.designWidth - 12.)
-  let settingsHeight = 2. * Grid.rowHeight + 2. * Grid.padBottom - Style.controlGap
+  let gap = Grid.gap
+  let settingsHeight = Grid.bareHeight(2)
   let rowHeight = 176.
-  let topHeight = Style.pageHeight - 6. - 34. - settingsHeight - rowHeight - 2. * gap
+  let topHeight = h - settingsHeight - rowHeight - 2. * gap
   let f = Float.toFixed(_, ~digits=1)
 
   let settings = (): FxDsp.reverbSettings => {
@@ -35,10 +35,6 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     earlyMix: get("R_EarlyMix"),
   }
   let infinite = () => get("R_Length") >= FxDsp.infinite
-  let status = ids =>
-    ctx.status->Status.show(
-      ids->Array.map(i => (model->ParamModel.def(i)).longText(model->ParamModel.get(i)))->Array.join("    "),
-    )
   let wetId = id("R_Wet")
   let dryId = id("R_Dry")
   let predelayId = id("R_Predelay")
@@ -51,7 +47,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
 
   let panel = Panel.make(body, ~title="sound", ~x=0., ~y=0., ~w, ~h=topHeight)
   panel->Panel.headerToggle(ctx, id("R_On"), ~label="on")
-  let g = FxGraph.make(ctx, panel.el, {x: 8., y: 25., w: w - 18., h: topHeight - 35.})
+  let g = FxGraph.inPanel(ctx, panel, ~hint)
   let (left, right) = (16., g.w - 16.)
   let axisHeight = 14.
   let middle = (g.h - axisHeight) / 2.
@@ -70,12 +66,9 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     (FxDsp.clamp(db, floor.contents, ceiling.contents) - floor.contents) / (ceiling.contents - floor.contents) * halfHeight
   let dbAt = y => floor.contents + (middle - y) / halfHeight * (ceiling.contents - floor.contents)
 
-  let grid = FxGraph.group(g.svg)
-  let shapes = FxGraph.group(g.svg)
-  let notes = FxGraph.group(g.svg)
-  let layer = FxGraph.group(g.svg)
-  let hits = FxGraph.group(g.svg)
-  let readout = svgEl(hits, "text", [("class", Str("readout"))])
+  let grid = FxGraph.group(g.under)
+  let shapes = FxGraph.group(g.under)
+  let notes = FxGraph.group(g.under)
 
   let predelay = () => get("R_Predelay") / 1000.
   let tailSeconds = () => infinite() ? 8. : get("R_Length")
@@ -85,28 +78,33 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     until := Math.max(0.3, Math.max(0., pd) + tailSeconds() * 1.15)
   }
 
-  // the network's response, kept until a setting that shapes it changes
+  // the network's response for `seconds` (its first n samples, at sr), kept until a setting that
+  // shapes it changes. A longer one at the same rate starts the same, so while the span is held
+  // (a predelay drag) it is made as long as the span allows.
   let cache = ref(None)
   let shapeIds = ["R_Size", "R_Length", "R_Dullness", "R_Brightness", "R_1", "R_2", "R_3", "R_Rotation", "R_EarlyMix"]
+  let rate = seconds => FxDsp.clamp(60000. / seconds, 2000., 24000.)
   let impulse = seconds => {
-    let key = shapeIds->Array.map(i => Float.toString(get(i)))->Array.join(",") ++ "@" ++ Float.toString(seconds)
+    let key = shapeIds->Array.map(i => Float.toString(get(i)))->Array.join(",")
+    let sr = rate(seconds)
+    let n = Math.Int.max(1, Float.toInt(sr * seconds))
     switch cache.contents {
-    | Some((k, result)) if k == key => result
+    | Some((k, (l, r, s))) if k == key && s == sr && TypedArray.length(l) >= n => (l, r, sr, n)
     | _ =>
-      let sr = FxDsp.clamp(60000. / seconds, 2000., 24000.)
-      let (l, r) = FxDsp.reverbImpulse(settings(), ~sr, ~seconds)
+      let span = until.contents - from.contents
+      let (l, r) = FxDsp.reverbImpulse(settings(), ~sr, ~seconds=rate(span) == sr ? Math.max(seconds, span) : seconds)
       cache := Some((key, (l, r, sr)))
-      (l, r, sr)
+      (l, r, sr, n)
     }
   }
   // the tail's loudness (both sides) at time t after its start, smoothed over `window` seconds,
   // in dB at a wet level of 0 dB
-  let envelope = ((l, r, sr), t, window) => {
+  let envelope = ((l, r, sr, n), t, window) => {
     let (i0, i1) = (Math.Int.max(0, Float.toInt((t - window / 2.) * sr)), Float.toInt((t + window / 2.) * sr))
-    let i1 = Math.Int.min(i1, TypedArray.length(l) - 1)
+    let i1 = Math.Int.min(i1, n - 1)
     let sum = ref(0.)
     for i in i0 to i1 {
-      let (a, b) = (FxDsp.at(l, i), FxDsp.at(r, i))
+      let (a, b) = (ByteView.getUnsafe(l, i), ByteView.getUnsafe(r, i))
       sum := sum.contents + a * a + b * b
     }
     let n = Math.Int.max(1, i1 - i0 + 1)
@@ -114,90 +112,43 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     10. * Math.log10(Math.max(1e-12, sum.contents / Int.toFloat(n))) + 9.
   }
 
-  let focus = ref(None)
-  let dragging = ref(false)
-  let draw = ref(() => ())
   // how loud the tail starts at a wet level of 0 dB, from the last drawing (held while dragging)
   let startLevel = ref(0.)
-  let hover = (key, ids, on) => {
-    focus := (on ? Some(key) : None)
-    on ? status(ids) : ctx.status->Status.show(hint)
-    draw.contents()
-  }
   let finish = () => {
-    dragging := false
     fit()
-    draw.contents()
+    g.redraw()
   }
-
-  let origin = ref((0., 0.))
-  let startSelf = ref(None)
   let startHandle = FxGraph.handle(
     g,
-    ~layer,
-    ~hits,
     ~ids=[predelayId, wetId],
-    ~start=() => {
-      dragging := true
-      origin := startSelf.contents->Option.mapOr((0., 0.), (h: FxGraph.handle) => (h.x, h.y))
-    },
-    ~drag=((dx, dy)) => {
-      let (x0, y0) = origin.contents
-      model->ParamModel.set(predelayId, timeAt(x0 + dx) * 1000.)
-      model->ParamModel.set(wetId, gain(dbAt(y0 + dy) - startLevel.contents))
-      status([predelayId, wetId])
+    ~key="start",
+    ~drag=({x, y}) => {
+      model->ParamModel.set(predelayId, timeAt(x) * 1000.)
+      model->ParamModel.set(wetId, gain(dbAt(y) - startLevel.contents))
     },
     ~finish,
-    ~hover=hover("start", [predelayId, wetId], ...),
   )
-  startSelf := Some(startHandle)
-
-  let endX = ref(0.)
-  let endSelf = ref(None)
   let endHandle = FxGraph.handle(
     g,
-    ~layer,
-    ~hits,
     ~cls="node hollow",
     ~cursor="ew-resize",
     ~ids=[lengthId],
-    ~start=() => {
-      dragging := true
-      endX := endSelf.contents->Option.mapOr(0., (h: FxGraph.handle) => h.x)
-    },
-    ~drag=((dx, _)) => {
-      let x = endX.contents + dx
-      model->ParamModel.set(lengthId, x > right + 12. ? 120. : FxDsp.clamp(timeAt(x) - predelay(), 0.1, 29.9))
-      status([lengthId])
-    },
+    ~key="end",
+    ~drag=({x}) =>
+      model->ParamModel.set(lengthId, x > right + 12. ? 120. : FxDsp.clamp(timeAt(x) - predelay(), 0.1, 29.9)),
     ~finish,
-    ~wheel=d => FxGraph.setNorm(g, lengthId, FxGraph.norm(g, lengthId) + d),
-    ~hover=hover("end", [lengthId], ...),
+    ~wheel=lengthId,
   )
-  endSelf := Some(endHandle)
-
-  let dryY = ref(0.)
-  let drySelf = ref(None)
   let dryHandle = FxGraph.handle(
     g,
-    ~layer,
-    ~hits,
     ~cls="node faint",
     ~r=5.,
     ~cursor="ns-resize",
     ~ids=[dryId],
-    ~start=() => {
-      dragging := true
-      dryY := drySelf.contents->Option.mapOr(0., (h: FxGraph.handle) => h.y)
-    },
-    ~drag=((_, dy)) => {
-      model->ParamModel.set(dryId, gain(dbAt(dryY.contents + dy)))
-      status([dryId])
-    },
+    ~key="dry",
+    ~drag=({y}) => model->ParamModel.set(dryId, gain(dbAt(y))),
     ~finish,
-    ~hover=hover("dry", [dryId], ...),
   )
-  drySelf := Some(dryHandle)
 
   // a label with a bracket under it, from x0 to x1
   let span = (x0, x1, y, text) => {
@@ -207,110 +158,104 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     FxGraph.text(notes, ~cls="note", ~anchor="middle", (x0 + x1) / 2., y - 4., text)
   }
 
-  draw :=
-    () => {
-      g.svg->toggleClass("off", get("R_On") == 0.)
-      grid->setTextContent("")
-      shapes->setTextContent("")
-      notes->setTextContent("")
-      let bottom = g.h - axisHeight
-      FxGraph.line(grid, ~cls="axis faint", left, middle, right, middle)
-      let step = FxGraph.niceStep((until.contents - from.contents) * 1000., 10.)
-      let t = ref(Math.ceil(from.contents * 1000. / step) * step)
-      while t.contents <= until.contents * 1000. {
-        let x = xOf(t.contents / 1000.)
-        FxGraph.line(grid, ~cls="axis faint", x, bottom - 4., x, bottom)
-        FxGraph.text(grid, ~anchor="middle", x, g.h - 2., FxGraph.msText(t.contents))
-        t := t.contents + step
-      }
+  let draw = () => {
+    g.svg->toggleClass("off", get("R_On") == 0.)
+    grid->setTextContent("")
+    shapes->setTextContent("")
+    notes->setTextContent("")
+    let bottom = g.h - axisHeight
+    FxGraph.line(grid, ~cls="axis faint", left, middle, right, middle)
+    let step = FxGraph.niceStep((until.contents - from.contents) * 1000., 10.)
+    FxGraph.ticks(~from=Math.ceil(from.contents * 1000. / step) * step, ~until=until.contents * 1000., ~step, t => {
+      let x = xOf(t / 1000.)
+      FxGraph.line(grid, ~cls="axis faint", x, bottom - 4., x, bottom)
+      FxGraph.text(grid, ~anchor="middle", x, g.h - 2., FxGraph.msText(t))
+    })
 
-      let pd = predelay()
-      let seconds = Math.max(0.05, until.contents - Math.max(from.contents, pd))
-      let response = impulse(seconds)
-      let wetDb = FxGraph.gainDb(get("R_Wet"))
-      let x0 = Math.max(left, xOf(pd))
-      // the tail: a smooth shape, as loud above the middle as below
-      let window = Math.max(0.006, (until.contents - from.contents) / 160.)
-      let columns = Math.Int.max(2, Float.toInt((right - x0) / 3.))
-      let levels = Array.fromInitializer(~length=columns + 1, c => {
-        let x = x0 + Int.toFloat(c) * (right - x0) / Int.toFloat(columns)
-        (x, envelope(response, timeAt(x) - pd, window) + wetDb)
-      })
-      if !dragging.contents {
-        startLevel :=
-          levels->Array.slice(~start=0, ~end=8)->Array.reduce(-120., (m, (_, db)) => Math.max(m, db)) - wetDb
-        let start = wetDb + startLevel.contents
-        floor := start - 60.
-        ceiling := Math.max(start, FxGraph.gainDb(get("R_Dry"))) + 4.
-      }
-      let upper = levels->Array.map(((x, db)) => (x, middle - lift(db)))
-      let lower = levels->Array.map(((x, db)) => (x, middle + lift(db)))->Array.toReversed
-      svgEl(
-        shapes,
-        "path",
-        [("class", Str("tail")), ("d", Str(Plots.pathFrom(Array.concat(upper, lower)) ++ "Z"))],
-      )->ignore
-      // the dry hit
-      let dx = xOf(0.)
-      let dh = lift(FxGraph.gainDb(get("R_Dry")))
-      svgEl(
-        shapes,
-        "path",
-        [
-          ("class", Str("hit")),
-          ("d", Str(`M${f(dx - 3.)} ${f(middle)}L${f(dx)} ${f(middle - dh)}L${f(dx + 3.)} ${f(middle)}L${f(dx)} ${f(middle + dh)}Z`)),
-        ],
-      )->ignore
-      dryHandle->FxGraph.place(dx, middle - dh)
-
-      let startY = middle - lift(wetDb + startLevel.contents)
-      startHandle->FxGraph.place(xOf(pd), startY)
-      let endT = infinite() ? until.contents : pd + get("R_Length")
-      endHandle->FxGraph.place(Math.min(right, xOf(endT)), middle)
-
-      // what the shape is made of
-      let noteY = bottom - 10.
-      let hasGap = Math.abs(pd) > 0.002
-      if hasGap {
-        let (a, b) = pd > 0. ? (0., pd) : (pd, 0.)
-        span(
-          xOf(a),
-          xOf(b),
-          noteY,
-          pd > 0. ? `predelay ${FxGraph.msText(pd * 1000.)}` : `dry ${FxGraph.msText(-.pd * 1000.)} late`,
-        )
-      }
-      span(
-        xOf(Math.max(0., pd)),
-        Math.min(right, xOf(endT)),
-        noteY - (hasGap ? 16. : 0.),
-        infinite() ? "the tail never dies away" : `the tail: ${FxGraph.short(g, lengthId)} to fade by 60 dB`,
-      )
-      FxGraph.text(notes, ~cls="note", ~anchor="middle", dx, middle - dh - 8., "dry")
-
-      startHandle->FxGraph.setClass(focus.contents == Some("start") ? "node hot" : "node")
-      endHandle->FxGraph.setClass(focus.contents == Some("end") ? "node hollow hot" : "node hollow")
-      dryHandle->FxGraph.setClass(focus.contents == Some("dry") ? "node faint hot" : "node faint")
-      switch focus.contents {
-      | Some("start") =>
-        g->FxGraph.readout(
-          readout,
-          ~x=startHandle.x,
-          ~y=startHandle.y,
-          `predelay ${FxGraph.short(g, predelayId)}  ·  wet ${FxGraph.short(g, wetId)}`,
-        )
-      | Some("end") =>
-        g->FxGraph.readout(readout, ~x=endHandle.x, ~y=endHandle.y, `length ${FxGraph.short(g, lengthId)}`)
-      | Some(_) => g->FxGraph.readout(readout, ~x=dryHandle.x, ~y=dryHandle.y, `dry ${FxGraph.short(g, dryId)}`)
-      | None => readout->setTextContent("")
-      }
+    let pd = predelay()
+    let seconds = Math.max(0.05, until.contents - Math.max(from.contents, pd))
+    let response = impulse(seconds)
+    let wetDb = FxGraph.gainDb(get("R_Wet"))
+    let x0 = Math.max(left, xOf(pd))
+    // the tail: a smooth shape, as loud above the middle as below
+    let window = Math.max(0.006, (until.contents - from.contents) / 160.)
+    let columns = Math.Int.max(2, Float.toInt((right - x0) / 3.))
+    let levels = Array.fromInitializer(~length=columns + 1, c => {
+      let x = x0 + Int.toFloat(c) * (right - x0) / Int.toFloat(columns)
+      (x, envelope(response, timeAt(x) - pd, window) + wetDb)
+    })
+    if !g.dragging {
+      startLevel :=
+        levels->Array.slice(~start=0, ~end=8)->Array.reduce(-120., (m, (_, db)) => Math.max(m, db)) - wetDb
+      let start = wetDb + startLevel.contents
+      floor := start - 60.
+      ceiling := Math.max(start, FxGraph.gainDb(get("R_Dry"))) + 4.
     }
+    let upper = levels->Array.map(((x, db)) => (x, middle - lift(db)))
+    let lower = levels->Array.map(((x, db)) => (x, middle + lift(db)))->Array.toReversed
+    svgEl(
+      shapes,
+      "path",
+      [("class", Str("tail")), ("d", Str(Plots.pathFrom(Array.concat(upper, lower)) ++ "Z"))],
+    )->ignore
+    // the dry hit
+    let dx = xOf(0.)
+    let dh = lift(FxGraph.gainDb(get("R_Dry")))
+    svgEl(
+      shapes,
+      "path",
+      [
+        ("class", Str("hit")),
+        ("d", Str(`M${f(dx - 3.)} ${f(middle)}L${f(dx)} ${f(middle - dh)}L${f(dx + 3.)} ${f(middle)}L${f(dx)} ${f(middle + dh)}Z`)),
+      ],
+    )->ignore
+    dryHandle->FxGraph.place(dx, middle - dh)
+
+    let startY = middle - lift(wetDb + startLevel.contents)
+    startHandle->FxGraph.place(xOf(pd), startY)
+    let endT = infinite() ? until.contents : pd + get("R_Length")
+    endHandle->FxGraph.place(Math.min(right, xOf(endT)), middle)
+
+    // what the shape is made of
+    let noteY = bottom - 10.
+    let hasGap = Math.abs(pd) > 0.002
+    if hasGap {
+      let (a, b) = pd > 0. ? (0., pd) : (pd, 0.)
+      span(
+        xOf(a),
+        xOf(b),
+        noteY,
+        pd > 0. ? `predelay ${FxGraph.msText(pd * 1000.)}` : `dry ${FxGraph.msText(-.pd * 1000.)} late`,
+      )
+    }
+    span(
+      xOf(Math.max(0., pd)),
+      Math.min(right, xOf(endT)),
+      noteY - (hasGap ? 16. : 0.),
+      infinite() ? "the tail never dies away" : `the tail: ${FxGraph.short(g, lengthId)} to fade by 60 dB`,
+    )
+    FxGraph.text(notes, ~cls="note", ~anchor="middle", dx, middle - dh - 8., "dry")
+
+    switch g.focus {
+    | Some("start") =>
+      g->FxGraph.readout(
+        ~x=startHandle.x,
+        ~y=startHandle.y,
+        `predelay ${FxGraph.short(g, predelayId)}  ·  wet ${FxGraph.short(g, wetId)}`,
+      )
+    | Some("end") =>
+      g->FxGraph.readout(~x=endHandle.x, ~y=endHandle.y, `length ${FxGraph.short(g, lengthId)}`)
+    | Some(_) => g->FxGraph.readout(~x=dryHandle.x, ~y=dryHandle.y, `dry ${FxGraph.short(g, dryId)}`)
+    | None => g->FxGraph.hideReadout
+    }
+  }
+  g.redraw = draw
 
   let soundRedraw = FxGraph.redraw(g, () => {
-    if !dragging.contents {
+    if !g.dragging {
       fit()
     }
-    draw.contents()
+    draw()
   })
   let allIds =
     [
@@ -329,8 +274,6 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
       "R_EarlyMix",
     ]->Array.map(id)
   g->FxGraph.listen(allIds, soundRedraw.request)
-  g.svg->onMouse(#mouseenter, _ => ctx.status->Status.show(hint))
-  g.svg->onMouse(#mouseleave, _ => ctx.status->Status.clear)
 
   //==============================================================================
   // how long each pitch rings
@@ -338,26 +281,18 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
   let rowY = topHeight + gap
   let ringWidth = (w - gap) / 2.
   let ring = Panel.make(body, ~title="ring time by pitch", ~x=0., ~y=rowY, ~w=ringWidth, ~h=rowHeight)
-  let rg = FxGraph.make(ctx, ring.el, {x: 8., y: 25., w: ringWidth - 18., h: rowHeight - 35.})
+  let rg = FxGraph.inPanel(ctx, ring, ~hint=ringHint)
   let (rLeft, rRight) = (40., rg.w - 10.)
   let (rTop, rBottom) = (14., rg.h - 14.)
-  let (fMin, fMax) = (20., 20000.)
-  let rxOf = hz => rLeft + Math.log(hz / fMin) / Math.log(fMax / fMin) * (rRight - rLeft)
-  let hzAt = x => fMin * Math.pow(fMax / fMin, ~exp=FxDsp.clamp((x - rLeft) / (rRight - rLeft), 0., 1.))
+  let (rxOf, hzAt) = FxGraph.logScale(~lo=20., ~hi=20000., ~left=rLeft, ~right=rRight)
   // seconds at the top, held while dragging
   let ceiling = ref(2.)
   let ryOf = s => rBottom - FxDsp.clamp(s / ceiling.contents, 0., 1.05) * (rBottom - rTop)
   let secondsAt = y => (rBottom - y) / (rBottom - rTop) * ceiling.contents
-  let rGrid = FxGraph.group(rg.svg)
-  let rFill = FxGraph.path(rg.svg, ~cls="fill")
-  let rCurve = FxGraph.path(rg.svg, ~cls="curve")
-  let rNotes = FxGraph.group(rg.svg)
-  let rLayer = FxGraph.group(rg.svg)
-  let rHits = FxGraph.group(rg.svg)
-  let rReadout = svgEl(rHits, "text", [("class", Str("readout"))])
-  let rFocus = ref(None)
-  let rDragging = ref(false)
-  let rDraw = ref(() => ())
+  let rGrid = FxGraph.group(rg.under)
+  let rFill = FxGraph.path(rg.under, ~cls="fill")
+  let rCurve = FxGraph.path(rg.under, ~cls="curve")
+  let rNotes = FxGraph.group(rg.under)
 
   // A pitch's ring time: the length, less what the damping filters take on every pass (a pass
   // takes about the room size).
@@ -379,163 +314,107 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     let step = FxGraph.niceStep(top, 1.)
     ceiling := step * Math.ceil(top / step)
   }
-  let rHover = (key, ids, on) => {
-    rFocus := (on ? Some(key) : None)
-    on ? status(ids) : ctx.status->Status.show(ringHint)
-    rDraw.contents()
-  }
-  let rFinish = () => {
-    rDragging := false
-    rFit()
-    rDraw.contents()
-  }
-  let rPoint = (i, ~cursor, ~drag) => {
-    let p0 = ref((0., 0.))
-    let self = ref(None)
-    let h = FxGraph.handle(
+  let rPoint = (i, ~cursor, ~drag) =>
+    FxGraph.handle(
       rg,
-      ~layer=rLayer,
-      ~hits=rHits,
       ~cursor,
       ~ids=[i],
-      ~start=() => {
-        rDragging := true
-        p0 := self.contents->Option.mapOr((0., 0.), (h: FxGraph.handle) => (h.x, h.y))
+      ~drag,
+      ~finish=() => {
+        rFit()
+        rg.redraw()
       },
-      ~drag=d => {
-        drag(p0.contents, d)
-        status([i])
-      },
-      ~finish=rFinish,
-      ~wheel=d => FxGraph.setNorm(rg, i, FxGraph.norm(rg, i) + d),
-      ~hover=rHover(i, [i], ...),
+      ~wheel=i,
     )
-    self := Some(h)
-    h
-  }
   let brightId = id("R_Brightness")
   let dullId = id("R_Dullness")
-  let lengthPoint = rPoint(lengthId, ~cursor="ns-resize", ~drag=((_, y0), (_, dy)) =>
-    model->ParamModel.set(lengthId, FxDsp.clamp(secondsAt(y0 + dy), 0.1, 29.9))
+  let lengthPoint = rPoint(lengthId, ~cursor="ns-resize", ~drag=({y}) =>
+    model->ParamModel.set(lengthId, FxDsp.clamp(secondsAt(y), 0.1, 29.9))
   )
-  let lowPoint = rPoint(brightId, ~cursor="ew-resize", ~drag=((x0, _), (dx, _)) =>
-    model->ParamModel.set(brightId, FxDsp.reverbHighpassValue(hzAt(x0 + dx)))
+  let lowPoint = rPoint(brightId, ~cursor="ew-resize", ~drag=({x}) =>
+    model->ParamModel.set(brightId, FxDsp.reverbHighpassValue(hzAt(x)))
   )
-  let highPoint = rPoint(dullId, ~cursor="ew-resize", ~drag=((x0, _), (dx, _)) =>
-    model->ParamModel.set(dullId, FxDsp.reverbLowpassValue(hzAt(x0 + dx)))
+  let highPoint = rPoint(dullId, ~cursor="ew-resize", ~drag=({x}) =>
+    model->ParamModel.set(dullId, FxDsp.reverbLowpassValue(hzAt(x)))
   )
 
-  rDraw :=
-    () => {
-      rGrid->setTextContent("")
-      rNotes->setTextContent("")
-      [100., 1000., 10000.]->Array.forEach(hz => {
-        let x = rxOf(hz)
-        FxGraph.line(rGrid, ~cls="axis faint", x, rTop, x, rBottom)
-        FxGraph.text(
-          rGrid,
-          ~anchor="middle",
-          x,
-          rg.h - 2.,
-          hz >= 1000. ? Float.toString(hz / 1000.) ++ "k" : Float.toString(hz),
-        )
-      })
-      FxGraph.text(rGrid, rLeft, rg.h - 2., "lows")
-      FxGraph.text(rGrid, ~anchor="end", rRight, rg.h - 2., "highs")
-      let step = FxGraph.niceStep(ceiling.contents, 4.)
-      let s = ref(0.)
-      while s.contents <= ceiling.contents + 1e-9 {
-        let y = ryOf(s.contents)
-        FxGraph.line(rGrid, ~cls=s.contents == 0. ? "axis" : "axis faint", rLeft, y, rRight, y)
-        FxGraph.text(rGrid, ~anchor="end", rLeft - 4., y + 3., FxGraph.msText(s.contents * 1000.))
-        s := s.contents + step
-      }
-      let at = t => {
-        let x = rLeft + (rRight - rLeft) * t
-        (x, ryOf(Math.min(ceiling.contents * 1.05, ringTime(hzAt(x)))))
-      }
-      let points = [at(0.)]
-      points->Plots.trace(at, ~steps=48)
-      let d = Plots.pathFrom(points)
-      rCurve->FxGraph.setPath(d)
-      rFill->FxGraph.setPath(`${d}L${f(rRight)} ${f(rBottom)}L${f(rLeft)} ${f(rBottom)}Z`)
-      // the top: the length; the sides: where the damping starts
-      let (px, _) = points->Array.reduce((rLeft, infinity), ((bx, by), (x, y)) => y < by ? (x, y) : (bx, by))
-      lengthPoint->FxGraph.place(px, ryOf(infinite() ? ceiling.contents : get("R_Length")))
-      let lowHz = FxDsp.reverbHighpass(get("R_Brightness"))
-      let highHz = FxDsp.reverbLowpass(get("R_Dullness"))
-      lowPoint->FxGraph.place(rxOf(lowHz), ryOf(Math.min(ceiling.contents, ringTime(lowHz))))
-      highPoint->FxGraph.place(rxOf(highHz), ryOf(Math.min(ceiling.contents, ringTime(highHz))))
-      let ringText = hz => {
-        let t = ringTime(hz)
-        t == infinity ? "forever" : FxGraph.msText(t * 1000.)
-      }
-      FxGraph.text(rNotes, ~cls="note", rLeft + 4., rTop + 8., `lows (100 Hz) ring ${ringText(100.)}`)
-      FxGraph.text(rNotes, ~cls="note", ~anchor="end", rRight - 4., rTop + 8., `highs (8 kHz) ${ringText(8000.)}`)
-      [(lengthId, lengthPoint), (brightId, lowPoint), (dullId, highPoint)]->Array.forEach(((i, h)) =>
-        h->FxGraph.setClass(rFocus.contents == Some(i) ? "node hot" : "node")
-      )
-      switch rFocus.contents {
-      | Some(i) =>
-        let (h: FxGraph.handle, text) = if i == lengthId {
-          (lengthPoint, `length ${FxGraph.short(rg, lengthId)}`)
-        } else if i == brightId {
-          (lowPoint, `lows damped below ${FxGraph.hzText(lowHz)} (brightness ${FxGraph.short(rg, i)})`)
-        } else {
-          (highPoint, `highs damped above ${FxGraph.hzText(highHz)} (dullness ${FxGraph.short(rg, i)})`)
-        }
-        rg->FxGraph.readout(rReadout, ~x=h.x, ~y=h.y, text)
-      | None => rReadout->setTextContent("")
-      }
+  let rDraw = () => {
+    rGrid->setTextContent("")
+    rNotes->setTextContent("")
+    [100., 1000., 10000.]->Array.forEach(hz => {
+      let x = rxOf(hz)
+      FxGraph.line(rGrid, ~cls="axis faint", x, rTop, x, rBottom)
+      FxGraph.text(rGrid, ~anchor="middle", x, rg.h - 2., FxGraph.hzTick(hz))
+    })
+    FxGraph.text(rGrid, rLeft, rg.h - 2., "lows")
+    FxGraph.text(rGrid, ~anchor="end", rRight, rg.h - 2., "highs")
+    FxGraph.ticks(~until=ceiling.contents + 1e-9, ~step=FxGraph.niceStep(ceiling.contents, 4.), s => {
+      let y = ryOf(s)
+      FxGraph.line(rGrid, ~cls=s == 0. ? "axis" : "axis faint", rLeft, y, rRight, y)
+      FxGraph.text(rGrid, ~anchor="end", rLeft - 4., y + 3., FxGraph.msText(s * 1000.))
+    })
+    let at = t => {
+      let x = rLeft + (rRight - rLeft) * t
+      (x, ryOf(Math.min(ceiling.contents * 1.05, ringTime(hzAt(x)))))
     }
+    let points = [at(0.)]
+    points->Plots.trace(at, ~steps=48)
+    let d = Plots.pathFrom(points)
+    rCurve->FxGraph.setPath(d)
+    rFill->FxGraph.setPath(`${d}L${f(rRight)} ${f(rBottom)}L${f(rLeft)} ${f(rBottom)}Z`)
+    // the top: the length; the sides: where the damping starts
+    let (px, _) = points->Array.reduce((rLeft, infinity), ((bx, by), (x, y)) => y < by ? (x, y) : (bx, by))
+    lengthPoint->FxGraph.place(px, ryOf(infinite() ? ceiling.contents : get("R_Length")))
+    let lowHz = FxDsp.reverbHighpass(get("R_Brightness"))
+    let highHz = FxDsp.reverbLowpass(get("R_Dullness"))
+    lowPoint->FxGraph.place(rxOf(lowHz), ryOf(Math.min(ceiling.contents, ringTime(lowHz))))
+    highPoint->FxGraph.place(rxOf(highHz), ryOf(Math.min(ceiling.contents, ringTime(highHz))))
+    let ringText = hz => {
+      let t = ringTime(hz)
+      t == infinity ? "forever" : FxGraph.msText(t * 1000.)
+    }
+    FxGraph.text(rNotes, ~cls="note", rLeft + 4., rTop + 8., `lows (100 Hz) ring ${ringText(100.)}`)
+    FxGraph.text(rNotes, ~cls="note", ~anchor="end", rRight - 4., rTop + 8., `highs (8 kHz) ${ringText(8000.)}`)
+    switch rg.focus {
+    | Some(i) =>
+      let (h: FxGraph.handle, text) = if i == lengthId {
+        (lengthPoint, `length ${FxGraph.short(rg, lengthId)}`)
+      } else if i == brightId {
+        (lowPoint, `lows damped below ${FxGraph.hzText(lowHz)} (brightness ${FxGraph.short(rg, i)})`)
+      } else {
+        (highPoint, `highs damped above ${FxGraph.hzText(highHz)} (dullness ${FxGraph.short(rg, i)})`)
+      }
+      rg->FxGraph.readout(~x=h.x, ~y=h.y, text)
+    | None => rg->FxGraph.hideReadout
+    }
+  }
+  rg.redraw = rDraw
   let ringRedraw = FxGraph.redraw(rg, () => {
-    if !rDragging.contents {
+    if !rg.dragging {
       rFit()
     }
-    rDraw.contents()
+    rDraw()
   })
   rg->FxGraph.listen(["R_Size", "R_Length", "R_Dullness", "R_Brightness"]->Array.map(id), ringRedraw.request)
-  rg.svg->onMouse(#mouseenter, _ => ctx.status->Status.show(ringHint))
-  rg.svg->onMouse(#mouseleave, _ => ctx.status->Status.clear)
 
   //==============================================================================
   // the room
 
   let room = Panel.make(body, ~title="room", ~x=ringWidth + gap, ~y=rowY, ~w=ringWidth, ~h=rowHeight)
-  let og = FxGraph.make(ctx, room.el, {x: 8., y: 25., w: ringWidth - 18., h: rowHeight - 35.})
-  let oRays = FxGraph.group(og.svg)
-  let oLayer = FxGraph.group(og.svg)
-  let oHits = FxGraph.group(og.svg)
-  let oReadout = svgEl(oHits, "text", [("class", Str("readout"))])
+  let og = FxGraph.inPanel(ctx, room, ~hint=roomHint)
+  let oRays = FxGraph.group(og.under)
   let (ox, oy) = (16., 10.)
   let biggest = og.h - 2. * oy
   // a side for a size (10..250 ms), and back
   let sideOf = ms => 24. + Math.sqrt((FxDsp.clamp(ms, 10., 250.) - 10.) / 240.) * (biggest - 24.)
   let sizeAt = side => 10. + Math.pow(FxDsp.clamp((side - 24.) / (biggest - 24.), 0., 1.), ~exp=2.) * 240.
-  let oFocus = ref(false)
-  let oDraw = ref(() => ())
-  let corner0 = ref((0., 0.))
-  let cornerSelf = ref(None)
   let corner = FxGraph.handle(
     og,
-    ~layer=oLayer,
-    ~hits=oHits,
     ~cursor="nwse-resize",
     ~ids=[sizeId],
-    ~start=() => corner0 := cornerSelf.contents->Option.mapOr((0., 0.), (h: FxGraph.handle) => (h.x, h.y)),
-    ~drag=((dx, dy)) => {
-      let (x0, y0) = corner0.contents
-      model->ParamModel.set(sizeId, sizeAt(Math.max(x0 + dx - ox, y0 + dy - oy)))
-      status([sizeId])
-    },
-    ~wheel=d => FxGraph.setNorm(og, sizeId, FxGraph.norm(og, sizeId) + d),
-    ~hover=on => {
-      oFocus := on
-      on ? status([sizeId]) : ctx.status->Status.show(roomHint)
-      oDraw.contents()
-    },
+    ~drag=({x, y}) => model->ParamModel.set(sizeId, sizeAt(Math.max(x - ox, y - oy))),
+    ~wheel=sizeId,
   )
-  cornerSelf := Some(corner)
 
   // how far the network mixes its lines: 0 when the diffusion angles leave each alone
   let diffusion = () => {
@@ -543,76 +422,73 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     1. - [0, 1, 2, 3]->Array.reduce(0., (s, i) => s + Math.abs(m->Array.getUnsafe(i)->Array.getUnsafe(i))) / 4.
   }
 
-  oDraw :=
-    () => {
-      oRays->setTextContent("")
-      let side = sideOf(get("R_Size"))
+  let oDraw = () => {
+    oRays->setTextContent("")
+    let side = sideOf(get("R_Size"))
+    svgEl(
+      oRays,
+      "rect",
+      [("class", Str("room")), ("x", Num(ox)), ("y", Num(oy)), ("width", Num(side)), ("height", Num(side))],
+    )->ignore
+    // a source and a listener, and reflections between them off the walls
+    let (sx, sy) = (ox + side * 0.3, oy + side * 0.35)
+    let (lx, ly) = (ox + side * 0.7, oy + side * 0.7)
+    let early = get("R_EarlyMix")
+    let scatter = diffusion()
+    let rays = 4 + Float.toInt(Math.round(scatter * 10.))
+    for k in 0 to rays - 1 {
+      let a = Int.toFloat(k) / Int.toFloat(rays) * 2. * Math.Constants.pi + 0.4
+      // where the ray meets a wall, then on to the listener (scattered with the diffusion)
+      let jitter = Math.sin(Int.toFloat(k) * 7.3) * scatter * side * 0.25
+      let wx = FxDsp.clamp(sx + Math.cos(a) * side, ox, ox + side)
+      let wy = FxDsp.clamp(sy + Math.sin(a) * side, oy, oy + side)
       svgEl(
         oRays,
-        "rect",
-        [("class", Str("room")), ("x", Num(ox)), ("y", Num(oy)), ("width", Num(side)), ("height", Num(side))],
+        "path",
+        [
+          ("class", Str("ray")),
+          ("stroke-opacity", Num(0.15 + 0.7 * early)),
+          ("d", Str(`M${f(sx)} ${f(sy)}L${f(wx)} ${f(wy)}L${f(lx + jitter)} ${f(ly - jitter)}`)),
+        ],
       )->ignore
-      // a source and a listener, and reflections between them off the walls
-      let (sx, sy) = (ox + side * 0.3, oy + side * 0.35)
-      let (lx, ly) = (ox + side * 0.7, oy + side * 0.7)
-      let early = get("R_EarlyMix")
-      let scatter = diffusion()
-      let rays = 4 + Float.toInt(Math.round(scatter * 10.))
-      for k in 0 to rays - 1 {
-        let a = Int.toFloat(k) / Int.toFloat(rays) * 2. * Math.Constants.pi + 0.4
-        // where the ray meets a wall, then on to the listener (scattered with the diffusion)
-        let jitter = Math.sin(Int.toFloat(k) * 7.3) * scatter * side * 0.25
-        let wx = FxDsp.clamp(sx + Math.cos(a) * side, ox, ox + side)
-        let wy = FxDsp.clamp(sy + Math.sin(a) * side, oy, oy + side)
-        svgEl(
-          oRays,
-          "path",
-          [
-            ("class", Str("ray")),
-            ("stroke-opacity", Num(0.15 + 0.7 * early)),
-            ("d", Str(`M${f(sx)} ${f(sy)}L${f(wx)} ${f(wy)}L${f(lx + jitter)} ${f(ly - jitter)}`)),
-          ],
-        )->ignore
-      }
-      svgEl(oRays, "circle", [("class", Str("source")), ("cx", Num(sx)), ("cy", Num(sy)), ("r", Num(3.5))])->ignore
-      svgEl(oRays, "circle", [("class", Str("listener")), ("cx", Num(lx)), ("cy", Num(ly)), ("r", Num(3.5))])->ignore
-      corner->FxGraph.place(ox + side, oy + side)
-      corner->FxGraph.setClass(oFocus.contents ? "node hot" : "node")
-      let tx = ox + biggest + 18.
-      let metres = get("R_Size") * 0.343
-      FxGraph.text(oRays, ~cls="note big", tx, oy + 14., `${FxGraph.short(og, sizeId)} room`)
-      FxGraph.text(
-        oRays,
-        ~cls="note",
-        tx,
-        oy + 32.,
-        `sound crosses it in about ${Float.toFixed(get("R_Size"), ~digits=0)} ms (${Float.toFixed(metres, ~digits=0)} m)`,
-      )
-      FxGraph.text(oRays, ~cls="note", tx, oy + 52., `early reflections: ${Float.toFixed(early * 100., ~digits=0)} %`)
-      FxGraph.text(
-        oRays,
-        ~cls="note",
-        tx,
-        oy + 68.,
-        `diffusion: ${scatter < 0.15 ? "little (a metallic ring)" : scatter < 0.45 ? "some" : "smooth"}`,
-      )
-      FxGraph.text(
-        oRays,
-        ~cls="note",
-        tx,
-        oy + 84.,
-        `the two sides: ${Math.abs(Math.sin(get("R_Rotation"))) < 0.15 ? "kept apart" : "mixed"} (stereo mix)`,
-      )
-      if oFocus.contents {
-        og->FxGraph.readout(oReadout, ~x=corner.x, ~y=corner.y, `size ${FxGraph.short(og, sizeId)}`)
-      } else {
-        oReadout->setTextContent("")
-      }
     }
-  let roomRedraw = FxGraph.redraw(og, () => oDraw.contents())
+    svgEl(oRays, "circle", [("class", Str("source")), ("cx", Num(sx)), ("cy", Num(sy)), ("r", Num(3.5))])->ignore
+    svgEl(oRays, "circle", [("class", Str("listener")), ("cx", Num(lx)), ("cy", Num(ly)), ("r", Num(3.5))])->ignore
+    corner->FxGraph.place(ox + side, oy + side)
+    let tx = ox + biggest + 18.
+    let metres = get("R_Size") * 0.343
+    FxGraph.text(oRays, ~cls="note big", tx, oy + 14., `${FxGraph.short(og, sizeId)} room`)
+    FxGraph.text(
+      oRays,
+      ~cls="note",
+      tx,
+      oy + 32.,
+      `sound crosses it in about ${Float.toFixed(get("R_Size"), ~digits=0)} ms (${Float.toFixed(metres, ~digits=0)} m)`,
+    )
+    FxGraph.text(oRays, ~cls="note", tx, oy + 52., `early reflections: ${Float.toFixed(early * 100., ~digits=0)} %`)
+    FxGraph.text(
+      oRays,
+      ~cls="note",
+      tx,
+      oy + 68.,
+      `diffusion: ${scatter < 0.15 ? "little (a metallic ring)" : scatter < 0.45 ? "some" : "smooth"}`,
+    )
+    FxGraph.text(
+      oRays,
+      ~cls="note",
+      tx,
+      oy + 84.,
+      `the two sides: ${Math.abs(Math.sin(get("R_Rotation"))) < 0.15 ? "kept apart" : "mixed"} (stereo mix)`,
+    )
+    if og.focus != None {
+      og->FxGraph.readout(~x=corner.x, ~y=corner.y, `size ${FxGraph.short(og, sizeId)}`)
+    } else {
+      og->FxGraph.hideReadout
+    }
+  }
+  og.redraw = oDraw
+  let roomRedraw = FxGraph.redraw(og, oDraw)
   og->FxGraph.listen(["R_Size", "R_EarlyMix", "R_1", "R_2", "R_3", "R_Rotation"]->Array.map(id), roomRedraw.request)
-  og.svg->onMouse(#mouseenter, _ => ctx.status->Status.show(roomHint))
-  og.svg->onMouse(#mouseleave, _ => ctx.status->Status.clear)
 
   //==============================================================================
   // every setting

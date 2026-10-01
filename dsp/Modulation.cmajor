@@ -395,16 +395,10 @@ namespace porridge
             if (this.L <= bp) this.stage = stageAfterBreakpoint (bp, sus);
         }
 
-        if (this.stage == envStage::decay2Down)
+        if (this.stage == envStage::decay2Down || this.stage == envStage::decay2Up)
         {
             this.L *= float (pow (float64 (c.d2coef), float64 (s)));
-            if (this.L <= sus) { this.stage = envStage::sustain; this.L = sus; }
-        }
-
-        if (this.stage == envStage::decay2Up)
-        {
-            this.L *= float (pow (float64 (c.d2coef), float64 (s)));
-            if (this.L >= sus) { this.stage = envStage::sustain; this.L = sus; }
+            if (this.stage == envStage::decay2Down ? this.L <= sus : this.L >= sus) { this.stage = envStage::sustain; this.L = sus; }
         }
 
         if (this.stage == envStage::sustain)
@@ -437,13 +431,31 @@ namespace porridge
         bool done;          // one-shot: the cycle has ended
     }
 
+    /// The LFOs' parameters' slots, by LFO (0: LFO 1, 1: LFO 2). cross: how much the other
+    /// LFO speeds this one up (LFO_2_1 for LFO 1, LFO_1_2 for LFO 2).
+    namespace lfoSlot
+    {
+        let unit     = int[2] (slot::LFO_1_Unit,     slot::LFO_2_Unit);
+        let shape    = int[2] (slot::LFO_1_Shape,    slot::LFO_2_Shape);
+        let speed    = int[2] (slot::LFO_1_Speed,    slot::LFO_2_Speed);
+        let quantize = int[2] (slot::LFO_1_Quantize, slot::LFO_2_Quantize);
+        let sync     = int[2] (slot::LFO_1_Sync,     slot::LFO_2_Sync);
+        let pitch    = int[2] (slot::LFO_1_Pitch,    slot::LFO_2_Pitch);
+        let pan      = int[2] (slot::LFO_1_Pan,      slot::LFO_2_Pan);
+        let cross    = int[2] (slot::LFO_2_1,        slot::LFO_1_2);
+        let delay    = int[2] (slot::LFO_1_Delay,    slot::LFO_2_Delay);
+        let fade     = int[2] (slot::LFO_1_Fade,     slot::LFO_2_Fade);
+        let slew     = int[2] (slot::LFO_1_Slew,     slot::LFO_2_Slew);
+        let steps    = int[2] (slot::LFO_1_Steps,    slot::LFO_2_Steps);
+        let oneShot  = int[2] (slot::LFO_1_OneShot,  slot::LFO_2_OneShot);
+    }
+
     /// Sample & hold: the LFO_n_Steps choices, in steps per cycle (0 = off).
     let lfoStepCounts = int[10] (0, 2, 3, 4, 6, 8, 12, 16, 24, 32);
 
     void resetPhase (LFO& this, Rand& rng, const float[numSlots]& P)
     {
-        let r = float64 (float (rng.next()) * (1.0f / 16384.0f) - 1.0f);
-        this.phase = int64 ((r * float64 (P[slot::LFOPhaseRand]) * 0.5 + float64 (P[slot::LFOPhase])) * two32 + 0.5) & u32;
+        this.phase = rng.randomPhase (P[slot::LFOPhase], P[slot::LFOPhaseRand]);
         this.prevR = float (rng.next()) / 32768.0f;
         this.curR = float (rng.next()) / 32768.0f;
         this.done = false;
@@ -455,22 +467,22 @@ namespace porridge
         return beats.at (clamp (unit - 3, 0, 14));
     }
 
-    /// Advances an LFO by nAdv samples (after speed modulation) and returns its value (0..1).
-    /// xySpeed = the X/Y "LFO speed" sum for this LFO (quirk: LFO 2 also follows target 8).
+    /// Advances LFO `which` (0, 1) by nAdv samples (after speed modulation) and returns its value
+    /// (0..1). xySpeed = the X/Y "LFO speed" sum for this LFO (quirk: LFO 2 also follows target 8).
     float step (LFO& this, const WaveTables& tables, Rand& rng, const float[numSlots]& P, const float[512]& userShape,
-                bool isLFO2, int nAdvIn, float xySpeed, float64 sr, float64 samplesPerBeat)
+                int which, int nAdvIn, float xySpeed, float64 sr, float64 samplesPerBeat)
     {
         var nAdv = nAdvIn;
 
         if (abs (xySpeed) > 0.01f)
             nAdv = int (pow (2.0, 2.0 * float64 (xySpeed)) * float64 (nAdv) + 0.5);
 
-        var speed = float64 (P.at (isLFO2 ? slot::LFO_2_Speed : slot::LFO_1_Speed));
+        var speed = float64 (P.at (lfoSlot::speed.at (which)));
 
-        if (P.at (isLFO2 ? slot::LFO_2_Quantize : slot::LFO_1_Quantize) != 0)
+        if (P.at (lfoSlot::quantize.at (which)) != 0)
             speed = (3.0 * speed >= 2.0) ? floor (speed + 0.5) : 1.0 / floor (1.0 / speed + 0.5);
 
-        let unit = int (P.at (isLFO2 ? slot::LFO_2_Unit : slot::LFO_1_Unit));
+        let unit = int (P.at (lfoSlot::unit.at (which)));
         float64 period;
 
         if (unit == 0)      period = sr * speed * 0.001;
@@ -480,7 +492,7 @@ namespace porridge
 
         let inc = int64 (two32 / max (period, 1e-9) + 0.5) & u32;
         let old = this.phase;
-        let oneShot = P.at (isLFO2 ? slot::LFO_2_OneShot : slot::LFO_1_OneShot) != 0;
+        let oneShot = P.at (lfoSlot::oneShot.at (which)) != 0;
 
         // one-shot (Porridge): one cycle from the phase it was reset to, then hold the end
         if (oneShot)
@@ -501,11 +513,11 @@ namespace porridge
         }
 
         // sample & hold (Porridge): the shape read at the start of each of n steps per cycle
-        let steps = lfoStepCounts.at (clamp (int (P.at (isLFO2 ? slot::LFO_2_Steps : slot::LFO_1_Steps)), 0, 9));
+        let steps = lfoStepCounts.at (clamp (int (P.at (lfoSlot::steps.at (which))), 0, 9));
         let ph = steps > 0 ? int64 (float64 (int (float64 (this.phase) * float64 (steps) / two32)) * two32 / float64 (steps))
                            : this.phase;
 
-        let shape = int (P.at (isLFO2 ? slot::LFO_2_Shape : slot::LFO_1_Shape));
+        let shape = int (P.at (lfoSlot::shape.at (which)));
 
         if (shape == 4 || shape == 5)
         {
@@ -563,62 +575,71 @@ namespace porridge
         return c;
     }
 
+    /// Pitch envelope stages (Voice.penvStage).
+    namespace penvStage
+    {
+        let off = 0;
+        let toStart = 1;        // a retrigger's glide back to the start ratio
+        let attack = 2;
+        let decayDown = 5;      // to the sustain ratio, down or up
+        let decayUp = 6;
+        let sustain = 7;
+        let release = 8;
+    }
+
     /// Advances the pitch envelope state (ratio R, stage) by x = n * speed samples.
     void advancePitchEnv (float& R, int& stage, const PitchEnvCoefs& c, float64 x, float64 sr)
     {
         var r = float64 (R);
 
-        if (stage == 0)
+        if (stage == penvStage::off)
         {
             r = 0;
         }
-        else if (stage == 1)
+        else if (stage == penvStage::toStart)
         {
             let stepAmt = x / (sr * 0.002);
 
             if (r < c.S)
             {
                 r += stepAmt;
-                if (r >= c.S) { r = c.S; stage = 2; }
+                if (r >= c.S) { r = c.S; stage = penvStage::attack; }
             }
             else
             {
                 r -= stepAmt;
-                if (r <= c.S) { r = c.S; stage = 2; }
+                if (r <= c.S) { r = c.S; stage = penvStage::attack; }
             }
         }
-        else if (stage == 2)
+        else if (stage == penvStage::attack)
         {
+            let next = c.Su <= c.Pk ? penvStage::decayDown : penvStage::decayUp;
+
             if (c.Pk > c.S)
             {
                 r += r >= c.S ? x * c.att : (c.S - r + 1.0) * c.att * x / (c.Pk - c.S);
-                if (r >= c.Pk) { r = c.Pk; stage = c.Su <= c.Pk ? 5 : 6; }
+                if (r >= c.Pk) { r = c.Pk; stage = next; }
             }
             else
             {
                 r += r <= c.S ? x * c.att : (r - c.S + 1.0) * x * c.att / (c.S - c.Pk + 0.001);
                 r += x * c.att;
-                if (r <= c.Pk) { r = c.Pk; stage = c.Su <= c.Pk ? 5 : 6; }
+                if (r <= c.Pk) { r = c.Pk; stage = next; }
             }
         }
-        else if (stage == 5)
+        else if (stage == penvStage::decayDown || stage == penvStage::decayUp)
         {
             r *= pow (c.dec, x);
-            if (r <= c.Su) { r = c.Su; stage = 7; }
+            if (stage == penvStage::decayDown ? r <= c.Su : r >= c.Su) { r = c.Su; stage = penvStage::sustain; }
         }
-        else if (stage == 6)
-        {
-            r *= pow (c.dec, x);
-            if (r >= c.Su) { r = c.Su; stage = 7; }
-        }
-        else if (stage == 7)
+        else if (stage == penvStage::sustain)
         {
             r = c.Su;
         }
-        else if (stage == 8)
+        else if (stage == penvStage::release)
         {
             r *= pow (c.rel, x);
-            if (r < 1e-4) { r = 0; stage = 0; }
+            if (r < 1e-4) { r = 0; stage = penvStage::off; }
             else if (r > 1048576.0) r = 1048576.0;
         }
 

@@ -5,23 +5,20 @@ open! Web
 
 type page = [#main | #mod | #fx | #play | #shapes | #midi]
 
-let hintFor = (page: page) =>
-  switch page {
-  | #main => PageMain.hint
-  | #mod => PageMod.hint
-  | #fx => PageFx.hint
-  | #play => PagePlay.hint
-  | #shapes => PageShapes.hint
-  | #midi => PageMidi.hint
-  }
+// A page: its tab's label and status text, its hint for the status line, and what builds it.
+type pageSpec = {
+  page: page,
+  label: string,
+  title: string,
+  hint: string,
+  build: (Ctx.t, element) => unit,
+}
 
 type t = {
   showPage: page => unit,
   // lets go of the patch connection
   dispose: unit => unit,
 }
-
-let pad2 = i => Int.toString(i)->String.padStart(2, "0")
 
 let make = (host, pc) => {
   // A scratch v38 program holding the current values, used as the context for status texts
@@ -77,28 +74,66 @@ let make = (host, pc) => {
   let programs = ProgramStore.make(pc, model, ~onMessage=toast)
   let updateProgramBar = () =>
     progName->setTextContent(
-      pad2(programs.current + 1) ++ "  " ++ programs->ProgramStore.name(programs.current),
+      ProgramStore.number(programs.current) ++ "  " ++ programs->ProgramStore.name(programs.current),
     )
   programs->ProgramStore.onChanged(updateProgramBar)
 
-  let pages: array<(page, element)> = [
-    (#main, el("div", ~cls="pv-page on", ~parent=stage)),
-    (#mod, el("div", ~cls="pv-page", ~parent=stage)),
-    (#fx, el("div", ~cls="pv-page", ~parent=stage)),
-    (#play, el("div", ~cls="pv-page", ~parent=stage)),
-    (#shapes, el("div", ~cls="pv-page", ~parent=stage)),
-    (#midi, el("div", ~cls="pv-page", ~parent=stage)),
-  ]
-  let pageButtons: array<(page, element)> = []
   let shapesPage = ref(None)
+  let pages = [
+    {
+      page: #main,
+      label: "Synth",
+      title: "Oscillators, filter, envelopes, LFOs and voice settings",
+      hint: PageMain.hint,
+      build: PageMain.build,
+    },
+    {
+      page: #mod,
+      label: "Mod",
+      title: "The modulation matrix: connect sources to targets, and the macro knobs",
+      hint: PageMod.hint,
+      build: PageMod.build,
+    },
+    {
+      page: #fx,
+      label: "FX",
+      title: "Distortion, chorus, delay, reverb and EQ",
+      hint: PageFx.hint,
+      build: PageFx.build,
+    },
+    {
+      page: #play,
+      label: "Arp / XY",
+      title: "Arpeggiator pattern and the XY pad",
+      hint: PagePlay.hint,
+      build: PagePlay.build,
+    },
+    {
+      page: #shapes,
+      label: "Shapes",
+      title: "Draw oscillator waveforms and LFO shapes",
+      hint: PageShapes.hint,
+      build: (ctx, e) => shapesPage := Some(PageShapes.build(ctx, e)),
+    },
+    {
+      page: #midi,
+      label: "MIDI",
+      title: "MIDI channels, controllers, velocity and aftertouch curves",
+      hint: PageMidi.hint,
+      build: PageMidi.build,
+    },
+  ]
+  let pageEls =
+    pages->Array.map(p => (p, el("div", ~cls=p.page == #main ? "pv-page on" : "pv-page", ~parent=stage)))
+  let pageButtons: array<(page, element)> = []
   let shownPage = ref((#main: page))
 
   let showPage = page => {
     shownPage := page
-    pages->Array.forEach(((p, e)) => e->toggleClass("on", p == page))
+    pageEls->Array.forEach(((p, e)) => e->toggleClass("on", p.page == page))
     pageButtons->Array.forEach(((p, b)) => b->toggleClass("on", p == page))
     menu->Menu.close
-    status->Status.setIdle(hintFor(page))
+    pages->Array.find(p => p.page == page)->Option.forEach(p => status->Status.setIdle(p.hint))
     if page == #shapes {
       shapesPage.contents->Option.forEach((s: PageShapes.t) => s.refresh())
     }
@@ -119,16 +154,7 @@ let make = (host, pc) => {
     toast,
   }
 
-  pages->Array.forEach(((page, e)) =>
-    switch page {
-    | #main => PageMain.build(ctx, e)
-    | #mod => PageMod.build(ctx, e)
-    | #fx => PageFx.build(ctx, e)
-    | #play => PagePlay.build(ctx, e)
-    | #midi => PageMidi.build(ctx, e)
-    | #shapes => shapesPage := Some(PageShapes.build(ctx, e))
-    }
-  )
+  pageEls->Array.forEach(((p, e)) => p.build(ctx, e))
 
   //==============================================================================
   // header
@@ -142,15 +168,8 @@ let make = (host, pc) => {
 
   el("div", ~cls="brand", ~text="porridge", ~parent=head)->ignore
   let pagesBar = el("div", ~cls="pages", ~parent=head)
-  [
-    (#main, "Synth", "Oscillators, filter, envelopes, LFOs and voice settings"),
-    (#mod, "Mod", "The modulation matrix: connect sources to targets, and the macro knobs"),
-    (#fx, "FX", "Distortion, chorus, delay, reverb and EQ"),
-    (#play, "Arp / XY", "Arpeggiator pattern and the XY pad"),
-    (#shapes, "Shapes", "Draw oscillator waveforms and LFO shapes"),
-    (#midi, "MIDI", "MIDI channels, controllers, velocity and aftertouch curves"),
-  ]->Array.forEach(((page, text, title)) =>
-    pageButtons->Array.push((page, button(pagesBar, text, title, () => showPage(page))))
+  pages->Array.forEach(({page, label, title}) =>
+    pageButtons->Array.push((page, button(pagesBar, label, title, () => showPage(page))))
   )
   pageButtons->Array.forEach(((page, b)) => b->toggleClass("on", page == #main))
   el("div", ~cls="spacer", ~parent=head)->ignore
@@ -159,40 +178,21 @@ let make = (host, pc) => {
     menu->Menu.show(
       progName,
       Array.fromInitializer(~length=OatmealFormat.bankPrograms, i => {
-        Menu.label: pad2(i + 1) ++ "  " ++ programs->ProgramStore.name(i),
+        Menu.label: ProgramStore.number(i) ++ "  " ++ programs->ProgramStore.name(i),
         value: i,
       }),
       programs.current,
       i => programs->ProgramStore.select(i),
     )
 
-  let renameProgram = () => {
-    let input = el("input", ~cls="entry", ~parent=stage)
-    let (x, y) = progName->offsetWithin(stage)
-    input->place(x, y, ~w=progName->offsetWidth, ~h=progName->offsetHeight)->ignore
-    input->setMaxLength(Preset.maxNameLength)
-    input->setValue(programs->ProgramStore.name(programs.current))
-    input->select
-    input->focus
-    let finished = ref(false)
-    let finish = ok =>
-      if !finished.contents {
-        finished := true
-        if ok {
-          programs->ProgramStore.rename(programs.current, input->value)
-        }
-        input->remove
-      }
-    input->onKeyDown(k => {
-      k->stopPropagation
-      switch k->key {
-      | "Enter" => finish(true)
-      | "Escape" => finish(false)
-      | _ => ()
-      }
-    })
-    input->onEvent(#blur, _ => finish(true))
-  }
+  let renameProgram = () =>
+    Controls.editInPlace(
+      progName,
+      programs->ProgramStore.name(programs.current),
+      ~maxLength=Preset.maxNameLength,
+      ~within=stage,
+      ~commit=name => programs->ProgramStore.rename(programs.current, name),
+    )
 
   let prog = el("div", ~cls="prog", ~parent=head)
   button(prog, "<", "Previous program", () =>
@@ -236,11 +236,7 @@ let make = (host, pc) => {
     AudioFile.isAudio(file->fileName)
       ? importSample(file)
       : programs->ProgramStore.loadUserFile(file)->Promise.ignore
-  let pickFile = FilePicker.make(
-    stage,
-    ~accept=".porridge,.json,.omp,.omb,.fxp,.fxb,.dat,.scl,.kbm",
-    loadFile,
-  )
+  let pickFile = FilePicker.make(stage, ~accept=[...Preset.extensions, ...Scala.extensions]->Array.join(","), loadFile)
 
   button(
     head,
@@ -323,8 +319,7 @@ let make = (host, pc) => {
     e
     ->dataTransfer
     ->Option.forEach(d => {
-      let list = d->transferredFiles
-      let files = Array.fromInitializer(~length=list->fileCount, i => list->item(i))->Array.filterMap(f => f)
+      let files = d->transferredFiles->filesToArray
       let sample = files->Array.find(f => AudioFile.isAudio(f->fileName))
       // a sample goes to the Shapes page; with the browser open, other files are added to it
       // instead of replacing the bank

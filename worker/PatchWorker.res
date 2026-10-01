@@ -47,8 +47,7 @@ let default = pc => {
   pc->addStoredStateValueListener(({key, value}) => {
     switch (StoredState.keyOf(key), value) {
     | (Some(Shapes), String(shapes)) => Bank.decodeShapes(shapes)->Option.forEach(sendShapes)
-    | (Some(Tuning), String(tuning)) =>
-      Bank.sendTuning(pc, tuning == "" ? None : Bank.decodeTuning(tuning))
+    | (Some(Tuning), String(tuning)) => Bank.sendTuning(pc, Bank.decodeTuning(tuning))
     | (Some(Impulses), String(s)) =>
       Impulse.decode(s)->Array.forEachWithIndex((imp, which) => Impulse.send(pc, which, imp))
     // The patch answers the request below even when there is no bank, which is a new

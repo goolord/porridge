@@ -3,16 +3,14 @@
 //
 //   npm run res && node tools/re/check-presets.mjs "F:/VST32/oatmeal banks"
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, extname, basename } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { join, basename } from "node:path";
 import { parseFile } from "../../ui/oatmeal/OatmealFormat.res.mjs";
 
 const root = process.argv[2];
 if (! root) { console.log ("usage: node tools/re/check-presets.mjs <folder>"); process.exit (2); }
 
-const files = [];
-const walk = d => { for (const n of readdirSync (d)) { const p = join (d, n); statSync (p).isDirectory() ? walk (p) : files.push (p); } };
-walk (root);
+const files = readdirSync (root, { recursive: true }).map (n => join (root, n));
 
 let ok = 0, failed = 0, programs = 0;
 const versions = new Map();

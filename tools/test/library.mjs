@@ -7,25 +7,15 @@
 //
 // run: npm run res && node tools/test/library.mjs
 
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import * as Preset from "../../ui/Preset.res.mjs";
 import * as Library from "../../ui/Library.res.mjs";
+import { readBank, checker } from "./lib.mjs";
 
-const root = join (dirname (fileURLToPath (import.meta.url)), "..", "..");
-let failures = 0;
-const check = (ok, msg) => { if (! ok) { console.log ("FAIL " + msg); ++failures; } };
+const { check, done } = checker ();
 const same = (a, b) => JSON.stringify (a) === JSON.stringify (b);
 
-const read = path => {
-    const r = Preset.parseFile (new Uint8Array (readFileSync (join (root, path))));
-    if (r.TAG !== "Ok") throw new Error (path + " didn't parse");
-    return r._0.presets;
-};
-const vanilla = Library.makeSource ("vanilla", "Vanilla", "Bundled", read ("presets/vanilla.porridge"));
-const oatmeal = Library.makeSource ("oatmeal", "Oatmeal factory", "Bundled", read ("presets/oatmealprs.dat"));
-const bank = Library.makeSource ("bank", "This bank", "Bank", read ("presets/oatmealprs.dat"));
+const vanilla = Library.makeSource ("vanilla", "Vanilla", "Bundled", readBank ("presets/vanilla.porridge"));
+const oatmeal = Library.makeSource ("oatmeal", "Oatmeal factory", "Bundled", readBank ("presets/oatmealprs.dat"));
+const bank = Library.makeSource ("bank", "This bank", "Bank", readBank ("presets/oatmealprs.dat"));
 const sources = [bank, vanilla, oatmeal];
 const all = Library.entries (sources, undefined);
 
@@ -95,5 +85,4 @@ const names = (text, filters = Library.noFilters) =>
     check (picked.some (([key, , n]) => key === "wide" && n === 0), "picked values stay listed");
 }
 
-console.log (failures === 0 ? `ok: library search over ${all.length} presets` : `${failures} failures`);
-process.exit (failures === 0 ? 0 : 1);
+done (`ok: library search over ${all.length} presets`);

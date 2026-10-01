@@ -22,15 +22,6 @@ namespace porridge
         return float (tan (pi * clamp (hz, 1.0, 0.45 * sr) / sr));
     }
 
-    /// 4-point cubic (Catmull-Rom) interpolation between y1 (t = 0) and y2 (t = 1).
-    float<2> extraHermite (float<2> y0, float<2> y1, float<2> y2, float<2> y3, float t)
-    {
-        let c1 = 0.5f * (y2 - y0);
-        let c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
-        let c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
-        return ((c3 * t + c2) * t + c1) * t + y1;
-    }
-
     /// Linear up to +-1, then bending smoothly towards +-2: bounds a feedback loop without
     /// colouring normal levels.
     float extraSoftClip (float x)
@@ -55,47 +46,10 @@ namespace porridge
     }
 
     //==============================================================================
-    /// A stereo trapezoidal state-variable filter (Simper's), the crossovers' building block.
-    struct ExtraSvf
+    /// Svf coefficients (Common.cmajor) at hz.
+    SvfCoefs extraSvfCoefs (float64 hz, float64 sr, float k)
     {
-        float<2> ic1, ic2;
-    }
-
-    /// An ExtraSvf's coefficients: g = tan (pi f / sr), k = 1 / Q.
-    struct ExtraSvfCoefs
-    {
-        float g, k, a1, a2, a3;
-    }
-
-    ExtraSvfCoefs extraSvfCoefs (float64 hz, float64 sr, float k)
-    {
-        ExtraSvfCoefs c;
-        c.g = extraPrewarp (hz, sr);
-        c.k = k;
-        c.a1 = 1.0f / (1.0f + c.g * (c.g + k));
-        c.a2 = c.g * c.a1;
-        c.a3 = c.g * c.a2;
-        return c;
-    }
-
-    /// One sample: the lowpass and bandpass outputs (highpass = x - k bp - lp).
-    void tick (ExtraSvf& this, const ExtraSvfCoefs& c, float<2> x, float<2>& lp, float<2>& bp)
-    {
-        let v3 = x - this.ic2;
-        let v1 = c.a1 * this.ic1 + c.a2 * v3;
-        let v2 = this.ic2 + c.a2 * this.ic1 + c.a3 * v3;
-        this.ic1 = 2.0f * v1 - this.ic1;
-        this.ic2 = 2.0f * v2 - this.ic2;
-        lp = v2;
-        bp = v1;
-    }
-
-    /// The 2nd-order allpass with the same coefficients (the phase of a crossover's band sum).
-    float<2> allpass (ExtraSvf& this, const ExtraSvfCoefs& c, float<2> x)
-    {
-        float<2> lp, bp;
-        this.tick (c, x, lp, bp);
-        return x - 2.0f * c.k * bp;
+        return svfCoefs (extraPrewarp (hz, sr), k);
     }
 
     /// Butterworth damping: two in series make a Linkwitz-Riley crossover.
@@ -105,10 +59,10 @@ namespace porridge
     /// same frequency, so the bands sum flat.
     struct ExtraCrossover
     {
-        ExtraSvf lp1, lp2, hp1, hp2;
+        Svf lp1, lp2, hp1, hp2;
     }
 
-    void split (ExtraCrossover& this, const ExtraSvfCoefs& c, float<2> x, float<2>& low, float<2>& high)
+    void split (ExtraCrossover& this, const SvfCoefs& c, float<2> x, float<2>& low, float<2>& high)
     {
         float<2> lp, bp;
         this.lp1.tick (c, x, lp, bp);
@@ -147,15 +101,15 @@ namespace porridge
         this.silentCount = 0;
     }
 
-    /// The line's value d samples back (d >= 2), cubic-interpolated.
-    float<2> flangerRead (const Flanger& this, float d)
+    /// Channel ch of the line d samples back (d >= 2), cubic-interpolated.
+    float flangerRead (const Flanger& this, float d, int ch)
     {
         let di = int (d);
         let t = d - float (di);
         let m = flangerLineSize - 1;
         let p = this.pos - di;
-        return extraHermite (this.line.at ((p + 1) & m), this.line.at (p & m),
-                             this.line.at ((p - 1) & m), this.line.at ((p - 2) & m), t);
+        return hermite (this.line.at ((p + 1) & m).at (ch), this.line.at (p & m).at (ch),
+                        this.line.at ((p - 1) & m).at (ch), this.line.at ((p - 2) & m).at (ch), t);
     }
 
     bool process (Flanger& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
@@ -191,8 +145,8 @@ namespace porridge
             let span = 4.0f * 0.693147181f * this.depth;
             let lfoL = 0.5f - 0.5f * float (cos (twoPi * this.phase));
             let lfoR = 0.5f - 0.5f * float (cos (twoPi * (this.phase + offset)));
-            let yL = this.flangerRead (clamp (this.delay * exp (span * lfoL), 2.0f, longest))[0];
-            let yR = this.flangerRead (clamp (this.delay * exp (span * lfoR), 2.0f, longest))[1];
+            let yL = this.flangerRead (clamp (this.delay * exp (span * lfoL), 2.0f, longest), 0);
+            let yR = this.flangerRead (clamp (this.delay * exp (span * lfoR), 2.0f, longest), 1);
             let y = float<2> (yL, yR);
             let x = buf[i];
 
@@ -210,14 +164,8 @@ namespace porridge
             if (this.phase >= 1.0) this.phase -= 1.0;
         }
 
-        if (active || written > 1e-8f) this.silentCount = 0;
-        else                           this.silentCount += blockSize;
-
-        if (active || anyAbove (buf, 1e-8f))
-        {
-            this.idle = false;
+        if (stillSounding (this.idle, this.silentCount, active || written > 1e-8f, active || anyAbove (buf, 1e-8f)))
             return true;
-        }
 
         // nothing audible went into the line for longer than its longest delay
         if (float (this.silentCount) > this.delay * 16.0f + float (blockSize))
@@ -487,7 +435,7 @@ namespace porridge
         p = p + 1 >= bodeLineSize ? 0 : p + 1;
         let y1 = this.line.at (p);
         p = p + 1 >= bodeLineSize ? 0 : p + 1;
-        return extraHermite (this.line.at (p), y1, y2, y3, t);
+        return hermite (this.line.at (p), y1, y2, y3, t);
     }
 
     bool process (Bode& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
@@ -568,14 +516,8 @@ namespace porridge
             buf[i] = x + (wet - x) * this.mix;
         }
 
-        if (active || written > 1e-8f) this.silentCount = 0;
-        else                           this.silentCount += blockSize;
-
-        if (active || anyAbove (buf, 1e-8f))
-        {
-            this.idle = false;
+        if (stillSounding (this.idle, this.silentCount, active || written > 1e-8f, active || anyAbove (buf, 1e-8f)))
             return true;
-        }
 
         // the Hilbert filters' ringing, and the echoes while the feedback is up
         let tail = float (sr) * 0.1f + (this.fb > 1e-6f ? this.delay : 0.0f);
@@ -675,14 +617,8 @@ namespace porridge
             this.xo = ExtraCrossover();
         }
 
-        if (active || anyAbove (buf, 1e-8f))
-        {
-            this.silentCount = 0;
-            this.idle = false;
+        if (stillSounding (this.idle, this.silentCount, active || anyAbove (buf, 1e-8f)))
             return true;
-        }
-
-        this.silentCount += blockSize;
 
         if (float (this.silentCount) > float (sr) * 0.1f)
             this.idle = true;
@@ -759,15 +695,9 @@ namespace porridge
             buf[i] = x + (float<2> (l[i], r[i]) - x) * this.mix;
         }
 
-        if (active || anyAbove (buf, 1e-8f))
-        {
-            this.silentCount = 0;
-            this.idle = false;
-            return true;
-        }
-
         // resonant types ring and the comb types echo: a quarter second of silence
-        this.silentCount += blockSize;
+        if (stillSounding (this.idle, this.silentCount, active || anyAbove (buf, 1e-8f)))
+            return true;
 
         if (float (this.silentCount) > float (sr) * 0.25f)
             this.idle = true;
@@ -784,7 +714,7 @@ namespace porridge
     struct Compressor
     {
         ExtraCrossover lowX, highX;
-        ExtraSvf lowAp;                     // the low band's allpass at the high split
+        Svf lowAp;                          // the low band's allpass at the high split
         float[3] env, meter;                // per band (low, mid, high): the detector, the meter (linear peak)
 
         // meters for the view, per band, updated every block (single band: index 1, the
@@ -805,7 +735,7 @@ namespace porridge
     {
         this.lowX = ExtraCrossover();
         this.highX = ExtraCrossover();
-        this.lowAp = ExtraSvf();
+        this.lowAp = Svf();
 
         for (wrap<3> j)
         {
@@ -966,14 +896,8 @@ namespace porridge
             this.gainDb[0] = 0; this.gainDb[2] = 0;
         }
 
-        if (active || anyAbove (buf, 1e-8f))
-        {
-            this.silentCount = 0;
-            this.idle = false;
+        if (stillSounding (this.idle, this.silentCount, active || anyAbove (buf, 1e-8f)))
             return true;
-        }
-
-        this.silentCount += blockSize;
 
         if (float (this.silentCount) > float (sr) * 0.1f)
             this.idle = true;

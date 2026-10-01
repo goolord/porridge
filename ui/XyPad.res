@@ -55,21 +55,17 @@ let make = (ctx: Ctx.t, parent, area) => {
   let hy = svgEl("line", [("stroke", signal), ("stroke-width", Num(1.4))])
   let dot = svgEl("circle", [("r", Num(3.2)), ("fill", signal)])
 
-  let hover = ref(false)
-  let dragging = ref(false)
   let livePosition = ref(None)
 
   let toPx = (x, y) => (side / 2. + x * (side / 2. - 3.), side / 2. - y * (side / 2. - 3.))
 
-  let status = () => {
+  let status = ctx.status->Status.live(s, () => {
     let (x, y) = (get("XY_X"), get("XY_Y"))
     let r = Math.hypot(x, y)
     let a = Math.atan2(~y, ~x) * 180. / Math.Constants.pi
     let fixed = (v, digits) => Float.toFixed(v, ~digits)
-    ctx.status->Status.show(
-      `XY pad (${fixed(x, 3)}, ${fixed(y, 3)} / ${fixed(r, 3)}, ${fixed(a, 2)} degrees)`,
-    )
-  }
+    `XY pad (${fixed(x, 3)}, ${fixed(y, 3)} / ${fixed(r, 3)}, ${fixed(a, 2)} degrees)`
+  })
 
   let draw = () => {
     let (px, py) = toPx(get("XY_X"), get("XY_Y"))
@@ -86,10 +82,7 @@ let make = (ctx: Ctx.t, parent, area) => {
       live->set([("cx", lx), ("cy", ly), ("opacity", 1.)])
     | _ => live->set([("opacity", 0.)])
     }
-
-    if hover.contents || dragging.contents {
-      status()
-    }
+    status.refresh()
   }
 
   let onDown = ev => {
@@ -98,7 +91,7 @@ let make = (ctx: Ctx.t, parent, area) => {
       model->ParamModel.gestureSet("XY_X", 0.)
       model->ParamModel.gestureSet("XY_Y", 0.)
     } else {
-      dragging := true
+      status.setDragging(true)
       model->ParamModel.beginGesture("XY_X")
       model->ParamModel.beginGesture("XY_Y")
       let circular = ev->button == 2
@@ -141,12 +134,9 @@ let make = (ctx: Ctx.t, parent, area) => {
             apply(under(mv))
           },
         ~onUp=() => {
-          dragging := false
           model->ParamModel.endGesture("XY_X")
           model->ParamModel.endGesture("XY_Y")
-          if !hover.contents {
-            ctx.status->Status.clear
-          }
+          status.setDragging(false)
         },
       )
     }
@@ -154,18 +144,8 @@ let make = (ctx: Ctx.t, parent, area) => {
 
   s->onPointer(#pointerdown, onDown)
   s->suppressContextMenu
-  s->onMouse(#mouseenter, _ => {
-    hover := true
-    status()
-  })
-  s->onMouse(#mouseleave, _ => {
-    hover := false
-    if !dragging.contents {
-      ctx.status->Status.clear
-    }
-  })
 
-  ["XY_X", "XY_Y", "XY_Var_Radius"]->Array.forEach(id => model->ParamModel.listen(id, draw))
+  model->ParamModel.listenEach(["XY_X", "XY_Y", "XY_Var_Radius"], draw)
   // (reported at the patch's rate: drawn once a frame, and only when it moves)
   let drawSoon = perFrame(draw)
   ctx.pc->PatchConnection.addEndpointListener("xyOut", json => {

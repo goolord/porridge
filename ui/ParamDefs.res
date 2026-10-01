@@ -273,10 +273,9 @@ let makeDefs = (~context=() => None) => {
         : Math.max(min, Math.min(max, x))
     }
     let fromNorm = v => fromF(OatmealParams.toInternal(index, Math.max(0., Math.min(1., v))))
-    // with a zero-delay-feedback filter (16..21) the cutoff knob reaches 20 kHz instead of 11
-    let zdfCutoff = () =>
-      id == "Cutoff" &&
-        context()->Option.mapOr(false, prog => Bank.readValue(prog, "Filter") >= 16.)
+    // with a zero-delay-feedback filter (Porridge's) the cutoff knob reaches 20 kHz instead of 11
+    let filterType = () => context()->Option.mapOr(0, prog => Float.toInt(Bank.readValue(prog, "Filter")))
+    let zdfCutoff = () => id == "Cutoff" && filterType() >= FilterTypes.firstPorridge
     // the fields the status text reads from the context program (and the cutoff's range)
     let dependsOn =
       p.reads
@@ -285,7 +284,7 @@ let makeDefs = (~context=() => None) => {
       ->Array.concat(id == "Cutoff" ? ["Filter"] : [])
     let valueText = (x: float) =>
       zdfCutoff()
-        ? Float.toFixed(x * x * x * 19980. + 20., ~digits=2) ++ " Hz"
+        ? Float.toFixed(FilterTypes.cutoffHz(~filterType=filterType(), x), ~digits=2) ++ " Hz"
         : OatmealParams.displayText(index, toF(x), ~prog=?context())
 
     // Find the knob position whose displayed number matches.

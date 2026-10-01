@@ -49,19 +49,8 @@ type shapePayload = {which: int, data: array<float>}
 
 @val external arrayOfFloats: Float32Array.t => array<float> = "Array.from"
 
-// The endpoint that takes a table, and its index there.
-let shapeEndpoint = table =>
-  switch table {
-  | Wave1 => ("shapeIn", 0)
-  | Wave2 => ("shapeIn", 1)
-  | LfoShape1 => ("shapeIn", 2)
-  | LfoShape2 => ("shapeIn", 3)
-  | VelocityCurve => ("curveIn", 0)
-  | AftertouchCurve => ("curveIn", 1)
-  }
-
 let sendShape = (pc, table, data) => {
-  let (endpoint, which) = shapeEndpoint(table)
+  let {endpoint, which} = tableInfo(table)
   pc->PatchConnection.sendEventOrValueNow(endpoint, {which, data: arrayOfFloats(data)})
 }
 
@@ -77,21 +66,11 @@ let sendTuning = (pc, tuning: option<Scala.source>) => {
 }
 
 // the stored-state form of a microtuning: JSON text, or "" for none
-let encodeTuning = (tuning: option<Scala.source>) =>
-  switch tuning {
-  | Some({scl, kbm}) =>
-    JSON.stringify(JSON.Object(Dict.fromArray([("scl", JSON.String(scl)), ("kbm", JSON.String(kbm))])))
-  | None => ""
-  }
+let encodeTuning = tuning => tuning->Option.mapOr("", t => JSON.stringify(Scala.toJson(t)))
 
-let decodeTuning = (s): option<Scala.source> =>
+let decodeTuning = s =>
   switch JSON.parseOrThrow(s) {
-  | Object(d) =>
-    switch (d->Dict.get("scl"), d->Dict.get("kbm")) {
-    | (Some(String(scl)), Some(String(kbm))) => Some({scl, kbm})
-    | _ => None
-    }
-  | _ => None
+  | json => Scala.fromJson(json)
   | exception _ => None
   }
 
@@ -137,6 +116,20 @@ let fromBase64 = s => {
     )
   }
   out
+}
+
+// Float32 data as the base64 of its bytes (a copy has a buffer of its own, so the bytes are
+// exactly the data's).
+let floatsToBase64 = (data: Float32Array.t) =>
+  toBase64(Uint8Array.fromBuffer(data->TypedArray.copy->TypedArray.buffer))
+
+let floatsFromBase64 = s => {
+  let bytes = fromBase64(s)
+  let n = TypedArray.length(bytes) / 4
+  // copied into an aligned buffer before it is viewed as floats
+  let aligned = Uint8Array.fromLength(n * 4)
+  aligned->ByteView.blit(bytes->TypedArray.subarray(~start=0, ~end=n * 4), 0)
+  Float32Array.fromBuffer(aligned->TypedArray.buffer, ~length=n)
 }
 
 let encodeBank = programs => {

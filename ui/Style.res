@@ -104,7 +104,7 @@ let css = `
 .pbody.cover { background: var(--panel); z-index: 1; border-radius: inherit; }
 .blk:has(> .pbody.cover.on) > .ptabs { z-index: 2; }
 .blk.responding > :not(.pbody):not(.ptabs) { visibility: hidden; }
-.blk > .hdr { position: absolute; right: 6px; top: 1px; width: 40px; height: 18px; }
+.blk > .hdr, .pbody > .hdr { position: absolute; right: 6px; top: 1px; width: 40px; height: 18px; }
 
 /* the FX page: a tab per effect in the order they run (the rack's are dragged sideways), and a
    page per tab */
@@ -135,7 +135,6 @@ let css = `
 .fxgap { width: 10px; }
 .fxbody { position: absolute; display: none; }
 .fxbody.on { display: block; }
-.pbody > .hdr { position: absolute; right: 6px; top: 1px; width: 40px; height: 18px; }
 
 /* the routing tab: nodes, the distortion's places, and the rack's cards */
 .flowsvg { left: 0; top: 0; pointer-events: none; }

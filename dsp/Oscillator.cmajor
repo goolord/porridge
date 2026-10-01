@@ -57,14 +57,12 @@ namespace porridge
 
     void setPhase (Osc& this, Rand& rng, const float[numSlots]& P)
     {
-        let r = float64 (float (rng.next()) * (1.0f / 16384.0f) - 1.0f);
-        this.phase = int64 ((float64 (P[slot::OscPhase]) + r * float64 (P[slot::OscPhaseRand]) * 0.5) * two32 + 0.5) & u32;
+        this.phase = rng.randomPhase (P[slot::OscPhase], P[slot::OscPhaseRand]);
     }
 
     void setPwmPhase (Osc& this, Rand& rng, const float[numSlots]& P)
     {
-        let r = float64 (float (rng.next()) * (1.0f / 16384.0f) - 1.0f);
-        this.pwmPhase = int64 ((float64 (P[slot::PWMPhase]) + r * float64 (P[slot::PWMPhaseRand]) * 0.5) * two32 + 0.5) & u32;
+        this.pwmPhase = rng.randomPhase (P[slot::PWMPhase], P[slot::PWMPhaseRand]);
     }
 
     /// Glide the base increment to t over m samples (linear in frequency).
@@ -571,13 +569,13 @@ namespace porridge
         if (reso <= 0)
         {
             for (int i = 0; i < n; ++i)
-                buf.at (i) = (float (rng.next()) * (1.0f / 16384.0f) - 1.0f) * amp;
+                buf.at (i) = rng.bipolar() * amp;
 
             return;
         }
 
         for (int i = 0; i < n; ++i)
-            buf.at (i) = float (rng.next()) * (1.0f / 16384.0f) - 1.0f;
+            buf.at (i) = rng.bipolar();
 
         let w = min (float64 (Rg) * float64 (this.freq) * 0.5 / sr * float64 (piF) * 2.0, float64 (piF * 0.98f));
         var F = float (2.0 * sin (w * 0.5));
@@ -597,7 +595,7 @@ namespace porridge
 
             for (int k = 0; k < warm; ++k)
             {
-                let x = float (rng.next()) * (1.0f / 16384.0f) - 1.0f;
+                let x = rng.bipolar();
                 this.noiseSvf (x, this.F, this.q);
                 this.noiseSvf (x, this.F, this.q);
             }

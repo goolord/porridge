@@ -13,18 +13,13 @@
 //      `npm run res` and `node tools/vanilla-bank.mjs` first)
 //      --wav writes each render to tools/test/build/levels/<name>.wav
 
-import { writeFileSync, readFileSync, mkdirSync } from "node:fs";
-import { execFileSync } from "node:child_process";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import * as Preset from "../../ui/Preset.res.mjs";
 import * as Scala from "../../ui/Scala.res.mjs";
+import { outDir, render, readBank } from "./lib.mjs";
 
-const root = join (dirname (fileURLToPath (import.meta.url)), "..", "..");
-const build = join (root, "tools", "test", "build");
-const dir = join (build, "levels");
-const host = join (build, process.platform === "win32" ? "host.exe" : "host");
-mkdirSync (dir, { recursive: true });
+const dir = outDir ("levels");
 
 const args = process.argv.slice (2);
 const wav = args.includes ("--wav");
@@ -33,24 +28,21 @@ const only = args.filter (a => ! a.startsWith ("--"));
 const rate = 44100, hold = 3, tail = 3;
 const target = -18;
 
-const bank = Preset.parseFile (new Uint8Array (readFileSync (join (root, "presets", "vanilla.porridge"))));
-if (bank.TAG !== "Ok") throw new Error ("presets/vanilla.porridge didn't parse");
+const bank = readBank ("presets/vanilla.porridge");
 const init = Preset.make ("Init").values;
 
 const db = x => 20 * Math.log10 (Math.max (x, 1e-12));
 
-const render = (p, name, notes, velocity) =>
+const play = (p, name, notes, velocity) =>
 {
     const prog = join (dir, name + ".bin");
     writeFileSync (prog, Preset.toOatmeal (p));
     const events = join (dir, name + ".txt");
     writeFileSync (events, notes.flatMap (n => [`0 144 ${n} ${velocity}`, `${hold * rate} 128 ${n} 0`]).join ("\n") + "\n");
-    const out = join (dir, name + ".f32");
-    const cmd = ["--program", prog, "--events", events, "--frames", String ((hold + tail) * rate), "--rate", String (rate),
-                 "--out", out, "--set", "Gain=1"];
     // Oatmeal's export loses Porridge's values: set every one that isn't Init's
+    const sets = { Gain: 1 }, args = [];
     for (const [id, x] of p.values)
-        if (id !== "Gain" && x !== init.get (id)) cmd.push ("--set", `${id}=${x}`);
+        if (id !== "Gain" && x !== init.get (id)) sets[id] = x;
     if (p.tuning)
     {
         const t = Scala.table (p.tuning);
@@ -58,14 +50,10 @@ const render = (p, name, notes, velocity) =>
         {
             const file = join (dir, name + ".tun");
             writeFileSync (file, Array.from (t._0.semitones).join ("\n"));
-            cmd.push ("--tuning", file);
+            args.push ("--tuning", file);
         }
     }
-    execFileSync (host, cmd);
-    const buf = readFileSync (out);
-    const n = buf.readInt32LE (4);
-    const f = new Float32Array (buf.buffer.slice (buf.byteOffset + 8, buf.byteOffset + 8 + 8 * n));
-    return [f.subarray (0, n), f.subarray (n, 2 * n)];
+    return render ({ program: prog, events, frames: (hold + tail) * rate, rate, sets, args, out: join (dir, name + ".f32") });
 };
 
 const rms = ([l, r], from, to) =>
@@ -105,17 +93,20 @@ const fft = (re, im) =>
             }
     }
 };
+// the power per bin of N samples of one channel from start, through a Hann window
+const windowedPower = (ch, start, N) =>
+{
+    const re = new Float64Array (N), im = new Float64Array (N);
+    for (let i = 0; i < N; ++i) re[i] = ch[start + i] * (0.5 - 0.5 * Math.cos (2 * Math.PI * i / N));
+    fft (re, im);
+    return Float64Array.from ({ length: N / 2 }, (_, k) => re[k] * re[k] + im[k] * im[k]);
+};
 const spectrum = ([l, r], from, to) =>
 {
     const N = 8192, power = new Float64Array (N / 2);
     for (let start = Math.floor (from * rate); start + N <= to * rate; start += N / 2)
         for (const ch of [l, r])
-        {
-            const re = new Float64Array (N), im = new Float64Array (N);
-            for (let i = 0; i < N; ++i) re[i] = ch[start + i] * (0.5 - 0.5 * Math.cos (2 * Math.PI * i / N));
-            fft (re, im);
-            for (let k = 0; k < N / 2; ++k) power[k] += re[k] * re[k] + im[k] * im[k];
-        }
+            windowedPower (ch, start, N).forEach ((p, k) => power[k] += p);
     const total = power.reduce ((a, b) => a + b, 0) || 1;
     let centroid = 0;
     power.forEach ((p, k) => centroid += p * k * rate / N);
@@ -139,14 +130,11 @@ const motion = ([l, r]) =>
         let el = 0, er = 0;
         for (const [ch, side] of [[l, 0], [r, 1]])
         {
-            const re = new Float64Array (N), im = new Float64Array (N);
-            for (let i = 0; i < N; ++i) re[i] = ch[start + i] * (0.5 - 0.5 * Math.cos (2 * Math.PI * i / N));
-            fft (re, im);
+            const p = windowedPower (ch, start, N);
             for (let k = 1; k < N / 2; ++k)
             {
-                const p = re[k] * re[k] + im[k] * im[k];
-                power[k] += p;
-                if (side) er += p; else el += p;
+                power[k] += p[k];
+                if (side) er += p[k]; else el += p[k];
             }
         }
         const total = el + er;
@@ -174,7 +162,7 @@ const writeWav = (file, [l, r], gain) =>
 const fileName = s => s.replace (/[^A-Za-z0-9]+/g, "-");
 const gains = {};
 console.log ("program              gain     peak  tail  centroid   <120  -500   -2k   -6k  >6k (dB)   motion: timbre  pan");
-for (const p of bank._0.presets)
+for (const p of bank)
 {
     const name = p.meta.name;
     if (only.length && ! only.some (o => name.toLowerCase().includes (o.toLowerCase()))) continue;
@@ -182,11 +170,11 @@ for (const p of bank._0.presets)
     const low = p.meta.category === "bass";
     const notes = mono ? [low ? 36 : 60] : [48, 55, 64, 71];
     const id = fileName (name);
-    const sound = render (p, id, notes, 100);
+    const sound = play (p, id, notes, 100);
     // the loudest 300 ms while the keys are down, so that plucks and pads compare
     let level = 0;
     for (let t = 0; t + 0.3 <= hold; t += 0.05) level = Math.max (level, rms (sound, t, t + 0.3));
-    const loud = render (p, id + "-loud", mono ? notes : [48, 55, 60, 64, 71], 127);
+    const loud = play (p, id + "-loud", mono ? notes : [48, 55, 60, 64, 71], 127);
     const gain = Math.min (Math.pow (10, target / 20) / Math.max (level, 1e-9), Math.pow (10, -1 / 20) / Math.max (peak (loud), 1e-9));
     const after = rms (sound, hold + 1, hold + 1.5) / Math.max (rms (sound, hold - 0.5, hold), 1e-9);
     const { centroid, band } = spectrum (sound, 0.25, hold);

@@ -63,20 +63,16 @@ let wheel = (ctx: Ctx.t, parent, box, kind) => {
     bipolar ? 2. * f - 1. : f
   }
 
-  let hover = ref(false)
-  let dragging = ref(false)
-
-  let status = () => {
+  let status = ctx.status->Status.live(s, () => {
     let v = value.contents
-    let text = switch kind {
+    switch kind {
     | Pitch =>
       let range = ctx.model->ParamModel.get("BendRange")
       let st = v * range
       `Pitch wheel ${v > 0. ? "+" : ""}${Float.toFixed(v, ~digits=3)} (${st > 0. ? "+" : ""}${Float.toFixed(st, ~digits=2)} st)`
     | Mod => `Mod wheel ${Float.toFixed(v * 127., ~digits=0)} of 127`
     }
-    ctx.status->Status.show(text)
-  }
+  })
 
   let draw = () => {
     let y = toY(value.contents)
@@ -85,9 +81,7 @@ let wheel = (ctx: Ctx.t, parent, box, kind) => {
     fill->setAttribute("height", Num(Math.abs(from - y)))
     thumb->setAttribute("y1", Num(y))
     thumb->setAttribute("y2", Num(y))
-    if hover.contents || dragging.contents {
-      status()
-    }
+    status.refresh()
   }
 
   let set = v => {
@@ -104,7 +98,7 @@ let wheel = (ctx: Ctx.t, parent, box, kind) => {
     if ev->button == 1 || ev->button == 0 && ev->commandKey {
       set(0.)
     } else if ev->button == 0 {
-      dragging := true
+      status.setDragging(true)
       set(under(ev))
       Controls.dragBy(
         ctx,
@@ -112,14 +106,9 @@ let wheel = (ctx: Ctx.t, parent, box, kind) => {
         ev,
         ~onMove=(_, _, mv) => set(under(mv)),
         ~onUp=() => {
-          dragging := false
+          status.setDragging(false)
           if kind == Pitch {
             set(0.)
-          }
-          if hover.contents {
-            status()
-          } else {
-            ctx.status->Status.clear
           }
         },
       )
@@ -132,16 +121,6 @@ let wheel = (ctx: Ctx.t, parent, box, kind) => {
     })
   }
   s->suppressContextMenu
-  s->onMouse(#mouseenter, _ => {
-    hover := true
-    status()
-  })
-  s->onMouse(#mouseleave, _ => {
-    hover := false
-    if !dragging.contents {
-      ctx.status->Status.clear
-    }
-  })
   draw()
 }
 

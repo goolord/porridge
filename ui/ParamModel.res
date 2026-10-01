@@ -56,12 +56,17 @@ let get = (t, id) => t.values->Map.get(id)->Option.getOr(0.)
 // The parameter's value as the status line and the readouts show it.
 let longText = (t, id) => def(t, id).longText(get(t, id))
 let shortText = (t, id) => def(t, id).shortText(get(t, id))
+// Several parameters' long texts, for the status line.
+let statusText = (t, ids) => ids->Array.map(longText(t, _))->Array.join("    ")
 
 let listen = (t, id, fn) =>
   switch t.listeners->Map.get(id) {
   | Some(fns) => fns->Array.push(fn)
   | None => t.listeners->Map.set(id, [fn])
   }
+
+// Calls fn whenever one of these parameters changes.
+let listenEach = (t, ids, fn) => ids->Array.forEach(id => listen(t, id, fn))
 
 let listenAny = (t, fn) => t.anyListeners->Array.push(fn)
 

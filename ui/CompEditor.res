@@ -20,18 +20,16 @@ type meter = {level: array<float>, gain: array<float>}
 @get external meterLevel: JSON.t => array<float> = "level"
 @get external meterGain: JSON.t => array<float> = "gain"
 
-let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
+let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
   let id = FxRack.id(e, ...)
   let model = ctx.model
   let get = x => model->ParamModel.get(id(x))
   let gap = Grid.gap
-  let w = Style.designWidth - 12.
-  let h = Style.pageHeight - 6. - 34.
   let bottomH = Grid.panelHeight(1) + 10.
   let topH = h - bottomH - gap
   let rightW = 250.
   let bandW = (w - rightW - 3. * gap) / 3.
-  let status = i => ctx.status->Status.show((model->ParamModel.def(i)).longText(model->ParamModel.get(i)))
+  let status = i => ctx.status->Status.show(model->ParamModel.longText(i))
   let single = () => get("Cp_Bands") == 0.
 
   // the gain band b gives a steady level x (dB): down above its threshold, up below its up
@@ -51,7 +49,9 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
   }
 
   let meters = ref({level: [-120., -120., -120.], gain: [0., 0., 0.]})
+  // each band's drawing: of everything, and of what the meter moves
   let redraws: array<unit => unit> = []
+  let meterRedraws: array<unit => unit> = []
 
   //==============================================================================
   // a band
@@ -64,19 +64,15 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     let (top, bottom) = (14., g.h - 14.)
     let yOf = db => top + (ceilDb - FxDsp.clamp(db, floorDb, ceilDb)) / (ceilDb - floorDb) * (bottom - top)
     let dbAt = y => ceilDb - (y - top) / (bottom - top) * (ceilDb - floorDb)
-    let scale = FxGraph.group(g.svg)
-    let bars = FxGraph.group(g.svg)
-    let layer = FxGraph.group(g.svg)
-    let hits = FxGraph.group(g.svg)
+    let scale = FxGraph.group(g.under)
+    let bars = FxGraph.group(g.under)
     let barX = 30.
     let barW = 26.
-    let ticks = ref(ceilDb)
-    while ticks.contents >= floorDb {
-      let y = yOf(ticks.contents)
+    FxGraph.ticks(~from=floorDb, ~until=ceilDb, ~step=6., db => {
+      let y = yOf(db)
       FxGraph.line(scale, ~cls="grid", barX, y, g.w - 4., y)
-      FxGraph.text(scale, ~anchor="end", barX - 4., y + 3.5, Float.toString(ticks.contents))
-      ticks := ticks.contents - 6.
-    }
+      FxGraph.text(scale, ~anchor="end", barX - 4., y + 3.5, Float.toString(db))
+    })
     let zone = svgEl(bars, "rect", [("class", Str("compzone")), ("x", Num(barX)), ("width", Num(g.w - 4. - barX))])
     let levelBar = svgEl(bars, "rect", [("class", Str("complevel")), ("x", Num(barX)), ("width", Num(barW))])
     let gainBar = svgEl(bars, "rect", [("class", Str("compgain")), ("x", Num(barX + barW + 4.)), ("width", Num(8.))])
@@ -84,24 +80,20 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     // a threshold: a line across, a point at its end and its value
     let threshold = (param, ~below) => {
       let i = id(param)
-      let line = svgEl(layer, "line", [("class", Str("compthresh")), ("x1", Num(barX))])
-      let text = svgEl(layer, "text", [("class", Str("readout")), ("text-anchor", Str("end"))])
-      let start = ref(0.)
+      let line = svgEl(g.layer, "line", [("class", Str("compthresh")), ("x1", Num(barX))])
+      let text = svgEl(g.layer, "text", [("class", Str("readout")), ("text-anchor", Str("end"))])
       let hd = FxGraph.handle(
         g,
-        ~layer,
-        ~hits,
         ~cursor="ns-resize",
         ~ids=[i],
-        ~start=() => start := yOf(model->ParamModel.get(i)),
-        ~drag=((_, dy)) => {
-          let v = Math.round(dbAt(start.contents + dy) * 10.) / 10.
+        ~hot=false,
+        ~drag=({y}) => {
+          let v = Math.round(dbAt(y) * 10.) / 10.
           // the upward threshold stays under the downward one
           let other = model->ParamModel.get(id(below ? `Cp_${band}Thresh` : `Cp_${band}UpThresh`))
           model->ParamModel.set(i, below ? Math.min(v, other) : Math.max(v, other))
-          status(i)
         },
-        ~wheel=d => FxGraph.setNorm(g, i, FxGraph.norm(g, i) + d),
+        ~wheel=i,
         ~hover=on => on ? status(i) : ctx.status->Status.show(hint),
       )
       () => {
@@ -126,8 +118,9 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     let cs = Math.min(bandW - cx0 - 12., topH - cTop - 12.)
     let cg = FxGraph.make(ctx, p.el, {x: cx0 + (bandW - cx0 - 10. - cs) / 2., y: cTop, w: cs, h: cs})
     let cl = FxGraph.group(cg.svg)
+    let dot = svgEl(cg.svg, "circle", [("class", Str("dot")), ("r", Num(3.5))])
     let pos = (db: float) => 4. + (FxDsp.clamp(db, floorDb, ceilDb) - floorDb) / (ceilDb - floorDb) * (cs - 8.)
-    let drawCurve = (level: float) => {
+    let drawCurve = () => {
       cl->setTextContent("")
       FxGraph.line(cl, ~cls="axis", pos(floorDb), cs - pos(floorDb), pos(ceilDb), cs - pos(ceilDb))
       [-12., -24., -36., -48.]->Array.forEach(v => {
@@ -140,17 +133,10 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
         (pos(x), cs - pos(x + bandGain(b, x)))
       })
       FxGraph.path(cl, ~cls="curve")->FxGraph.setPath(Plots.pathFrom(points))
-      if level > floorDb {
-        svgEl(cl, "circle", [("class", Str("dot")), ("cx", Num(pos(level))), ("cy", Num(cs - pos(level + bandGain(b, level)))), ("r", Num(3.5))])->ignore
-      }
     }
 
-    let draw = () => {
-      let resting = single() && b != 1 || get(`Cp_${band}On`) == 0.
-      p.el->toggleClass("resting", resting)
-      let (yd, yu) = (yOf(get(`Cp_${band}Thresh`)), yOf(get(`Cp_${band}UpThresh`)))
-      zone->setAttribute("y", Num(yd))
-      zone->setAttribute("height", Num(Math.max(0., yu - yd)))
+    // the live level, the gain it gets, and where it is on the curve
+    let drawMeter = () => {
       let level = meters.contents.level[b]->Option.getOr(-120.)
       let gain = meters.contents.gain[b]->Option.getOr(0.)
       let yl = yOf(level)
@@ -164,22 +150,36 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
       readout->setTextContent(
         level <= -100. ? "" : `in ${Float.toFixed(level, ~digits=1)} dB · ${gain >= 0. ? "lift" : "cut"} ${Float.toFixed(Math.abs(gain), ~digits=1)} dB`,
       )
+      dot->setStyle("display", level > floorDb ? "" : "none")
+      dot->setAttribute("cx", Num(pos(level)))
+      dot->setAttribute("cy", Num(cs - pos(level + bandGain(b, level))))
+    }
+
+    let draw = () => {
+      let resting = single() && b != 1 || get(`Cp_${band}On`) == 0.
+      p.el->toggleClass("resting", resting)
+      let (yd, yu) = (yOf(get(`Cp_${band}Thresh`)), yOf(get(`Cp_${band}UpThresh`)))
+      zone->setAttribute("y", Num(yd))
+      zone->setAttribute("height", Num(Math.max(0., yu - yd)))
       down()
       up()
-      drawCurve(level)
+      drawCurve()
+      drawMeter()
     }
     redraws->Array.push(draw)
-    [
-      `Cp_${band}Thresh`,
-      `Cp_${band}UpThresh`,
-      `Cp_${band}Ratio`,
-      `Cp_${band}UpRatio`,
-      `Cp_${band}Gain`,
-      `Cp_${band}On`,
-      "Cp_Bands",
-      "Cp_Depth",
-    ]->Array.forEach(x =>
-      model->ParamModel.listen(id(x), draw)
+    meterRedraws->Array.push(drawMeter)
+    model->ParamModel.listenEach(
+      [
+        `Cp_${band}Thresh`,
+        `Cp_${band}UpThresh`,
+        `Cp_${band}Ratio`,
+        `Cp_${band}UpRatio`,
+        `Cp_${band}Gain`,
+        `Cp_${band}On`,
+        "Cp_Bands",
+        "Cp_Depth",
+      ]->Array.map(id),
+      draw,
     )
 
     let grid = Grid.make(ctx, p.el, ~x=meterW + 16., ~cw=bandW - meterW - 26.)
@@ -243,8 +243,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
   )
   knob->suppressContextMenu
   knob->onWheel(ev => Controls.wheelParam(model, depthId, ev))
-  knob->onMouse(#mouseenter, _ => status(depthId))
-  knob->onMouse(#mouseleave, _ => ctx.status->Status.clear)
+  ctx.status->Status.hover(knob, () => model->ParamModel.longText(depthId))
   el("div", ~cls="grp center", ~text="compress", ~parent=right.el)->place(0., knobBox.y + size + 2., ~w=rightW)->ignore
   let rg = Grid.make(ctx, right.el, ~y=topH - 3. * Grid.rowHeight - Grid.padBottom, ~cw=(rightW - 2. - 2. * Grid.padX + Grid.columnGap) / 2.)
   rg->Grid.param(id("Cp_Attack"), 0, 0, "attack")
@@ -261,16 +260,15 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
   sg->Grid.param(id("Cp_OutGain"), 1, 0, "output")
   let trackX = 2. * Grid.columnWidth + 20.
   let xg = FxGraph.make(ctx, strip.el, {x: trackX, y: 22., w: w - trackX - 14., h: bottomH - 28.})
-  let xl = FxGraph.group(xg.svg)
-  let xh = FxGraph.group(xg.svg)
+  let xl = xg.layer
   let (tl, tr) = (14., xg.w - 14.)
-  let xOfHz = hz => tl + Math.log(FxDsp.clamp(hz, 20., 20000.) / 20.) / Math.log(1000.) * (tr - tl)
+  let (xOfHz, _) = FxGraph.logScale(~lo=20., ~hi=20000., ~left=tl, ~right=tr)
   let ty = xg.h / 2. + 2.
   FxGraph.line(xl, ~cls="axis", tl, ty, tr, ty)
   [100., 1000., 10000.]->Array.forEach(hz => {
     let x = xOfHz(hz)
     FxGraph.line(xl, ~cls="grid", x, ty - 6., x, ty + 6.)
-    FxGraph.text(xl, ~anchor="start", x + 3., ty - 3., hz >= 1000. ? `${Float.toString(hz / 1000.)}k` : Float.toString(hz))
+    FxGraph.text(xl, ~anchor="start", x + 3., ty - 3., FxGraph.hzTick(hz))
   })
   let bandLabels = ["low", "mid", "high"]->Array.map(t => {
     let e = svgEl(xl, "text", [("class", Str("note big")), ("text-anchor", Str("middle")), ("y", Num(ty + 18.))])
@@ -280,25 +278,20 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
   let hzOf = i => PorridgeParams.expValue(20., 20000., model->ParamModel.get(i))
   let split = (param, ~low) => {
     let i = id(param)
-    let readout = svgEl(xh, "text", [("class", Str("readout")), ("text-anchor", Str("middle"))])
-    let start = ref(0.)
+    let readout = svgEl(xg.hits, "text", [("class", Str("readout")), ("text-anchor", Str("middle"))])
     let hd = FxGraph.handle(
       xg,
-      ~layer=xl,
-      ~hits=xh,
       ~cursor="ew-resize",
       ~ids=[i],
-      ~start=() => start := xOfHz(hzOf(i)),
-      ~drag=((dx, _)) => {
-        let x = FxDsp.clamp(start.contents + dx, tl, tr)
+      ~hot=false,
+      ~drag=({x}) => {
+        let x = FxDsp.clamp(x, tl, tr)
         let v = (x - tl) / (tr - tl)
         // the low split stays under the high one
         let other = model->ParamModel.get(id(low ? "Cp_HighSplit" : "Cp_LowSplit"))
         model->ParamModel.set(i, low ? Math.min(v, other - 0.02) : Math.max(v, other + 0.02))
-        status(i)
       },
-      ~wheel=d => FxGraph.setNorm(xg, i, FxGraph.norm(xg, i) + d),
-      ~hover=on => on ? status(i) : ctx.status->Status.clear,
+      ~wheel=i,
     )
     () => {
       let x = xOfHz(hzOf(i))
@@ -318,26 +311,20 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     let centres = single() ? [-100., (tl + tr) / 2., -100.] : [(tl + a) / 2., (a + b) / 2., (b + tr) / 2.]
     bandLabels->Array.forEachWithIndex((e, k) => e->setAttribute("x", Num(centres->Array.getUnsafe(k))))
   }
-  ["Cp_LowSplit", "Cp_HighSplit", "Cp_Bands"]->Array.forEach(x => model->ParamModel.listen(id(x), drawSplits))
+  model->ParamModel.listenEach(["Cp_LowSplit", "Cp_HighSplit", "Cp_Bands"]->Array.map(id), drawSplits)
   drawSplits()
 
   //==============================================================================
   // the meters, from the patch
 
   let drawAll = () => redraws->Array.forEach(f => f())
-  let pending = ref(false)
-  let listener = (j: JSON.t) =>
+  let drawMeters = perFrame(() => meterRedraws->Array.forEach(f => f()))
+  ctx.pc->PatchConnection.addEndpointListener("compMeterOut", j =>
     if meterWhich(j) == e.copy - 1 && body->offsetParent->Option.isSome {
       meters := {level: meterLevel(j), gain: meterGain(j)}
-      if !pending.contents {
-        pending := true
-        requestAnimationFrame(_ => {
-          pending := false
-          drawAll()
-        })->ignore
-      }
+      drawMeters()
     }
-  ctx.pc->PatchConnection.addEndpointListener("compMeterOut", listener)
+  )
   drawAll()
   () => {
     drawAll()

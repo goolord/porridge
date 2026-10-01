@@ -21,7 +21,6 @@ let highestPitch = 3000.
 
 let twoPi = 2. * Math.Constants.pi
 let at = ByteView.getUnsafe
-let setAt = TypedArray.set
 @get_index external get64: (Float64Array.t, int) => float = ""
 
 type kind =
@@ -81,11 +80,11 @@ let envelopeOf = (x: Float32Array.t, ~sampleRate) => {
       weight := weight.contents + w
     }
     let rms = Math.sqrt(sum.contents / weight.contents)
-    env->setAt(j, rms)
+    env->ByteView.setUnsafe(j, rms)
     peak := Math.max(peak.contents, rms)
   }
   if peak.contents > 0. {
-    env->TypedArray.forEachWithIndex((v, j) => env->setAt(j, v / peak.contents))
+    env->TypedArray.forEachWithIndex((v, j) => env->ByteView.setUnsafe(j, v / peak.contents))
   }
   env
 }
@@ -108,9 +107,9 @@ let make = (name, audio: AudioFile.t) =>
 
 type spectrum = {amp: array<float>, phase: array<float>}
 
-let emptySpectrum = () => {
-  amp: Array.make(~length=harmonics, 0.),
-  phase: Array.make(~length=harmonics, 0.),
+let emptySpectrum = count => {
+  amp: Array.make(~length=count, 0.),
+  phase: Array.make(~length=count, 0.),
 }
 
 let setHarmonic = (s, k, re, im, scale) => {
@@ -118,9 +117,9 @@ let setHarmonic = (s, k, re, im, scale) => {
   s.phase->Array.setUnsafe(k - 1, Math.atan2(~y=re, ~x=-.im))
 }
 
-// n samples from 'start' taken as one period: exact.
-let spectrumOfCycle = (x, ~start, ~n) => {
-  let s = emptySpectrum()
+// n samples from 'start' taken as one period: exact. Its first `count` harmonics.
+let spectrumOfCycle = (x, ~start, ~n, ~count=harmonics) => {
+  let s = emptySpectrum(count)
   let cos = Float64Array.fromLength(n)
   let sin = Float64Array.fromLength(n)
   for i in 0 to n - 1 {
@@ -128,7 +127,7 @@ let spectrumOfCycle = (x, ~start, ~n) => {
     cos->TypedArray.set(i, Math.cos(a))
     sin->TypedArray.set(i, Math.sin(a))
   }
-  for k in 1 to Math.Int.min(harmonics, (n - 1) / 2) {
+  for k in 1 to Math.Int.min(count, (n - 1) / 2) {
     let re = ref(0.)
     let im = ref(0.)
     for i in 0 to n - 1 {
@@ -145,7 +144,7 @@ let spectrumOfCycle = (x, ~start, ~n) => {
 // A whole number of periods from 'start' (a fractional sample position) under a Hann window.
 // With two periods or more, the window's zeros fall on the neighbouring harmonics.
 let spectrumOfPeriods = (x, ~start, ~period, ~cycles) => {
-  let s = emptySpectrum()
+  let s = emptySpectrum(harmonics)
   let n = TypedArray.length(x)
   let span = period * Int.toFloat(cycles)
   let i0 = Math.Int.max(0, Float.toInt(Math.ceil(start)))
@@ -222,6 +221,12 @@ let synthesise = s => {
 //==============================================================================
 // Pitch
 
+// Where the parabola through (tau - 1, a), (tau, b) and (tau + 1, c) bottoms out.
+let vertex = (tau, a, b, c) => {
+  let curve = a - 2. * b + c
+  Int.toFloat(tau) + (curve > 0. ? 0.5 * (a - c) / curve : 0.)
+}
+
 // The period at 'center' (in samples, fractional) by YIN: the lag where the sample best
 // matches itself, measured over a window as long as the longest period looked for.
 let findPeriod = (x, ~center, ~sampleRate) => {
@@ -276,11 +281,7 @@ let findPeriod = (x, ~center, ~sampleRate) => {
         }
         d->get64(deepest.contents) < 0.4 ? Some(deepest.contents) : None
       }
-      best->Option.map(tau => {
-        let (a, b, c) = (d->get64(tau - 1), d->get64(tau), d->get64(tau + 1))
-        let curve = a - 2. * b + c
-        Int.toFloat(tau) + (curve > 0. ? 0.5 * (a - c) / curve : 0.)
-      })
+      best->Option.map(tau => vertex(tau, d->get64(tau - 1), d->get64(tau), d->get64(tau + 1)))
     }
   }
 }
@@ -317,10 +318,8 @@ let refinePeriod = (x, ~start, ~period, ~cycles) => {
       // the bottom is at the edge of the search: keep the first estimate
       period
     } else {
-      let (a, b, c) = (ds->Array.getUnsafe(i - 1), ds->Array.getUnsafe(i), ds->Array.getUnsafe(i + 1))
-      let curve = a - 2. * b + c
-      let tau = Int.toFloat(lo + i) + (curve > 0. ? 0.5 * (a - c) / curve : 0.)
-      tau / Int.toFloat(cycles)
+      let d = Array.getUnsafe(ds, ...)
+      vertex(lo + i, d(i - 1), d(i), d(i + 1)) / Int.toFloat(cycles)
     }
   }
 }

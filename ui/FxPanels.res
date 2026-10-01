@@ -9,9 +9,8 @@
 open! Web
 
 let pi = Math.Constants.pi
-let clamp = (x: float, lo, hi) => Math.max(lo, Math.min(hi, x))
+let (clamp, db) = (FxDsp.clamp, FxDsp.db)
 let expValue = PorridgeParams.expValue
-let db = (x: float) => x <= 1e-9 ? -180. : 20. * Math.log10(x)
 
 type item =
   | Knob(string, string)
@@ -23,50 +22,6 @@ type item =
 type section = {title: string, rows: array<array<item>>}
 
 open! Complex
-
-//==============================================================================
-// graphs: frequency (20 Hz .. 20 kHz on a log scale) or time across
-
-type plot = {
-  g: FxGraph.t,
-  layer: element,
-  left: float,
-  right: float,
-  top: float,
-  bottom: float,
-}
-
-let xOfHz = (p, hz: float) => p.left + Math.log(clamp(hz, 20., 20000.) / 20.) / Math.log(1000.) * (p.right - p.left)
-let hzAt = (p, x: float) => 20. * Math.pow(1000., ~exp=(x - p.left) / (p.right - p.left))
-let yOf = (p, v: float, lo: float, hi: float) => p.bottom - (clamp(v, lo, hi) - lo) / (hi - lo) * (p.bottom - p.top)
-
-let frequencyGrid = (p, ~lo, ~hi, ~step) => {
-  [50., 100., 200., 500., 1000., 2000., 5000., 10000.]->Array.forEach(f => {
-    let x = xOfHz(p, f)
-    FxGraph.line(p.layer, ~cls="grid", x, p.top, x, p.bottom)
-    FxGraph.text(p.layer, ~anchor="middle", x, p.bottom + 12., f >= 1000. ? `${Float.toString(f / 1000.)}k` : Float.toString(f))
-  })
-  let v = ref(lo)
-  while v.contents <= hi {
-    let y = yOf(p, v.contents, lo, hi)
-    FxGraph.line(p.layer, ~cls=v.contents == 0. ? "axis" : "grid", p.left, y, p.right, y)
-    FxGraph.text(p.layer, ~anchor="end", p.left - 4., y + 4., Float.toString(v.contents))
-    v := v.contents + step
-  }
-}
-
-// A response curve: dB at each frequency across.
-let response = (p, ~cls="curve", ~lo, ~hi, magnitude: float => float) => {
-  let n = 240
-  let points = Array.fromInitializer(~length=n + 1, k => {
-    let x = p.left + Int.toFloat(k) / Int.toFloat(n) * (p.right - p.left)
-    (x, yOf(p, db(magnitude(hzAt(p, x))), lo, hi))
-  })
-  FxGraph.path(p.layer, ~cls)->FxGraph.setPath(Plots.pathFrom(points))
-}
-
-let note = (p, ~x=?, ~y=?, ~anchor="start", text) =>
-  FxGraph.text(p.layer, ~cls="tick", ~anchor, x->Option.getOr(p.left + 6.), y->Option.getOr(p.top + 14.), text)
 
 //==============================================================================
 // flanger: the comb at both ends of its sweep
@@ -83,12 +38,12 @@ let flangerSweep = (get: string => float) => {
   (d, d * Math.pow(2., ~exp=4. * get("Fl_Depth")))
 }
 
-let drawFlanger = (p, get: string => float) => {
-  frequencyGrid(p, ~lo=-30., ~hi=12., ~step=6.)
+let drawFlanger = (p: FxGraph.plot, get: string => float) => {
+  FxGraph.frequencyGrid(p, ~lo=-30., ~hi=12., ~step=6.)
   let (dMin, dMax) = flangerSweep(get)
-  response(p, ~cls="curve dim", ~lo=-30., ~hi=12., flangerResponse(get, ~delayMs=dMax, _))
-  response(p, ~lo=-30., ~hi=12., flangerResponse(get, ~delayMs=dMin, _))
-  note(p, `the comb at both ends of the sweep: ${Float.toFixed(dMin, ~digits=2)} ms (bright) to ${Float.toFixed(dMax, ~digits=2)} ms (dim), ${Float.toFixed(expValue(0.02, 20., get("Fl_Rate")), ~digits=2)} Hz`)
+  FxGraph.response(p, ~cls="curve dim", ~lo=-30., ~hi=12., flangerResponse(get, ~delayMs=dMax, _))
+  FxGraph.response(p, ~lo=-30., ~hi=12., flangerResponse(get, ~delayMs=dMin, _))
+  FxGraph.note(p, `the comb at both ends of the sweep: ${Float.toFixed(dMin, ~digits=2)} ms (bright) to ${Float.toFixed(dMax, ~digits=2)} ms (dim), ${Float.toFixed(expValue(0.02, 20., get("Fl_Rate")), ~digits=2)} Hz`)
 }
 
 //==============================================================================
@@ -111,15 +66,15 @@ let phaserResponse = (get: string => float, ~centre, hz) => {
   add(scale(one, 1. - mix), scale(div(a, add(one, scale(a, -.fb))), mix))->abs
 }
 
-let drawPhaser = (p, get: string => float) => {
-  frequencyGrid(p, ~lo=-30., ~hi=12., ~step=6.)
+let drawPhaser = (p: FxGraph.plot, get: string => float) => {
+  FxGraph.frequencyGrid(p, ~lo=-30., ~hi=12., ~step=6.)
   let centre = expValue(20., 20000., get("Ph_Freq"))
   let swing = Math.pow(2., ~exp=3. * get("Ph_Depth"))
-  response(p, ~cls="curve dim", ~lo=-30., ~hi=12., phaserResponse(get, ~centre=centre / swing, _))
-  response(p, ~cls="curve dim", ~lo=-30., ~hi=12., phaserResponse(get, ~centre=centre * swing, _))
-  response(p, ~lo=-30., ~hi=12., phaserResponse(get, ~centre, _))
+  FxGraph.response(p, ~cls="curve dim", ~lo=-30., ~hi=12., phaserResponse(get, ~centre=centre / swing, _))
+  FxGraph.response(p, ~cls="curve dim", ~lo=-30., ~hi=12., phaserResponse(get, ~centre=centre * swing, _))
+  FxGraph.response(p, ~lo=-30., ~hi=12., phaserResponse(get, ~centre, _))
   let track = get("Ph_Track")
-  note(
+  FxGraph.note(
     p,
     `the notches at the centre and at both ends of the sweep (dim)${track > 0. ? `; the centre follows the note by ${Float.toFixed(track * 100., ~digits=0)} %` : ""}`,
   )
@@ -147,7 +102,7 @@ let reverbModelText = model =>
   | _ => "hall: a large, smooth room"
   }
 
-let drawSpace = (p, get: string => float) => {
+let drawSpace = (p: FxGraph.plot, get: string => float) => {
   let (lo, hi) = (-60., 0.)
   let decay = expValue(0.1, 30., get("Rv_Decay"))
   let predelay = get("Rv_Predelay") / 1000.
@@ -156,18 +111,12 @@ let drawSpace = (p, get: string => float) => {
   let until = predelay + build + Math.min(decay, 30.) * 1.1
   let xOf = t => p.left + t / until * (p.right - p.left)
   let step = until > 20. ? 5. : until > 5. ? 1. : until > 1. ? 0.25 : 0.05
-  let t = ref(0.)
-  while t.contents <= until {
-    let x = xOf(t.contents)
+  FxGraph.ticks(~until, ~step, t => {
+    let x = xOf(t)
     FxGraph.line(p.layer, ~cls="grid", x, p.top, x, p.bottom)
-    FxGraph.text(p.layer, ~anchor="middle", x, p.bottom + 12., `${Float.toString(Math.round(t.contents * 100.) / 100.)} s`)
-    t := t.contents + step
-  }
-  [-12., -24., -36., -48., -60.]->Array.forEach(v => {
-    let y = yOf(p, v, lo, hi)
-    FxGraph.line(p.layer, ~cls="grid", p.left, y, p.right, y)
-    FxGraph.text(p.layer, ~anchor="end", p.left - 4., y + 4., Float.toString(v))
+    FxGraph.text(p.layer, ~anchor="middle", x, p.bottom + 12., `${Float.toString(Math.round(t * 100.) / 100.)} s`)
   })
+  p->FxGraph.levelLines(~lo, ~hi, [-12., -24., -36., -48., -60.])
   let n = 200
   let level = t =>
     if t < predelay {
@@ -179,10 +128,10 @@ let drawSpace = (p, get: string => float) => {
     }
   let points = Array.fromInitializer(~length=n + 1, k => {
     let t = until * Int.toFloat(k) / Int.toFloat(n)
-    (xOf(t), yOf(p, level(t), lo - 4., hi))
+    (xOf(t), FxGraph.yOf(p, level(t), lo - 4., hi))
   })
   FxGraph.path(p.layer, ~cls="curve")->FxGraph.setPath(Plots.pathFrom(points))
-  note(p, `${reverbModelText(model)}; decays 60 dB in ${PorridgeParams.secondsText(decay)}`)
+  FxGraph.note(p, `${reverbModelText(model)}; decays 60 dB in ${PorridgeParams.secondsText(decay)}`)
 }
 
 //==============================================================================
@@ -215,13 +164,8 @@ let ring = (s, ~cls, x: float, y: float, r: float, ~squash=1., ~wobble: float, ~
   scenePath(s, ~cls, ~opacity, Plots.pathFrom(points) ++ "Z")
 }
 
-// deterministic scatter
-let scatter = (k: float, seed: float) => {
-  let x = Math.sin(k * 12.9898 + seed * 78.233) * 43758.5453
-  x - Math.floor(x)
-}
-
 let drawScene = (s, get: string => float, time: float) => {
+  let f = Float.toFixed(_, ~digits=1)
   let model = Float.toInt(get("Rv_Model"))
   let size = get("Rv_Size")
   let decay = expValue(0.1, 30., get("Rv_Decay"))
@@ -259,7 +203,7 @@ let drawScene = (s, get: string => float, time: float) => {
     let (pw, ph) = (sw * (0.45 + 0.4 * size), sh * (0.4 + 0.35 * size))
     let (x0, y0) = (cx0 - pw / 2., cy0 - ph / 2.)
     let skew = pw * 0.12
-    let corner = (x, y) => `${Float.toFixed(x, ~digits=1)} ${Float.toFixed(y, ~digits=1)}`
+    let corner = (x, y) => `${f(x)} ${f(y)}`
     let outline = `M${corner(x0 + skew, y0)} L${corner(x0 + pw + skew, y0)} L${corner(x0 + pw - skew, y0 + ph)} L${corner(x0 - skew, y0 + ph)} Z`
     [(x0 + skew, y0), (x0 + pw + skew, y0), (x0 + pw - skew, y0 + ph), (x0 - skew, y0 + ph)]->Array.forEach(((x, y)) =>
       scenePath(s, ~cls="spring", `M${corner(x, y)} L${corner(x + (x < cx0 ? -14. : 14.), y + (y < cy0 ? -14. : 14.))}`)
@@ -278,15 +222,15 @@ let drawScene = (s, get: string => float, time: float) => {
     let n = 160
     for k in 0 to n - 1 {
       let kf = Int.toFloat(k)
-      let a = 2. * pi * scatter(kf, 1.)
-      let d = Math.sqrt(scatter(kf, 2.)) * r * (1. + 0.4 * width)
-      let born = scatter(kf, 3.) * 0.12
+      let a = 2. * pi * FxDsp.hash(kf, 1.)
+      let d = Math.sqrt(FxDsp.hash(kf, 2.)) * r * (1. + 0.4 * width)
+      let born = FxDsp.hash(kf, 3.) * 0.12
       let t = age - born
-      let twinkle = 0.55 + 0.45 * Math.sin(time * (6. + 8. * scatter(kf, 4.)) + kf)
+      let twinkle = 0.55 + 0.45 * Math.sin(time * (6. + 8. * FxDsp.hash(kf, 4.)) + kf)
       let x = cx0 + Math.cos(a) * d * (1. + 0.5 * width) + wobble * 3. * Math.sin(time * 4. + kf)
       let y = cy0 + Math.sin(a) * d * 0.7
       if t > 0. {
-        sceneCircle(s, ~cls=dull > 0.5 ? "spark dull" : "spark", x, y, 1.2 + 1.6 * scatter(kf, 5.), ~opacity=fade(t) * twinkle * mix)
+        sceneCircle(s, ~cls=dull > 0.5 ? "spark dull" : "spark", x, y, 1.2 + 1.6 * FxDsp.hash(kf, 5.), ~opacity=fade(t) * twinkle * mix)
       }
     }
     sceneCircle(s, ~cls="source", cx0, cy0, 5., ~opacity=1.)
@@ -295,7 +239,6 @@ let drawScene = (s, get: string => float, time: float) => {
     let bw = sw * (0.55 + 0.4 * size)
     let depth = sh * (0.35 + 0.3 * size)
     let (left, right, surface) = (cx0 - bw / 2., cx0 + bw / 2., sh * 0.3)
-    let f = Float.toFixed(_, ~digits=1)
     scenePath(s, ~cls="basin", `M${f(left)} ${f(surface)} Q${f(cx0)} ${f(surface + depth * 2.)} ${f(right)} ${f(surface)}`)
     // the bloom: the swell grows in before it fades
     let bloom = (t: float) => t < 0. ? 0. : Math.min(1., t / 0.25) * fade(t)
@@ -319,7 +262,6 @@ let drawScene = (s, get: string => float, time: float) => {
     // vintage: a rack unit's display, its delay network drawn in coarse steps
     let (uw, uh) = (sw * 0.8, sh * 0.62)
     let (x0, y0) = (cx0 - uw / 2., cy0 - uh / 2.)
-    let f = Float.toFixed(_, ~digits=1)
     scenePath(s, ~cls="unit", `M${f(x0)} ${f(y0)} h${f(uw)} v${f(uh)} h${f(-.uw)} Z`)
     let (dx, dy, dw, dh) = (x0 + 16., y0 + 16., uw - 32., uh - 32.)
     scenePath(s, ~cls="display", `M${f(dx)} ${f(dy)} h${f(dw)} v${f(dh)} h${f(-.dw)} Z`)
@@ -328,7 +270,7 @@ let drawScene = (s, get: string => float, time: float) => {
     for k in 0 to bars - 1 {
       let t = Int.toFloat(k) / Int.toFloat(bars) * period
       let level = t < predelay ? 0. : fade(t - predelay)
-      let grain = 0.8 + 0.2 * scatter(Int.toFloat(k) + Math.floor(time * 8. * (0.3 + wobble)), 6.)
+      let grain = 0.8 + 0.2 * FxDsp.hash(Int.toFloat(k) + Math.floor(time * 8. * (0.3 + wobble)), 6.)
       let hgt = Math.round(level * grain * (dh - 8.) / 6.) * 6.
       let lit = t <= Math.max(0., age + predelay)
       let x = dx + 4. + Int.toFloat(k) * (dw - 8.) / Int.toFloat(bars)
@@ -343,7 +285,6 @@ let drawScene = (s, get: string => float, time: float) => {
     // hall: a floor plan: the stage, the listeners, the first reflections and the wavefront
     let (rw, rh) = (sw * (0.5 + 0.45 * size), sh * (0.45 + 0.45 * size))
     let (x0, y0) = (cx0 - rw / 2., cy0 - rh / 2.)
-    let f = Float.toFixed(_, ~digits=1)
     let outline = `M${f(x0)} ${f(y0)} h${f(rw)} v${f(rh)} h${f(-.rw)} Z`
     scenePath(s, ~cls="room", outline)
     svgEl(s.layer, "clipPath", [("id", Str("hallclip"))])->(c => svgEl(c, "path", [("d", Str(outline))]))->ignore
@@ -390,7 +331,7 @@ let builtInText = impulse =>
 // 5 % of it at full length, more as Length shortens it.
 let convolveFade = (length: float) => 0.05 + 0.3 * (1. - length)
 
-let drawConvolve = (p, get: string => float, ~which, ~file: option<Impulse.t>) => {
+let drawConvolve = (p: FxGraph.plot, get: string => float, ~which, ~file: option<Impulse.t>) => {
   let kind = Float.toInt(get("Cv_Impulse"))
   let isFile = kind == PorridgeParams.impulseFile
   let length = get("Cv_Length")
@@ -411,7 +352,7 @@ let drawConvolve = (p, get: string => float, ~which, ~file: option<Impulse.t>) =
   let tone = {...p, left: split + 46., right: p.right}
   let ip = {...p, right: split}
   switch view {
-  | None => note(ip, ~y=(p.top + p.bottom) / 2., text ++ (isFile ? "" : " (being built)"))
+  | None => FxGraph.note(ip, ~y=(p.top + p.bottom) / 2., text ++ (isFile ? "" : " (being built)"))
   | Some({seconds, peaks}) =>
     let n = Array.length(peaks)
     let peak = peaks->Array.reduce(1e-9, Math.max)
@@ -421,19 +362,12 @@ let drawConvolve = (p, get: string => float, ~which, ~file: option<Impulse.t>) =
     let total = Math.max(predelay + seconds, 0.001)
     let xOf = t => ip.left + t / total * (ip.right - ip.left)
     // time ticks
-    let step = FxGraph.niceStep(total, 6.)
-    let t = ref(0.)
-    while t.contents <= total +. 1e-9 {
-      let x = xOf(t.contents)
+    FxGraph.ticks(~until=total +. 1e-9, ~step=FxGraph.niceStep(total, 6.), t => {
+      let x = xOf(t)
       FxGraph.line(ip.layer, ~cls="grid", x, ip.top, x, ip.bottom)
-      FxGraph.text(ip.layer, ~anchor="middle", x, ip.bottom + 12., FxGraph.msText(t.contents * 1000.))
-      t := t.contents + step
-    }
-    [-12., -24., -36., -48.]->Array.forEach(v => {
-      let y = yOf(ip, v, floorDb, peakDb)
-      FxGraph.line(ip.layer, ~cls="grid", ip.left, y, ip.right, y)
-      FxGraph.text(ip.layer, ~anchor="end", ip.left - 4., y + 4., Float.toString(v))
+      FxGraph.text(ip.layer, ~anchor="middle", x, ip.bottom + 12., FxGraph.msText(t * 1000.))
     })
+    ip->FxGraph.levelLines(~lo=floorDb, ~hi=peakDb, [-12., -24., -36., -48.])
     // a piece's level, kept or cut, faded at the kept part's end, in playing order
     let level = k => {
       let v = peaks->Array.getUnsafe(k) / peak
@@ -446,7 +380,7 @@ let drawConvolve = (p, get: string => float, ~which, ~file: option<Impulse.t>) =
     let shape = (~cls, from, until, at) => {
       let points = Array.fromInitializer(~length=until - from, j => {
         let k = from + j
-        (xOf(predelay + at(k) * piece), yOf(ip, db(level(k)), floorDb, peakDb))
+        (xOf(predelay + at(k) * piece), FxGraph.yOf(ip, db(level(k)), floorDb, peakDb))
       })
       if Array.length(points) > 0 {
         let (x0, _) = points->Array.getUnsafe(0)
@@ -460,13 +394,9 @@ let drawConvolve = (p, get: string => float, ~which, ~file: option<Impulse.t>) =
     // the kept part as it plays (reversed: from its end), and the cut part dim where it was
     shape(~cls="curve fill", 0, kept, k => reverse ? Int.toFloat(kept - 1 - k) : Int.toFloat(k))
     if kept < n {
-      let cut = k => {
-        let v = peaks->Array.getUnsafe(k) / peak
-        v
-      }
       let points = Array.fromInitializer(~length=n - kept, j => {
         let k = kept + j
-        (xOf(predelay + Int.toFloat(k) * piece), yOf(ip, db(cut(k)), floorDb, peakDb))
+        (xOf(predelay + Int.toFloat(k) * piece), FxGraph.yOf(ip, db(peaks->Array.getUnsafe(k) / peak), floorDb, peakDb))
       })
       FxGraph.path(ip.layer, ~cls="curve dim")->FxGraph.setPath(Plots.pathFrom(points))
       let x = xOf(predelay + Int.toFloat(kept) * piece)
@@ -478,24 +408,16 @@ let drawConvolve = (p, get: string => float, ~which, ~file: option<Impulse.t>) =
       FxGraph.line(ip.layer, ~cls="mark", x, ip.top, x, ip.bottom)
       FxGraph.text(ip.layer, ~anchor="end", x - 4., ip.bottom - 6., "predelay")
     }
-    note(ip, `${text}${reverse ? ", reversed" : ""}: ${PorridgeParams.secondsText(seconds * length)} of ${PorridgeParams.secondsText(seconds)}`)
+    FxGraph.note(ip, `${text}${reverse ? ", reversed" : ""}: ${PorridgeParams.secondsText(seconds * length)} of ${PorridgeParams.secondsText(seconds)}`)
   }
 
   // the tone: the cuts' 12 dB/oct slopes and the gain
   let lowCut = expValue(20., 20000., get("Cv_LowCut"))
   let highCut = expValue(20., 20000., get("Cv_HighCut"))
   let gain = Math.pow(10., ~exp=get("Cv_Gain") / 20.)
-  [100., 1000., 10000.]->Array.forEach(f => {
-    let x = xOfHz(tone, f)
-    FxGraph.line(tone.layer, ~cls="grid", x, tone.top, x, tone.bottom)
-    FxGraph.text(tone.layer, ~anchor="middle", x, tone.bottom + 12., f >= 1000. ? `${Float.toString(f / 1000.)}k` : Float.toString(f))
-  })
-  [12., 0., -12., -24.]->Array.forEach(v => {
-    let y = yOf(tone, v, -36., 24.)
-    FxGraph.line(tone.layer, ~cls=v == 0. ? "axis" : "grid", tone.left, y, tone.right, y)
-    FxGraph.text(tone.layer, ~anchor="end", tone.left - 4., y + 4., Float.toString(v))
-  })
-  response(tone, ~lo=-36., ~hi=24., hz => {
+  tone->FxGraph.frequencyLines([100., 1000., 10000.])
+  tone->FxGraph.levelLines(~lo=-36., ~hi=24., [12., 0., -12., -24.])
+  FxGraph.response(tone, ~lo=-36., ~hi=24., hz => {
     let s = Complex.make(0., hz / lowCut)
     let hp = lowCut <= 21. ? 1. : Complex.abs(Complex.div(Complex.mul(s, s), Complex.add(Complex.add(Complex.mul(s, s), Complex.scale(s, Math.sqrt(2.))), Complex.one)))
     let s2 = Complex.make(0., hz / highCut)
@@ -508,14 +430,14 @@ let drawConvolve = (p, get: string => float, ~which, ~file: option<Impulse.t>) =
 //==============================================================================
 // bode: a note's partials before (dim) and after the shift
 
-let drawBode = (p, get: string => float) => {
-  frequencyGrid(p, ~lo=-30., ~hi=0., ~step=10.)
+let drawBode = (p: FxGraph.plot, get: string => float) => {
+  FxGraph.frequencyGrid(p, ~lo=-30., ~hi=0., ~step=10.)
   let shift = PorridgeParams.bodeShift(get("Bd_Shift"))
   let mode = Float.toInt(get("Bd_Mode"))
   let base = 220.
   let partial = (cls, f: float, k) => {
-    let x = xOfHz(p, Math.abs(f))
-    let y = yOf(p, -20. * Math.log10(Int.toFloat(k)), -30., 0.)
+    let x = FxGraph.xOfHz(p, Math.abs(f))
+    let y = FxGraph.yOf(p, -20. * Math.log10(Int.toFloat(k)), -30., 0.)
     if Math.abs(f) >= 20. && Math.abs(f) <= 20000. {
       FxGraph.line(p.layer, ~cls, x, p.bottom, x, y)
     }
@@ -532,7 +454,7 @@ let drawBode = (p, get: string => float) => {
     }
   }
   let fb = get("Bd_Feedback")
-  note(
+  FxGraph.note(
     p,
     `a 220 Hz note's partials (dim) shifted by ${PorridgeParams.bodeShiftText(get("Bd_Shift"))}` ++ (
       mode == 2 ? ": up on the left, down on the right" : mode == 3 ? ": both ways, as ring modulation" : ""
@@ -560,7 +482,7 @@ let utilityMatrix = (get: string => float) => {
   (ll * gl * g, lr * gl * g, rl * gr * g, rr * gr * g)
 }
 
-let drawUtility = (p, get: string => float) => {
+let drawUtility = (p: FxGraph.plot, get: string => float) => {
   let (cxp, cyp) = ((p.left + p.right) / 2., (p.top + p.bottom) / 2. + 10.)
   let r = (p.bottom - p.top) / 2. - 14.
   // a goniometer: mid up, side across (left to the left)
@@ -580,7 +502,7 @@ let drawUtility = (p, get: string => float) => {
     FxGraph.text(p.layer, x + 6., y - 4., label)
   })
   let bass = get("Ut_BassMono")
-  note(
+  FxGraph.note(
     p,
     `where a sound on the left, in the centre and on the right ends up` ++ (
       bass > 0. ? `; below ${PorridgeParams.hzText(expValue(20., 1000., bass))} everything is mono` : ""
@@ -638,12 +560,10 @@ let graphTitle = (k: FxRack.kind) =>
 //==============================================================================
 // the tab
 
-let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
+let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
   let id = FxRack.id(e, ...)
   let model = ctx.model
   let get = x => model->ParamModel.get(id(x))
-  let w = Style.designWidth - 12.
-  let h = Style.pageHeight - 6. - 34.
   let secs = sections(e.kind)
   let gap = Grid.gap
   let cols = s => s.rows->Array.reduce(1, (n, row) => Math.Int.max(n, Array.length(row)))
@@ -708,7 +628,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
       : None
   let fg = FxGraph.make(ctx, panel.el, e.kind == #filter ? {...graphBox, h: 0.} : graphBox)
   let layer = FxGraph.group(fg.svg)
-  let p = {g: fg, layer, left: 40., right: fg.w - 16., top: 8., bottom: fg.h - 18.}
+  let p: FxGraph.plot = {layer, left: 40., right: fg.w - 16., top: 8., bottom: fg.h - 18.}
   let impulse = () => ctx.programs.impulses[e.copy - 1]->Option.flatMap(x => x)
   let draw = () => {
     layer->setTextContent("")
@@ -723,34 +643,20 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     }
   }
   let redraw = FxGraph.redraw(fg, draw)
-  FxRack.params(e)->Array.forEach(i => model->ParamModel.listen(i, redraw.request))
+  model->ParamModel.listenEach(FxRack.params(e), redraw.request)
 
   // the space, animated while it shows (about 30 frames a second)
-  let startScene = ref(() => ())
-  if sceneW > 0. {
+  let startScene = if sceneW > 0. {
     let sp = Panel.make(body, ~title="space", ~x=0., ~y=gy, ~w=sceneW, ~h=gh)
-    let sg = FxGraph.make(ctx, sp.el, {x: 8., y: 25., w: sceneW - 18., h: gh - 35.})
+    let sg = FxGraph.inPanel(ctx, sp)
     let scene = {sw: sg.w, sh: sg.h, layer: FxGraph.group(sg.svg)}
-    let running = ref(false)
-    let odd = ref(false)
     let origin = Date.now()
-    let rec frame = _ =>
-      if FxGraph.shown(sg) {
-        odd := !odd.contents
-        if odd.contents {
-          scene.layer->setTextContent("")
-          drawScene(scene, get, (Date.now() - origin) / 1000.)
-        }
-        requestAnimationFrame(frame)->ignore
-      } else {
-        running := false
-      }
-    startScene :=
-      () =>
-        if !running.contents {
-          running := true
-          requestAnimationFrame(frame)->ignore
-        }
+    FxGraph.animate(sg, ~everyOther=true, _ => {
+      scene.layer->setTextContent("")
+      drawScene(scene, get, (Date.now() - origin) / 1000.)
+    })
+  } else {
+    () => ()
   }
   if e.kind == #convolve {
     ctx.programs->ProgramStore.onImpulses(redraw.request)
@@ -775,28 +681,49 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect) => {
     if e.kind == #convolve {
       Impulse.requestViews(ctx.pc)
     }
-    startScene.contents()
+    startScene()
   }
 }
 
 //==============================================================================
 // the routing tab's card: a switch, a level, and a summary
 
+// The switch's label, and the level with its label.
 let cardControls = (k: FxRack.kind) =>
   switch k {
-  | #flanger => Some(("Fl_On", "Fl_Mix", "mix"))
-  | #phaser => Some(("Ph_On", "Ph_Mix", "mix"))
-  | #compressor => Some(("Cp_On", "Cp_Depth", "depth"))
-  | #space => Some(("Rv_On", "Rv_Mix", "mix"))
-  | #convolve => Some(("Cv_On", "Cv_Mix", "mix"))
-  | #bode => Some(("Bd_On", "Bd_Mix", "mix"))
-  | #filter => Some(("Ff_On", "Ff_Cutoff", "cutoff"))
-  | #utility => Some(("Ut_On", "Ut_Gain", "gain"))
-  | _ => None
+  | #chorus => ("mode", Some(("C_Mix", "mix")))
+  | #delay => ("on", Some(("D_Wet", "wet")))
+  | #reverb => ("on", Some(("R_Wet", "wet")))
+  | #eq => ("on", None)
+  | #distortion => ("type", Some(("Sat_Postgain", "postgain")))
+  | #flanger => ("on", Some(("Fl_Mix", "mix")))
+  | #phaser => ("on", Some(("Ph_Mix", "mix")))
+  | #compressor => ("on", Some(("Cp_Depth", "depth")))
+  | #space => ("on", Some(("Rv_Mix", "mix")))
+  | #convolve => ("on", Some(("Cv_Mix", "mix")))
+  | #bode => ("on", Some(("Bd_Mix", "mix")))
+  | #filter => ("on", Some(("Ff_Cutoff", "cutoff")))
+  | #utility => ("on", Some(("Ut_Gain", "gain")))
   }
 
-let summary = (k: FxRack.kind, s: string => string) =>
-  switch k {
+let summary = (model, e: FxRack.effect) => {
+  let id = FxRack.id(e, ...)
+  let s = x => model->ParamModel.shortText(id(x))
+  switch e.kind {
+  | #chorus => `${s("C_Voices")}, ${s("C_Rate")}\n${s("C_MinDelay")} + ${s("C_Depth")}`
+  | #delay =>
+    let get = x => model->ParamModel.get(id(x))
+    let n = x => Float.toString(Math.round(get(x) * 100.) / 100.)
+    let percent = x => Float.toFixed(get(x) * 100., ~digits=0)
+    `${n("D_LengthL")} / ${n("D_LengthR")} × ${s("D_Unit")}\nfeedback ${percent("D_FeedbackL")} / ${percent("D_FeedbackR")} %`
+  | #reverb => `${s("R_Size")} room, ${s("R_Length")}\npredelay ${s("R_Predelay")}`
+  | #eq =>
+    switch FxRack.eqBandTypes(e)->Array.filter(i => model->ParamModel.get(i) != 0.)->Array.length {
+    | 0 => "every band off"
+    | 1 => "1 band on"
+    | n => `${Int.toString(n)} bands on`
+    }
+  | #distortion => `pregain ${s("Sat_Pregain")}\nlimit ${s("Sat_Limit")}`
   | #flanger => `${s("Fl_Rate")}, ${s("Fl_Delay")}\nfeedback ${s("Fl_Feedback")}`
   | #phaser => `${s("Ph_Stages")} stages, ${s("Ph_Rate")}\n${s("Ph_Freq")}, fb ${s("Ph_Feedback")}`
   | #compressor => `${s("Cp_Bands")}\namount ${s("Cp_Depth")}, mix ${s("Cp_Mix")}`
@@ -805,5 +732,5 @@ let summary = (k: FxRack.kind, s: string => string) =>
   | #bode => `${s("Bd_Shift")} ${s("Bd_Mode")}\nfeedback ${s("Bd_Feedback")}`
   | #filter => `${s("Ff_Type")}\nres ${s("Ff_Resonance")}`
   | #utility => `width ${s("Ut_Width")}, pan ${s("Ut_Pan")}\n${s("Ut_Gain")}`
-  | _ => ""
   }
+}

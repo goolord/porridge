@@ -19,6 +19,8 @@ let columnGap = 4. // between the controls of neighbouring columns
 
 // The panel height that fits rows of controls below the title.
 let panelHeight = rows => padTop + Int.toFloat(rows) * rowHeight + padBottom
+// The height of a panel without a title that fits rows of controls.
+let bareHeight = rows => Int.toFloat(rows) * rowHeight + 2. * padBottom - Style.controlGap
 
 // The column width at which this many columns fill a panel this wide (borders included),
 // with the same margin left and right.
@@ -71,55 +73,29 @@ let claim = (g, c, r, ~span=1, ~rows=1, what) =>
     }
   }
 
-let param = (g, id, c, r, label, ~span=1) => {
-  g->claim(c, r, ~span, id)
-  let b = g->cell(c, r, ~span)
-  Controls.param(g.ctx, g.el, id, ~x=b.x, ~y=b.y, ~w=b.w, ~label)
+// Claims cells for `what`, and calls f with the box a control spanning them fills.
+let at = (g, c, r, ~span=1, ~rows=1, what, f) => {
+  g->claim(c, r, ~span, ~rows, what)
+  f(g->cell(c, r, ~span, ~rows))
 }
 
-let choice = (g, id, c, r, label, ~span=1) => {
-  g->claim(c, r, ~span, id)
-  let b = g->cell(c, r, ~span)
-  Controls.choice(g.ctx, g.el, id, ~x=b.x, ~y=b.y, ~w=b.w, ~label)
-}
+let param = (g, id, c, r, label, ~span=1) =>
+  g->at(c, r, ~span, id, b => Controls.param(g.ctx, g.el, id, ~x=b.x, ~y=b.y, ~w=b.w, ~label))
 
-let toggle = (g, id, c, r, label, ~span=1) => {
-  g->claim(c, r, ~span, id)
-  let b = g->cell(c, r, ~span)
-  Controls.toggle(g.ctx, g.el, id, ~x=b.x, ~y=b.y, ~w=b.w, ~label)
-}
+let choice = (g, id, c, r, label, ~span=1) =>
+  g->at(c, r, ~span, id, b => Controls.choice(g.ctx, g.el, id, ~x=b.x, ~y=b.y, ~w=b.w, ~label))
 
-// A button filling its cells. (~w is ignored: the width comes from the span. ~dy is only
-// for older call sites, and moves the button down from the top of its row.)
-let button = (g, text, c, r, ~span=1, ~w as _: option<float>=?, ~status=?, ~dy=0., onClick) => {
-  g->claim(c, r, ~span, text)
-  let b = g->cell(c, r, ~span)
-  Controls.button(
-    g.ctx,
-    g.el,
-    text,
-    ~x=b.x,
-    ~y=b.y + dy,
-    ~w=b.w,
-    ~h=b.h,
-    ~cls="gc",
-    ~status?,
-    onClick,
-  )->ignore
-}
+let toggle = (g, id, c, r, label, ~span=1) =>
+  g->at(c, r, ~span, id, b => Controls.toggle(g.ctx, g.el, id, ~x=b.x, ~y=b.y, ~w=b.w, ~label))
+
+// A button filling its cells.
+let button = (g, text, c, r, ~span=1, ~status=?, onClick) =>
+  g->at(c, r, ~span, text, b =>
+    Controls.button(g.ctx, g.el, text, ~x=b.x, ~y=b.y, ~w=b.w, ~h=b.h, ~cls="gc", ~status?, onClick)->ignore
+  )
 
 // A note (wrapped, faint text) filling a span of cells.
-let note = (g, text, c, r, ~span=1, ~rows=1) => {
-  g->claim(c, r, ~span, ~rows, "a note")
-  let b = g->cell(c, r, ~span, ~rows)
-  let e = Web.el("div", ~cls="note wrap", ~text, ~parent=g.el)->Web.placeBox({...b, x: b.x + 2.})
-  e
-}
-
-// The area of a span of cells, for plots.
-let box = (g, c, r, cols, rows): Web.box => {
-  x: cx(g, c) + 3.,
-  y: cy(g, r) + 2.,
-  w: Int.toFloat(cols) * g.cw - 8.,
-  h: Int.toFloat(rows) * rowHeight - 4.,
-}
+let note = (g, text, c, r, ~span=1, ~rows=1) =>
+  g->at(c, r, ~span, ~rows, "a note", b =>
+    Web.el("div", ~cls="note wrap", ~text, ~parent=g.el)->Web.placeBox({...b, x: b.x + 2.})
+  )

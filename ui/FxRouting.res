@@ -29,13 +29,9 @@ let hint = "Click a dashed place to put the distortion there (right-click takes 
 // the distortion's places: Sat_Mode's values
 type place = Pre | Post | Global
 
-let make = (ctx: Ctx.t, body, ops) => {
+let make = (ctx: Ctx.t, body, ~w, ~h, ops) => {
   let model = ctx.model
   let get = id => model->ParamModel.get(id)
-  let def = id => model->ParamModel.def(id)
-  let short = id => (def(id)).shortText(get(id))
-  let w = Style.designWidth - 12.
-  let h = Style.pageHeight - 6. - 34.
   let panel = Panel.make(body, ~title="signal flow", ~x=0., ~y=0., ~w, ~h)
   let root = panel.el
   let svg = Plots.svg(root, {x: 0., y: 0., w: w - 2., h: h - 2.})
@@ -43,10 +39,7 @@ let make = (ctx: Ctx.t, body, ops) => {
   let arrows = FxGraph.group(svg)
   let f = Float.toFixed(_, ~digits=1)
 
-  let hover = (e, text) => {
-    e->onMouse(#mouseenter, _ => ctx.status->Status.show(text()))
-    e->onMouse(#mouseleave, _ => ctx.status->Status.clear)
-  }
+  let hover = (e, text) => ctx.status->Status.hover(e, text)
   let label = (text, x, y) => el("div", ~cls="grp", ~text, ~parent=root)->place(x, y)->ignore
   let node = (text, x, y, w) => el("div", ~cls="fnode", ~text, ~parent=root)->place(x, y, ~w, ~h=30.)
 
@@ -130,7 +123,7 @@ let make = (ctx: Ctx.t, body, ops) => {
   let drawSlots = () => {
     let on = get(typeId) != 0.
     let mode = Float.toInt(get(modeId))
-    let typeName = short(typeId)
+    let typeName = model->ParamModel.shortText(typeId)
     [(pre, mode == 2 || mode == 3), (post, mode == 1), (global, mode == 0 || mode == 3)]->Array.forEach(((
       e,
       here,
@@ -149,34 +142,12 @@ let make = (ctx: Ctx.t, body, ops) => {
   let addW = 30.
   let rackEnd = w - 14. - addW
 
-  let summary = (e: FxRack.effect) => {
-    let id = FxRack.id(e, ...)
-    let s = x => short(id(x))
-    switch e.kind {
-    | #chorus => `${s("C_Voices")}, ${s("C_Rate")}\n${s("C_MinDelay")} + ${s("C_Depth")}`
-    | #delay =>
-      let n = x => Float.toString(Math.round(get(id(x)) * 100.) / 100.)
-      let percent = x => Float.toFixed(get(id(x)) * 100., ~digits=0)
-      `${n("D_LengthL")} / ${n("D_LengthR")} × ${s("D_Unit")}\nfeedback ${percent("D_FeedbackL")} / ${percent("D_FeedbackR")} %`
-    | #reverb => `${s("R_Size")} room, ${s("R_Length")}\npredelay ${s("R_Predelay")}`
-    | #eq =>
-      switch FxRack.eqBandTypes(e)->Array.filter(i => get(i) != 0.)->Array.length {
-      | 0 => "every band off"
-      | 1 => "1 band on"
-      | n => `${Int.toString(n)} bands on`
-      }
-    | #distortion => `pregain ${s("Sat_Pregain")}\nlimit ${s("Sat_Limit")}`
-    | k => FxPanels.summary(k, s)
-    }
-  }
-
   // a card per effect, made when it first comes into the rack
   let cards = Map.make()
   let card = (e: FxRack.effect) =>
     switch cards->Map.get(FxRack.value(e)) {
     | Some(c) => c
     | None =>
-      let id = FxRack.id(e, ...)
       let card = el("div", ~cls="card", ~parent=root)
       let head = el("div", ~cls="chead", ~parent=card)
       let led = el("i", ~cls="led", ~parent=head)
@@ -200,26 +171,17 @@ let make = (ctx: Ctx.t, body, ops) => {
         `${FxRack.label(ops.rack(), e)} (${FxRack.hostName(e)}'s parameters): click to open it, drag sideways to move it, right-click to duplicate or remove it`
       )
       let controls = el("div", ~cls="cctl", ~parent=card)
-      switch e.kind {
-      | #chorus =>
-        Controls.choice(ctx, controls, id("C_Mode"), ~x=0., ~y=0., ~label="mode")
-        Controls.param(ctx, controls, id("C_Mix"), ~x=0., ~y=Grid.rowHeight, ~label="mix")
-      | #delay =>
-        Controls.toggle(ctx, controls, id("D_On"), ~x=0., ~y=0., ~w=100., ~label="on")
-        Controls.param(ctx, controls, id("D_Wet"), ~x=0., ~y=Grid.rowHeight, ~label="wet")
-      | #reverb =>
-        Controls.toggle(ctx, controls, id("R_On"), ~x=0., ~y=0., ~w=100., ~label="on")
-        Controls.param(ctx, controls, id("R_Wet"), ~x=0., ~y=Grid.rowHeight, ~label="wet")
-      | #eq => Controls.toggle(ctx, controls, id("EQ_On"), ~x=0., ~y=0., ~w=100., ~label="on")
-      | #distortion =>
-        Controls.choice(ctx, controls, id("Sat_Type"), ~x=0., ~y=0., ~label="type")
-        Controls.param(ctx, controls, id("Sat_Postgain"), ~x=0., ~y=Grid.rowHeight, ~label="postgain")
-      | k =>
-        FxPanels.cardControls(k)->Option.forEach(((on, level, label)) => {
-          Controls.toggle(ctx, controls, id(on), ~x=0., ~y=0., ~w=100., ~label="on")
-          Controls.param(ctx, controls, id(level), ~x=0., ~y=Grid.rowHeight, ~label)
-        })
+      // the switch (a list, for those that are off at its first value), and the level
+      let (label, level) = FxPanels.cardControls(e.kind)
+      let on = FxRack.switchId(e)
+      if Array.length(Controls.namesOf(model->ParamModel.def(on))) > 2 {
+        Controls.choice(ctx, controls, on, ~x=0., ~y=0., ~label)
+      } else {
+        Controls.toggle(ctx, controls, on, ~x=0., ~y=0., ~w=100., ~label)
       }
+      level->Option.forEach(((level, label)) =>
+        Controls.param(ctx, controls, FxRack.id(e, level), ~x=0., ~y=Grid.rowHeight, ~label)
+      )
       let sum = el("div", ~cls="csum", ~parent=card)
       head->onPointer(#pointerdown, ev =>
         switch ev->button {
@@ -279,7 +241,7 @@ let make = (ctx: Ctx.t, body, ops) => {
       let on = FxRack.isOn(e, get)
       led->toggleClass("lit", on)
       c->toggleClass("off", !on)
-      sum->setTextContent(summary(e))
+      sum->setTextContent(FxPanels.summary(model, e))
       arrow([(x - gap + 2., arrowY), (x - 1., arrowY)])
     })
     let end = rackX + gap + Int.toFloat(n) * (cardW + gap)
@@ -311,10 +273,10 @@ let make = (ctx: Ctx.t, body, ops) => {
     ~parent=root,
   )->place(12., row3 + 4., ~w=w - 14. - 320. - 24.)->ignore
 
-  root->onMouse(#mouseenter, _ => ctx.status->Status.show(hint))
-  root->onMouse(#mouseleave, _ => ctx.status->Status.clear)
-  model->ParamModel.listenAny(_ => if root->offsetParent->Option.isSome {
+  hover(root, () => hint)
+  let layoutSoon = perFrame(() => if root->offsetParent->Option.isSome {
       layout()
     })
+  model->ParamModel.listenAny(_ => layoutSoon())
   layout
 }

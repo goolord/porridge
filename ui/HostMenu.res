@@ -11,48 +11,31 @@
 open! Web
 
 type t = {
-  pc: PatchConnection.t,
+  channel: HostChannel.t,
   // whether the host can show its menu
   mutable available: bool,
-  mutable stateListener: option<PatchConnection.storedStateEvent => unit>,
 }
-
-let requestPrefix = "porridge:host?"
-let replyKey = "porridge:host"
 
 // Windows' default double-click time
 let doubleClickMs = 500.
 
-let request = (t, what) => t.pc->PatchConnection.requestStoredStateValue(requestPrefix ++ what)
-
-let onState = (t, {key, value}: PatchConnection.storedStateEvent) =>
-  switch value {
-  | Object(reply) if key == replyKey =>
+let make = pc => {
+  let t = {channel: HostChannel.make(pc, "host"), available: false}
+  t.channel->HostChannel.listen(reply =>
     t.available = switch reply->Dict.get("menu") {
     | Some(Boolean(menu)) => menu
     | _ => false
     }
-  | _ => ()
-  }
-
-let make = pc => {
-  let t = {pc, available: false, stateListener: None}
-  let listener = ev => onState(t, ev)
-  t.stateListener = Some(listener)
-  pc->PatchConnection.addStoredStateValueListener(listener)
-  request(t, "get")
+  )
+  t.channel->HostChannel.request("get")
   t
 }
 
-let dispose = t =>
-  t.stateListener->Option.forEach(listener =>
-    t.pc->PatchConnection.removeStoredStateValueListener(listener)
-  )
+let dispose = t => t.channel->HostChannel.dispose
 
 // Shows the menu for the parameter id where ev happened.
 let show = (t, id, ev) =>
-  request(
-    t,
+  t.channel->HostChannel.request(
     "menu=" ++
     JSON.stringify(
       Object(

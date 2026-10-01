@@ -11,18 +11,17 @@
 // run: node tools/test/presets.mjs
 
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import * as Preset from "../../ui/Preset.res.mjs";
 import * as Bank from "../../ui/Bank.res.mjs";
 import * as OatmealFormat from "../../ui/oatmeal/OatmealFormat.res.mjs";
 import * as Scala from "../../ui/Scala.res.mjs";
+import { root, checker } from "./lib.mjs";
 
-const root = join (dirname (fileURLToPath (import.meta.url)), "..", "..");
-let failures = 0;
-const fail = msg => { console.log ("FAIL " + msg); ++failures; };
+const { fail, done } = checker ();
 
-const factory = OatmealFormat.parseFile (new Uint8Array (readFileSync (join (root, "presets", "oatmealprs.dat"))));
+const factoryFile = new Uint8Array (readFileSync (join (root, "presets", "oatmealprs.dat")));
+const factory = OatmealFormat.parseFile (factoryFile);
 if (factory.TAG !== "Ok") throw new Error ("factory bank didn't parse");
 const programs = factory._0.programs;
 
@@ -55,7 +54,7 @@ if (! legacy || ! legacy.every ((p, i) => sameValues (presets[i].values, p.value
 
 // the factory bank the worker installs, which it decodes only the first preset of
 {
-    const bank = Preset.factoryBank (new Uint8Array (readFileSync (join (root, "presets", "oatmealprs.dat"))));
+    const bank = Preset.factoryBank (factoryFile);
     const encoded = Preset.encodeBank (bank);
     const all = Preset.decodeBank (encoded);
     const first = Preset.decodeFirst (encoded);
@@ -133,5 +132,4 @@ else
     if (Preset.make ("plain").tuning !== undefined) fail ("Init has a tuning");
 }
 
-console.log (failures === 0 ? `ok: ${programs.length} programs round-trip` : `${failures} failures`);
-process.exit (failures === 0 ? 0 : 1);
+done (`ok: ${programs.length} programs round-trip`);

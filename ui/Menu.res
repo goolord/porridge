@@ -13,13 +13,14 @@ type t = {
   root: element,
   mutable menu: option<element>,
   mutable anchor: option<element>,
-  mutable closer: option<Dom.pointerEvent => unit>,
+  // stops closing the menu on a press outside it
+  mutable closer: option<unit => unit>,
 }
 
 let make = root => {root, menu: None, anchor: None, closer: None}
 
 let close = t => {
-  t.closer->Option.forEach(closer => document->offDocumentPointerDownCapture(closer))
+  t.closer->Option.forEach(stop => stop())
   t.closer = None
   t.menu->Option.forEach(remove)
   t.menu = None
@@ -74,19 +75,7 @@ let show = (t, anchor, items, current, onPick) =>
     m->place(x, y)->ignore
 
     // presses on the anchor are left to it, so that it can close the menu again
-    let closer = ev => {
-      let target = ev->originalTarget
-      if !(m->contains(target)) && !(anchor->contains(target)) {
-        close(t)
-      }
-    }
-    setTimeout(() =>
-      // the menu may already be gone
-      if t.menu->Option.mapOr(false, open_ => open_ === m) {
-        t.closer = Some(closer)
-        document->onDocumentPointerDownCapture(closer)
-      }
-    , 0)->ignore
+    t.closer = Some(onPressOutside([m, anchor], () => close(t)))
   }
 
 // Shows a menu at a point inside parent (in its design pixels), as if below an anchor there.

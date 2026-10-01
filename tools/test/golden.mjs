@@ -9,17 +9,12 @@
 // Build the host first (tools/test/build.sh; it needs `npm run build`). Output goes to
 // tools/test/build/golden/.
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { execFileSync } from "node:child_process";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { programSize, bankHeaderSize, bankPrograms } from "../../ui/oatmeal/OatmealFormat.res.mjs";
+import { root, outDir, render } from "./lib.mjs";
 
-const root = join (dirname (fileURLToPath (import.meta.url)), "..", "..");
-const build = join (root, "tools", "test", "build");
-const dir = join (build, "golden");
-const host = join (build, process.platform === "win32" ? "host.exe" : "host");
 const mode = process.argv[2];
 
 if (mode !== "record" && mode !== "check")
@@ -28,7 +23,7 @@ if (mode !== "record" && mode !== "check")
     process.exit (1);
 }
 
-mkdirSync (dir, { recursive: true });
+const dir = outDir ("golden");
 
 // a chord, a release, a single note with bend, pressure and the mod wheel
 const events = [
@@ -48,7 +43,7 @@ for (let i = 0; i < bankPrograms; ++i)
     const prog = join (dir, `p${i}.bin`);
     writeFileSync (prog, bank.subarray (bankHeaderSize + i * programSize, bankHeaderSize + (i + 1) * programSize));
     const out = join (dir, `p${i}.f32`);
-    execFileSync (host, ["--program", prog, "--events", eventsPath, "--frames", "100000", "--rate", "44100", "--set", "Oat_Mode=1", "--out", out]);
+    render ({ program: prog, events: eventsPath, frames: 100000, sets: { Oat_Mode: 1 }, out });
     hashes[i] = createHash ("sha256").update (readFileSync (out)).digest ("hex");
 }
 

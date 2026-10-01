@@ -18,6 +18,19 @@ namespace porridge
         return int ((this.state >> 16) & 0x7fff);
     }
 
+    /// The next value as -1 .. 1 (in steps of 1 / 16384).
+    float bipolar (Rand& this)          { return float (this.next()) * (1.0f / 16384.0f) - 1.0f; }
+
+    /// The next value as a direction: 1 or -1.
+    int randomSign (Rand& this)         { return (this.next() & 1) != 0 ? 1 : -1; }
+
+    /// A uint32 phase: `phase` (0..1) moved by a random amount, up to +-spread / 2.
+    int64 randomPhase (Rand& rng, float phase, float spread)
+    {
+        let r = float64 (rng.bipolar());
+        return int64 ((float64 (phase) + r * float64 (spread) * 0.5) * two32 + 0.5) & u32;
+    }
+
     /// Porridge's own random numbers (drift, unison phases, the modulation matrix's random
     /// source), kept apart from Oatmeal's rand() so that they don't change its sequence.
     struct Lcg
@@ -107,6 +120,26 @@ namespace porridge
         return false;
     }
 
+    /// An effect's tail bookkeeping after a block: silentCount counts the samples since the
+    /// effect was last `fed` sound (its input, or what went into its memory), and it is awake
+    /// while its output is `loud`. Returns loud; the caller puts it to sleep (idle) once
+    /// silentCount passes its tail's length.
+    bool stillSounding (bool& idle, int& silentCount, bool fed, bool loud)
+    {
+        silentCount = fed ? 0 : silentCount + blockSize;
+
+        if (loud)
+            idle = false;
+
+        return loud;
+    }
+
+    /// The same where the count restarts whenever the output is loud.
+    bool stillSounding (bool& idle, int& silentCount, bool loud)
+    {
+        return stillSounding (idle, silentCount, loud, loud);
+    }
+
     /// Samples per delay/LFO/arp unit. Units 3.. are note lengths relative to the tempo.
     float64 delayUnitSamples (int unit, float64 sr, float64 spb)
     {
@@ -137,7 +170,7 @@ namespace porridge
     {
         float[delayHalf] bufL0, bufL1, bufR0, bufR1;
         int lenL, lenR, posL, posR;
-        float lpxL, lpyL, lpxR, lpyR, hpxL, hpyL, hpxR, hpyR;
+        float<2> lpx, lpy, hpx, hpy;
         bool idle;
         int silentCount;
         float rotCur;
@@ -151,7 +184,7 @@ namespace porridge
     {
         float[rackDelayHalf] bufL0, bufL1, bufR0, bufR1;
         int lenL, lenR, posL, posR;
-        float lpxL, lpyL, lpxR, lpyR, hpxL, hpyL, hpxR, hpyR;
+        float<2> lpx, lpy, hpx, hpy;
         bool idle;
         int silentCount;
         float rotCur;
@@ -169,8 +202,7 @@ namespace porridge
         this.idle = true;
         this.silentCount = 0;
         this.posL = 0; this.posR = 0;
-        this.lpxL = 0; this.lpyL = 0; this.lpxR = 0; this.lpyR = 0;
-        this.hpxL = 0; this.hpyL = 0; this.hpxR = 0; this.hpyR = 0;
+        this.lpx = float<2>(); this.lpy = float<2>(); this.hpx = float<2>(); this.hpy = float<2>();
         this.rotCur = 0;
         this.clearL (max (this.lenL, 0));
         this.clearR (max (this.lenR, 0));
@@ -251,16 +283,15 @@ namespace porridge
             let rL = revL == 2 ? reverseWindow (t, this.posL, invL) * this.readL (this.lenL - 1 - this.posL) : this.readL (this.posL);
             let rR = revR == 2 ? reverseWindow (t, this.posR, invR) * this.readR (this.lenR - 1 - this.posR) : this.readR (this.posR);
 
-            let yL = kl * (rL + this.lpxL) + pl * this.lpyL + 1e-15f;  this.lpxL = rL; this.lpyL = yL;
-            let hL = kh * (yL - this.hpxL) + ph * this.hpyL + 1e-15f;  this.hpxL = yL; this.hpyL = hL;
-            let yR = kl * (rR + this.lpxR) + pl * this.lpyR + 1e-15f;  this.lpxR = rR; this.lpyR = yR;
-            let hR = kh * (yR - this.hpxR) + ph * this.hpyR + 1e-15f;  this.hpxR = yR; this.hpyR = hR;
+            let rd = float<2> (rL, rR);
+            let y = kl * (rd + this.lpx) + pl * this.lpy + 1e-15f;  this.lpx = rd; this.lpy = y;
+            let h = kh * (y - this.hpx) + ph * this.hpy + 1e-15f;  this.hpx = y; this.hpy = h;
 
-            this.writeL (this.posL, sat10 (t, inL * panL + b * hR + a * hL) + 1e-15f);
-            this.writeR (this.posR, sat10 (t, inR * panR + d * hR + c * hL) + 1e-15f);
+            this.writeL (this.posL, sat10 (t, inL * panL + b * h[1] + a * h[0]) + 1e-15f);
+            this.writeR (this.posR, sat10 (t, inR * panR + d * h[1] + c * h[0]) + 1e-15f);
 
-            let oL = revL == 1 ? reverseWindow (t, this.posL, invL) * this.readL (this.lenL - 1 - this.posL) : hL;
-            let oR = revR == 1 ? reverseWindow (t, this.posR, invR) * this.readR (this.lenR - 1 - this.posR) : hR;
+            let oL = revL == 1 ? reverseWindow (t, this.posL, invL) * this.readL (this.lenL - 1 - this.posL) : h[0];
+            let oR = revR == 1 ? reverseWindow (t, this.posR, invR) * this.readR (this.lenR - 1 - this.posR) : h[1];
 
             buf[i] = float<2> (oL * wet + inL * dry, oR * wet + inR * dry);
 
@@ -280,14 +311,8 @@ namespace porridge
 
         this.rotCur = target;
 
-        if (anyAbove (buf, 1e-9f))
-        {
-            this.silentCount = 0;
-            this.idle = false;
+        if (stillSounding (this.idle, this.silentCount, anyAbove (buf, 1e-9f)))
             return true;
-        }
-
-        this.silentCount += blockSize;
 
         if (this.silentCount >= this.lenL + this.lenR)
             this.idle = true;
@@ -298,7 +323,7 @@ namespace porridge
     //==============================================================================
     struct EQBand
     {
-        float s1L, s2L, s1R, s2R;
+        float<2> s1, s2;
     }
 
     struct EQ
@@ -385,26 +410,19 @@ namespace porridge
             let B0 = float (b0 * inv), B1 = float (b1 * inv), B2 = float (b2 * inv);
             let A1 = float (-a1 * inv), A2 = float (-a2 * inv);
 
-            var s1L = this.bands[k].s1L, s2L = this.bands[k].s2L;
-            var s1R = this.bands[k].s1R, s2R = this.bands[k].s2R;
+            var s1 = this.bands[k].s1, s2 = this.bands[k].s2;
+            let dc = float<2> (this.dc, -this.dc);
 
             for (wrap<blockSize> i)
             {
-                let xL = buf[i][0] + this.dc;
-                let yL = B0 * xL + s1L;
-                s1L = A1 * yL + B1 * xL + s2L;
-                s2L = A2 * yL + B2 * xL;
-
-                let xR = buf[i][1] - this.dc;
-                let yR = B0 * xR + s1R;
-                s1R = A1 * yR + B1 * xR + s2R;
-                s2R = A2 * yR + B2 * xR;
-
-                buf[i] = float<2> (yL, yR);
+                let x = buf[i] + dc;
+                let y = B0 * x + s1;
+                s1 = A1 * y + B1 * x + s2;
+                s2 = A2 * y + B2 * x;
+                buf[i] = y;
             }
 
-            this.bands[k].s1L = s1L; this.bands[k].s2L = s2L;
-            this.bands[k].s1R = s1R; this.bands[k].s2R = s2R;
+            this.bands[k].s1 = s1; this.bands[k].s2 = s2;
         }
 
         if (anyAbove (buf, 1e-9f))
@@ -425,8 +443,8 @@ namespace porridge
         bool idle;
         int tailCount;
         int64 phase;               // uint32 LFO phase
-        int64[16] dposL, dposR;    // irregular mode: delay in samples * 2^17 (uint32)
-        int[16] velL, velR;
+        int64[16][2] dpos;         // irregular mode, per side (L, R): delay in samples * 2^17 (uint32)
+        int[16][2] vel;
         float x1L, y1L, x1R, y1R;
     }
 
@@ -449,12 +467,19 @@ namespace porridge
 
         for (wrap<16> k)
         {
-            this.dposL[k] = int64 (int (float (rng.next()) * range / 32768.0f + minD + 0.5f)) << 17;
-            this.dposR[k] = int64 (int (float (rng.next()) * range / 32768.0f + minD + 0.5f)) << 17;
-            this.velL[k] = int (float (rng.next() - 16384) * r * 8.0f + 0.5f);
-            this.velR[k] = int (float (rng.next() - 16384) * r * 8.0f + 0.5f);
+            for (wrap<2> c)
+                this.dpos[c][k] = int64 (int (float (rng.next()) * range / 32768.0f + minD + 0.5f)) << 17;
+
+            for (wrap<2> c)
+                this.vel[c][k] = chorusDrift (rng, r);
         }
     }
+
+    /// A random drift speed for irregular mode (r: the speed scale).
+    int chorusDrift (Rand& rng, float r)       { return int (float (rng.next() - 16384) * r * 8.0f + 0.5f); }
+
+    /// A random speed away from the end of the range that a voice's drift has reached.
+    int chorusBounce (Rand& rng, float r)      { return int (float (rng.next() + 1) * r * 131072.0f / 32768.0f + 0.5f); }
 
     float lfoTable (const FxTables& t, int mode, int j)
     {
@@ -490,25 +515,24 @@ namespace porridge
         return (1.0f - fr) * line.at (j & 0x7fff) + fr * line.at ((j + 1) & 0x7fff);
     }
 
-    void chorusStep (Chorus& this, Rand& rng, bool right, int v, int64 minF, int64 maxF, float r)
+    /// Irregular mode: voice v of side c drifts on, bouncing off the ends of the range.
+    void chorusStep (Chorus& this, Rand& rng, int c, int v, int64 minF, int64 maxF, float r)
     {
-        let vel = right ? this.velR.at (v) : this.velL.at (v);
-        let d = ((right ? this.dposR.at (v) : this.dposL.at (v)) + int64 (vel)) & u32;
+        let d = (this.dpos.at (c).at (v) + int64 (this.vel.at (c).at (v))) & u32;
 
         if (d < minF)
         {
-            if (right) { this.dposR.at (v) = minF; this.velR.at (v) = int (float (rng.next() + 1) * r * 131072.0f / 32768.0f + 0.5f); }
-            else       { this.dposL.at (v) = minF; this.velL.at (v) = int (float (rng.next() + 1) * r * 131072.0f / 32768.0f + 0.5f); }
+            this.dpos.at (c).at (v) = minF;
+            this.vel.at (c).at (v) = chorusBounce (rng, r);
         }
         else if (d > maxF)
         {
-            if (right) { this.dposR.at (v) = maxF; this.velR.at (v) = -int (float (rng.next() + 1) * r * 131072.0f / 32768.0f + 0.5f); }
-            else       { this.dposL.at (v) = maxF; this.velL.at (v) = -int (float (rng.next() + 1) * r * 131072.0f / 32768.0f + 0.5f); }
+            this.dpos.at (c).at (v) = maxF;
+            this.vel.at (c).at (v) = -chorusBounce (rng, r);
         }
         else
         {
-            if (right) this.dposR.at (v) = d;
-            else       this.dposL.at (v) = d;
+            this.dpos.at (c).at (v) = d;
         }
     }
 
@@ -516,10 +540,8 @@ namespace porridge
     void randomiseSpeeds (Chorus& this, Rand& rng, float r)
     {
         for (wrap<16> k)
-        {
-            this.velL[k] = int (float (rng.next() - 16384) * r * 8.0f + 0.5f);
-            this.velR[k] = int (float (rng.next() - 16384) * r * 8.0f + 0.5f);
-        }
+            for (wrap<2> c)
+                this.vel[c][k] = chorusDrift (rng, r);
     }
 
     /// The feedback path's DC blocker (x1, y1: its state).
@@ -667,17 +689,17 @@ namespace porridge
                 {
                     if (v >= nv) break;
 
-                    this.chorusStep (rng, false, v, minF, maxF, r);
-                    aL += chorusRead (this.bufL, wF - this.dposL[v]);
+                    this.chorusStep (rng, 0, v, minF, maxF, r);
+                    aL += chorusRead (this.bufL, wF - this.dpos[0][v]);
 
                     if (stereo == 1)
                     {
-                        this.chorusStep (rng, true, v, minF, maxF, r);
-                        aR += chorusRead (this.bufR, wF - this.dposR[v]);
+                        this.chorusStep (rng, 1, v, minF, maxF, r);
+                        aR += chorusRead (this.bufR, wF - this.dpos[1][v]);
                     }
                     else if (stereo == 2)
                     {
-                        aR += chorusRead (this.bufR, wF + this.dposL[v] - maxF - 1);
+                        aR += chorusRead (this.bufR, wF + this.dpos[0][v] - maxF - 1);
                     }
                 }
 
@@ -996,14 +1018,8 @@ namespace porridge
             }
         }
 
-        if (active || anyAbove (buf, 1e-8f))
-        {
-            this.silentCount = 0;
-            this.idle = false;
+        if (stillSounding (this.idle, this.silentCount, active || anyAbove (buf, 1e-8f)))
             return true;
-        }
-
-        this.silentCount += blockSize;
 
         if (float (this.silentCount) >= abs (predelay) * float (sr) * 0.001f + float (4 * this.len[4]))
             this.idle = true;

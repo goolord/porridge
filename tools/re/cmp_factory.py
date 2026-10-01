@@ -2,6 +2,7 @@
 # randomness (random LFO shapes, free-running global LFOs, irregular chorus, XY random walk,
 # noise) are replaced by deterministic equivalents first.
 # Run with 32-bit Python after tools/test/build.sh:  python tools/re/cmp_factory.py [program ...]
+import sys, struct
 from cmp_synth import *
 h0 = Host(); h0.flush(640)
 SEQ = [(0, 0x90, 48, 100), (0, 0x90, 55, 90), (0, 0x90, 64, 110), (44032, 0x80, 48, 0), (44032, 0x80, 55, 0), (44032, 0x80, 64, 0),

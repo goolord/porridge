@@ -156,43 +156,30 @@ let build = (ctx: Ctx.t, page) => {
 
   let importSample = async (file, ~here) => {
     let tab = sampleTab(~here)
-    let name = file->fileName
+    let source = (await AudioFile.readFile(file))->Result.flatMap(WaveImport.make(file->fileName, _))
     try {
-      let bytes = Uint8Array.fromBuffer(await file->arrayBuffer)
-      switch await AudioFile.decode(bytes, name) {
+      switch source {
       | Error(e) => ctx.toast(e)
-      | Ok(audio) =>
-        switch WaveImport.make(name, audio) {
+      | Ok(source) =>
+        if current.contents != tab {
+          selectRef.contents(tab)
+        }
+        switch analyse(source, WaveImport.defaultPosition(source)) {
         | Error(e) => ctx.toast(e)
-        | Ok(source) =>
-          if current.contents != tab {
-            selectRef.contents(tab)
-          }
-          switch analyse(source, WaveImport.defaultPosition(source)) {
-          | Error(e) => ctx.toast(e)
-          | Ok(a) =>
-            editor->ShapeEditor.pushUndo
-            setFromSample(a, ~commit=true)
-            stripRef.contents->Option.forEach(s => s->SampleStrip.show(source, a, ~scrubs=scrubs(source)))
-          }
+        | Ok(a) =>
+          editor->ShapeEditor.pushUndo
+          setFromSample(a, ~commit=true)
+          stripRef.contents->Option.forEach(s => s->SampleStrip.show(source, a, ~scrubs=scrubs(source)))
         }
       }
     } catch {
-    | JsExn(e) => ctx.toast(`Couldn't read ${name}: ${e->JsExn.message->Option.getOr("")}`)
+    | JsExn(e) => ctx.toast(readError(file, e))
     }
   }
 
-  let sampleInput = el("input", ~parent=blk)
-  sampleInput->setInputType("file")
-  sampleInput->setAccept(AudioFile.extensions->Array.join(","))
-  sampleInput->setStyle("display", "none")
-  sampleInput->onEvent(#change, _ => {
-    sampleInput
-    ->files
-    ->Option.flatMap(item(_, 0))
-    ->Option.forEach(f => importSample(f, ~here=true)->Promise.ignore)
-    sampleInput->setValue("")
-  })
+  let pickSample = FilePicker.make(blk, ~accept=AudioFile.accept, file =>
+    importSample(file, ~here=true)->Promise.ignore
+  )
   let generate = kind =>
     apply(d =>
       d->ShapeEditor.blit(shape().bipolar ? ShapeEditor.genWave(kind) : ShapeEditor.genLfo(kind))
@@ -204,7 +191,7 @@ let build = (ctx: Ctx.t, page) => {
     ("square", () => generate(Square)),
     ("triangle", () => generate(Triangle)),
     ("random", () => generate(Random)),
-    (sampleTool, () => sampleInput->click),
+    (sampleTool, pickSample),
     ("fix", () => apply(d => ShapeEditor.fix(d, ~bipolar=shape().bipolar))),
     ("soften", () => apply(d => ShapeEditor.soften(d))),
     ("invert", () => apply(d => ShapeEditor.invert(d, ~bipolar=shape().bipolar))),

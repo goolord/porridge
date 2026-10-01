@@ -31,7 +31,6 @@ namespace porridge
     let convPredelayMax = 48064;       // 250 ms at 192 kHz, and a little
     let convSincZeros   = 8;           // the file resampler's windowed sinc: zero crossings a side
     let convSincRes     = 256;         // table points per zero crossing
-    let convPi          = 3.141592653589793;
 
     // Convolver.mode: how the tail partitions are being set up
     let convSteady = 0;
@@ -85,7 +84,8 @@ namespace porridge
         float<2> spA;
         float[2] spLp, spDc, spOut1, spOut2;
         float spG, spLpA, spDcA, spOutA;
-        float[2] amCur, amTarget, bpLog, bpTarget, bpA1, bpA2, bpA3, bpS1, bpS2, nLp;
+        float[2] amCur, amTarget, bpLog, bpTarget, bpS1, bpS2, nLp;
+        SvfCoefs[2] bpC;
         float amA, bpK, nLpA;
         int peak;
     }
@@ -173,7 +173,7 @@ namespace porridge
 
         // the wet's filters, width, gain and the mix
         float mixCur, gainCur, widthCur, hpAmt, lpAmt, hpLog, lpLog;
-        float[2] hp1, hp2, lp1, lp2;
+        Svf hp, lp;
         bool idle;
         int silentCount;                    // samples since the input was last active
 
@@ -189,7 +189,7 @@ namespace porridge
     {
         for (wrap<1024> k)
         {
-            let a = 2.0 * convPi * float64 (k) / 2048.0;
+            let a = 2.0 * pi * float64 (k) / 2048.0;
             this.twCos[k] = float (cos (a));
             this.twSin[k] = float (sin (a));
         }
@@ -211,8 +211,8 @@ namespace porridge
         {
             let u = float64 (i) / float64 (convSincRes);
             let v = u / float64 (convSincZeros);
-            let s = i == 0 ? 1.0 : sin (convPi * u) / (convPi * u);
-            this.sincTable.at (i) = float (s * (0.42 + 0.5 * cos (convPi * v) + 0.08 * cos (2.0 * convPi * v)));
+            let s = i == 0 ? 1.0 : sin (pi * u) / (pi * u);
+            this.sincTable.at (i) = float (s * (0.42 + 0.5 * cos (pi * v) + 0.08 * cos (2.0 * pi * v)));
         }
 
         this.sincTable.at (n + 1) = 0.0f;
@@ -242,7 +242,8 @@ namespace porridge
         this.acc[0] = ConvSpectrum();
         this.acc[1] = ConvSpectrum();
 
-        for (wrap<2> c) { this.hp1[c] = 0; this.hp2[c] = 0; this.lp1[c] = 0; this.lp2[c] = 0; }
+        this.hp = Svf();
+        this.lp = Svf();
 
         // The frames before now are left out instead of cleared, and a crossfade is finished.
         this.settle();
@@ -396,6 +397,13 @@ namespace porridge
         }
     }
 
+    /// Both channels of a partition: acc[0] += x[i] * h[j], acc[1] += x[i + 1] * h[j + 1].
+    void convMacPair<A, X, H> (A& acc, const X& x, int i, const H& h, int j)
+    {
+        convMac (acc[0], x.at (i), h.at (j));
+        convMac (acc[1], x.at (i + 1), h.at (j + 1));
+    }
+
     /// acc += x * h (bin 0: DC and Nyquist are real).
     void convMac<S> (S& acc, const S& x, const S& h)
     {
@@ -492,13 +500,20 @@ namespace porridge
         let fadeStart = n - this.srcFade;
 
         if (s >= fadeStart)
-            v *= float (0.5 + 0.5 * cos (convPi * (float64 (s - fadeStart) + 0.5) / float64 (this.srcFade)));
+            v *= float (0.5 + 0.5 * cos (pi * (float64 (s - fadeStart) + 0.5) / float64 (this.srcFade)));
 
         return v;
     }
 
     //==============================================================================
     // Head: 64-tap partitions, every block
+
+    /// The head's 128-point FFT of headWork (its input in bit-reversed order).
+    void headFft (Convolver& this)
+    {
+        for (int s = 0; s < 7; ++s)
+            convFftStage (this.headWork, this.twCos, this.twSin, s);
+    }
 
     /// Frame n (blocks n - 1 and n of the input) into the head's delay line at dst.
     /// weight: 0 plain, 1 the old impulse's share of a crossfade, 2 the new one's.
@@ -523,9 +538,7 @@ namespace porridge
             this.headWork.im.at (d) = this.inR.at (k) * w;
         }
 
-        for (int s = 0; s < 7; ++s)
-            convFftStage (this.headWork, this.twCos, this.twSin, s);
-
+        this.headFft();
         convUnpack (this.headWork, this.headX.at (dst), this.headX.at (dst + 1), 1.0f);
     }
 
@@ -540,9 +553,7 @@ namespace porridge
             this.headWork.im.at (d) = v[1];
         }
 
-        for (int s = 0; s < 7; ++s)
-            convFftStage (this.headWork, this.twCos, this.twSin, s);
-
+        this.headFft();
         let i = side * 64 + p * 2;
         convUnpack (this.headWork, this.headH.at (i), this.headH.at (i + 1), this.srcGain / (4.0f * 128.0f));
     }
@@ -588,22 +599,14 @@ namespace porridge
             let x = int (f & 31) * 2;
 
             if (p < oldParts && f >= this.headLo && f <= lastOld)
-            {
-                convMac (this.headAcc[0], this.headX.at (old * 64 + x), this.headH.at (old * 64 + p * 2));
-                convMac (this.headAcc[1], this.headX.at (old * 64 + x + 1), this.headH.at (old * 64 + p * 2 + 1));
-            }
+                convMacPair (this.headAcc, this.headX, old * 64 + x, this.headH, old * 64 + p * 2);
 
             if (p < newParts && f >= this.headB0)
-            {
-                convMac (this.headAcc[0], this.headX.at (nw * 64 + x), this.headH.at (nw * 64 + p * 2));
-                convMac (this.headAcc[1], this.headX.at (nw * 64 + x + 1), this.headH.at (nw * 64 + p * 2 + 1));
-            }
+                convMacPair (this.headAcc, this.headX, nw * 64 + x, this.headH, nw * 64 + p * 2);
         }
 
         convPack (this.headWork, this.headAcc[0], this.headAcc[1], this.bitRev, 4);
-
-        for (int s = 0; s < 7; ++s)
-            convFftStage (this.headWork, this.twCos, this.twSin, s);
+        this.headFft();
 
         for (wrap<blockSize> i)
             wet[i] = float<2> (this.headWork.re[64 + i], -this.headWork.im[64 + i]);
@@ -888,17 +891,9 @@ namespace porridge
             let h = q * 2;
 
             if (this.mode == convXfade && f >= S - 1)
-            {
-                let e = int (f - (S - 1)) * 2;
-                convMac (this.acc[0], this.tailE.at (e), this.tailH.at (h));
-                convMac (this.acc[1], this.tailE.at (e + 1), this.tailH.at (h + 1));
-            }
+                convMacPair (this.acc, this.tailE, int (f - (S - 1)) * 2, this.tailH, h);
             else
-            {
-                let x = int (f % convTailParts) * 2;
-                convMac (this.acc[0], this.tailX.at (x), this.tailH.at (h));
-                convMac (this.acc[1], this.tailX.at (x + 1), this.tailH.at (h + 1));
-            }
+                convMacPair (this.acc, this.tailX, int (f % convTailParts) * 2, this.tailH, h);
 
             return convCostMac;
         }
@@ -914,16 +909,9 @@ namespace porridge
             let x = int (f % convTailParts) * 2;
 
             if (c < S + 2 + q)
-            {
-                let i = (q & 3) * 2;
-                convMac (this.acc[0], this.tailX.at (x), this.ring.at (i));
-                convMac (this.acc[1], this.tailX.at (x + 1), this.ring.at (i + 1));
-            }
+                convMacPair (this.acc, this.tailX, x, this.ring, (q & 3) * 2);
             else
-            {
-                convMac (this.acc[0], this.tailX.at (x), this.tailH.at (q * 2));
-                convMac (this.acc[1], this.tailX.at (x + 1), this.tailH.at (q * 2 + 1));
-            }
+                convMacPair (this.acc, this.tailX, x, this.tailH, q * 2);
 
             return convCostMac;
         }
@@ -1359,11 +1347,6 @@ namespace porridge
     //==============================================================================
     // Built-in impulses
 
-    float convOnePole (float64 hz, float64 sr)
-    {
-        return float (1.0 - exp (-2.0 * convPi * min (hz, 0.45 * sr) / sr));
-    }
-
     float convRand01 (Lcg& rng)
     {
         return 0.5f + 0.5f * rng.nextSigned();
@@ -1377,9 +1360,9 @@ namespace porridge
         s.envHi = 1.0;
         s.kLo = pow (10.0, -3.0 / (t60Lo * sr));
         s.kHi = pow (10.0, -3.0 / (t60Hi * sr));
-        s.split = convOnePole (xoverHz, sr);
-        s.toneLp = convOnePole (lpHz, sr);
-        s.toneHp = convOnePole (hpHz, sr);
+        s.split = onePoleCoef (xoverHz, sr);
+        s.toneLp = onePoleCoef (lpHz, sr);
+        s.toneHp = onePoleCoef (hpHz, sr);
         s.pre = int (preMs * 0.001 * sr);
         s.attack = max (1, int (attackMs * 0.001 * sr));
     }
@@ -1441,7 +1424,7 @@ namespace porridge
     /// RBJ biquad i of the cascade: type 0 low-pass, 1 high-pass, 2 peak.
     void setBiquad (ConvSynth& s, int i, int type, float64 hz, float64 q, float64 dB, float64 sr)
     {
-        let w = 2.0 * convPi * min (hz, 0.45 * sr) / sr;
+        let w = 2.0 * pi * min (hz, 0.45 * sr) / sr;
         let cw = cos (w);
         let alpha = sin (w) / (2.0 * q);
         let A = pow (10.0, dB / 40.0);
@@ -1581,7 +1564,7 @@ namespace porridge
         if (t < s.peak)
         {
             let u = float (t) / float (s.peak);
-            env = sin (float (convPi) * 0.5f * u) * sin (float (convPi) * 0.5f * u);
+            env = sin (float (pi) * 0.5f * u) * sin (float (pi) * 0.5f * u);
         }
         else
         {
@@ -1604,23 +1587,17 @@ namespace porridge
             if ((t & 31) == 0)
             {
                 s.bpLog[ch] += (s.bpTarget[ch] - s.bpLog[ch]) * 0.03f;
-                let g = float (tan (convPi * min (float64 (exp (s.bpLog[ch])), 0.45 * sr) / sr));
-                s.bpA1[ch] = 1.0f / (1.0f + g * (g + s.bpK));
-                s.bpA2[ch] = g * s.bpA1[ch];
-                s.bpA3[ch] = g * s.bpA2[ch];
+                let g = float (tan (pi * min (float64 (exp (s.bpLog[ch])), 0.45 * sr) / sr));
+                s.bpC[ch] = svfCoefs (g, s.bpK);
             }
 
             s.amCur[ch] += s.amA * (s.amTarget[ch] - s.amCur[ch]);
 
-            let n = s.rng[ch].nextSigned();
-            let v3 = n - s.bpS2[ch];
-            let v1 = s.bpA1[ch] * s.bpS1[ch] + s.bpA2[ch] * v3;
-            let v2 = s.bpS2[ch] + s.bpA2[ch] * s.bpS1[ch] + s.bpA3[ch] * v3;
-            s.bpS1[ch] = 2.0f * v1 - s.bpS1[ch];
-            s.bpS2[ch] = 2.0f * v2 - s.bpS2[ch];
+            float lp, bp;
+            svfTick (s.bpS1[ch], s.bpS2[ch], s.bpC[ch], s.rng[ch].nextSigned(), lp, bp);
 
             s.nLp[ch] += s.nLpA * (s.rng[ch + 2].nextSigned() - s.nLp[ch]);
-            out[ch] = env * s.amCur[ch] * (0.7f * v1 * s.bpK + 0.6f * s.nLp[ch]);
+            out[ch] = env * s.amCur[ch] * (0.7f * bp * s.bpK + 0.6f * s.nLp[ch]);
         }
 
         return out;
@@ -1676,10 +1653,10 @@ namespace porridge
             this.syn.spA = float<2> (-0.75f, -0.78f);
             let trip = float64 (this.syn.spD[0]) + 3.0 * float64 (this.syn.spK * this.syn.spM);
             this.syn.spG = float (pow (10.0, -3.0 * trip / (2.2 * sr)));
-            this.syn.spLpA = convOnePole (4000.0, sr);
-            this.syn.spDcA = convOnePole (40.0, sr);
-            this.syn.spOutA = convOnePole (4500.0, sr);
-            this.syn.toneHp = convOnePole (100.0, sr);
+            this.syn.spLpA = onePoleCoef (4000.0, sr);
+            this.syn.spDcA = onePoleCoef (40.0, sr);
+            this.syn.spOutA = onePoleCoef (4500.0, sr);
+            this.syn.toneHp = onePoleCoef (100.0, sr);
             this.syn.envLo = 1.0;
             this.syn.kLo = exp (-1.0 / (0.08 * sr));
 
@@ -1738,13 +1715,13 @@ namespace porridge
                 let t60 = 3.3 * pow (f / 140.0, -0.28);
                 let a = (0.6 + 0.4 * float64 (convRand01 (this.syn.rng[3]))) / sqrt (t60);   // even energy per octave
                 let rr = pow (10.0, -3.0 / (t60 * sr));
-                let w = 2.0 * convPi * f / sr;
+                let w = 2.0 * pi * f / sr;
                 this.syn.mCr[k] = float (rr * cos (w));
                 this.syn.mCi[k] = float (rr * sin (w));
                 this.syn.mRe[k] = float (a);
                 this.syn.mIm[k] = 0;
-                let pl = 2.0 * convPi * float64 (convRand01 (this.syn.rng[2]));
-                let pr = 2.0 * convPi * float64 (convRand01 (this.syn.rng[3]));
+                let pl = 2.0 * pi * float64 (convRand01 (this.syn.rng[2]));
+                let pr = 2.0 * pi * float64 (convRand01 (this.syn.rng[3]));
                 this.syn.mL[k] = float (cos (pl));
                 this.syn.mLq[k] = float (sin (pl));
                 this.syn.mR[k] = float (cos (pr));
@@ -1755,7 +1732,7 @@ namespace porridge
             this.syn.kHi = exp (-1.0 / (0.004 * sr));
             this.syn.envLo = 1.0;
             this.syn.kLo = pow (10.0, -3.0 / (1.5 * sr));
-            this.syn.toneHp = convOnePole (1000.0, sr);
+            this.syn.toneHp = onePoleCoef (1000.0, sr);
         }
         else if (kind == impulse::noiseBloom)
         {
@@ -1763,9 +1740,9 @@ namespace porridge
             this.syn.peak = max (1, int (0.38 * T));
             this.syn.envLo = 1.0;
             this.syn.kLo = exp (-5.5 / (T - float64 (this.syn.peak)));
-            this.syn.amA = convOnePole (13.0, sr);
+            this.syn.amA = onePoleCoef (13.0, sr);
             this.syn.bpK = 1.0f / 3.0f;
-            this.syn.nLpA = convOnePole (5000.0, sr);
+            this.syn.nLpA = onePoleCoef (5000.0, sr);
 
             for (wrap<2> ch)
             {
@@ -1937,12 +1914,12 @@ namespace porridge
         // the wet's cuts (12 dB/oct state-variable filters), width, gain; the mix
         // cutoffs smoothed per block, their coefficients interpolated across it
         let fa = float (1.0 - exp (-float64 (blockSize) / (0.02 * sr)));
-        let gh0 = float (tan (convPi * float64 (exp (this.hpLog)) / sr));
-        let gl0 = float (tan (convPi * float64 (exp (this.lpLog)) / sr));
+        let gh0 = float (tan (pi * float64 (exp (this.hpLog)) / sr));
+        let gl0 = float (tan (pi * float64 (exp (this.lpLog)) / sr));
         this.hpLog += (hpT - this.hpLog) * fa;
         this.lpLog += (lpT - this.lpLog) * fa;
-        let dgh = (float (tan (convPi * float64 (exp (this.hpLog)) / sr)) - gh0) * (1.0f / float (blockSize));
-        let dgl = (float (tan (convPi * float64 (exp (this.lpLog)) / sr)) - gl0) * (1.0f / float (blockSize));
+        let dgh = (float (tan (pi * float64 (exp (this.hpLog)) / sr)) - gh0) * (1.0f / float (blockSize));
+        let dgl = (float (tan (pi * float64 (exp (this.lpLog)) / sr)) - gl0) * (1.0f / float (blockSize));
         let kq = 1.41421356f;
         let doHp = hpOn || this.hpAmt > 0;
         let doLp = lpOn || this.lpAmt > 0;
@@ -1955,38 +1932,20 @@ namespace porridge
             var w = wet[i];
             let fi = float (i + 1);
 
+            float<2> lp, bp;
+
             if (doHp)
             {
                 this.hpAmt += (hpTo - this.hpAmt) * sa;
-                let g = gh0 + dgh * fi;
-                let h1 = 1.0f / (1.0f + g * (g + kq)), h2 = g * h1, h3 = g * h2;
-
-                for (wrap<2> ch)
-                {
-                    let v3 = w[ch] - this.hp2[ch];
-                    let v1 = h1 * this.hp1[ch] + h2 * v3;
-                    let v2 = this.hp2[ch] + h2 * this.hp1[ch] + h3 * v3;
-                    this.hp1[ch] = 2.0f * v1 - this.hp1[ch];
-                    this.hp2[ch] = 2.0f * v2 - this.hp2[ch];
-                    w[ch] += this.hpAmt * (-kq * v1 - v2);
-                }
+                this.hp.tick (svfCoefs (gh0 + dgh * fi, kq), w, lp, bp);
+                w += this.hpAmt * (-kq * bp - lp);
             }
 
             if (doLp)
             {
                 this.lpAmt += (lpTo - this.lpAmt) * sa;
-                let g = gl0 + dgl * fi;
-                let l1 = 1.0f / (1.0f + g * (g + kq)), l2 = g * l1, l3 = g * l2;
-
-                for (wrap<2> ch)
-                {
-                    let v3 = w[ch] - this.lp2[ch];
-                    let v1 = l1 * this.lp1[ch] + l2 * v3;
-                    let v2 = this.lp2[ch] + l2 * this.lp1[ch] + l3 * v3;
-                    this.lp1[ch] = 2.0f * v1 - this.lp1[ch];
-                    this.lp2[ch] = 2.0f * v2 - this.lp2[ch];
-                    w[ch] += this.lpAmt * (v2 - w[ch]);
-                }
+                this.lp.tick (svfCoefs (gl0 + dgl * fi, kq), w, lp, bp);
+                w += this.lpAmt * (lp - w);
             }
 
             this.mixCur += (mixT - this.mixCur) * sa;
@@ -2008,8 +1967,8 @@ namespace porridge
 
         for (wrap<2> ch)
         {
-            if (this.hpAmt == 0 || abs (this.hp1[ch]) + abs (this.hp2[ch]) < 1.0e-20f) { this.hp1[ch] = 0; this.hp2[ch] = 0; }
-            if (this.lpAmt == 0 || abs (this.lp1[ch]) + abs (this.lp2[ch]) < 1.0e-20f) { this.lp1[ch] = 0; this.lp2[ch] = 0; }
+            if (this.hpAmt == 0 || abs (this.hp.ic1[ch]) + abs (this.hp.ic2[ch]) < 1.0e-20f) { this.hp.ic1[ch] = 0; this.hp.ic2[ch] = 0; }
+            if (this.lpAmt == 0 || abs (this.lp.ic1[ch]) + abs (this.lp.ic2[ch]) < 1.0e-20f) { this.lp.ic1[ch] = 0; this.lp.ic2[ch] = 0; }
         }
 
         if (this.bPhase != 0)
@@ -2018,13 +1977,8 @@ namespace porridge
         this.blockCount = n + 1;
 
         // idle once the input has been silent for longer than the impulse can ring
-        this.silentCount = active ? 0 : this.silentCount + blockSize;
-
-        if (active || anyAbove (buf, 1e-8f))
-        {
-            this.idle = false;
+        if (stillSounding (this.idle, this.silentCount, active, active || anyAbove (buf, 1e-8f)))
             return true;
-        }
 
         if (this.silentCount >= max (this.pdCur, this.pdNext) + this.lkPlay + 3 * 1024 + 2 * blockSize)
             this.idle = true;

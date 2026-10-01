@@ -74,7 +74,7 @@ let onState = (t, {key, value}: PatchConnection.storedStateEvent) =>
       changed(t)
     }
   | (Some(StoredState.Tuning), String(s)) =>
-    t.tuning = s == "" ? None : Bank.decodeTuning(s)
+    t.tuning = Bank.decodeTuning(s)
     changed(t)
   | (Some(StoredState.Impulses), String(s)) =>
     t.impulses = Impulse.decode(s)
@@ -128,8 +128,12 @@ let dispose = t =>
     t.pc->PatchConnection.removeEndpointListener("ccOut", outListener)
   })
 
+// program i's number as the view shows it: from 01
+let number = i => Int.toString(i + 1)->String.padStart(2, "0")
+
 let name = (t, i) => t.programs[i]->Option.mapOr("", Preset.name)
-let meta = t => (t.programs->Array.getUnsafe(t.current)).meta
+let currentProgram = t => t.programs->Array.getUnsafe(t.current)
+let meta = t => currentProgram(t).meta
 
 let shape = (t, table) => t.shapes->getTable(table)
 let onShapes = (t, fn) => t.shapeListeners->Array.push(fn)
@@ -155,14 +159,22 @@ let setShape = (t, table, data, ~commit) => {
 
 // the current program with the live parameter values and shapes
 let captureCurrent = (t): Preset.t => {
-  ...t.programs->Array.getUnsafe(t.current),
+  ...currentProgram(t),
   values: Map.fromArray(t.model.values->Map.entries->Array.fromIterator),
   tables: Preset.copyTables(t.shapes),
   tuning: t.tuning,
   impulses: t.impulses,
 }
 
+// keeps the live edits in the current program
+let keepCurrent = t => t.programs->Array.setUnsafe(t.current, captureCurrent(t))
+
 let storeBank = t => store(t, StoredState.Bank, Preset.encodeBank(t.programs))
+
+let bankChanged = t => {
+  storeBank(t)
+  changed(t)
+}
 
 let sendTuning = t => {
   Bank.sendTuning(t.pc, t.tuning)
@@ -207,32 +219,29 @@ let apply = (t, preset: Preset.t) => {
 let select = (t, i, ~keepEdits=true) => {
   let i = mod(mod(i, bankPrograms) + bankPrograms, bankPrograms)
   if keepEdits {
-    t.programs->Array.setUnsafe(t.current, captureCurrent(t))
+    keepCurrent(t)
   }
   t.current = i
-  apply(t, t.programs->Array.getUnsafe(i))
+  apply(t, currentProgram(t))
   StoredState.send(t.pc, StoredState.Program, i)
-  storeBank(t)
-  changed(t)
+  bankChanged(t)
 }
 
 let rename = (t, i, name) => {
   if i == t.current {
-    t.programs->Array.setUnsafe(i, captureCurrent(t))
+    keepCurrent(t)
   }
   t.programs[i]->Option.forEach(p => t.programs->Array.setUnsafe(i, p->Preset.withName(name)))
-  storeBank(t)
-  changed(t)
+  bankChanged(t)
 }
 
 let setMeta = (t, meta: Preset.meta) => {
   t.programs->Array.setUnsafe(t.current, {...captureCurrent(t), meta}->Preset.withName(meta.name))
-  storeBank(t)
-  changed(t)
+  bankChanged(t)
 }
 
 let setMacroName = (t, i, name) => {
-  let meta = (t.programs->Array.getUnsafe(t.current)).meta
+  let meta = meta(t)
   setMeta(
     t,
     {
@@ -245,18 +254,16 @@ let setMacroName = (t, i, name) => {
 let setTuning = (t, tuning) => {
   t.tuning = tuning
   sendTuning(t)
-  t.programs->Array.setUnsafe(t.current, captureCurrent(t))
-  storeBank(t)
-  changed(t)
+  keepCurrent(t)
+  bankChanged(t)
 }
 
 // Loads convolver `which`'s impulse from a file (and selects it).
 let setImpulse = (t, which, imp) => {
   t.impulses = t.impulses->Array.mapWithIndex((x, i) => i == which ? imp : x)
   sendImpulses(t)
-  t.programs->Array.setUnsafe(t.current, captureCurrent(t))
-  storeBank(t)
-  changed(t)
+  keepCurrent(t)
+  bankChanged(t)
 }
 
 let tuningName = t =>
@@ -284,8 +291,7 @@ let loadTuningFile = (t, text, filename) => {
 let loadIntoCurrent = (t, p) => {
   t.programs->Array.setUnsafe(t.current, p)
   apply(t, p)
-  storeBank(t)
-  changed(t)
+  bankChanged(t)
 }
 
 // The browser plays presets without storing them: it keeps the current program as it was
@@ -296,48 +302,34 @@ let preview = (t, p) => apply(t, p)
 let restore = (t, kept: Preset.t) => apply(t, kept)
 let keep = (t, kept: Preset.t) => t.programs->Array.setUnsafe(t.current, kept)
 
-let initCurrent = t => {
-  let p = Preset.make("Init")
-  t.programs->Array.setUnsafe(t.current, p)
-  apply(t, p)
-  storeBank(t)
-  changed(t)
-}
+let initCurrent = t => loadIntoCurrent(t, Preset.make("Init"))
 
 let panic = t => t.pc->PatchConnection.sendEventOrValue("panic", 1)
 
 let isTuningFile = filename =>
-  [".scl", ".kbm"]->Array.some(ext => filename->String.toLowerCase->String.endsWith(ext))
+  Scala.extensions->Array.some(ext => filename->String.toLowerCase->String.endsWith(ext))
 
 let loadFile = (t, bytes, filename) =>
   if isTuningFile(filename) {
     loadTuningFile(t, Preset.utf8Decode(bytes), filename)
   } else {
-    switch Preset.parseFile(bytes) {
-    | Error(e) => t.message(`${filename} isn't a Porridge or Oatmeal program or bank (${e})`)
-    | Ok({presets: []}) => t.message(`${filename} has no programs in it`)
+    switch Preset.parseForLoading(bytes, filename) {
+    | Error(e) => t.message(e)
     | Ok({kind: Single, presets: [p]}) =>
       loadIntoCurrent(t, p)
       t.message(`Loaded "${Preset.name(p)}" into program ${Int.toString(t.current + 1)}`)
     | Ok({presets: programs}) =>
       t.programs = Preset.fillBank(programs)
-      t.current = 0
-      apply(t, t.programs->Array.getUnsafe(0))
-      StoredState.send(t.pc, StoredState.Program, 0)
+      select(t, 0, ~keepEdits=false)
       t.message(`Loaded bank ${filename} (${Int.toString(Array.length(programs))} programs)`)
-      storeBank(t)
-      changed(t)
     }
   }
 
 // A file the user picked or dropped.
 let loadUserFile = async (t, file) =>
-  try {
-    let buffer = await file->Web.arrayBuffer
-    loadFile(t, Uint8Array.fromBuffer(buffer), file->Web.fileName)
-  } catch {
-  | JsExn(e) =>
-    t.message(`Couldn't read ${file->Web.fileName}: ${e->JsExn.message->Option.getOr("")}`)
+  switch await Web.readBytes(file) {
+  | Ok(bytes) => loadFile(t, bytes, file->Web.fileName)
+  | Error(e) => t.message(e)
   }
 
 let download = (bytes, filename) => {
@@ -360,13 +352,13 @@ let safeName = s =>
   }
 
 let downloadProgram = t => {
-  let p = captureCurrent(t)
-  t.programs->Array.setUnsafe(t.current, p)
+  keepCurrent(t)
+  let p = currentProgram(t)
   download(Preset.writePreset(p), safeName(Preset.name(p)) ++ ".porridge")
 }
 
 let downloadBank = t => {
-  t.programs->Array.setUnsafe(t.current, captureCurrent(t))
+  keepCurrent(t)
   download(Preset.writeBank(t.programs), "porridge bank.porridge")
 }
 
@@ -381,14 +373,14 @@ let warnOatmeal = (t, presets) => {
 }
 
 let exportOatmealProgram = t => {
-  let p = captureCurrent(t)
+  keepCurrent(t)
+  let p = currentProgram(t)
   warnOatmeal(t, [p])
-  t.programs->Array.setUnsafe(t.current, p)
   download(writeProgramChunk(Preset.toOatmeal(p)), safeName(Preset.name(p)) ++ ".omp")
 }
 
 let exportOatmealBank = t => {
-  t.programs->Array.setUnsafe(t.current, captureCurrent(t))
+  keepCurrent(t)
   warnOatmeal(t, t.programs)
   download(writeBankChunk(t.programs->Array.map(Preset.toOatmeal)), "porridge bank.omb")
 }
@@ -401,21 +393,16 @@ let learn = (t, ccId) => {
 // An audio file as convolver `which`'s impulse, which it then plays (Cv_Impulse "file").
 let loadImpulseFile = async (t, which, file) => {
   let name = file->Web.fileName
-  try {
-    let bytes = Uint8Array.fromBuffer(await file->Web.arrayBuffer)
-    switch await AudioFile.decode(bytes, name) {
-    | Error(e) => t.message(e)
-    | Ok(audio) =>
-      switch Impulse.fromAudio(name, audio) {
-      | None => t.message(`${name} is silent`)
-      | Some(imp) =>
-        setImpulse(t, which, Some(imp))
-        let param = which == 0 ? "Cv_Impulse" : PorridgeParams.copyId("Cv_Impulse", which + 1)
-        t.model->ParamModel.gestureSet(param, Int.toFloat(PorridgeParams.impulseFile))
-        t.message(`Loaded ${name} (${Float.toFixed(Impulse.seconds(imp), ~digits=2)} s) into the convolver`)
-      }
+  switch await AudioFile.readFile(file) {
+  | Error(e) => t.message(e)
+  | Ok(audio) =>
+    switch Impulse.fromAudio(name, audio) {
+    | None => t.message(`${name} is silent`)
+    | Some(imp) =>
+      setImpulse(t, which, Some(imp))
+      let param = which == 0 ? "Cv_Impulse" : PorridgeParams.copyId("Cv_Impulse", which + 1)
+      t.model->ParamModel.gestureSet(param, Int.toFloat(PorridgeParams.impulseFile))
+      t.message(`Loaded ${name} (${Float.toFixed(Impulse.seconds(imp), ~digits=2)} s) into the convolver`)
     }
-  } catch {
-  | JsExn(e) => t.message(`Couldn't read ${name}: ${e->JsExn.message->Option.getOr("")}`)
   }
 }

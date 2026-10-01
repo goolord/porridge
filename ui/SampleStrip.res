@@ -21,31 +21,21 @@ type t = {
   onEnd: unit => unit,
 }
 
-let ink = canvas =>
-  switch canvas->getComputedStyle->getPropertyValue("--signal")->String.trim {
-  | "" => "#1c3c73"
-  | ink => ink
-  }
-
 let draw = t =>
   switch (t.source, t.analysis) {
   | (Some(source), Some(analysis)) if t.scrubs =>
     open Context2d
     let g = t.overview->getContext2d
-    let (w, h) = (t.overview->canvasWidth, t.overview->canvasHeight)
-    g->clearRect(0., 0., w, h)
-    g->setFillStyle("rgba(236,227,196,0.45)")
-    g->fillRect(0., 0., w, h)
+    let (w, h) = CanvasStyle.paper(t.overview, g)
     let n = Int.toFloat(WaveImport.length(source))
     let x = sample => sample / n * w
     // the part measured, at least a few pixels wide
     let middle = x(analysis.from + analysis.length / 2.)
     let half = Math.max(3., x(analysis.length) / 2.)
     let (x0, x1) = (middle - half, middle + half)
-    g->setFillStyle("rgba(28,60,115,0.25)")
+    g->setFillStyle(CanvasStyle.tint(0.25))
     g->fillRect(x0, 0., x1 - x0, h)
     // the volume, mirrored about the middle: solid where it's measured
-    let signal = ink(t.overview)
     let bars = Float.toInt(w / 2.)
     let env = source.envelope
     let count = TypedArray.length(env)
@@ -53,12 +43,10 @@ let draw = t =>
       let bx = Int.toFloat(i) * 2.
       let v = ByteView.getUnsafe(env, i * count / bars)
       let bh = Math.max(1., v * (h - 6.))
-      g->setFillStyle(bx + 1.5 >= x0 && bx <= x1 ? signal : "rgba(31,26,14,0.3)")
+      g->setFillStyle(bx + 1.5 >= x0 && bx <= x1 ? CanvasStyle.ink : CanvasStyle.shade(0.3))
       g->fillRect(bx, (h - bh) / 2., 1.5, bh)
     }
-    g->setStrokeStyle("#6f5f36")
-    g->setLineWidth(2.)
-    g->strokeRect(1., 1., w - 2., h - 2.)
+    CanvasStyle.border(g, w, h)
   | _ => ()
   }
 
@@ -107,9 +95,7 @@ let make = (ctx: Ctx.t, parent, box: box, ~onStart, ~onPick, ~onEnd) => {
   let e = el("div", ~cls="sstrip", ~parent)->placeBox(box)
   let name = el("div", ~cls="n", ~parent=e)
   let detail = el("div", ~cls="d", ~parent=e)
-  let overview = el("canvas", ~parent=e)->place(box.w - 28. - overviewWidth, 3., ~w=overviewWidth, ~h=20.)
-  overview->setCanvasWidth(overviewWidth * 2.)
-  overview->setCanvasHeight(40.)
+  let overview = CanvasStyle.make(e, {x: box.w - 28. - overviewWidth, y: 3., w: overviewWidth, h: 20.})
   let close = el("button", ~cls="btn x", ~text="×", ~parent=e)
   let t = {
     ctx,
@@ -124,8 +110,7 @@ let make = (ctx: Ctx.t, parent, box: box, ~onStart, ~onPick, ~onEnd) => {
     onPick,
     onEnd,
   }
-  e->onMouse(#mouseenter, _ => ctx.status->Status.show(statusText(t)))
-  e->onMouse(#mouseleave, _ => ctx.status->Status.clear)
+  ctx.status->Status.hover(e, () => statusText(t))
   close->onMouse(#mouseenter, _ => ctx.status->Status.show("Put the sample away (the shape stays as it is)"))
   close->onMouse(#mouseleave, _ => ctx.status->Status.show(statusText(t)))
   close->onMouse(#click, _ => {
@@ -144,11 +129,10 @@ let make = (ctx: Ctx.t, parent, box: box, ~onStart, ~onPick, ~onEnd) => {
       pending := None
       t.onPick(p)
     })
+  let flushSoon = perFrame(flush)
   let pick = ev => {
-    if pending.contents == None {
-      requestAnimationFrame(_ => flush())
-    }
     pending := Some(positionAt(ev))
+    flushSoon()
   }
   overview->onPointer(#pointerdown, ev =>
     if ev->button == 0 {
