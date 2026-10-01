@@ -56,7 +56,7 @@ if (! isMainThread)
             let n = 0;
             while (performance.now () < end)
             {
-                MatchSearch.evaluate (ctx, Genome.random (random), MatchLoss.standard, -1, workerData.fit);
+                MatchSearch.evaluate (ctx, Genome.random (random), MatchLoss.standard, -1, workerData.fit, false);
                 n++;
             }
             parentPort.postMessage (n);
@@ -80,7 +80,7 @@ if (! isMainThread)
             else
             {
                 const t0 = performance.now ();
-                const result = MatchSearch.evaluate (ctx, Float64Array.from (m.genes), m.weights, m.threshold, m.fit);
+                const result = MatchSearch.evaluate (ctx, Float64Array.from (m.genes), m.weights, m.threshold, m.fit, m.short);
                 spent += performance.now () - t0;
                 count++;
                 parentPort.postMessage (result);
@@ -127,7 +127,7 @@ else
                 // the pool: each candidate to the next free worker
                 const idle = [...workers], queue = [];
                 const pump = () => { while (idle.length && queue.length) { const w = idle.shift (), job = queue.shift (); w.once ("message", r => { idle.push (w); job.resolve (r); pump (); }); w.postMessage (job.message); } };
-                const evaluate = (x, weights, threshold, fit) => new Promise (resolve => { queue.push ({ message: { genes: Array.from (x), weights, threshold, fit }, resolve }); pump (); });
+                const evaluate = (x, weights, threshold, fit, short) => new Promise (resolve => { queue.push ({ message: { genes: Array.from (x), weights, threshold, fit, short }, resolve }); pump (); });
                 const t0 = performance.now ();
                 const starts = [Genome.seed (target), ...(model ? MatchModel.suggest (model, target) : [])];
                 const m = MatchSearch.makeMatch (starts, target.wave !== undefined, [], undefined, budget, 0.25, 1234);

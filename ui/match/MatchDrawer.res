@@ -624,7 +624,8 @@ let make = (ctx: Ctx.t, stage): t => {
             s
           }
           let run = MatchPool.newRun(p)
-          let evaluate = (x, weights, threshold, fit) => MatchPool.evaluate(p, ~session, ~run, x, weights, threshold, fit)
+          let evaluate = (x, weights, threshold, fit, short) =>
+            MatchPool.evaluate(p, ~session, ~run, x, weights, threshold, fit, short)
           gen.run = Some((start(p, evaluate), run))
         }
       | Error(text) =>

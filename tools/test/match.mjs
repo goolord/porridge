@@ -107,20 +107,20 @@ async function matcher ({ budget, wav, useModel })
         // renders are repeatable: the same genes after others (each a different kind of patch)
         // render the same, as only the pages renders change are put back between them
         const probe = Genome.random (Cmaes.makeRandom (31 + job.index));
-        const first = MatchSearch.renderGenes (ctx, probe)[2].slice ();
-        for (const x of Genome.probes ()) MatchSearch.renderGenes (ctx, x);
-        const again = MatchSearch.renderGenes (ctx, probe)[2];
+        const first = MatchSearch.renderGenes (ctx, undefined, probe)[2].slice ();
+        for (const x of Genome.probes ()) MatchSearch.renderGenes (ctx, undefined, x);
+        const again = MatchSearch.renderGenes (ctx, undefined, probe)[2];
         const repeatable = first.every ((v, i) => v === again[i]);
         // an envelope put on a flat render's measurements scores as a render with it does
         const shapedOff = Array.from ({ length: 4 }, (_, k) =>
         {
             const x = Genome.random (Cmaes.makeRandom (57 + 13 * job.index + k));
             for (const key of ["drive", "chorus", "reverb"]) x[Genome.indexOf (key)] = 0;
-            const fitted = MatchSearch.evaluate (ctx, x, MatchLoss.standard, -1, true);
-            const real = MatchSearch.evaluate (ctx, Float64Array.from (fitted.genes), MatchLoss.standard, -1, false);
+            const fitted = MatchSearch.evaluate (ctx, x, MatchLoss.standard, -1, true, false);
+            const real = MatchSearch.evaluate (ctx, Float64Array.from (fitted.genes), MatchLoss.standard, -1, false, false);
             return Math.abs (MatchLoss.similarity (fitted.loss) - MatchLoss.similarity (real.loss));
         });
-        const score = x => MatchSearch.evaluate (ctx, x, MatchLoss.standard, -1, false).loss - MatchSearch.cost (x);
+        const score = x => MatchSearch.evaluate (ctx, x, MatchLoss.standard, -1, false, false).loss - MatchSearch.cost (x);
         const similarity = loss => MatchLoss.similarity (loss);
         const seedGenes = Genome.seed (target);
         const suggestions = model ? MatchModel.suggest (model, target) : [];
@@ -136,7 +136,7 @@ async function matcher ({ budget, wav, useModel })
             return score (x);
         })))) : undefined;
         const m = MatchSearch.makeMatch ([seedGenes, ...suggestions], target.wave !== undefined, [], undefined, budget, 0.25, 1234);
-        const evaluate = (x, weights, threshold, fit) => Promise.resolve (MatchSearch.evaluate (ctx, x, weights, threshold, fit));
+        const evaluate = (x, weights, threshold, fit, short) => Promise.resolve (MatchSearch.evaluate (ctx, x, weights, threshold, fit, short));
         await new Promise (done => MatchRun.search (evaluate, m, { onCandidate: () => {}, onProgress: () => {}, onDone: done }));
         const ms = performance.now () - t0;
         const searches = m.searches;

@@ -159,11 +159,11 @@ let baseValue = (ctx, id) => ctx.base->Map.get(id)->Option.getOr(0.)
 let frames = ctx => TypedArray.length(ctx.target.samples)
 
 // Renders x at the key and tuning its genes play it at, from its onset (SoundTarget.onsetOf),
-// as long as the target.
-let renderGenes = (ctx, x) => {
+// as long as the target (or only its first `frames`).
+let renderGenes = (ctx, ~frames as length=?, x) => {
   let note = Genome.playedNote(x, ~note=ctx.target.note)
   let values = Genome.decode(x, ~note, ~base=baseValue(ctx, _))
-  let n = frames(ctx)
+  let n = length->Option.getOr(frames(ctx))
   let y = MatchEngine.render(
     ctx.engine,
     values,
@@ -329,15 +329,15 @@ let shapedSamples = (y: Float32Array.t, power) => {
 // x with the amp envelope that suits a flat render of it best by these weights: where the
 // loss itself is least (MatchLoss.envelopeObjective, on the flat render's measurements), found
 // from x's own envelope (in a search, one already fitted to a sound near it) or the one that
-// follows the sample's loudness, whichever is closer.
-let fitEnvelope = (ctx, x, flat: Spectrum.features, ~weights) => {
+// follows the sample's loudness, whichever is closer. With `quick`, just the closer of the two.
+let fitEnvelope = (ctx, x, flat: Spectrum.features, ~weights, ~quick) => {
   let objective = MatchLoss.envelopeObjective(weights, ctx.measured, flat)
   let ms = Float.toInt(1000. * Int.toFloat(frames(ctx)) / Spectrum.sampleRate) + 60
   let keys = Genome.envelopeKeys->Array.map(Genome.indexOf)
   let trial = e => objective(EnvelopeFit.levels(Genome.stagesOf(e), ~ms)->TypedArray.map(a => a * a))
   let own = Float64Array.fromArray(keys->Array.map(k => x->get64(k)))
   let start = trial(own) <= trial(ctx.seedEnvelope) ? own : ctx.seedEnvelope
-  let (best, _) = EnvelopeFit.minimize(trial, start, ~step=0.08, ~iterations=20)
+  let best = quick ? start : Pair.first(EnvelopeFit.minimize(trial, start, ~step=0.08, ~iterations=20))
   let y = TypedArray.copy(x)
   keys->Array.forEachWithIndex((k, j) => y->set64(k, best->get64(j)))
   y
@@ -349,6 +349,41 @@ type result = {loss: float, genes: array<float>, candidate: option<candidate>}
 
 let measureOf = (ctx, y) => Spectrum.measure(y, ~period=SoundTarget.period(ctx.target))
 
+// A short render (`short` evaluations) is the first this many seconds of the note.
+let shortSeconds = 0.45
+
+// A short render's measurements made as long as the target's, holding its last whole frames
+// (those whose windows fit in it) and its last whole loudness step to the end: the sound as
+// it has settled, which ranks candidates much as their whole notes do.
+let extend = (f: Spectrum.features, ~like: Spectrum.features) => {
+  let spectra = Spectrum.resolutions->Array.mapWithIndex((r, ri) => {
+    let levels = f.spectra->Array.getUnsafe(ri)
+    let pool = f.pools->Array.getUnsafe(ri)
+    let groups = TypedArray.length(levels) / r.bands
+    let want = TypedArray.length(like.spectra->Array.getUnsafe(ri)) / r.bands
+    // the last group all of whose frames' windows are in the render
+    let whole = Math.Int.max(0, Math.Int.min(groups - 1, (f.length - r.size / 2) / r.hop / pool - 1))
+    let out = Float64Array.fromLength(want * r.bands)
+    for g in 0 to want - 1 {
+      let from = Math.Int.min(g, whole)
+      for b in 0 to r.bands - 1 {
+        out->set64(g * r.bands + b, levels->get64(from * r.bands + b))
+      }
+    }
+    out
+  })
+  let steps = TypedArray.length(like.envelope)
+  let last = Math.Int.max(0, TypedArray.length(f.envelope) - 2)
+  let envelope = Float64Array.fromLength(steps)
+  let energy = ref(0.)
+  for s in 0 to steps - 1 {
+    let v = f.envelope->get64(Math.Int.min(s, last))
+    envelope->set64(s, v)
+    energy := energy.contents + v * v * Int.toFloat(Spectrum.envelopeStep)
+  }
+  {...f, length: like.length, spectra, envelope, energy: energy.contents}
+}
+
 // Renders x and scores it by these weights (with its parts' cost); the candidate too if it
 // scores under `threshold` (the search's best so far: only a new best is shown).
 //
@@ -359,22 +394,31 @@ let measureOf = (ctx, y) => Spectrum.measure(y, ~period=SoundTarget.period(ctx.t
 // sound it tries is heard with the envelope that suits it best. Drive, chorus and reverb come
 // after the envelope or depend on its level, so x with any of them is rendered as it is, with
 // the envelope it has (from the dry sound it was found from, in the searches).
-let evaluate = (ctx, x, ~weights, ~threshold, ~fit) => {
+//
+// A `short` evaluation renders only the first shortSeconds and measures the rest as that
+// settled (`extend`): for ranking many candidates cheaply, never shown (it has no candidate).
+let evaluate = (ctx, x, ~weights, ~threshold, ~fit, ~short) => {
+  let length = short ? Math.Int.min(frames(ctx), Float.toInt(shortSeconds * Spectrum.sampleRate)) : frames(ctx)
+  let measure = y => {
+    let f = measureOf(ctx, y)
+    short ? extend(f, ~like=ctx.measured) : f
+  }
   let finish = (x, note, values, y, f) => {
     let loss = MatchLoss.compare(weights, ctx.measured, f) + cost(x)
     {
       loss,
       genes: Array.fromInitializer(~length=TypedArray.length(x), i => x->get64(i)),
-      candidate: loss < threshold ? Some(candidateOf(ctx, x, note, values, y(), f)) : None,
+      candidate: loss < threshold && !short ? Some(candidateOf(ctx, x, note, values, y(), f)) : None,
     }
   }
   if !fit || Genome.wet(x) {
-    let (note, values, y) = renderGenes(ctx, x)
-    finish(x, note, values, () => y, measureOf(ctx, y))
+    let (note, values, y) = renderGenes(ctx, ~frames=length, x)
+    finish(x, note, values, () => y, measure(y))
   } else {
-    let (note, _, flatY) = renderGenes(ctx, Genome.flatOf(x))
-    let flatF = measureOf(ctx, flatY)
-    let x = fitEnvelope(ctx, x, flatF, ~weights)
+    let (note, _, flatY) = renderGenes(ctx, ~frames=length, Genome.flatOf(x))
+    let flatF = measure(flatY)
+    // (a short evaluation, which only ranks, takes the quick fit)
+    let x = fitEnvelope(ctx, x, flatF, ~weights, ~quick=short)
     {
       let values = Genome.decode(x, ~note, ~base=baseValue(ctx, _))
       let ms = Float.toInt(1000. * Int.toFloat(frames(ctx)) / Spectrum.sampleRate) + 20
@@ -447,6 +491,14 @@ let distance = (x: Float64Array.t, y: Float64Array.t) => {
   Math.sqrt(sum.contents / Int.toFloat(Genome.count - 2))
 }
 
+// distinct points: none within a hair of another (at the same octave)
+let distinct = (xs: array<Float64Array.t>) =>
+  xs->Array.reduce([], (kept, x) =>
+    kept->Array.some(y => distance(x, y) < 1e-6 && Genome.get(x, "octave") == Genome.get(y, "octave"))
+      ? kept
+      : Array.concat(kept, [x])
+  )
+
 // what a candidate on top of a rival's best is charged (about 14% of match), less the further
 // away it is, nothing from this far; and what having the same structure (Genome.structure) as
 // a rival's best costs (about 8%), so that cards differ in what they are made of, not just in
@@ -470,6 +522,9 @@ type polish = {
 
 // The stages of a search (see the top).
 type stage =
+  // short evaluations of many structures (level 1: waves, filters and octaves; level 2: the
+  // second oscillator and mix modes on the best of those), the best then evaluated in full
+  | Screen(array<Float64Array.t>, int)
   | Grid(array<Float64Array.t>)
   // CMA-ES runs side by side, each over one structure, and the generations left in this round
   | Rounds(array<Cmaes.t>, int)
@@ -500,6 +555,8 @@ type rec search = {
   mutable rivals: array<search>,
   // its best candidates, one per structure, best first
   mutable archive: array<entry>,
+  // what its screens found: short evaluations' scores and genes
+  mutable screened: array<(float, Float64Array.t)>,
 }
 
 let apart = (s, x) => {
@@ -560,24 +617,35 @@ let outline = (~starts, ~fitted, ~fit, ~locks, ~reference, ~budget, ~sigma, ~see
     sigma,
     seed,
     fit,
-    stage: Grid(gridOf(starts, lo, hi)),
+    stage: Screen(gridOf(starts, lo, hi), 1),
     evals: 0,
     bestLoss: infinity,
     best: None,
     bestGenes: None,
     rivals: [],
     archive: [],
+    screened: [],
   }
 }
 
-// One of the four searches, from the outline's best few within its bounds.
+// how many of the outline's screened structures that are within a search's bounds it tries
+let branchScreened = 6
+
+// One of the four searches, from the outline's best few held within its bounds, and the best
+// of what its screens found that is within them already (a search that keeps to one
+// oscillator would otherwise see only patches with two, cut down).
 let branch = (outline: search, islandIndex, ~fitted, ~locks, ~reference, ~budget) => {
   let island = islands->Array.getUnsafe(islandIndex)
   let (lo, hi) = boundsFor(Some(island), ~fitted, ~locks, ~reference)
   let start = clampInto(outline.bestGenes->Option.getOr(outline.start), lo, hi)
-  let starts = [start, ...outline.archive->Array.map(e => clampInto(e.genes, lo, hi))]->Array.reduce([], (kept, x) =>
-    kept->Array.some(y => distance(x, y) < 1e-6 && Genome.get(x, "octave") == Genome.get(y, "octave")) ? kept : Array.concat(kept, [x])
-  )
+  let within = x => distance(x, clampInto(x, lo, hi)) < 1e-9 && Genome.get(x, "octave") == clampInto(x, lo, hi)->Genome.get("octave")
+  let screened =
+    outline.screened
+    ->Array.toSorted(((a, _), (b, _)) => Float.compare(a, b))
+    ->Array.filterMap(((_, x)) => within(x) ? Some(x) : None)
+    ->distinct
+    ->Array.slice(~start=0, ~end=branchScreened)
+  let starts = distinct([start, ...outline.archive->Array.map(e => clampInto(e.genes, lo, hi)), ...screened])
   let sigma = 0.6 * outline.sigma
   {
     islandIndex,
@@ -596,20 +664,69 @@ let branch = (outline: search, islandIndex, ~fitted, ~locks, ~reference, ~budget
     bestGenes: None,
     rivals: [],
     archive: [],
+    screened: [],
   }
 }
 
 let isDone = s =>
   switch s.stage {
   | Finished => true
-  | Grid(_) | Rounds(_) | Polish(_) => false
+  | Screen(_) | Grid(_) | Rounds(_) | Polish(_) => false
   }
+
+// The second screen's structures on a first-screen winner: osc 2 at a middle level with each
+// wave and interval it may take, and each mix mode with a sine or saw osc 2 in unison, a fifth
+// or an octave up (within the bounds).
+let secondScreen = (x: Float64Array.t, lo, hi) => {
+  let set = (y, key, v) => y->set64(Genome.indexOf(key), v)
+  let choice = (key, o) => Genome.valueOfChoice(o, Genome.gene(Genome.indexOf(key)).options)
+  let plain =
+    allowed("o2Wave", lo, hi)->Array.flatMap(w =>
+      allowed("o2Interval", lo, hi)->Array.map(i => {
+        let y = TypedArray.copy(x)
+        set(y, "oscMix", choice("oscMix", 0))
+        set(y, "o2Level", 0.55)
+        set(y, "o2Fine", 0.5)
+        set(y, "o2Wave", w)
+        set(y, "o2Interval", i)
+        y
+      })
+    )
+  let mixes =
+    allowed("oscMix", lo, hi)
+    ->Array.filter(v => Genome.choiceOf(v, 7) != 0)
+    ->Array.flatMap(m =>
+      [0, 1]->Array.flatMap(w =>
+        [0, 3, 1]->Array.map(i => {
+          let y = TypedArray.copy(x)
+          set(y, "oscMix", m)
+          set(y, "o2Level", 0.55)
+          set(y, "o2Fine", 0.5)
+          set(y, "feedback", 0.3)
+          set(y, "o2Wave", choice("o2Wave", w))
+          set(y, "o2Interval", choice("o2Interval", i))
+          y
+        })
+      )
+    )
+  Array.concat(plain, mixes)->Array.map(y => clampInto(y, lo, hi))
+}
+
+// how many first-screen winners the second screen builds on, and how many of all screened go
+// on to be evaluated in full
+let screenBases = 4
+let screenKept = 12
 
 // how small the step gets before a stage has nothing more to find
 let settled = 0.004
 
 // What a search tries next: the genes, and the samples they came from (for `tell`).
-type pending = {genes: array<Float64Array.t>, samples: array<(Cmaes.t, array<Cmaes.sample>)>}
+type pending = {
+  genes: array<Float64Array.t>,
+  samples: array<(Cmaes.t, array<Cmaes.sample>)>,
+  // short evaluations (a screen's)
+  short: bool,
+}
 
 let polishMoves = (p: polish) => {
   let moves = p.genes->Array.flatMap(i =>
@@ -627,12 +744,13 @@ let polishMoves = (p: polish) => {
 
 let ask = s =>
   switch s.stage {
-  | Finished => {genes: [], samples: []}
-  | Grid(points) => {genes: points, samples: []}
+  | Finished => {genes: [], samples: [], short: false}
+  | Screen(points, _) => {genes: points, samples: [], short: true}
+  | Grid(points) => {genes: points, samples: [], short: false}
   | Rounds(runs, _) =>
     let samples = runs->Array.map(es => (es, Cmaes.ask(es)))
-    {genes: samples->Array.flatMap(((_, xs)) => xs->Array.map(sample => sample.x)), samples}
-  | Polish(p) => {genes: polishMoves(p)->Array.map(x => clampInto(x, s.lo, s.hi)), samples: []}
+    {genes: samples->Array.flatMap(((_, xs)) => xs->Array.map(sample => sample.x)), samples, short: false}
+  | Polish(p) => {genes: polishMoves(p)->Array.map(x => clampInto(x, s.lo, s.hi)), samples: [], short: false}
   }
 
 let archiveSize = 8
@@ -733,7 +851,8 @@ let tell = (s, pending, results: array<result>) => {
   let losses = results->Array.mapWithIndex((r, i) => r.loss + apart(s, scored->Array.getUnsafe(i)))
   results->Array.forEachWithIndex((r, i) => r.candidate->Option.forEach(c => remember(s, r.loss, scored->Array.getUnsafe(i), c)))
   let improved = reselect(s)
-  s.evals = s.evals + Array.length(results)
+  // a short evaluation costs about a third of a whole one
+  s.evals = s.evals + (pending.short ? (Array.length(results) + 2) / 3 : Array.length(results))
   let left = s.budget - s.evals
   // the samples' losses, run by run
   let offset = ref(0)
@@ -744,6 +863,21 @@ let tell = (s, pending, results: array<result>) => {
     runBests->WeakMap.set(es, ls->Array.reduce(runBest(es), Math.min))->ignore
   })
   switch s.stage {
+  | Screen(_, level) =>
+    s.screened = Array.concat(s.screened, scored->Array.mapWithIndex((x, i) => (losses->Array.getUnsafe(i), x)))
+    let ranked = s.screened->Array.toSorted(((a, _), (b, _)) => Float.compare(a, b))
+    // the best of each structure, best first
+    let best = (key, count) =>
+      ranked
+      ->Array.reduce([], (kept, (_, x)) =>
+        kept->Array.length >= count || kept->Array.some(y => key(y) == key(x)) ? kept : Array.concat(kept, [x])
+      )
+    let bases = best(x => [Genome.choice(x, "o1Wave"), Genome.choice(x, "filterType"), Genome.choice(x, "octave")], screenBases)
+    let second = level == 1 ? distinct(bases->Array.flatMap(x => secondScreen(x, s.lo, s.hi))) : []
+    s.stage =
+      second == []
+        ? Grid(best(x => Array.concat(Genome.structure(x), [Genome.choice(x, "octave")]), screenKept))
+        : Screen(second, 2)
   | Grid(_) if s.islandIndex < 0 =>
     // the best few structures of the grid, each run over its core genes
     let runs = s.archive->Array.slice(~start=0, ~end=roundRuns)->Array.mapWithIndex((e, k) => coreRun(s, e.genes, ~seed=s.seed + k))
