@@ -81,8 +81,7 @@ let make = (ctx: Ctx.t, panel: Panel.t) => {
   })
 
   root->suppressContextMenu
-  root->onMouse(#mouseenter, _ => ctx.status->Status.show(hint))
-  root->onMouse(#mouseleave, _ => ctx.status->Status.clear)
+  ctx.status->Status.hover(root, () => hint)
   model->ParamModel.listen(id, draw)
   draw()
 }

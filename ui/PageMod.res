@@ -81,7 +81,7 @@ let pickerColumns = {
 let build = (ctx: Ctx.t, page) => {
   let model = ctx.model
   let get = id => model->ParamModel.get(id)
-  let slotNumbers = Array.fromInitializer(~length=ModMatrix.slots, i => i + 1)
+  let slotNumbers = ModMatrix.slotNumbers
   let sourceOf = k => Float.toInt(get(ModMatrix.sourceId(k)))
   let targetOf = k => Float.toInt(get(ModMatrix.targetId(k)))
   let isUsed = k => sourceOf(k) > 0 && targetOf(k) > 0
@@ -112,16 +112,11 @@ let build = (ctx: Ctx.t, page) => {
   }
   let targetText = t =>
     switch ModMatrix.targets->Array.getUnsafe(t) {
-    | {law: Knob(id)} => (model->ParamModel.def(id)).longText(get(id))
+    | {law: Knob(id)} => model->ParamModel.longText(id)
     | {label} => label
     }
 
-  let show = text => ctx.status->Status.show(text)
-  let clear = () => ctx.status->Status.clear
-  let hover = (e, text) => {
-    e->onMouse(#mouseenter, _ => show(text()))
-    e->onMouse(#mouseleave, _ => clear())
-  }
+  let hover = (e, text) => ctx.status->Status.hover(e, text)
 
   //==============================================================================
   // editing
@@ -197,11 +192,9 @@ let build = (ctx: Ctx.t, page) => {
   //==============================================================================
   // sources
 
-  let sourceChips = Array.make(~length=Array.length(ModMatrix.sources), None)
-  let sourceJack = s =>
-    sourceChips[s]
-    ->Option.flatMap(x => x)
-    ->Option.map(((_, jack)) => jack)
+  // by source index: the chip (or a macro's plug) and its jack
+  let sourceChips = Map.make()
+  let sourceJack = s => sourceChips->Map.get(s)->Option.map(((_, jack)) => jack)
 
   let startRef = ref((_: Dom.pointerEvent, _: int, _: element) => ())
   let pickRef = ref((_: int) => ())
@@ -248,14 +241,9 @@ let build = (ctx: Ctx.t, page) => {
         plug->setTabIndex(0)
         let jack = el("i", ~cls="jk", ~parent=plug)
         plug->onPointer(#pointerdown, ev => startRef.contents(ev, s, plug))
-        plug->onKeyDown(ev =>
-          if ev->key == "Enter" || ev->key == " " {
-            ev->preventDefault
-            pickRef.contents(s)
-          }
-        )
+        plug->onActivate(() => pickRef.contents(s))
         plug->hover(() => `${sourceLabel(s)}: drag to a target to connect it. Double-click the name to rename it.`)
-        sourceChips->Array.setUnsafe(s, Some((plug, jack)))
+        sourceChips->Map.set(s, (plug, jack))
       | None =>
         let chip = el("div", ~cls="src", ~parent=sources.el)->placeBox(b)
         chip->setTabIndex(0)
@@ -264,16 +252,11 @@ let build = (ctx: Ctx.t, page) => {
         el("b", ~cls="n", ~parent=chip)->ignore
         let jack = el("i", ~cls="jk", ~parent=chip)
         chip->onPointer(#pointerdown, ev => startRef.contents(ev, s, chip))
-        chip->onKeyDown(ev =>
-          if ev->key == "Enter" || ev->key == " " {
-            ev->preventDefault
-            pickRef.contents(s)
-          }
-        )
+        chip->onActivate(() => pickRef.contents(s))
         chip->hover(() =>
-          `${sourceLabel(s)}: ${ModMatrix.sourceHelp(source.key)}. Drag it to a target, or click it.`
+          `${sourceLabel(s)}: ${source.help}. Drag it to a target, or click it.`
         )
-        sourceChips->Array.setUnsafe(s, Some((chip, jack)))
+        sourceChips->Map.set(s, (chip, jack))
       }
     })
     y := y.contents + headingHeight + Int.toFloat((Array.length(members) + 1) / 2) * Grid.rowHeight + 4.
@@ -283,7 +266,8 @@ let build = (ctx: Ctx.t, page) => {
   // the target picker
 
   let mode = ref(Closed)
-  let targetChips = Array.make(~length=Array.length(ModMatrix.targets), None)
+  // by target index
+  let targetChips = Map.make()
   let pickTargetRef = ref((_: int) => ())
 
   let pg = Grid.fitColumns(listWidth, Array.length(pickerColumns))
@@ -306,14 +290,9 @@ let build = (ctx: Ctx.t, page) => {
             pickTargetRef.contents(t)
           }
         })
-        chip->onKeyDown(ev =>
-          if ev->key == "Enter" || ev->key == " " {
-            ev->preventDefault
-            pickTargetRef.contents(t)
-          }
-        )
+        chip->onActivate(() => pickTargetRef.contents(t))
         chip->hover(() => targetText(t))
-        targetChips->Array.setUnsafe(t, Some(chip))
+        targetChips->Map.set(t, chip)
       })
       y := y.contents + headingHeight + Int.toFloat(Array.length(members)) * Grid.rowHeight + 6.
     })
@@ -352,12 +331,10 @@ let build = (ctx: Ctx.t, page) => {
     }
     pickerTitle->setTextContent(title)
     // the targets this source already reaches
-    targetChips->Array.forEachWithIndex((chip, t) =>
-      chip->Option.forEach(chip =>
-        chip->toggleClass(
-          "on",
-          slotNumbers->Array.some(k => isUsed(k) && sourceOf(k) == source && targetOf(k) == t),
-        )
+    targetChips->Map.forEachWithKey((chip, t) =>
+      chip->toggleClass(
+        "on",
+        slotNumbers->Array.some(k => isUsed(k) && sourceOf(k) == source && targetOf(k) == t),
       )
     )
     picker.el->addClass("on")
@@ -403,12 +380,14 @@ let build = (ctx: Ctx.t, page) => {
     toLocal(r.left + r.width / 2., r.top + r.height / 2.)
   }
   let targetAt = (cx, cy) =>
-    targetChips->Array.findIndex(chip =>
-      chip->Option.mapOr(false, chip => {
-        let r = chip->getBoundingClientRect
-        cx >= r.left && cx <= r.left + r.width && cy >= r.top && cy <= r.top + r.height
-      })
-    )
+    targetChips
+    ->Map.entries
+    ->Iterator.toArray
+    ->Array.find(((_, chip)) => {
+      let r = chip->getBoundingClientRect
+      cx >= r.left && cx <= r.left + r.width && cy >= r.top && cy <= r.top + r.height
+    })
+    ->Option.mapOr(-1, Pair.first)
 
   startRef :=
     (ev, s, chip) =>
@@ -416,7 +395,7 @@ let build = (ctx: Ctx.t, page) => {
         ev->preventDefault
         openPicker(Connect(s))
         let start = sourceJack(s)->Option.mapOr({x: 0., y: 0.}, centre)
-        let wire = wires->Plots.svgEl(
+        let wire = wires->svgEl(
           "path",
           [("class", Str("wire drag")), ("stroke", Str(sourceColor(s))), ("d", Str(""))],
         )
@@ -424,9 +403,9 @@ let build = (ctx: Ctx.t, page) => {
         let moved = ref(false)
         let hot = ref(-1)
         let setHot = t => {
-          targetChips[hot.contents]->Option.flatMap(x => x)->Option.forEach(c => c->removeClass("hot"))
+          targetChips->Map.get(hot.contents)->Option.forEach(c => c->removeClass("hot"))
           hot := t
-          targetChips[t]->Option.flatMap(x => x)->Option.forEach(c => c->addClass("hot"))
+          targetChips->Map.get(t)->Option.forEach(c => c->addClass("hot"))
         }
         chip->Controls.capturePointer(
           ev,
@@ -436,7 +415,7 @@ let build = (ctx: Ctx.t, page) => {
             }
             let t = targetAt(mv->clientX, mv->clientY)
             setHot(t)
-            let p = switch targetChips[t]->Option.flatMap(x => x) {
+            let p = switch targetChips->Map.get(t) {
             | Some(c) => {
                 let r = c->getBoundingClientRect
                 toLocal(r.left + 13. * ctx.scale(), r.top + r.height / 2.)
@@ -484,7 +463,7 @@ let build = (ctx: Ctx.t, page) => {
 
     let cable = Plots.svg(row, g->Grid.cell(4, 0))
     cable->setAttribute("class", Str("wirecell"))
-    let wire = cable->Plots.svgEl("path", [("class", Str("wire"))])
+    let wire = cable->svgEl("path", [("class", Str("wire"))])
     g->Grid.claim(4, 0, "cable")
 
     let target = el("div", ~cls="tgt", ~parent=row)->placeBox(g->Grid.cell(5, 0, ~span=4))
@@ -498,11 +477,7 @@ let build = (ctx: Ctx.t, page) => {
         openPicker(Retarget(k))
       }
     })
-    target->onKeyDown(ev =>
-      if ev->key == "Enter" {
-        openPicker(Retarget(k))
-      }
-    )
+    target->onActivate(() => openPicker(Retarget(k)))
     target->hover(() => targetText(targetOf(k)) ++ ". Click to change the target.")
 
     g->Grid.param(ModMatrix.amountId(k), 9, 0, "amount", ~span=4)
@@ -510,10 +485,10 @@ let build = (ctx: Ctx.t, page) => {
     g->Grid.button("×", 15, 0, ~status="Remove this connection", () => disconnect(k))
 
     row->onMouse(#mouseenter, _ =>
-      sourceChips[sourceOf(k)]->Option.flatMap(x => x)->Option.forEach(((c, _)) => c->addClass("lit"))
+      sourceChips->Map.get(sourceOf(k))->Option.forEach(((c, _)) => c->addClass("lit"))
     )
     row->onMouse(#mouseleave, _ =>
-      sourceChips->Array.forEach(c => c->Option.forEach(((c, _)) => c->removeClass("lit")))
+      sourceChips->Map.forEach(((c, _)) => c->removeClass("lit"))
     )
     (k, row, sw, sourceName, targetName, wire)
   })
@@ -529,11 +504,7 @@ let build = (ctx: Ctx.t, page) => {
     ev->preventDefault
     addConnection()
   })
-  add->onKeyDown(ev =>
-    if ev->key == "Enter" {
-      addConnection()
-    }
-  )
+  add->onActivate(addConnection)
   add->hover(() => "Pick a source, then a target")
 
   let empty = el("div", ~cls="mempty", ~parent=list.el)
@@ -588,8 +559,7 @@ let build = (ctx: Ctx.t, page) => {
     count->setTextContent(`${Int.toString(n)} of ${Int.toString(ModMatrix.slots)}`)
 
     // the sources: how many connections each has
-    sourceChips->Array.forEachWithIndex((chip, s) =>
-      chip->Option.forEach(((chip, jack)) => {
+    sourceChips->Map.forEachWithKey(((chip, jack), s) => {
         let c = counts->Map.get(s)->Option.getOr(0)
         jack->toggleClass("on", c > 0)
         jack->setStyle("background", c > 0 ? sourceColor(s) : "")
@@ -603,26 +573,16 @@ let build = (ctx: Ctx.t, page) => {
         | _ => false
         }
         chip->toggleClass("sel", picking)
-      })
-    )
+    })
     sources.el
     ->querySelectorAll(".p .l")
     ->nodesToArray
     ->Array.forEachWithIndex((l, i) => l->setTextContent(macroName(i)))
   }
 
-  let pending = ref(false)
-  redraw :=
-    () =>
-      if !pending.contents {
-        pending := true
-        // (a timeout rather than an animation frame: a burst of changes draws once, and
-        // the page still updates while the window isn't being painted)
-        setTimeout(() => {
-          pending := false
-          draw()
-        }, 0)->ignore
-      }
+  // (a timeout rather than an animation frame: a burst of changes draws once, and the page
+  // still updates while the window isn't being painted)
+  redraw := coalesce(run => setTimeout(run, 0)->ignore, draw)
 
   slotNumbers->Array.forEach(k =>
     [ModMatrix.sourceId(k), ModMatrix.targetId(k), ModMatrix.amountId(k), ModMatrix.viaId(k)]->Array.forEach(

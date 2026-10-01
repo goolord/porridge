@@ -18,18 +18,26 @@ let controlGap = 2.
 
 let groundColour = "#978552"
 
+// Colours the canvases draw with too, as "r, g, b" for rgba (see CanvasStyle).
+let edgeRgb = "111, 95, 54"
+let inkRgb = "31, 26, 14"
+let signalRgb = "28, 60, 115"
+let paperRgb = "236, 227, 196"
+let rgb = rgb => `rgb(${rgb})`
+let rgba = (rgb, alpha) => `rgba(${rgb}, ${Float.toString(alpha)})`
+
 let css = `
 :host, porridge-view {
     --ground: ${groundColour};
     --panel: #b9aa7b;
     --panel-hi: #c9bc92;
-    --edge: #6f5f36;
-    --ink: #1f1a0e;
+    --edge: ${rgb(edgeRgb)};
+    --ink: ${rgb(inkRgb)};
     --ink-soft: #4c4127;
     --ink-faint: #7a6c45;
-    --signal: #1c3c73;
-    --signal-soft: rgba(28, 60, 115, 0.22);
-    --paper: #ece3c4;
+    --signal: ${rgb(signalRgb)};
+    --signal-soft: ${rgba(signalRgb, 0.22)};
+    --paper: ${rgb(paperRgb)};
     --mod: #a3501c;
     /* what every control sits on, so that it reads as something to grab */
     --tile: rgba(236, 227, 196, 0.32);

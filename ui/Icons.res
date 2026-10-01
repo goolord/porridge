@@ -21,15 +21,6 @@ type mark =
 // (mirrored: drawn right to left)
 type icon = {width: float, marks: array<mark>, mirrored?: bool}
 
-let svgNamespace = "http://www.w3.org/2000/svg"
-
-let svgEl = (parent, tag, attrs) => {
-  let e = document->createElementNS(svgNamespace, tag)
-  attrs->Array.forEach(((name, value)) => e->setAttribute(name, value))
-  parent->appendChild(e)
-  e
-}
-
 // The icon as an <svg>, 1em tall by default (CSS sets the size).
 let render = (icon, ~cls="ic") => {
   let s = document->createElementNS(svgNamespace, "svg")
@@ -227,7 +218,38 @@ let filterDouble = [
 //==============================================================================
 // lookup
 
-let byIndex = (icons, index) => icons[index]
+let byIndex = icons => (index, _) => icons[index]
+
+// The parameters with icons, and how each finds the icon of a value from its index and its
+// lower-case name (less " hq").
+let lookup = id =>
+  switch id {
+  | "O1_Waveform" | "O2_Waveform" | "LFO_1_Shape" | "LFO_2_Shape" =>
+    Some((_, name) => waveformByName(name))
+  | "Filter" => Some(filterTypes->byIndex)
+  | "Filter2" => Some((index, _) => index == 0 ? Some(sameAsFilter1) : filterTypes[index])
+  | "PolyMode" => Some(voiceModes->byIndex)
+  | "OscMix" => Some(oscMix->byIndex)
+  | "Sat_Type" => Some(distortion->byIndex)
+  | "Arp_Mode" => Some(arpModes->byIndex)
+  | "F_Double" => Some(filterDouble->byIndex)
+  | "C_Mode" =>
+    Some(
+      (_, name) =>
+        switch name {
+        | "off" => Some(flat)
+        | "sine" => Some(sine)
+        | "ramp" => Some(saw)
+        | "fm" => Some(fmWave)
+        | "irregular" => Some(smoothRandom)
+        | _ => None
+        },
+    )
+  | _ => None
+  }
+
+// Whether any value of the parameter has an icon.
+let has = id => lookup(id)->Option.isSome
 
 // The icon for value `index` (named `name`) of a list parameter, and the text to show beside
 // it (the name, less anything the icon shows).
@@ -235,27 +257,9 @@ let forValue = (id, index, name) => {
   let lower = String.toLowerCase(name)
   let hq = String.endsWith(lower, " hq")
   let base = hq ? String.slice(lower, ~start=0, ~end=String.length(lower) - 3) : lower
-  let icon = switch id {
-  | "O1_Waveform" | "O2_Waveform" | "LFO_1_Shape" | "LFO_2_Shape" => waveformByName(base)
-  | "Filter" => filterTypes->byIndex(index)
-  | "Filter2" => index == 0 ? Some(sameAsFilter1) : filterTypes->byIndex(index)
-  | "PolyMode" => voiceModes->byIndex(index)
-  | "OscMix" => oscMix->byIndex(index)
-  | "Sat_Type" => distortion->byIndex(index)
-  | "Arp_Mode" => arpModes->byIndex(index)
-  | "F_Double" => filterDouble->byIndex(index)
-  | "C_Mode" =>
-    switch base {
-    | "off" => Some(flat)
-    | "sine" => Some(sine)
-    | "ramp" => Some(saw)
-    | "fm" => Some(fmWave)
-    | "irregular" => Some(smoothRandom)
-    | _ => None
-    }
-  | _ => None
-  }
-  icon->Option.map(icon => {
+  lookup(id)
+  ->Option.flatMap(find => find(index, base))
+  ->Option.map(icon => {
     let wrap = el("span", ~cls="icw")
     wrap->appendChild(render(icon))
     if hq {
@@ -264,24 +268,6 @@ let forValue = (id, index, name) => {
     (wrap, hq ? String.slice(name, ~start=0, ~end=String.length(name) - 3) : name)
   })
 }
-
-// Whether any value of the parameter has an icon.
-let has = id =>
-  switch id {
-  | "O1_Waveform"
-  | "O2_Waveform"
-  | "LFO_1_Shape"
-  | "LFO_2_Shape"
-  | "Filter"
-  | "Filter2"
-  | "PolyMode"
-  | "OscMix"
-  | "Sat_Type"
-  | "Arp_Mode"
-  | "F_Double"
-  | "C_Mode" => true
-  | _ => false
-  }
 
 //==============================================================================
 // arpeggiator step commands, in the synth's order; some are two marks side by side

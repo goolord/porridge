@@ -79,3 +79,11 @@ let show = (t, anchor, items, current, onPick) =>
       }
     , 0)->ignore
   }
+
+// Shows a menu at a point inside parent (in its design pixels), as if below an anchor there.
+let showAt = (t, parent, ~x, ~y, items, current, onPick) => {
+  let anchor = el("div", ~parent)->place(x, y, ~w=1., ~h=1.)
+  anchor->setStyle("position", "absolute")
+  show(t, anchor, items, current, onPick)
+  anchor->remove
+}

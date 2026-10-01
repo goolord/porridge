@@ -3,8 +3,6 @@
 
 open! Web
 
-let svgNamespace = "http://www.w3.org/2000/svg"
-
 let svg = (parent, box) => {
   let s = document->createElementNS(svgNamespace, "svg")
   s->setAttribute("class", Str("plot"))
@@ -14,13 +12,6 @@ let svg = (parent, box) => {
   s->placeBox(box)->ignore
   parent->appendChild(s)
   s
-}
-
-let svgEl = (parent, tag, attrs) => {
-  let e = document->createElementNS(svgNamespace, tag)
-  attrs->Array.forEach(((name, value)) => e->setAttribute(name, value))
-  parent->appendChild(e)
-  e
 }
 
 let background = (s, box) =>
@@ -36,6 +27,13 @@ let background = (s, box) =>
     ],
   )
   ->ignore
+
+// A grid or axis line.
+let line = (parent, ~cls="axis", x1, y1, x2, y2) =>
+  parent->svgEl(
+    "line",
+    [("class", Str(cls)), ("x1", Num(x1)), ("y1", Num(y1)), ("x2", Num(x2)), ("y2", Num(y2))],
+  )
 
 let pathFrom = points =>
   points
@@ -64,18 +62,7 @@ let waveSample = (wave, pw, user, phase) =>
 let wave = (ctx: Ctx.t, parent, osc, box) => {
   let s = svg(parent, box)
   background(s, box)
-  s
-  ->svgEl(
-    "line",
-    [
-      ("class", Str("axis")),
-      ("x1", Num(2.)),
-      ("x2", Num(box.w - 2.)),
-      ("y1", Num(box.h / 2.)),
-      ("y2", Num(box.h / 2.)),
-    ],
-  )
-  ->ignore
+  s->line(2., box.h / 2., box.w - 2., box.h / 2.)->ignore
   let curve = s->svgEl("path", [("class", Str("curve"))])
   let prefix = osc == 0 ? "O1_" : "O2_"
 
@@ -88,7 +75,7 @@ let wave = (ctx: Ctx.t, parent, osc, box) => {
     let points = Array.fromInitializer(~length=n + 1, k => {
       let f = Int.toFloat(k) / Int.toFloat(n)
       let v = waveSample(wave, pw, user, k == n ? 0.99999 : f)
-      (3. + f * w, 4. + (0.5 - 0.5 * Math.max(-1., Math.min(1., v))) * h)
+      (3. + f * w, 4. + (0.5 - 0.5 * Float.clamp(v, ~min=-1., ~max=1.)) * h)
     })
     curve->setAttribute("d", Str(pathFrom(points)))
   }
@@ -131,7 +118,7 @@ let lfo = (ctx: Ctx.t, parent, lfo, box) => {
       | 5 => random(cycle)
       | _ => userAt(user, phase)
       }
-      (3. + f * w, 3. + (1. - Math.max(0., Math.min(1., v))) * h)
+      (3. + f * w, 3. + (1. - Float.clamp(v, ~min=0., ~max=1.)) * h)
     })
     curve->setAttribute("d", Str(pathFrom(points)))
   }

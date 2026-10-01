@@ -26,20 +26,16 @@ let curveBlock = (ctx: Ctx.t, page, title, table, ~x, ~y, ~w, ~h) => {
         )} %`,
   )
   editor.menu = [
-    {label: "linear", run: e => e.data->ShapeEditor.blit(linear(points))},
-    {label: "soften", run: e => ShapeEditor.soften(e.data, ~wrap=false)},
-    {
-      label: "scale to the top",
-      run: e => {
-        let top =
-          e.data->TypedArray.reduce((a, v) => Math.max(a, v), Float.Constants.negativeInfinity)
-        if top > 0. {
-          e.data->TypedArray.forEachWithIndex((v, i) => e.data->TypedArray.set(i, v / top))
-        }
-      },
-    },
-    {label: "fit top and bottom", run: e => ShapeEditor.fix(e.data, ~bipolar=false)},
-    {label: "undo", run: ShapeEditor.undo},
+    ShapeEditor.editItem("linear", d => d->ShapeEditor.blit(linear(points))),
+    ShapeEditor.editItem("soften", d => ShapeEditor.soften(d, ~wrap=false)),
+    ShapeEditor.editItem("scale to the top", d => {
+      let top = d->TypedArray.reduce((a, v) => Math.max(a, v), Float.Constants.negativeInfinity)
+      if top > 0. {
+        d->TypedArray.forEachWithIndex((v, i) => d->TypedArray.set(i, v / top))
+      }
+    }),
+    ShapeEditor.editItem("fit top and bottom", d => ShapeEditor.fix(d, ~bipolar=false)),
+    ShapeEditor.undoItem,
   ]
   editor->ShapeEditor.set(ctx.programs->ProgramStore.shape(table))
   ctx.programs->ProgramStore.onShapes(() =>
