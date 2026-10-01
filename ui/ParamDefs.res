@@ -24,46 +24,32 @@ let filterNames = [
 ]
 
 // Compact names for the narrow value fields (the full names appear in menus and the status bar).
+let filterShortNames = [
+  "off",
+  "1P LP",
+  "2P LP",
+  "4P LP",
+  "1P HP",
+  "2P HP",
+  "4P HP",
+  "2P BP wide",
+  "2P BP narrow",
+  "4P BP",
+  "2P notch",
+  "2P LP drive",
+  "4P LP drive",
+  "phaser 4",
+  "phaser 12",
+  "phaser 36",
+]
+
+// Filter 2's first value follows filter 1 instead of being off.
+let asFilter2 = (names, first) => [first, ...names->Array.slice(~start=1)]
+
 let shortNamesFor = id =>
   switch id {
-  | "Filter" =>
-    Some([
-      "off",
-      "1P LP",
-      "2P LP",
-      "4P LP",
-      "1P HP",
-      "2P HP",
-      "4P HP",
-      "2P BP wide",
-      "2P BP narrow",
-      "4P BP",
-      "2P notch",
-      "2P LP drive",
-      "4P LP drive",
-      "phaser 4",
-      "phaser 12",
-      "phaser 36",
-    ])
-  | "Filter2" =>
-    Some([
-      "as filter 1",
-      "1P LP",
-      "2P LP",
-      "4P LP",
-      "1P HP",
-      "2P HP",
-      "4P HP",
-      "2P BP wide",
-      "2P BP narrow",
-      "4P BP",
-      "2P notch",
-      "2P LP drive",
-      "4P LP drive",
-      "phaser 4",
-      "phaser 12",
-      "phaser 36",
-    ])
+  | "Filter" => Some(filterShortNames)
+  | "Filter2" => Some(filterShortNames->asFilter2("as filter 1"))
   | "Sat_Mode" => Some(["global", "voice, post-filter", "voice, pre-filter", "double"])
   | "PolyMode" => Some(["mono", "poly", "mono legato"])
   | "AftertouchMode" => Some(["ignore", "channel", "poly"])
@@ -146,6 +132,12 @@ let compact = s => {
   })
 }
 
+// The index of value name s, ignoring case.
+let nameIndex = (names, s) =>
+  names
+  ->Array.findIndex(n => String.toLowerCase(n) == String.toLowerCase(String.trim(s)))
+  ->(i => i >= 0 ? Some(Int.toFloat(i)) : None)
+
 let firstNumber = s =>
   switch /-?\d+(\.\d+)?/->RegExp.exec(String.replace(s, "-inf", "-1e9")) {
   | Some(m) => Float.parseFloat(RegExp.Result.fullMatch(m))
@@ -175,9 +167,9 @@ type t = {
   shortText: float => string,
   // Typed values are read in display units.
   parse: string => option<float>,
+  // the parameters its readouts also depend on (octave size, tuning, breakpoint, targets...)
+  dependsOn: array<string>,
 }
-
-let pw32 = 4294967296.
 
 // A Porridge parameter (PorridgeParams): plain linear knobs and lists.
 let porridgeDef = (index, spec: PorridgeParams.spec) =>
@@ -196,6 +188,7 @@ let porridgeDef = (index, spec: PorridgeParams.spec) =>
       min,
       max,
       bipolar: min < 0. && max > 0.,
+      dependsOn: [],
       clamp,
       toNorm: x => (x - min) / (max - min),
       fromNorm: v => min + (max - min) * v,
@@ -223,16 +216,14 @@ let porridgeDef = (index, spec: PorridgeParams.spec) =>
       min: 0.,
       max: last,
       bipolar: false,
+      dependsOn: [],
       clamp,
       toNorm: x => last > 0. ? x / last : 0.,
       fromNorm: v => Math.round(v * last),
       longText: x => `${spec.name}: ${valueText(x)}`,
       valueText,
       shortText: valueText,
-      parse: s =>
-        names
-        ->Array.findIndex(n => String.toLowerCase(n) == String.toLowerCase(String.trim(s)))
-        ->(i => i >= 0 ? Some(Int.toFloat(i)) : None),
+      parse: nameIndex(names, _),
     }
   }
 
@@ -260,9 +251,10 @@ let extend = (def, oatNames, extra, extraShort) => {
     valueText: x => isNew(x) ? newName(x) : def.valueText(x),
     shortText: x => isNew(x) ? newShort(x) : def.shortText(x),
     parse: s =>
-      names
-      ->Array.findIndex(n => String.toLowerCase(n) == String.toLowerCase(String.trim(s)))
-      ->(i => i >= 0 ? Some(Int.toFloat(i)) : def.parse(s)),
+      switch nameIndex(names, s) {
+      | Some(i) => Some(i)
+      | None => def.parse(s)
+      },
   }
 }
 
@@ -276,12 +268,12 @@ let makeDefs = (~context=() => None) => {
     let p = OatmealParams.param(index)
     let isPw = kind == Pw
     let isInt = Fields.isInt(field)
-    let toF = x => isPw ? ByteView.toUint32(Math.round(x * pw32)) : x
-    let fromF = x => isPw ? x / pw32 : x
+    let toF = x => isPw ? OatmealParams.pwToPhase(x) : x
+    let fromF = x => isPw ? OatmealParams.pwOfPhase(x) : x
 
     let names = switch kind {
     | Filter1 => Some(filterNames)
-    | Filter2 => Some(["same as filter 1", ...filterNames->Array.slice(~start=1)])
+    | Filter2 => Some(filterNames->asFilter2("same as filter 1"))
     | _ => p.labels
     }->Option.map(names =>
       switch p.states {
@@ -296,7 +288,7 @@ let makeDefs = (~context=() => None) => {
     | Filter1 | Filter2 => (0., 15.)
     | _ => (fromF(Math.min(p.min, p.max)), fromF(Math.max(p.min, p.max)))
     }
-    let initValue = fromF(OatmealParams.readInternal(init, index))
+    let initValue = Bank.readField(init, field)
     let min = isPw ? 0. : lo
     let max = isPw ? 1. : hi
 
@@ -310,9 +302,13 @@ let makeDefs = (~context=() => None) => {
     // with a zero-delay-feedback filter (16..21) the cutoff knob reaches 20 kHz instead of 11
     let zdfCutoff = () =>
       id == "Cutoff" &&
-        context()->Option.mapOr(false, prog =>
-          (prog->ByteView.getI32(OatmealParams.offFilter) &&& 0xffff) >= 16
-        )
+        context()->Option.mapOr(false, prog => Bank.readValue(prog, "Filter") >= 16.)
+    // the fields the status text reads from the context program (and the cutoff's range)
+    let dependsOn =
+      p.reads
+      ->Array.flatMap(offset => Fields.all->Array.filter(f => f.offset == offset && f.id != id))
+      ->Array.map(f => f.id)
+      ->Array.concat(id == "Cutoff" ? ["Filter"] : [])
     let valueText = (x: float) =>
       zdfCutoff()
         ? Float.toFixed(x * x * x * 19980. + 20., ~digits=2) ++ " Hz"
@@ -373,6 +369,7 @@ let makeDefs = (~context=() => None) => {
       valueText,
       shortText: x => compact(valueText(x)),
       parse,
+      dependsOn,
     }
 
     switch (porridgeValuesFor(id), def.names) {

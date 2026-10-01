@@ -4,31 +4,27 @@
 
 open OatmealFormat
 
-let filterOffset = 8428
-
-let readField = (bytes, field: Fields.t) =>
-  switch field.kind {
-  | F32 => bytes->ByteView.getF32(field.offset)
-  | I32 => bytes->ByteView.getI32(field.offset)->Int.toFloat
-  | Filter1 => (bytes->ByteView.getI32(filterOffset) &&& 0xffff)->Int.toFloat
-  | Filter2 => (bytes->ByteView.getI32(filterOffset) >>> 16 &&& 0xffff)->Int.toFloat
-  | Pw => bytes->ByteView.getU32(field.offset) / 4294967296.
-  }
-
-let writeField = (bytes, field: Fields.t, x) => {
-  let int = x => Float.toInt(Math.round(x))
-  switch field.kind {
-  | F32 => bytes->ByteView.setF32(field.offset, x)
-  | I32 => bytes->ByteView.setI32(field.offset, int(x))
-  | Filter1 =>
-    let packed = bytes->ByteView.getI32(filterOffset)
-    bytes->ByteView.setI32(filterOffset, packed &&& ~~~0xffff ||| int(x) &&& 0xffff)
-  | Filter2 =>
-    let packed = bytes->ByteView.getI32(filterOffset)
-    bytes->ByteView.setI32(filterOffset, packed &&& 0xffff ||| (int(x) &&& 0xffff) << 16)
-  | Pw => bytes->ByteView.setU32(field.offset, Math.round(x * 4294967296.))
-  }
+// A field's endpoint value: the internal value, except pulse width (a 0..1 fraction). The
+// second filter type is read as a signed word, like the DLL does; its values (0..21) read the
+// same either way.
+let readField = (bytes, field: Fields.t) => {
+  let x = OatmealParams.readInternal(bytes, field.index)
+  field.kind == Pw ? OatmealParams.pwOfPhase(x) : x
 }
+
+// Like setParameter, an envelope's release also writes the DLL's second release field.
+let writeField = (bytes, field: Fields.t, x) =>
+  OatmealParams.writeInternal(
+    bytes,
+    field.index,
+    switch field.kind {
+    | F32 => x
+    | Pw => OatmealParams.pwToPhase(x)
+    | I32 | Filter1 | Filter2 => Math.round(x)
+    },
+  )
+
+let fieldsById = Fields.all->Array.map(field => (field.id, field))->Map.fromArray
 
 // Parameter values by endpoint id.
 type values = Map.t<string, float>
@@ -36,10 +32,15 @@ type values = Map.t<string, float>
 let programValues = (bytes): values =>
   Fields.all->Array.map(field => (field.id, readField(bytes, field)))->Map.fromArray
 
+// One value by endpoint id (0 for a parameter Oatmeal doesn't have).
+let readValue = (bytes, id) => fieldsById->Map.get(id)->Option.mapOr(0., readField(bytes, _))
+
+// Parameters Oatmeal doesn't have are skipped.
+let writeValue = (bytes, id, x) =>
+  fieldsById->Map.get(id)->Option.forEach(field => writeField(bytes, field, x))
+
 let writeValues = (bytes, values: values) =>
-  Fields.all->Array.forEach(field =>
-    values->Map.get(field.id)->Option.forEach(x => writeField(bytes, field, x))
-  )
+  values->Map.forEachWithKey((x, id) => writeValue(bytes, id, x))
 
 //==============================================================================
 // Sending to the patch
@@ -63,9 +64,6 @@ let sendShape = (pc, table, data) => {
   let (endpoint, which) = shapeEndpoint(table)
   pc->PatchConnection.sendEventOrValueNow(endpoint, {which, data: arrayOfFloats(data)})
 }
-
-let sendShapes = (pc, shapes) =>
-  allTables->Array.forEach(table => sendShape(pc, table, shapes->getTable(table)))
 
 type tuningPayload = {on: int, semitones: array<float>}
 

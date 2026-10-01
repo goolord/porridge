@@ -2,30 +2,27 @@
 // endpoints): name, range, default, switch names, and a unit when the internal value is
 // the number the original displays.
 
-// The original has a few duplicate or misleading names; hosts need unique ones.
-let renamed = index =>
-  switch index {
-  | 30 => Some("LFO 2 unit")
-  | 67 => Some("Chorus mode")
-  | 68 => Some("Chorus stereo")
-  | 75 => Some("Delay on")
-  | 78 => Some("D reverse L")
-  | 79 => Some("D reverse R")
-  | 90 => Some("Reverb on")
-  | 103 => Some("Voice mode")
-  | 29 => Some("LFO 1 > LFO 2 rate")
-  | 40 => Some("LFO 2 > LFO 1 rate")
+// The original has a few duplicate or misleading names, and leaves the unison parameters
+// unnamed; hosts need unique ones.
+let renamed = id =>
+  switch id {
+  | "LFO_2_Unit" => Some("LFO 2 unit")
+  | "C_Mode" => Some("Chorus mode")
+  | "C_Stereo" => Some("Chorus stereo")
+  | "D_On" => Some("Delay on")
+  | "D_ReverseL" => Some("D reverse L")
+  | "D_ReverseR" => Some("D reverse R")
+  | "R_On" => Some("Reverb on")
+  | "PolyMode" => Some("Voice mode")
+  | "LFO_1_2" => Some("LFO 1 > LFO 2 rate")
+  | "LFO_2_1" => Some("LFO 2 > LFO 1 rate")
+  | "U_Voices" => Some("Unison voices")
+  | "U_Detune" => Some("Unison detune")
+  | "U_Spread" => Some("Unison spread")
+  | "U_PitchJitter" => Some("Unison pitch jitter")
+  | "U_PanJitter" => Some("Unison pan jitter")
   | _ => None
   }
-
-// The DLL leaves 124..128 unnamed.
-let unisonNames = [
-  "Unison voices",
-  "Unison detune",
-  "Unison spread",
-  "Unison pitch jitter",
-  "Unison pan jitter",
-]
 
 let defs = Lazy.make(() => ParamDefs.makeDefs())
 
@@ -65,9 +62,6 @@ type t = {
 
 let paramInfo = index => {
   let d = Lazy.get(defs)->Array.getUnsafe(index)
-  let hostName = switch renamed(index) {
-  | Some(name) => name
-  | None => unisonNames[index - 124]->Option.getOr(d.name)
-  }
+  let hostName = renamed(d.id)->Option.getOr(d.name)
   {hostName, min: d.min, max: d.max, init: d.init, names: d.names, unit: unitFor(d)}
 }

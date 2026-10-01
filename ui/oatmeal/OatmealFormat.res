@@ -323,22 +323,6 @@ let derivedFields = [
   {from: 9464, until: 9472, what: "mod env 2 release coefs"},
 ]
 
-// Regions that hold no program data (stale memory / padding in real files); ignore when comparing.
-let paddingFields = [
-  {
-    from: 16,
-    until: 32,
-    what: "runtime scratch (usually int sampleRate, 0, double samplesPerBeat of the saving session)",
-  },
-  {from: 4128, until: 4136, what: "padding between wave2 and LFO shape 1"},
-  {
-    from: 8296,
-    until: 8300,
-    what: "runtime pointer in the live program copy (heap garbage in files)",
-  },
-  {from: 10348, until: 10352, what: "padding after unison fields (never written by the DLL)"},
-]
-
 // ---------------------------------------------------------------------------------------------------
 // small helpers
 
@@ -527,6 +511,14 @@ let remapTargetsV34 = p => {
   remap(xyTargetOffsets, xyTargetRemapV34)
 }
 
+// Convert one native program chunk ("Oatmeal.prgm", versions 31..38) to a v38 program.
+// Mirrors setChunk(isPreset=true) 0x1004f880:
+//   v38 (or newer, with ~allowNewer): raw copy of min(len, 10376) bytes (over the default program here;
+//       the DLL copies over whatever program was in the slot, so a short v38 chunk keeps stale data there).
+//   v31..v37: len must be >= layout size else error ("Not enough data!"); name = 24 bytes at
+//       layout.name; struct = defaults (0x10052d70) then bytes [16, 16+copy) of the source; v<=34 remaps
+//       M1/M2 target indices (modTargetRemapV34).
+// The header is always rewritten to 'Oatmeal.prgm' v38 (the DLL leaves the slot's old header in place).
 let convertProgram = (src, ~allowNewer) => {
   let version = switch readNativeHeader(src) {
   | Some({kind: Program, version}) => version
@@ -579,16 +571,12 @@ let convertProgram = (src, ~allowNewer) => {
   {bytes: out, name: getName(out), version, warnings}
 }
 
-// Convert one native program chunk ("Oatmeal.prgm", versions 31..38) to a v38 program.
-// Mirrors setChunk(isPreset=true) 0x1004f880:
-//   v38 (or newer, with ~allowNewer): raw copy of min(len, 10376) bytes (over the default program here;
-//       the DLL copies over whatever program was in the slot, so a short v38 chunk keeps stale data there).
-//   v31..v37: len must be >= layout size else error ("Not enough data!"); name = 24 bytes at
-//       layout.name; struct = defaults (0x10052d70) then bytes [16, 16+copy) of the source; v<=34 remaps
-//       M1/M2 target indices (modTargetRemapV34).
-// The header is always rewritten to 'Oatmeal.prgm' v38 (the DLL leaves the slot's old header in place).
-let programToV38 = (src, ~allowNewer=false) => guard(() => convertProgram(src, ~allowNewer))
-
+// Convert a native bank chunk ("Oatmeal.bank") to 64 v38 programs.
+// Layout: 16-byte bank header (magic 'Oatm','eal.','bank', int version), then 64 programs of
+// layout size bytes each, each with its own 16-byte program header (ignored by the DLL:
+// the bank version decides the layout).  The DLL needs len >= 16 + 64*size for v31..v37 (else nothing
+// is loaded); a v38 bank is raw-copied (min(len, 664080) bytes).
+// ~lenient: accept truncated banks, returning only the complete programs (+ warning).
 let convertBank = (src, ~lenient) => {
   let version = switch readNativeHeader(src) {
   | Some({kind: Bank, version}) => version
@@ -630,14 +618,6 @@ let convertBank = (src, ~lenient) => {
   {version, programs, warnings}
 }
 
-// Convert a native bank chunk ("Oatmeal.bank") to 64 v38 programs.
-// Layout: 16-byte bank header (magic 'Oatm','eal.','bank', int version), then 64 programs of
-// layout size bytes each, each with its own 16-byte program header (ignored by the DLL:
-// the bank version decides the layout).  The DLL needs len >= 16 + 64*size for v31..v37 (else nothing
-// is loaded); a v38 bank is raw-copied (min(len, 664080) bytes).
-// ~lenient: accept truncated banks, returning only the complete programs (+ warning).
-let bankToV38 = (src, ~lenient=false) => guard(() => convertBank(src, ~lenient))
-
 // ---------------------------------------------------------------------------------------------------
 // VST fxp / fxb containers (big-endian headers)
 
@@ -668,6 +648,7 @@ let fourcc = (bytes, offset) =>
     bytes->byteAt(offset + 3),
   ])
 
+// Parse a VST fxp/fxb container.
 let rec readFx = bytes => {
   let length = TypedArray.length(bytes)
   if length < 28 || fourcc(bytes, 0) != "CcnK" {
@@ -711,9 +692,6 @@ let rec readFx = bytes => {
     body,
   }
 }
-
-// Parse a VST fxp/fxb container.
-let parseFxContainer = bytes => guard(() => readFx(bytes))
 
 // Program from a VST parameter list (FxCk): Init program + setParameter(i, v) for each param in order.
 let programFromParams = (values, name) => {
@@ -838,143 +816,4 @@ let writeBankChunk = programs => {
     out->blit(p, bankHeaderSize + k * programSize)
   }
   out
-}
-
-let fxHeader = (bytes, magic, count, fxVersion) => {
-  bytes->putLatin1(0, "CcnK", 4)
-  bytes->setI32BE(4, TypedArray.length(bytes) - 8)
-  bytes->putLatin1(8, magic, 4)
-  bytes->setI32BE(12, 1)
-  bytes->putLatin1(16, "FzOm", 4)
-  bytes->setI32BE(20, fxVersion)
-  bytes->setI32BE(24, count)
-}
-
-// VST .fxp with opaque chunk.  numParams = 342, fxVersion 1 (as written by hosts for Oatmeal 38).
-let writeFxp = (prog, ~name=?) => {
-  let chunk = writeProgramChunk(prog)
-  let n = TypedArray.length(chunk)
-  let out = Uint8Array.fromLength(60 + n)
-  fxHeader(out, "FPCh", OatmealParams.paramCount, 1)
-  out->putLatin1(28, name->Option.getOr(getName(chunk)), 27)
-  out->setI32BE(56, n)
-  out->blit(chunk, 60)
-  out
-}
-
-// VST .fxb with opaque bank chunk.
-let writeFxb = (programs, ~currentProgram=0) => {
-  let chunk = writeBankChunk(programs)
-  let n = TypedArray.length(chunk)
-  let out = Uint8Array.fromLength(160 + n)
-  fxHeader(out, "FBCh", bankPrograms, 1)
-  out->setI32BE(28, currentProgram)
-  out->setI32BE(156, n)
-  out->blit(chunk, 160)
-  out
-}
-
-// Normalized parameter vector of a program (float32 inverse of setParameter, see OatmealParams.toNormalizedF32).
-let programToParams = prog =>
-  Float32Array.fromLength(OatmealParams.paramCount)->TypedArray.mapWithIndex((_, i) =>
-    OatmealParams.toNormalizedF32(i, OatmealParams.readInternal(prog, i))
-  )
-
-let fxckBytes = (prog, name) => {
-  let values = programToParams(prog)
-  let out = Uint8Array.fromLength(56 + 4 * OatmealParams.paramCount)
-  fxHeader(out, "FxCk", OatmealParams.paramCount, 1)
-  out->putLatin1(28, name, 27)
-  values->TypedArray.forEachWithIndex((v, i) => out->setF32BE(56 + 4 * i, v))
-  out
-}
-
-// VST .fxp as a plain parameter list (FxCk).  Lossy: user waveforms, LFO shapes, velocity/aftertouch curves
-// and derived fields are not representable (a reader gets the Init tables).
-let writeFxpParams = (prog, ~name=?) => fxckBytes(prog, name->Option.getOr(getName(prog)))
-
-// VST .fxb as a list of FxCk programs (FxBk).  Lossy, see writeFxpParams.
-let writeFxbParams = (programs: array<program>) => {
-  let parts = programs->Array.map(p => fxckBytes(p.bytes, p.name))
-  let out = Uint8Array.fromLength(
-    parts->Array.reduce(156, (n, part) => n + TypedArray.length(part)),
-  )
-  fxHeader(out, "FxBk", Array.length(programs), 1)
-  parts
-  ->Array.reduce(156, (offset, part) => {
-    out->blit(part, offset)
-    offset + TypedArray.length(part)
-  })
-  ->ignore
-  out
-}
-
-// ---------------------------------------------------------------------------------------------------
-// derived fields (what Oatmeal.dll recomputes in process(); handy for a re-implementation / for comparing)
-
-let f32 = Math.fround
-
-// Envelope sub-struct coefficient update: port of 0x100522a0(mask=0xffff, sampleRate).
-// Sub-struct (16 dwords at base): +0 fade time ms, +4 attack ms, +8 hold ms, +0xc decay 1 ms, +0x10 decay 2 ms,
-// +0x14 release ms, +0x18 (2nd release field), +0x1c 1000/(sr*fade), +0x20 1000/(sr*attack), +0x24 int hold samples,
-// +0x28 decay-1 multiplier, +0x2c breakpoint (linear), +0x30 decay-2 multiplier, +0x34 sustain (linear),
-// +0x38 release multiplier (-60 dB in release ms), +0x3c fast release multiplier (-60 dB in release/2 ms).
-// NOTE: breakpoint / sustain values > 0.998 are clamped to exactly 1.0 in place.
-// base = 8232 (amp), 8300 (filter), 8364 (filter 2), 9312 (mod 1), 9408 (mod 2).
-let computeEnvelopeCoefficients = (prog, base, sampleRate) => {
-  let g = o => prog->getF32(base + o)
-  let s = (o, v) => prog->setF32(base + o, v)
-  let atLeast = (x, lo) => x < lo ? lo : x
-  let sr = sampleRate->Float.toInt->Int.toFloat
-  // f32(sr * field * factor), at least one sample
-  let samples = (o, factor) => atLeast(f32(sr * g(o) * f32(factor)), 1.)
-  s(0x1c, 1000. / (sr * g(0x00)))
-  s(0x20, 1000. / (sr * g(0x04)))
-  prog->setI32(base + 0x24, Float.toInt(Math.trunc(g(0x08) * sr * 0.001 + 0.5)))
-  if g(0x2c) > f32(0.998) {
-    s(0x2c, 1.)
-  }
-  s(0x28, Math.pow(atLeast(g(0x2c), f32(1e-6)), ~exp=1. / samples(0x0c, 0.001)))
-  if g(0x34) > f32(0.998) {
-    s(0x34, 1.)
-  }
-  let ratio = atLeast(f32(g(0x34) / atLeast(g(0x2c), f32(1e-6))), f32(1e-6))
-  s(0x30, Math.pow(ratio, ~exp=1. / samples(0x10, 0.001)))
-  s(0x38, Math.pow(10., ~exp=-3. / samples(0x14, 0.001)))
-  s(0x3c, Math.pow(10., ~exp=-3. / samples(0x14, 0.0005)))
-}
-
-// Recompute every derived field exactly in the order process() (0x10068040) does it on the live copy.
-// sampleRate: host sample rate (the DLL uses round(float SR) for envelopes and the int SR for the pitch env).
-let recomputeDerived = (prog, sampleRate) => {
-  let g = o => prog->getF32(o)
-  let s = (o, v) => prog->setF32(o, v)
-  let sr = Math.round(sampleRate)->Float.toInt->Int.toFloat
-  prog->setU32(8408, prog->getU32(8344)) // filter-2 env breakpoint = F breakpoint
-  prog->setU32(8416, prog->getU32(8352)) // filter-2 env sustain = F sustain
-  s(9068, Math.log(g(9064))) // ln(Octave)
-  let envSpeed = g(8452) // F envspeed
-  s(8368, g(8304) * envSpeed)
-  s(8376, g(8312) * envSpeed)
-  s(8380, g(8316) * envSpeed)
-  s(8372, g(8308) * envSpeed)
-  s(8384, g(8320) * envSpeed)
-  s(8388, g(8324) * envSpeed)
-  computeEnvelopeCoefficients(prog, 8232, sr)
-  computeEnvelopeCoefficients(prog, 8300, sr)
-  computeEnvelopeCoefficients(prog, 8364, sr)
-  let octave = g(9064)
-  let inv12 = f32(1. / 12.)
-  s(8992, g(8988) > -48. ? Math.pow(2., ~exp=g(8988) * inv12) : 0.) // start ratio
-  let peak = f32(Math.pow(octave, ~exp=g(9004) * inv12))
-  s(9008, peak)
-  let sustain = f32(Math.pow(octave, ~exp=g(9020) * inv12))
-  s(9024, sustain)
-  let srf = f32(sr)
-  s(9000, (peak - g(8992)) / (srf * g(8996) * f32(0.001))) // attack increment per sample
-  s(9016, Math.pow(sustain / peak, ~exp=1. / (srf * g(9012) * f32(0.001)))) // decay multiplier per sample
-  s(9032, Math.pow(octave, ~exp=g(9028) / (12. * sr))) // release multiplier per sample
-  computeEnvelopeCoefficients(prog, 9312, sr)
-  computeEnvelopeCoefficients(prog, 9408, sr)
-  prog
 }

@@ -22,14 +22,12 @@ let categories = [
 
 @set external setPlaceholder: (element, string) => unit = "placeholder"
 @set external setId: (element, string) => unit = "id"
-@set external setList: (element, string) => unit = "list"
 @send external setAttributeString: (element, string, string) => unit = "setAttribute"
 
 let show = (ctx: Ctx.t, stage) => {
   let meta = ctx.programs->ProgramStore.meta
-  let shade = el("div", ~cls="shade", ~parent=stage)
-  let d = el("div", ~cls="dlg", ~parent=shade)
-  el("div", ~cls="dttl", ~text="Program info", ~parent=d)->ignore
+  let dialog = Dialog.make(stage, "Program info")
+  let d = dialog.element
 
   let row = (label, input) => {
     let r = el("label", ~cls="drow", ~parent=d)
@@ -56,7 +54,7 @@ let show = (ctx: Ctx.t, stage) => {
   let description = row("description", el("textarea"))
   description->setValue(meta.description)
 
-  let close = () => shade->remove
+  let close = () => dialog->Dialog.remove
   let save = () => {
     ctx.programs->ProgramStore.setMeta({
       ...meta,
@@ -73,26 +71,7 @@ let show = (ctx: Ctx.t, stage) => {
     close()
   }
 
-  let buttons = el("div", ~cls="dbtns", ~parent=d)
-  let ok = el("button", ~cls="btn", ~text="OK", ~parent=buttons)
-  ok->onMouse(#click, _ => save())
-  let cancel = el("button", ~cls="btn", ~text="Cancel", ~parent=buttons)
-  cancel->onMouse(#click, _ => close())
-
-  // keys stay in the dialog (the host may otherwise take them as shortcuts)
-  d->onKeyDown(k => {
-    k->stopPropagation
-    switch k->key {
-    | "Escape" => close()
-    | "Enter" if !(k->target === Obj.magic(description)) => save()
-    | _ => ()
-    }
-  })
-  shade->onPointer(#pointerdown, ev =>
-    if ev->target === Obj.magic(shade) {
-      close()
-    }
-  )
+  dialog->Dialog.finish([("OK", save), ("Cancel", close)], ~onEnter=save, ~close)->ignore
   name->focus
   name->select
 }

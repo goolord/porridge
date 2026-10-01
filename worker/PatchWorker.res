@@ -75,59 +75,67 @@ let readBytes = async (pc, path) => {
   await attempt(list{path, "/" ++ path})
 }
 
+// Sends tables to the patch, skipping those it was last sent already.
+let shapeSender = pc => {
+  let sent = Map.make()
+  shapes =>
+    OatmealFormat.allTables->Array.forEach(table => {
+      let data = shapes->OatmealFormat.getTable(table)
+      if !(sent->Map.get(table)->Option.mapOr(false, Preset.sameTable(_, data))) {
+        sent->Map.set(table, data)
+        Bank.sendShape(pc, table, data)
+      }
+    })
+}
+
 // A new instance: install the factory bank, as Oatmeal does.
-let installFactoryBank = async pc => {
+let installFactoryBank = async (pc, sendShapes) => {
   let factory = switch await readBytes(pc, "presets/oatmealprs.dat") {
   | Some(bytes) =>
     switch OatmealFormat.parseFile(bytes) {
-    | Ok({programs}) => programs->Array.map(p => p.bytes)
+    | Ok({programs}) => programs->Array.map(p => Preset.fromOatmeal(p.bytes))
     | Error(e) =>
       Console.log("Porridge: factory bank not available: " ++ e)
       []
     }
   | None => []
   }
-  let all = Array.fromInitializer(~length=OatmealFormat.bankPrograms, i =>
-    switch factory[i] {
-    | Some(bytes) => Preset.fromOatmeal(bytes)
-    | None => Preset.make(i == 0 ? "Init" : `Init ${Int.toString(i)}`)
-    }
-  )
+  // without it, the first program is Init
+  let all = Preset.fillBank(Array.length(factory) > 0 ? factory : [Preset.make("Init")])
 
   let first = all->Array.getUnsafe(0)
   Bank.sendValues(pc, first.values)
-  Bank.sendShapes(pc, first.tables)
-  pc->sendStoredStateValue("shapes", Bank.encodeShapes(first.tables))
-  pc->sendStoredStateValue("program", 0)
-  pc->sendStoredStateValue("bank", Preset.encodeBank(all))
+  sendShapes(first.tables)
+  StoredState.send(pc, Shapes, Bank.encodeShapes(first.tables))
+  StoredState.send(pc, Program, 0)
+  StoredState.send(pc, Bank, Preset.encodeBank(all))
 }
 
 let default = pc => {
   let seen = Map.make()
   let settled = ref(false)
+  let sendShapes = shapeSender(pc)
 
   pc->addStoredStateValueListener(({key, value}) => {
-    switch (key, value) {
-    | ("shapes", String(shapes)) =>
-      Bank.decodeShapes(shapes)->Option.forEach(Bank.sendShapes(pc, _))
-    | ("tuning", String(tuning)) => Bank.sendTuning(pc, tuning == "" ? None : Bank.decodeTuning(tuning))
+    switch (StoredState.keyOf(key), value) {
+    | (Some(Shapes), String(shapes)) => Bank.decodeShapes(shapes)->Option.forEach(sendShapes)
+    | (Some(Tuning), String(tuning)) =>
+      Bank.sendTuning(pc, tuning == "" ? None : Bank.decodeTuning(tuning))
     | _ => ()
     }
     if !settled.contents {
       seen->Map.set(key, value)
     }
   })
-  pc->requestStoredStateValue("bank")
-  pc->requestStoredStateValue("shapes")
-  pc->requestStoredStateValue("tuning")
+  [StoredState.Bank, Shapes, Tuning]->Array.forEach(StoredState.request(pc, _))
 
   // Give the host a moment to answer; if there is no bank in the session this is a
   // new instance.
   setTimeout(() => {
     settled := true
-    switch seen->Map.get("bank") {
-    | Some(JSON.String(bank)) if String.length(bank) > 1000 => ()
-    | _ => installFactoryBank(pc)->Promise.ignore
+    switch seen->Map.get(StoredState.name(Bank)) {
+    | Some(JSON.String(bank)) if StoredState.isBank(bank) => ()
+    | _ => installFactoryBank(pc, sendShapes)->Promise.ignore
     }
   }, 400)->ignore
 }
