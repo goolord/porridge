@@ -11,9 +11,11 @@ let pageHeight = designHeight - headerHeight - statusHeight
 
 let px = Web.px
 
+let groundColour = "#978552"
+
 let css = `
 :host, porridge-view {
-    --ground: #978552;
+    --ground: ${groundColour};
     --panel: #b9aa7b;
     --panel-hi: #c9bc92;
     --edge: #6f5f36;
@@ -24,6 +26,9 @@ let css = `
     --signal-soft: rgba(28, 60, 115, 0.22);
     --paper: #ece3c4;
     --mod: #a3501c;
+    /* what every control sits on, so that it reads as something to grab */
+    --tile: rgba(236, 227, 196, 0.32);
+    --tile-edge: rgba(111, 95, 54, 0.4);
 
     display: block;
     position: relative;
@@ -76,13 +81,14 @@ let css = `
     padding: 0 7px; height: 18px; line-height: 18px; border-radius: 2px;
     font-size: 13px; font-weight: 700; color: var(--ink-faint); cursor: pointer; white-space: nowrap;
 }
+.ptab { background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge); }
 .ptab:hover { color: var(--ink); background: var(--panel-hi); }
 .ptab.on { color: var(--paper); background: var(--signal); }
 .pbody { position: absolute; inset: 0; display: none; }
 .pbody.on { display: block; }
 .blk > .hdr { position: absolute; right: 6px; top: 1px; width: 40px; height: 18px; }
 
-/* a parameter row: label left, value right, position track underneath */
+/* a parameter row: label left, value right, position track underneath, on a tile */
 .p {
     position: absolute;
     box-sizing: border-box;
@@ -90,8 +96,10 @@ let css = `
     padding: 1px 3px 0 3px;
     border-radius: 2px;
     cursor: ns-resize;
+    background: var(--tile);
+    box-shadow: inset 0 0 0 1px var(--tile-edge);
 }
-.p:hover, .p.drag { background: var(--panel-hi); }
+.p:hover, .p.drag { background: var(--panel-hi); box-shadow: inset 0 0 0 1px var(--edge); }
 .p .l {
     position: absolute; left: 3px; top: 1px;
     font-size: 11px; color: var(--ink-soft); white-space: nowrap;
@@ -111,7 +119,7 @@ let css = `
 .p .t em { position: absolute; top: -1px; bottom: -1px; background: var(--mod); opacity: 0.6; display: none; }
 .p.dim .v, .p.dim .l { opacity: 0.45; }
 
-/* choice: same footprint, click cycles, menu on right click */
+/* choice: same footprint, click opens the menu, right click steps */
 .p.ch { cursor: pointer; }
 .p.ch .v::after { content: ""; display: inline-block; width: 0; height: 0; margin-left: 4px;
     border-left: 3px solid transparent; border-right: 3px solid transparent; border-top: 4px solid var(--ink-faint);
@@ -121,7 +129,9 @@ let css = `
 .tg {
     position: absolute; height: 18px; cursor: pointer; font-size: 11.5px; color: var(--ink-soft);
     display: flex; align-items: center; gap: 5px; white-space: nowrap;
+    padding: 0 7px 0 5px; border-radius: 2px; background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge);
 }
+.tg:hover { background: var(--panel-hi); box-shadow: inset 0 0 0 1px var(--edge); }
 .tg b { width: 9px; height: 9px; border: 1px solid var(--ink); box-sizing: border-box; background: transparent; }
 .tg.on b { background: var(--signal); border-color: var(--signal); }
 .tg.on { color: var(--ink); }
@@ -194,6 +204,7 @@ let css = `
     font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .pv-head .prog .btn { width: 22px; padding: 0; }
+.pv-head .btn.icon { width: 26px; padding: 0; font-size: 15px; line-height: 19px; }
 
 /* status line: hover texts, or a hint for the page */
 .pv-status {
@@ -231,6 +242,8 @@ let css = `
 
 /* drawing surfaces */
 .draw { position: absolute; cursor: crosshair; }
+.hlabel { position: absolute; font-size: 11px; color: var(--ink-soft); pointer-events: none;
+    background: rgba(236, 227, 196, 0.75); padding: 0 4px; border-radius: 2px; }
 
 .drop {
     position: absolute; inset: 0; z-index: 100; display: none; align-items: center; justify-content: center;
@@ -270,7 +283,9 @@ let css = `
 .mrow .mname {
     position: absolute; left: 15px; top: 0; width: 128px; height: 26px; line-height: 26px; font-size: 12px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+    box-sizing: border-box; padding: 0 4px; border-radius: 2px; background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge);
 }
+.mrow .mname:hover { background: var(--panel-hi); }
 .mrow .mdel { right: 2px; top: 3px; width: 20px; padding: 0; }
 
 /* dialogs */
@@ -290,6 +305,11 @@ let css = `
 .dlg textarea { height: 84px; resize: none; }
 .dlg .dbtns { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
 .dlg .btn { position: static; min-width: 64px; }
+.dlg .seg { display: flex; flex-wrap: wrap; }
+.dlg .seg .btn { min-width: 0; padding: 0 6px; border-radius: 0; margin-left: -1px; }
+.dlg .seg .btn.off { opacity: 0.45; pointer-events: none; }
+.dlg .dnote { margin: 6px 0 6px 82px; font-size: 11.5px; line-height: 1.35; color: var(--ink-faint); }
+.dlg .dnote + .btn { margin-left: 82px; }
 
 .p:focus-visible, .btn:focus-visible, .tg:focus-visible, .cell:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
 `

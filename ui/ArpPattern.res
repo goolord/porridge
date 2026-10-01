@@ -1,5 +1,6 @@
 // Arpeggiator pattern: 16 step cells and a pattern-length handle.
-// Click a step to advance its command, shift-click to go back, right-click for the list.
+// Click a step to pick its command from the list, right-click to advance it, shift-right-click
+// to go back.
 
 open! Web
 
@@ -55,10 +56,10 @@ let make = (ctx: Ctx.t, parent, box) => {
     c->onPointer(#pointerdown, ev => {
       ev->preventDefault
       switch ev->button {
-      | 2 => menu(c, id)
       | 1 => model->ParamModel.gestureSet(id, 0.)
       | 0 if ev->commandKey => model->ParamModel.gestureSet(id, 0.)
-      | 0 => step(id, ev->shiftKey ? -1. : 1.)
+      | 0 => menu(c, id)
+      | 2 => step(id, ev->shiftKey ? -1. : 1.)
       | _ => ()
       }
     })

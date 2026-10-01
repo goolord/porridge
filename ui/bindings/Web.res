@@ -6,6 +6,7 @@ type element = Dom.element
 @send external createElement: (Dom.document, string) => element = "createElement"
 @send external createElementNS: (Dom.document, string, string) => element = "createElementNS"
 @get external body: Dom.document => element = "body"
+@get external documentElement: Dom.document => element = "documentElement"
 
 //==============================================================================
 // Elements
@@ -93,8 +94,13 @@ type shadowInit = {mode: string}
 @get external metaKey: Dom.uiEvent_like<'a> => bool = "metaKey"
 @get external altKey: Dom.uiEvent_like<'a> => bool = "altKey"
 @get external target: Dom.event_like<'a> => Dom.eventTarget = "target"
+@send external composedPath: Dom.event_like<'a> => array<Dom.eventTarget> = "composedPath"
 @send external preventDefault: Dom.event_like<'a> => unit = "preventDefault"
 @send external stopPropagation: Dom.event_like<'a> => unit = "stopPropagation"
+
+// The element an event started on, also seen from outside the view's shadow root (where
+// target is the shadow host).
+let originalTarget = ev => ev->composedPath->Array.get(0)->Option.getOr(ev->target)
 
 // ctrl, or cmd on a Mac
 let commandKey = ev => ev->ctrlKey || ev->metaKey
@@ -138,6 +144,32 @@ external offDocumentPointerDownCapture: (
   Dom.pointerEvent => unit,
   @as(json`true`) _,
 ) => unit = "removeEventListener"
+
+@send
+external onDocumentMouse: (Dom.document, mouseEventName, Dom.mouseEvent => unit) => unit =
+  "addEventListener"
+@send
+external offDocumentMouse: (Dom.document, mouseEventName, Dom.mouseEvent => unit) => unit =
+  "removeEventListener"
+@send
+external onDocumentKeyDown: (Dom.document, @as("keydown") _, Dom.keyboardEvent => unit) => unit =
+  "addEventListener"
+@send
+external offDocumentKeyDown: (Dom.document, @as("keydown") _, Dom.keyboardEvent => unit) => unit =
+  "removeEventListener"
+@send
+external onDocumentWheel: (
+  Dom.document,
+  @as("wheel") _,
+  Dom.wheelEvent => unit,
+  @as(json`{"passive": false}`) _,
+) => unit = "addEventListener"
+@send
+external offDocumentWheel: (Dom.document, @as("wheel") _, Dom.wheelEvent => unit) => unit =
+  "removeEventListener"
+
+// The tag of an event target, e.g. "INPUT" (None for the document or the window).
+@get @return(nullable) external tagNameOf: Dom.eventTarget => option<string> = "tagName"
 
 // Ignores the context menu, so that right-button drags and clicks reach the control.
 let suppressContextMenu = e => e->onMouse(#contextmenu, preventDefault)

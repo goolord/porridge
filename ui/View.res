@@ -33,6 +33,11 @@ let make = (host, pc) => {
     Bank.writeValues(context, Map.fromArray([(id, model->ParamModel.get(id))]))
   )
 
+  let restoreBrowserChrome = BrowserChrome.install()
+  // the page around the view (Cmajor's is black) shows while a host resizes the window
+  document->documentElement->setStyle("background", Style.groundColour)
+  let settings = Settings.make(pc)
+
   let shadow = host->attachShadow({mode: "open"})
   el("style", ~text=Style.css, ~parent=shadow)->ignore
   let stage = el("div", ~cls="pv-stage", ~parent=shadow)
@@ -233,6 +238,9 @@ let make = (host, pc) => {
   button(head, "Panic", "Stop all notes and clear effect tails", () =>
     programs->ProgramStore.panic
   )->ignore
+  button(head, "⚙", "Settings: the size of the interface", () =>
+    SettingsDialog.show(settings, stage)
+  )->addClass("icon")
 
   stage->appendChild(fileInput)
   fileInput->setInputType("file")
@@ -299,6 +307,8 @@ let make = (host, pc) => {
     showPage,
     dispose: () => {
       resizeObserver->disconnect
+      restoreBrowserChrome()
+      settings->Settings.dispose
       model->ParamModel.dispose
       programs->ProgramStore.dispose
     },

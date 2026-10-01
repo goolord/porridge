@@ -2,7 +2,7 @@
 
 open! Web
 
-let hint = "Click a step to change it (shift-click goes back, right-click lists them). Drag the XY pad; right-drag keeps its distance from the centre."
+let hint = "Click a step to pick it from a list, right-click to step through them (shift goes back). Drag the XY pad; right-drag keeps its distance from the centre."
 
 let build = (ctx: Ctx.t, page) => {
   let margin = 6.

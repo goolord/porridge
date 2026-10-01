@@ -275,7 +275,8 @@ let namesOf = (def: ParamDefs.t) =>
   | None => JsError.panic(def.id ++ " has no value names")
   }
 
-// A choice: same footprint as a parameter row; click cycles, menu on right click.
+// A choice: same footprint as a parameter row; click opens the menu, right click steps
+// through the values (shift goes back).
 let choice = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=76., ~label=?, ~names=?) => {
   let c = control(ctx, id)
   let menuNames = namesOf(c.def)
@@ -306,11 +307,10 @@ let choice = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=76., ~label=?, ~names=?) => {
   e->onPointer(#pointerdown, ev => {
     ev->preventDefault
     switch ev->button {
-    | 2 => openMenu()
-    | _ if ev->altKey => openMenu()
     | 1 => gestureSet(c, 0.)
     | 0 if ev->commandKey => gestureSet(c, 0.)
-    | 0 => step(ev->shiftKey ? -1. : 1.)
+    | 0 => openMenu()
+    | 2 => step(ev->shiftKey ? -1. : 1.)
     | _ => ()
     }
   })

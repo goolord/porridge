@@ -13,7 +13,14 @@ cmaj play Porridge.cmajorpatch
 ![Synth page](docs/screenshot.png)
 
 The interface is one 1100 × 580 panel, scaled to fit any window size, so that it fits on a
-1080p screen at 150 % scaling. The header switches between six pages:
+1080p screen at 150 % scaling. Resizing the plugin window keeps the panel's proportions, and
+**⚙** (settings) sets the size new windows open at (75-300 %); it is saved for every instance,
+in `%APPDATA%\Porridge`, `~/Library/Application Support/Porridge` or `~/.config/porridge`.
+
+Drag or scroll a value, double-click to type one, right-click to reset it. Click a list to
+pick from it; right-click steps through it (shift-right-click steps back).
+
+The header switches between six pages:
 
 - **Synth**: oscillators (with noise, unison and phase on tabs), the filter, the amp
   envelope, the modulation sources (mod envelopes, pitch envelope and LFOs, on tabs), and
@@ -27,8 +34,8 @@ The interface is one 1100 × 580 panel, scaled to fit any window size, so that i
   other pages show the range their connections sweep.
 - **FX**: distortion, chorus, delay, reverb and the EQ.
 - **Arp / XY**: the arpeggiator pattern and the XY pad with its targets.
-- **Shapes**: draw the two oscillator waveforms and the two LFO shapes. The editor shows the
-  waveform's harmonics.
+- **Shapes**: draw the two oscillator waveforms and the two LFO shapes. Under a waveform, click
+  or drag the level and phase of its first 64 harmonics (right-click clears one).
 - **MIDI**: channel filter, sustain pedal, velocity and aftertouch curves, MPE, and the six
   assignable controllers (with learn). With MPE on (lower zone, master channel 1), every note
   on channels 2-16 follows its own channel's pitch bend (range up to ±96 semitones), pressure
@@ -63,6 +70,8 @@ docs/internals/         reverse-engineering notes on the original
 tools/
   gen.mjs                 regenerates ParamStore/Slots/ModTables from the parameter tables
   bundle.mjs              bundles the compiled view and worker into bundle/
+  clap-patch.mjs          patches the generated CLAP wrapper: aspect-locked resizing, and the
+                          interface size setting
   test/                   native C++ test host built from the patch (cmaj generate --target=cpp),
                           golden.mjs (bit-exact factory renders), presets.mjs (format round trips)
   re/                     comparisons against Oatmeal.dll (32-bit Python) and data checks

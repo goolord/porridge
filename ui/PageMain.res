@@ -4,7 +4,7 @@
 
 open! Web
 
-let hint = "Drag or scroll to change a value, shift for fine steps. Double-click to type, right-click to reset."
+let hint = "Drag or scroll to change a value, shift for fine steps. Double-click to type, right-click to reset. Click a list to pick from it, right-click to step through it."
 
 let (margin, gap) = (6., Grid.gap)
 let columnWidth = 358.

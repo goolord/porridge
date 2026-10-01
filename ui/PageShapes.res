@@ -1,8 +1,9 @@
-// Shapes page: the two user oscillator waveforms and the two user LFO shapes.
+// Shapes page: the two user oscillator waveforms, with their harmonics, and the two user LFO
+// shapes.
 
 open! Web
 
-let hint = "Drag to draw, shift-click for a straight line, ctrl-drag to smooth. Right-click for tools."
+let hint = "Drag to draw, shift-click for a straight line, ctrl-drag to smooth. Right-click for tools. Click or drag the harmonics to set their levels and phases."
 
 type shape = {table: OatmealFormat.table, tab: string, bipolar: bool}
 
@@ -38,86 +39,49 @@ let build = (ctx: Ctx.t, page) => {
   let current = ref(0)
   let shape = () => shapes->Array.getUnsafe(current.contents)
 
-  let specBox = {x: 10., y: 378., w: width, h: 122.}
-  let spectrum = el("canvas", ~parent=blk)->placeBox(specBox)
-  spectrum->setStyle("position", "absolute")
-  spectrum->setCanvasWidth(specBox.w * 2.)
-  spectrum->setCanvasHeight(specBox.h * 2.)
-  let spectrumNote = el("div", ~cls="note", ~text="harmonics (dB, first 64)")
+  // osc waveforms have their harmonics under them; LFO shapes get the whole height
+  let waveBox = {x: 10., y: 54., w: width, h: 232.}
+  let lfoHeight = 446.
 
-  let editorRef = ref(None)
-
-  let drawSpectrum = () =>
-    editorRef.contents->Option.forEach((editor: ShapeEditor.t) => {
-      open Context2d
-      let g = spectrum->getContext2d
-      let (w, h) = (spectrum->canvasWidth, spectrum->canvasHeight)
-      g->clearRect(0., 0., w, h)
-      g->setFillStyle("rgba(236,227,196,0.45)")
-      g->fillRect(0., 0., w, h)
-      g->setStrokeStyle("#6f5f36")
-      g->setLineWidth(2.)
-      g->strokeRect(1., 1., w - 2., h - 2.)
-      let d = editor.data
-      let n = TypedArray.length(d)
-      let bars = 64
-      let barWidth = w / Int.toFloat(bars)
-      g->setFillStyle(
-        switch spectrum->getComputedStyle->getPropertyValue("--signal")->String.trim {
-        | "" => "#1c3c73"
-        | ink => ink
-        },
-      )
-      let mean = shape().bipolar ? 0. : ShapeEditor.sum(d) / Int.toFloat(n)
-      let magnitudes = Array.fromInitializer(~length=bars, k => {
-        let harmonic = Int.toFloat(k + 1)
-        let re = ref(0.)
-        let im = ref(0.)
-        for i in 0 to n - 1 {
-          let a = 2. * Math.Constants.pi * harmonic * Int.toFloat(i) / Int.toFloat(n)
-          let v = d->ByteView.getUnsafe(i) - mean
-          re := re.contents + v * Math.cos(a)
-          im := im.contents - v * Math.sin(a)
-        }
-        2. * Math.hypot(re.contents, im.contents) / Int.toFloat(n)
-      })
-      let peak = Math.maxMany([1e-9, ...magnitudes])
-      magnitudes->Array.forEachWithIndex((m, k) => {
-        let db = 20. * Math.log10(Math.max(m / peak, 1e-6))
-        let f = Math.max(0., (db + 60.) / 60.)
-        g->fillRect(
-          Int.toFloat(k) * barWidth + 2.,
-          h - 4. - f * (h - 8.),
-          barWidth - 4.,
-          f * (h - 8.),
-        )
-      })
-    })
+  let harmonicsRef = ref(None)
+  let refreshHarmonics = () =>
+    if shape().bipolar {
+      harmonicsRef.contents->Option.forEach(HarmonicEditor.refresh)
+    }
 
   let editor = ShapeEditor.make(
     ctx,
     blk,
-    {x: 10., y: 54., w: width, h: 300.},
+    waveBox,
     ~points=512,
     ~bipolar=true,
     ~grid=16,
-    ~onEdit=d => ctx.programs->ProgramStore.setShape(shape().table, d, ~commit=false),
+    ~onEdit=d => {
+      ctx.programs->ProgramStore.setShape(shape().table, d, ~commit=false)
+      refreshHarmonics()
+    },
     ~onCommit=d => {
       ctx.programs->ProgramStore.setShape(shape().table, d, ~commit=true)
-      drawSpectrum()
+      refreshHarmonics()
     },
   )
-  editorRef := Some(editor)
-  blk->appendChild(spectrum)
-  blk->appendChild(spectrumNote)
-  spectrumNote->place(12., 360.)->ignore
+  let harmonics = HarmonicEditor.make(
+    ctx,
+    blk,
+    editor,
+    ~levels={x: 10., y: 292., w: width, h: 128.},
+    ~phases={x: 10., y: 426., w: width, h: 76.},
+    ~onEdit=() => ctx.programs->ProgramStore.setShape(shape().table, editor.data, ~commit=false),
+    ~onCommit=() => ctx.programs->ProgramStore.setShape(shape().table, editor.data, ~commit=true),
+  )
+  harmonicsRef := Some(harmonics)
 
   let apply = f => {
     editor->ShapeEditor.pushUndo
     f(editor.data)
     editor->ShapeEditor.draw
     ctx.programs->ProgramStore.setShape(shape().table, editor.data, ~commit=true)
-    drawSpectrum()
+    refreshHarmonics()
   }
   let generate = kind =>
     apply(d =>
@@ -147,7 +111,7 @@ let build = (ctx: Ctx.t, page) => {
       () => {
         editor->ShapeEditor.undo
         ctx.programs->ProgramStore.setShape(shape().table, editor.data, ~commit=true)
-        drawSpectrum()
+        refreshHarmonics()
       },
     ),
   ]
@@ -160,11 +124,10 @@ let build = (ctx: Ctx.t, page) => {
     editor.bipolar = s.bipolar
     editor.gridDivs = 16
     editor.undoStack = []
+    editor->ShapeEditor.setHeight(s.bipolar ? waveBox.h : lfoHeight)
     editor->ShapeEditor.set(ctx.programs->ProgramStore.shape(s.table))
-    let display = s.bipolar ? "block" : "none"
-    spectrum->setStyle("display", display)
-    spectrumNote->setStyle("display", display)
-    drawSpectrum()
+    harmonics->HarmonicEditor.setVisible(s.bipolar)
+    refreshHarmonics()
   }
 
   selectRef := select
@@ -183,7 +146,7 @@ let build = (ctx: Ctx.t, page) => {
 
   ctx.programs->ProgramStore.onShapes(() => {
     editor->ShapeEditor.set(ctx.programs->ProgramStore.shape(shape().table))
-    drawSpectrum()
+    refreshHarmonics()
   })
   select(0)
 

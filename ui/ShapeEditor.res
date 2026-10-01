@@ -111,6 +111,12 @@ let draw = t => {
   g->strokeRect(1., 1., w - 2., h - 2.)
 }
 
+// Changes the height of the drawing area (in design pixels).
+let setHeight = (t, h) => {
+  t.canvas->setStyle("height", px(h))
+  t.canvas->setCanvasHeight(h * 2.)
+}
+
 let set = (t, data) => {
   t.data = TypedArray.copy(data)
   draw(t)

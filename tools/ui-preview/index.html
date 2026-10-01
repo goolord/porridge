@@ -40,7 +40,36 @@ class MockPatchConnection
     sendParameterGestureEnd() {}
     addStoredStateValueListener (fn)    { this.stateListeners.push (fn); }
     removeStoredStateValueListener (fn) { this.stateListeners = this.stateListeners.filter (f => f !== fn); }
-    requestStoredStateValue (key)   { setTimeout (() => this.stateListeners.forEach (f => f ({ key, value: this.state.get (key) })), 0); }
+    requestStoredStateValue (key)
+    {
+        setTimeout (() =>
+        {
+            this.stateListeners.forEach (f => f ({ key, value: this.state.get (key) }));
+
+            if (key.startsWith ("porridge:settings?") && new URLSearchParams (location.search).get ("plugin") !== "0")
+                this.answerSettings (key.slice ("porridge:settings?".length));
+        }, 0);
+    }
+    // Stands in for the CLAP plugin's settings bridge (tools/clap-patch.mjs): the "window"
+    // is the #host element. ?plugin=0 leaves it out, as in cmaj play.
+    answerSettings (request)
+    {
+        const host = document.getElementById ("host");
+        let settings = {};
+        try { settings = JSON.parse (localStorage.getItem ("porridge-settings") ?? "{}"); } catch {}
+        if (request.startsWith ("zoom="))
+        {
+            const zoom = Math.min (3, Math.max (0.5, Number (request.slice (5)) || 1));
+            Object.assign (host.style, { inset: "auto", left: "0", top: "0", width: `${1100 * zoom}px`, height: `${580 * zoom}px` });
+        }
+        if (request.startsWith ("save="))
+        {
+            settings = JSON.parse (request.slice (5));
+            localStorage.setItem ("porridge-settings", JSON.stringify (settings));
+        }
+        const zoom = Math.min (host.clientWidth / 1100, host.clientHeight / 580);
+        this.stateListeners.forEach (f => f ({ key: "porridge:settings", value: { settings, zoom } }));
+    }
     sendStoredStateValue (key, v)   { this.state.set (key, v); this.stateListeners.forEach (f => f ({ key, value: v })); }
     addEndpointListener (id, fn)    { if (! this.endpointListeners.has (id)) this.endpointListeners.set (id, []); this.endpointListeners.get (id).push (fn); }
     removeEndpointListener() {}

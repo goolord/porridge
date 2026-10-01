@@ -24,17 +24,20 @@ let make = (ctx, el, ~x=padX, ~y=padTop, ~cw=columnWidth) => {ctx, el, ox: x, oy
 let cx = (g, c) => g.ox + Int.toFloat(c) * g.cw - 1.
 let cy = (g, r) => g.oy + Int.toFloat(r) * rowHeight
 
+// controls keep a few pixels apart, so that each label reads with its own control
+let controlWidth = (g, span) => Int.toFloat(span) * g.cw - 4.
+
 let param = (g, id, c, r, label, ~span=1) =>
-  Controls.param(g.ctx, g.el, id, ~x=cx(g, c), ~y=cy(g, r), ~w=Int.toFloat(span) * g.cw - 2., ~label)
+  Controls.param(g.ctx, g.el, id, ~x=cx(g, c) + 1., ~y=cy(g, r), ~w=controlWidth(g, span), ~label)
 
 let choice = (g, id, c, r, label, ~span=1) =>
   Controls.choice(
     g.ctx,
     g.el,
     id,
-    ~x=cx(g, c),
+    ~x=cx(g, c) + 1.,
     ~y=cy(g, r),
-    ~w=Int.toFloat(span) * g.cw - 2.,
+    ~w=controlWidth(g, span),
     ~label,
   )
 
