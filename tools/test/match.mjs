@@ -175,7 +175,7 @@ else
     const flag = name => { const i = args.indexOf (name); return i >= 0 ? args.splice (i, 2)[1] : undefined; };
     const wav = args.includes ("--wav");
     const useModel = ! args.includes ("--no-model");
-    const budget = Number (flag ("--budget") ?? 1400);
+    const budget = Number (flag ("--budget") ?? 1000);
     const genomes = Number (flag ("--genomes") ?? 12);
     const jobs = Number (flag ("--jobs") ?? Math.max (1, Math.min (12, availableParallelism () - 2)));
     const only = args.filter (a => ! a.startsWith ("--"));

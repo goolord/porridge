@@ -22,7 +22,7 @@ import * as Cmaes from "../../ui/match/Cmaes.res.mjs";
 import { root, readBank } from "./lib.mjs";
 
 const programIndices = [9, 25, 41, 58];
-const budget = 1400;
+const budget = 1000;
 
 // a bank program rendered as a sample, prepared
 const targetOf = (engine, program) =>

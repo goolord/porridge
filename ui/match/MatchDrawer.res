@@ -17,7 +17,7 @@ open! Web
 
 let slotCount = 4
 // the renders a match has, for the outline and the four searches together
-let budget = 1400
+let budget = 1000
 let amounts = [("a little", 0.15), ("some", 0.35), ("a lot", 0.7)]
 
 type card = {
