@@ -1,6 +1,6 @@
 // The tabs of Porridge's own rack effects (flanger, phaser, algo reverb, convolve, bode,
-// filter, utility, ambience, air; the compressor has CompEditor) and the voice lane's shifter and
-// resonator: their controls in panels across the top, and below them a graph of
+// filter, utility, ambience, air; the compressor has CompEditor) and the voice lane's shifter,
+// resonator and octaver: their controls in panels across the top, and below them a graph of
 // what the effect does with these settings. Also each one's controls and summary on the
 // routing tab's card.
 //
@@ -46,7 +46,13 @@ let drawFlanger = (p: FxGraph.plot, get: string => float) => {
   let (dMin, dMax) = flangerSweep(get)
   FxGraph.response(p, ~cls="curve dim", ~lo=-30., ~hi=12., flangerResponse(get, ~delayMs=dMax, _))
   FxGraph.response(p, ~lo=-30., ~hi=12., flangerResponse(get, ~delayMs=dMin, _))
-  FxGraph.note(p, `the comb at both ends of the sweep: ${Float.toFixed(dMin, ~digits=2)} ms (bright) to ${Float.toFixed(dMax, ~digits=2)} ms (dim), ${Float.toFixed(expValue(0.02, 20., get("Fl_Rate")), ~digits=2)} Hz`)
+  let track = get("Fl_Track")
+  FxGraph.note(
+    p,
+    `the comb at both ends of the sweep: ${Float.toFixed(dMin, ~digits=2)} ms (bright) to ${Float.toFixed(dMax, ~digits=2)} ms (dim), ${Float.toFixed(expValue(0.02, 20., get("Fl_Rate")), ~digits=2)} Hz` ++ (
+      track > 0. ? `; at middle C, the delay following each voice's note (at 3.82 ms it rings on the note)` : ""
+    ),
+  )
 }
 
 //==============================================================================
@@ -647,6 +653,50 @@ let drawResonator = (p: FxGraph.plot, get: string => float) => {
 }
 
 //==============================================================================
+// octaver: four cycles of a note (dim) and what comes out: the octave down flips the sound's
+// sign on every other cycle, the octave up is the sound rectified (less its average)
+
+let drawOctaver = (p: FxGraph.plot, get: string => float) => {
+  let (sub, up, dry) = (get("Oc_Sub"), get("Oc_Up"), get("Oc_Dry"))
+  let (lo, hi) = (-2., 2.)
+  let cycles = 4.
+  let n = Float.toInt(p.right - p.left)
+  // a soft saw: its first six partials
+  let wave = t => {
+    let s = ref(0.)
+    for k in 1 to 6 {
+      s := s.contents + Math.sin(2. * pi * Int.toFloat(k) * t) / Int.toFloat(k)
+    }
+    0.6 * s.contents
+  }
+  let rectifiedMean = {
+    let s = ref(0.)
+    for i in 0 to 255 {
+      s := s.contents + Math.abs(wave(Int.toFloat(i) / 256.))
+    }
+    s.contents / 256.
+  }
+  let xOf = i => p.left + Int.toFloat(i)
+  let tOf = i => cycles * Int.toFloat(i) / Int.toFloat(n)
+  FxGraph.line(p.layer, ~cls="grid", p.left, FxGraph.yOf(p, 0., lo, hi), p.right, FxGraph.yOf(p, 0., lo, hi))
+  for c in 1 to Float.toInt(cycles) - 1 {
+    let x = p.left + Int.toFloat(c) / cycles * (p.right - p.left)
+    FxGraph.line(p.layer, ~cls="grid", x, p.top, x, p.bottom)
+  }
+  let input = Array.fromInitializer(~length=n + 1, i => (xOf(i), FxGraph.yOf(p, wave(tOf(i)), lo, hi)))
+  let output = Array.fromInitializer(~length=n + 1, i => {
+    let t = tOf(i)
+    let x = wave(t)
+    let flip = mod(Float.toInt(Math.floor(t)), 2) == 0 ? 1. : -1.
+    let y = dry * x + sub * flip * x + up * (Math.abs(x) - rectifiedMean)
+    (xOf(i), FxGraph.yOf(p, clamp(y, lo, hi), lo, hi))
+  })
+  FxGraph.path(p.layer, ~cls="curve dim")->FxGraph.setPath(Plots.pathFrom(input))
+  FxGraph.path(p.layer, ~cls="curve")->FxGraph.setPath(Plots.pathFrom(output))
+  FxGraph.note(p, "four cycles of a note (dim) and the octaver's output: each note finds its own cycles")
+}
+
+//==============================================================================
 // utility: where a left, centre and right sound end up
 
 let utilityMatrix = (get: string => float) => {
@@ -882,10 +932,11 @@ let sections = (k: FxRack.kind) =>
   switch k {
   | #flanger => [
       {title: "flanger", rows: [[Knob("Fl_Rate", "rate"), Knob("Fl_Depth", "depth"), Knob("Fl_Delay", "delay")], [Knob("Fl_Feedback", "feedback"), Knob("Fl_Phase", "stereo phase"), Knob("Fl_Mix", "mix")]]},
+      {title: "note", rows: [[Knob("Fl_Track", "delay track"), Knob("Fl_RateTrack", "rate track")], [Knob("Fl_PhaseRand", "random start")]]},
     ]
   | #phaser => [
       {title: "phaser", rows: [[Knob("Ph_Rate", "rate"), Knob("Ph_Depth", "depth"), Knob("Ph_Freq", "frequency"), Knob("Ph_Feedback", "feedback")], [List("Ph_Stages", "stages"), Knob("Ph_Spread", "spread"), Knob("Ph_Phase", "stereo phase"), Knob("Ph_Mix", "mix")]]},
-      {title: "tracking", rows: [[Knob("Ph_Track", "note track")]]},
+      {title: "note", rows: [[Knob("Ph_Track", "note track"), Knob("Ph_RateTrack", "rate track")], [Knob("Ph_PhaseRand", "random start")]]},
     ]
   | #space => [
       {title: "algo reverb", rows: [[List("Rv_Model", "model"), Knob("Rv_Size", "size"), Knob("Rv_Decay", "decay"), Knob("Rv_Predelay", "predelay")], [Knob("Rv_Damp", "damping"), Knob("Rv_LowCut", "low cut"), Knob("Rv_Width", "width"), Knob("Rv_Mod", "modulation")]]},
@@ -908,6 +959,9 @@ let sections = (k: FxRack.kind) =>
   | #resonator => [
       {title: "resonator", rows: [[List("Rs_Model", "model"), Knob("Rs_Pitch", "pitch"), Knob("Rs_Decay", "decay")], [Knob("Rs_Bright", "brightness")]]},
       {title: "level", rows: [[Knob("Rs_Gain", "gain")], [Knob("Rs_Mix", "mix")]]},
+    ]
+  | #octaver => [
+      {title: "octaver", rows: [[Knob("Oc_Sub", "octave down"), Knob("Oc_Up", "octave up")], [Knob("Oc_Dry", "dry")]]},
     ]
   | #utility => [
       {title: "utility", rows: [[Knob("Ut_Gain", "gain"), Knob("Ut_Pan", "pan"), Knob("Ut_Width", "width")], [Switch("Ut_InvL", "invert L"), Switch("Ut_InvR", "invert R"), Switch("Ut_Swap", "swap L/R")]]},
@@ -935,6 +989,7 @@ let graphTitle = (k: FxRack.kind) =>
   | #ambience | #air => "tone"
   | #shifter => "partials: each note moves by a share of its own pitch"
   | #resonator => "response for a 220 Hz note"
+  | #octaver => "waveform"
   | _ => ""
   }
 
@@ -1024,6 +1079,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
     | #air => drawAir(p, get)
     | #shifter => drawShifter(p, get)
     | #resonator => drawResonator(p, get)
+    | #octaver => drawOctaver(p, get)
     | _ => ()
     }
   }
@@ -1107,6 +1163,7 @@ let cardControls = (k: FxRack.kind) =>
   | #air => ("on", Some(("Ai_Air", "air")))
   | #shifter => ("on", Some(("Sh_Mix", "mix")))
   | #resonator => ("on", Some(("Rs_Mix", "mix")))
+  | #octaver => ("on", Some(("Oc_Sub", "down")))
   }
 
 let summary = (model, e: FxRack.effect) => {
@@ -1142,5 +1199,6 @@ let summary = (model, e: FxRack.effect) => {
   | #air => `air ${s("Ai_Air")}, body ${s("Ai_Body")}\ndarken ${s("Ai_Darken")}`
   | #shifter => `${s("Sh_Ratio")} ${s("Sh_Mode")}\noffset ${s("Sh_Hz")}`
   | #resonator => `${s("Rs_Model")}, ${s("Rs_Pitch")}\ndecay ${s("Rs_Decay")}`
+  | #octaver => `down ${s("Oc_Sub")}, up ${s("Oc_Up")}\ndry ${s("Oc_Dry")}`
   }
 }

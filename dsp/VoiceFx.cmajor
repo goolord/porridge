@@ -1,8 +1,8 @@
 //  The voice lane: up to laneSlots effects in every voice (VL_1 .. VL_4, the same values as the
 //  rack's slots), placed around the filter and the amp envelope (VL_FilterAt, VL_AmpAt). Each
 //  note runs its own copy of each, so its LFOs, envelopes and key move them for that note alone:
-//  the rack's filter, distortion, EQ, phaser, flanger and utility, and two that only work per
-//  note, a frequency shifter that follows the key and a resonator tuned to it.
+//  the rack's filter, distortion, EQ, phaser, flanger and utility, and three that only work per
+//  note, a frequency shifter that follows the key, a resonator tuned to it and an octaver.
 //
 //  The synth swaps a copy's parameters into its first's slots to run it, as the rack does, so
 //  the code here reads the first's. A voice renders in pieces of n samples (MIDI splits blocks),
@@ -22,6 +22,9 @@ namespace porridge
     {
         int fx;
         bool fresh;
+
+        // a random number 0..1 drawn as it starts, for the phaser's and flanger's random start
+        float startRand;
 
         // filter: the cutoff (ln Hz), morph and mix, gliding per block
         float fHz, fMorph, fMix;
@@ -68,6 +71,13 @@ namespace porridge
         float rsNoteHz, rsPitch, rsDecay, rsBright;
         int rsModel;
         bool rsDesigned;
+
+        // octaver: the lowpasses that find the note's cycles and the last of them, the switch
+        // (+-1) and how far it has eased to its sign, each side's DC blocker for the octave up
+        // (last input and output), and the gliding levels
+        float ocLp1, ocLp2, ocLast, ocFlip, ocSign;
+        float ocUpXL, ocUpYL, ocUpXR, ocUpYR;
+        float ocSub, ocUp, ocDry;
     }
 
     /// A lane slot's big parts, which only its kind uses (and startLane clears for it): kept
@@ -142,6 +152,12 @@ namespace porridge
             this.rY1L = float[4](); this.rY2L = float[4](); this.rX1L = float[4](); this.rX2L = float[4]();
             this.rY1R = float[4](); this.rY2R = float[4](); this.rX1R = float[4](); this.rX2R = float[4]();
             this.rsDesigned = false;
+        }
+        else if (kind == rack::octaverKind)
+        {
+            this.ocLp1 = 0; this.ocLp2 = 0; this.ocLast = 0;
+            this.ocFlip = 1.0f; this.ocSign = 1.0f;
+            this.ocUpXL = 0; this.ocUpYL = 0; this.ocUpXR = 0; this.ocUpYR = 0;
         }
     }
 
@@ -261,8 +277,8 @@ namespace porridge
     }
 
     //==============================================================================
-    // phaser (FxExtra.cmajor's): the note's own LFO, from the note-on, and its tracking
-    // follows the voice's note
+    // phaser (FxExtra.cmajor's): the note's own LFO, from the note-on (or a random point of
+    // it), and its tracking follows the voice's note
 
     void lanePhaser (LaneFx& this, const float[numSlots]& P, float noteHz, float64 sr, float glide,
                      float[blockSize]& l, float[blockSize]& r, bool both, int n)
@@ -276,6 +292,7 @@ namespace porridge
         {
             this.phCentre = t.centre; this.phDepth = t.depth; this.phSpread = t.spread;
             this.phFb = t.fb; this.phMix = t.mix;
+            this.phPhase = float64 (this.startRand * clamp (P[slot::Ph_PhaseRand], 0.0f, 1.0f));
         }
 
         let k = glide;
@@ -370,7 +387,8 @@ namespace porridge
     }
 
     //==============================================================================
-    // flanger (FxExtra.cmajor's), on a shorter line: the note's own LFO, from the note-on
+    // flanger (FxExtra.cmajor's), on a shorter line: the note's own LFO, from the note-on (or a
+    // random point of it), and its delay and rate following the voice's note
 
     float laneFlangerRead (const LaneFx& this, const LaneBuffers& bufs, float d, int ch)
     {
@@ -382,15 +400,17 @@ namespace porridge
                         bufs.flLine.at ((p - 1) & m).at (ch), bufs.flLine.at ((p - 2) & m).at (ch), t);
     }
 
-    void laneFlanger (LaneFx& this, LaneBuffers& bufs, const float[numSlots]& P, float64 sr, float glide, float[blockSize]& l, float[blockSize]& r, bool both, int n)
+    void laneFlanger (LaneFx& this, LaneBuffers& bufs, const float[numSlots]& P, float noteHz, float64 sr, float glide,
+                      float[blockSize]& l, float[blockSize]& r, bool both, int n)
     {
         let longest = float (laneFlangerLine - 4);
-        let t = flangerTargets (P, sr, longest);
+        let t = flangerTargets (P, sr, longest, noteHz);
         let inc = t.inc, offset = t.offset;
 
         if (this.fresh)
         {
             this.flDelay = t.delay; this.flDepth = t.depth; this.flFb = t.fb; this.flMix = t.mix;
+            this.flPhase = float64 (this.startRand * clamp (P[slot::Fl_PhaseRand], 0.0f, 1.0f));
         }
 
         let k = glide;
@@ -681,5 +701,70 @@ namespace porridge
 
             r.at (i) = x + (wet * norm * 2.0f * (gain0 + dgain * float (i + 1)) - x) * mix;
         }
+    }
+
+    //==============================================================================
+    // octaver: the octave down is the sound with its sign flipped on every other cycle of the
+    // note, the cycles found where the sound through two lowpasses at the note (which leave
+    // mostly its fundamental) rises through zero; the flip eases over a few samples. The octave
+    // up is the sound rectified, less its average (a DC blocker at 20 Hz). The left side (or
+    // mono) finds the cycles for both.
+
+    void laneOctaver (LaneFx& this, const float[numSlots]& P, float noteHz, float64 sr, float glide,
+                      float[blockSize]& l, float[blockSize]& r, bool both, int n)
+    {
+        let tSub = clamp (P[slot::Oc_Sub], 0.0f, 1.0f);
+        let tUp = clamp (P[slot::Oc_Up], 0.0f, 1.0f);
+        let tDry = clamp (P[slot::Oc_Dry], 0.0f, 1.0f);
+
+        if (this.fresh)
+        {
+            this.ocSub = tSub; this.ocUp = tUp; this.ocDry = tDry;
+        }
+
+        let k = glide;
+        let sub0 = this.ocSub, up0 = this.ocUp, dry0 = this.ocDry;
+        this.ocSub += (tSub - this.ocSub) * k;
+        this.ocUp += (tUp - this.ocUp) * k;
+        this.ocDry += (tDry - this.ocDry) * k;
+        let step = 1.0f / float (n);
+
+        let a = float (1.0 - exp (-twoPi * clamp (float64 (noteHz), 20.0, 0.2 * sr) / sr));
+        let dc = float (1.0 - twoPi * 20.0 / sr);
+        var lp1 = this.ocLp1, lp2 = this.ocLp2, last = this.ocLast, flip = this.ocFlip, sign = this.ocSign;
+
+        for (int i = 0; i < n; ++i)
+        {
+            let f = float (i + 1) * step;
+            let sub = sub0 + (this.ocSub - sub0) * f;
+            let up = up0 + (this.ocUp - up0) * f;
+            let dry = dry0 + (this.ocDry - dry0) * f;
+            let x = l.at (i);
+
+            lp1 += (x - lp1) * a;
+            lp2 += (lp1 - lp2) * a;
+
+            if (last < 0 && lp2 >= 0)
+                flip = -flip;
+
+            last = lp2;
+            sign += (flip - sign) * 0.25f;
+
+            let ax = abs (x);
+            let yu = ax - this.ocUpXL + dc * this.ocUpYL + 1e-18f;
+            this.ocUpXL = ax; this.ocUpYL = yu;
+            l.at (i) = x * (dry + sub * sign) + yu * up;
+
+            if (both)
+            {
+                let xr = r.at (i);
+                let axr = abs (xr);
+                let yr = axr - this.ocUpXR + dc * this.ocUpYR + 1e-18f;
+                this.ocUpXR = axr; this.ocUpYR = yr;
+                r.at (i) = xr * (dry + sub * sign) + yr * up;
+            }
+        }
+
+        this.ocLp1 = lp1 + 1e-18f; this.ocLp2 = lp2; this.ocLast = last; this.ocFlip = flip; this.ocSign = sign;
     }
 }

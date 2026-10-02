@@ -310,6 +310,8 @@ let rackKind = key =>
   // the resonator: a struck note ringing away
   | "resonator" =>
     Some(wide([Line("M1 8 Q2.5 -3 4 8 Q5.5 17 7 8 Q8.5 1.2 10 8 Q11.5 12.8 13 8 Q14.5 4.8 16 8 Q17.5 9.8 19 8 L21 8")]))
+  // the octaver: a note's cycles (dashed) and the one cycle of the octave below spanning two
+  | "octaver" => Some(wide([Dash("M1 6 Q3.5 1 6 6 T11 6 T16 6 T21 6"), Line("M1 10 Q6 0.5 11 10 T21 10")]))
   | _ => None
   }
 

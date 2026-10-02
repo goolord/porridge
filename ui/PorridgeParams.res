@@ -668,6 +668,16 @@ let resonatorSpecs = [
 // are in a group of their own.
 let resonatorGainSpecs = [{id: "Rs_Gain", name: "Resonator gain", kind: decibels(-24., 24., 0.)}]
 
+// The octaver: an octave down, from a switch that flips the sound's sign on every other cycle of
+// the note (found through a lowpass at the note, so that only its fundamental counts), and an
+// octave up, from the sound rectified; each at its own level, with the dry sound's.
+let octaverSpecs = [
+  onSpec("Oc_On", "Octaver on"),
+  {id: "Oc_Sub", name: "Octaver down", kind: unit(0., 1., 0.7)},
+  {id: "Oc_Up", name: "Octaver up", kind: unit(0., 1., 0.)},
+  {id: "Oc_Dry", name: "Octaver dry", kind: unit(0., 1., 1.)},
+]
+
 let voiceKinds = [
   {
     key: "shifter",
@@ -688,12 +698,45 @@ let voiceKinds = [
     copies: [2],
     firstInRack: true,
   },
+  {
+    key: "octaver",
+    name: "Octaver",
+    about: "an octave down and an octave up, found from each note's own pitch",
+    runsIn: LaneOnly,
+    params: rackParams(octaverSpecs),
+    copies: [2],
+    firstInRack: true,
+  },
 ]
 
 // The FX filter's note tracking came later: its first and copies are in the voice lane's group.
 let filterTrackSpecs = [
   {id: "Ff_Track", name: "FX filter note tracking", kind: unit(0., 1., 0.)},
 ]
+
+// What came later still, for the voices (their firsts and copies are in the VoiceExtras group):
+// the phaser's and flanger's LFOs follow the note's pitch (rate tracking) and start each note at a
+// random point (random start); the flanger's delay follows the note's period, so that with
+// feedback it rings at the note; the lo-fi sampler's rates land on whole multiples of the note.
+let pitchTrackText = x => x == 0. ? "off" : percent(x)
+let laterKindSpecs = [
+  ("phaser", [
+    {id: "Ph_RateTrack", name: "Phaser rate tracking", kind: Float({min: 0., max: 1., init: 0., text: pitchTrackText})},
+    {id: "Ph_PhaseRand", name: "Phaser random start", kind: unit(0., 1., 0.)},
+  ]),
+  ("flanger", [
+    {id: "Fl_RateTrack", name: "Flanger rate tracking", kind: Float({min: 0., max: 1., init: 0., text: pitchTrackText})},
+    {id: "Fl_PhaseRand", name: "Flanger random start", kind: unit(0., 1., 0.)},
+    {id: "Fl_Track", name: "Flanger delay tracking", kind: Float({min: 0., max: 1., init: 0., text: pitchTrackText})},
+  ]),
+  ("distortion", [
+    {id: "Sat_Track", name: "Dist lo-fi note tracking", kind: Choice({names: ["off", "on"], init: 0})},
+  ]),
+]
+
+let laterKindParams = key =>
+  laterKindSpecs->Array.find(((k, _)) => k == key)->Option.mapOr([], ((_, specs)) => rackParams(specs))
+let isLaterKindParam = id => laterKindSpecs->Array.some(((_, specs)) => specs->Array.some(s => s.id == id))
 
 let rackKinds = [
   {
@@ -795,12 +838,17 @@ let rackKinds = [
       ("Sat_Postgain", "postgain"),
       ...shaperParams,
       ...distModelParams,
+      ...laterKindParams("distortion"),
     ],
     copies: [2, 3, 4, 5],
     firstInRack: false,
   },
-  // (the filter's note tracking came later: see filterTrackSpecs)
-  ...newKinds->Array.map(k => k.key == "filter" ? {...k, params: [...k.params, ("Ff_Track", "note tracking")]} : k),
+  // (the filter's note tracking came later: see filterTrackSpecs; and the phaser's and flanger's
+  // tracking and random start later still: laterKindSpecs)
+  ...newKinds->Array.map(k => {
+    let k = k.key == "filter" ? {...k, params: [...k.params, ("Ff_Track", "note tracking")]} : k
+    {...k, params: [...k.params, ...laterKindParams(k.key)]}
+  }),
   ...voiceKinds,
 ]
 
@@ -859,12 +907,15 @@ let copySpecsOf = (kinds, ~only=_ => true) => kinds->Array.flatMap(k =>
 
 // Oatmeal's effects' copies, and Porridge's own effects' copies (which come after them; the
 // ambience's, the distortion's model knobs' and the air's are in groups of their own)
-let laterKinds = ["ambience", "air", "shifter", "resonator"]
+let laterKinds = ["ambience", "air", "shifter", "resonator", "octaver"]
 let laterParams = ["Ff_Track"]
-let copySpecs = copySpecsOf(rackKinds->Array.filter(k => !k.firstInRack), ~only=id => !isDistModelParam(id))
+let copySpecs = copySpecsOf(
+  rackKinds->Array.filter(k => !k.firstInRack),
+  ~only=id => !isDistModelParam(id) && !isLaterKindParam(id),
+)
 let newCopySpecs = copySpecsOf(
   rackKinds->Array.filter(k => k.firstInRack && !(laterKinds->Array.includes(k.key))),
-  ~only=id => !(laterParams->Array.includes(id)),
+  ~only=id => !(laterParams->Array.includes(id)) && !isLaterKindParam(id),
 )
 let ambienceCopySpecs = copySpecsOf(rackKinds->Array.filter(k => k.key == "ambience"))
 let distModelCopySpecs = copySpecsOf(rackKinds->Array.filter(k => k.key == "distortion"), ~only=isDistModelParam)
@@ -985,6 +1036,7 @@ type feature =
   | Lfo3
   | VoiceLane
   | ResonatorGain
+  | VoiceExtras
 
 // The voice lane (dsp/VoiceFx.cmajor): up to laneSlots effects in every voice, which each note
 // runs its own copy of, holding the same values as the rack's slots (only the kinds that work in
@@ -1014,6 +1066,26 @@ let voiceLaneSpecs = Array.concat(
     ),
   ),
 )
+
+// Each connection's steps: its source snapped to that many levels across its range (after the
+// curve), 0 or 1 for none. 25 steps of a bipolar source on pitch ±24 st at half the amount are
+// semitones.
+let stepsText = x => x < 1.5 ? "off" : `${Int.toString(Float.toInt(Math.round(x)))} steps`
+let stepSpecs = Array.fromInitializer(~length=ModMatrix.slots, i => {
+  id: ModMatrix.stepsId(i + 1),
+  name: `Mod ${Int.toString(i + 1)} steps`,
+  kind: Float({min: 0., max: 49., init: 0., text: stepsText}),
+})
+
+// The voices' extras: the phaser's, flanger's and lo-fi sampler's tracking and random starts
+// (firsts, then copies), the octaver and its copy, and the connections' steps.
+let voiceExtraSpecs = [
+  ...laterKindSpecs->Array.flatMap(((_, specs)) => specs),
+  ...copySpecsOf(rackKinds->Array.filter(k => laterKindSpecs->Array.some(((key, _)) => key == k.key)), ~only=isLaterKindParam),
+  ...octaverSpecs,
+  ...copySpecsOf(rackKinds->Array.filter(k => k.key == "octaver")),
+  ...stepSpecs,
+]
 
 let groups = [
   (Macros, macroSpecs),
@@ -1049,6 +1121,7 @@ let groups = [
     ResonatorGain,
     Array.concat(resonatorGainSpecs, copySpecsOf(rackKinds->Array.filter(k => k.key == "resonator"), ~only=id => id == "Rs_Gain")),
   ),
+  (VoiceExtras, voiceExtraSpecs),
 ]
 
 let all = groups->Array.flatMap(((_, specs)) => specs)

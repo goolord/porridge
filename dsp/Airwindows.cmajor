@@ -24,7 +24,9 @@
 //    bitcrush       Beam (16-bit): drive its derez, 15 bits down to 3 (1 - 4^-drive), tone its
 //                   focus
 //    lo-fi sampler  BitGlitter: drive its glitter (a lower sample rate), tone the size of its
-//                   quantizing steps (a quarter .. four times the original's, finer to the right)
+//                   quantizing steps (a quarter .. four times the original's, finer to the right);
+//                   in a voice with Sat_Track on, its rates land on multiples of the note
+//                   (trackLofi)
 //  BassAmp's left side mixes the right side's state into one of its filters; here each side
 //  uses its own. BitGlitter's quantizer works out its steps directly instead of counting them,
 //  and Beam keeps its history as a ring.
@@ -902,6 +904,24 @@ namespace porridge
 
         y *= 1.0 - rez;
         return abs (y) < rez ? 0.0 : y;
+    }
+
+    /// The lo-fi sampler's rates moved to whole multiples of a note at hz (Sat_Track in a voice),
+    /// two at least, so that its holds land on the same places in every cycle and its aliases on
+    /// the note's harmonics; the second, at about 1.618 times the first, stays above it. A note
+    /// too high for that leaves them.
+    void trackLofi (DistCoefs& c, float hz)
+    {
+        let rate = c.scale * 44100.0;
+        let h = float64 (hz);
+        let nA = max (2.0, floor (c.bgRateA * rate / h + 0.5));
+        let nB = max (nA + 1.0, floor (c.bgRateB * rate / h + 0.5));
+
+        if (nB * h < rate)
+        {
+            c.bgRateA = nA * h / rate;
+            c.bgRateB = nB * h / rate;
+        }
     }
 
     float64 lofi (DistModel& m, const DistCoefs& c, float64 xin)

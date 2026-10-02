@@ -394,7 +394,7 @@ let make = (ctx: Ctx.t, body, ~w, ~h, ops) => {
   el(
     "div",
     ~cls="note wrap",
-    ~text="The distortion's places are Oatmeal's: in every voice (before or after the filter), on the whole sound before the rack, or both (\"double\"). Each voice can also run up to four effects of its own (the filter, distortion, EQ, phaser, flanger and utility, and the key shifter and resonator, which follow each note's pitch). The rack holds up to eight effects on the whole sound, each kind up to four times: the first chorus, delay, reverb and EQ are Oatmeal's, and an Oatmeal export keeps those in Oatmeal's order and leaves the rest out.",
+    ~text="The distortion's places are Oatmeal's: in every voice (before or after the filter), on the whole sound before the rack, or both (\"double\"). Each voice can also run up to four effects of its own (the filter, distortion, EQ, phaser, flanger and utility, and the key shifter, resonator and octaver, which follow each note's pitch). The rack holds up to eight effects on the whole sound, each kind up to four times: the first chorus, delay, reverb and EQ are Oatmeal's, and an Oatmeal export keeps those in Oatmeal's order and leaves the rest out.",
     ~parent=root,
   )->place(12., row3 + 34., ~w=w - 14. - 320. - 24.)->ignore
 
