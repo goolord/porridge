@@ -9,7 +9,7 @@ open! Web
 let signal = Str("var(--signal)")
 
 // Where the wheels were left, so they keep their place when the page is rebuilt, and every
-// drawing of them (the Synth page and the Arp / XY page each have a pair), to move them together.
+// drawing of them (the Play page's pair, and any other), to move them together.
 let bend = ref(0.)
 let modWheel = ref(0.)
 let drawings: array<unit => unit> = []

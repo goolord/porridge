@@ -10,8 +10,10 @@ type t = {
   hostMenu: HostMenu.t,
   // design-to-screen scale of the stage
   scale: unit => float,
-  // switches to the shapes page and selects a shape
+  // opens the shapes editor over the page, on a shape
   openShape: OatmealFormat.table => unit,
+  // switches to a page
+  openPage: [#main | #mod | #fx | #play] => unit,
   // switches to the FX page and opens an effect's tab
   openEffect: FxRack.effect => unit,
   toast: string => unit,

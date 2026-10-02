@@ -11,7 +11,7 @@ let elementClass: elementClass = %raw(`
 
 @set external setOnDisconnect: (element, unit => unit) => unit = "onDisconnect"
 // For the UI preview: view.showPage("shapes")
-@set external setShowPage: (element, View.page => unit) => unit = "showPage"
+@set external setShowPage: (element, View.view => unit) => unit = "showPage"
 
 let default = pc => {
   if getCustomElement("porridge-view")->Option.isNone {

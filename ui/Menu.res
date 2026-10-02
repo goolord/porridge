@@ -4,9 +4,20 @@
 open! Web
 
 // An item may have an icon in front of its label (see Icons), a heading above it that starts
-// a group, and a hint the status bar shows while the pointer is over it. Long menus run in
-// columns.
-type item = {label: string, value: int, icon?: element, heading?: string, hint?: string}
+// a group (or a rule above it), a hint the status bar shows while the pointer is over it, a
+// check mark (checked: false leaves its place empty), its keyboard shortcut, and be disabled.
+// Long menus run in columns.
+type item = {
+  label: string,
+  value: int,
+  icon?: element,
+  heading?: string,
+  rule?: bool,
+  hint?: string,
+  checked?: bool,
+  keys?: string,
+  disabled?: bool,
+}
 
 let rowsPerColumn = 24
 
@@ -51,21 +62,36 @@ let show = (t, anchor, items, current, onPick) =>
       m->addClass("cols")
       m->setStyle("column-count", Int.toString((count + rowsPerColumn - 1) / rowsPerColumn))
     }
-    items->Array.forEach(({label, value, ?icon, ?heading, ?hint}) => {
+    let withChecks = items->Array.some(item => item.checked != None)
+    if withChecks || items->Array.some(item => item.keys != None) {
+      m->addClass("rich")
+    }
+    items->Array.forEach(({label, value, ?icon, ?heading, ?rule, ?hint, ?checked, ?keys, ?disabled}) => {
       heading->Option.forEach(text => el("div", ~cls="mh", ~text, ~parent=m)->ignore)
+      if rule == Some(true) {
+        el("hr", ~parent=m)->ignore
+      }
       let row = el("div", ~cls=value == current ? "cur" : "", ~parent=m)
+      if withChecks {
+        el("span", ~cls="ck", ~text=checked == Some(true) ? "✓" : "", ~parent=row)->ignore
+      }
       switch icon {
       | Some(icon) => row->appendChild(icon)
       | None if withIcons => el("span", ~cls="icw", ~parent=row)->ignore
       | None => ()
       }
       el("span", ~text=label, ~parent=row)->ignore
+      keys->Option.forEach(text => el("span", ~cls="keys", ~text, ~parent=row)->ignore)
       hint->Option.forEach(text => t.status->Status.hover(row, () => text))
+      let disabled = disabled == Some(true)
+      row->toggleClass("off", disabled)
       row->onPointer(#pointerdown, ev => {
         ev->stopPropagation
         ev->preventDefault
-        close(t)
-        onPick(value)
+        if !disabled {
+          close(t)
+          onPick(value)
+        }
       })
     })
 

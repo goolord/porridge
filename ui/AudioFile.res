@@ -1,4 +1,4 @@
-// Reads the samples dropped onto the Shapes page. WAV and AIFF are parsed here, so that a
+// Reads the samples dropped for the shapes editor. WAV and AIFF are parsed here, so that a
 // wavetable's frames keep their exact length and its frame size can be read from the file;
 // anything else goes to the browser's decoder (at 48 kHz).
 
