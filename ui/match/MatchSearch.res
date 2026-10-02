@@ -3,8 +3,8 @@
 // four cards differ in kind rather than being four takes on one answer:
 //
 //   Detailed  every gene free, the standard loss: the closest the match gets
-//   Simple    one oscillator through the filter, with its envelopes: a patch that is easy to
-//             take further by hand
+//   Simple    one oscillator (and noise) through the filter, with its envelopes: a patch
+//             that is easy to take further by hand
 //   Punchy    the attack weighs most (the first 150 ms, the envelope, the short spectra), dry
 //   Lush      the tone weighs most (the long spectra), with unison, chorus and reverb
 //
@@ -70,12 +70,11 @@ let islands = [
   {
     key: "simple",
     title: "Simple",
-    blurb: "One oscillator through the filter, with its envelopes: easy to take further by hand",
+    blurb: "One oscillator (and noise) through the filter, with its envelopes: easy to take further by hand",
     weights: MatchLoss.standard,
     bounds: [
       off("o2Level"),
       only("oscMix", 0),
-      off("noise"),
       only("unison", 0),
       ("pitchEnv", 0.5, 0.5),
       off("vibrato"),

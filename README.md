@@ -23,6 +23,7 @@ dsp/                    Cmajor DSP
   ModTables.cmajor        modulation sources, targets and knob laws (generated)
   Synth.cmajor            MIDI, voice manager, arpeggiator, per-voice rendering, effects chain
   Oscillator, Filter, Modulation, Effects, Tables, Voice, Types
+                          (Voice.cmajor also has the key EQ: bands on each voice's harmonics)
   FxExtra.cmajor          Porridge's flanger, phaser, compressor, bode, rack filter and utility
   Space.cmajor            the algo reverb (hall, plate, nitrous, basin, vintage)
   Ambience.cmajor         the ambience: very small spaces (room, and Airwindows' ClearCoat
@@ -38,12 +39,14 @@ ui/                     patch view (ReScript)
   PresetBrowser.res       the preset browser; Library.res searches and filters for it, and
                           BankLibrary.res asks the plugin for the banks it keeps
   match/                  the sound matcher: MatchDrawer.res (the drawer and its cards),
-                          SoundTarget.res (a sample made ready: pitch, envelope, fitted wave),
-                          Genome.res (what is searched, as parameter values), EnvelopeFit.res
-                          (the amp envelope that follows the sample), Spectrum.res and
-                          MatchLoss.res (how close a render is), Cmaes.res (the optimizer),
-                          MatchModel.res and match-model.bin (the predictor), MatchSearch.res
-                          and MatchRun.res (the outline and the four searches), MatchPool.res,
+                          SoundTarget.res (a sample made ready: pitch and its sweep,
+                          envelope, brightness, noise, width, fitted wave), Genome.res (what is
+                          searched, as parameter values), EnvelopeFit.res (the amp envelope
+                          that follows the sample), Spectrum.res and MatchLoss.res (how close
+                          a render is: spectra, loudness, the harmonic grid, width), Cmaes.res
+                          (the optimizer), MatchModel.res and match-model.bin (the predictor),
+                          MatchSearch.res and MatchRun.res (the outline and the four searches,
+                          and the key EQ fitted to each candidate), MatchPool.res,
                           MatchWorker.res and MatchEngine.res (the workers and their synth)
   NewBankDialog.res       starts a new bank of Init programs, for someone writing one
   FilterTypes.res         the filter types; FilterGraph.res their response pictures, with a
@@ -87,7 +90,8 @@ tools/
                           smoke.mjs (Porridge's own effects and filter types sound, stay
                           bounded and fall silent, the ambience's models and the distortion's
                           types too, and the distortion's mix lines up with oversampling; the
-                          oscillator envelopes and the noise source), banklibrary.cpp (the plugin's bank library on real files), oneshot.mjs (one-shot LFOs hold their
+                          oscillator envelopes and the noise source; the key EQ's bands),
+                          banklibrary.cpp (the plugin's bank library on real files), oneshot.mjs (one-shot LFOs hold their
                           end), levels.mjs (the Vanilla bank's gains, levels and motion),
                           match.mjs (the sound matcher on programs from the banks and on
                           random patches whose genes are known), match-speed.mjs (how fast it

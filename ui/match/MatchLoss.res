@@ -19,8 +19,9 @@
 //           weighted by how loud the target is in them and bands by how loud they are in it;
 //           noise, unison's detuning and a rough recording show here where the bands can't
 //           tell them from more harmonic level;
-//   width   (for a stereo target) side against mid every 10 ms, dB, the mean distance in units
-//           of 20 dB over the steps weighted as the timbre's frames are.
+//   width   (for a stereo target) side against mid every 10 ms (as a ratio of their levels: a
+//           little width, 20 dB under, counts little against none; unison's, a few dB under,
+//           much), the mean distance over the steps weighted as the timbre's frames are.
 //
 // The candidate is first brought to the target's overall loudness, so only the shape of the
 // sound counts, not how loud the patch is. Levels more than 70 dB under the target's loudest
@@ -48,10 +49,9 @@ let standard = {envelope: 0.5, early: 1., treble: 1., resolutions: [1., 1., 1.]}
 let earlySeconds = 0.15
 let detailWeight = 0.1
 let gridWeight = 0.2
-let widthWeight = 0.15
-// a difference in the grid, or the width, counts at most this many dB
+let widthWeight = 0.4
+// a difference in the grid counts at most this many dB
 let gridCap = 30.
-let widthCap = 30.
 // the envelope's steps: how far under the loudest one counts least, and how little
 let envelopeRange = 60.
 let envelopeLeast = 0.1
@@ -197,13 +197,14 @@ let compare = (w, target: Spectrum.features, c: Spectrum.features) =>
       let (sum, weight) = (ref(0.), ref(0.))
       for s in 0 to n - 1 {
         let m = te->get64(s)
-        let a = Spectrum.db(ts->get64(s)) - Spectrum.db(m)
-        let z = side->Option.mapOr(-60., cs => Spectrum.db(cs->get64(s)) - Spectrum.db(ce->get64(s)))
+        let ratio = (side, mid) => mid > 1e-9 ? Math.min(1., side / mid) : 0.
+        let a = ratio(ts->get64(s), m)
+        let z = side->Option.mapOr(0., cs => ratio(cs->get64(s), ce->get64(s)))
         let lw = Math.max(0.02, Math.min(1., (Spectrum.db(m) - (topDb - quietRange)) / quietRange))
-        sum := sum.contents + lw * Math.min(widthCap, Math.abs(Math.max(-60., a) - Math.max(-60., z)))
+        sum := sum.contents + lw * Math.abs(a - z)
         weight := weight.contents + lw
       }
-      weight.contents > 0. ? sum.contents / weight.contents / 20. : 0.
+      weight.contents > 0. ? sum.contents / weight.contents : 0.
     | (None, _) => 0.
     }
     spectral + w.envelope * envelope + gridWeight * grid + widthWeight * width
