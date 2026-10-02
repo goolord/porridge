@@ -72,7 +72,7 @@ let help = (g: Grid.t, c, r, text, ~tipW=260., ~left=?) => {
   g->Grid.at(c, r, "a help button", b => Controls.help(g.el, text, ~x=b.x + b.w - size, ~y=b.y, ~size, ~tipW, ~left?))
 }
 
-// The button in the corner of a plot that opens its table on the Shapes page.
+// The button in the corner of a plot that opens its table in the shapes editor.
 let drawButton = (ctx: Ctx.t, body, plot: box, ~status, table) =>
   Controls.button(
     ctx,

@@ -36,7 +36,7 @@ let lfoHelp = "the LFO's shape, -1..1 (without its depth modulation)"
 let modEnvHelp = "the mod envelope, with its velocity sensitivity"
 let xyHelp = "the XY pad, including its random walk"
 let macroHelp = "a macro knob on this page"
-let ccHelp = "an assignable controller from the MIDI page"
+let ccHelp = "an assignable controller from the Play page"
 
 // the colours: the voice's own envelopes, the macros, the controllers, and the note and the
 // player's hands

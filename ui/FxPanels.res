@@ -1162,31 +1162,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~perVoice, ~w, ~h) => {
 }
 
 //==============================================================================
-// an effect in brief: its switch's and level's labels (for the synth page's per-voice rows), and
-// a summary of its settings (for hover texts)
-
-// The switch's label, and the level with its label.
-let cardControls = (k: FxRack.kind) =>
-  switch k {
-  | #chorus => ("mode", Some(("C_Mix", "mix")))
-  | #delay => ("on", Some(("D_Wet", "wet")))
-  | #reverb => ("on", Some(("R_Wet", "wet")))
-  | #eq => ("on", None)
-  | #distortion => ("type", Some(("Sat_Postgain", "postgain")))
-  | #flanger => ("on", Some(("Fl_Mix", "mix")))
-  | #phaser => ("on", Some(("Ph_Mix", "mix")))
-  | #compressor => ("on", Some(("Cp_Depth", "depth")))
-  | #space => ("on", Some(("Rv_Mix", "mix")))
-  | #convolve => ("on", Some(("Cv_Mix", "mix")))
-  | #bode => ("on", Some(("Bd_Mix", "mix")))
-  | #filter => ("on", Some(("Ff_Cutoff", "cutoff")))
-  | #utility => ("on", Some(("Ut_Gain", "gain")))
-  | #ambience => ("on", Some(("Am_Mix", "mix")))
-  | #air => ("on", Some(("Ai_Air", "air")))
-  | #shifter => ("on", Some(("Sh_Mix", "mix")))
-  | #resonator => ("on", Some(("Rs_Mix", "mix")))
-  | #octaver => ("on", Some(("Oc_Sub", "down")))
-  }
+// an effect in brief: a summary of its settings (for hover texts)
 
 let summary = (model, e: FxRack.effect) => {
   let id = FxRack.id(e, ...)
