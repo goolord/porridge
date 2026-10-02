@@ -246,34 +246,28 @@ namespace porridge
     void lanePhaser (LaneFx& this, const float[numSlots]& P, float noteHz, float64 sr,
                      float[blockSize]& l, float[blockSize]& r, bool both, int n)
     {
-        let stages = phaserStages (int (P[slot::Ph_Stages]));
-        var centre = float64 (expKnob (20.0f, 20000.0f, P[slot::Ph_Freq]));
-        centre *= pow (float64 (noteHz) / 261.63, float64 (clamp (P[slot::Ph_Track], 0.0f, 1.0f)));
-        let tCentre = float (log (clamp (centre, 1.0, 100000.0)));
-        let tDepth = clamp (P[slot::Ph_Depth], 0.0f, 1.0f);
-        let tSpread = clamp (P[slot::Ph_Spread], 0.0f, 1.0f);
-        let tFb = clamp (P[slot::Ph_Feedback], -1.0f, 1.0f) * 0.95f;
-        let tMix = clamp (P[slot::Ph_Mix], 0.0f, 1.0f);
-        let offset = float64 (clamp (P[slot::Ph_Phase], 0.0f, 180.0f)) / 360.0;
+        let t = phaserTargets (P, noteHz, true);
+        let stages = t.stages;
+        let offset = t.offset;
         let fresh = this.fresh;
 
         if (fresh)
         {
-            this.phCentre = tCentre; this.phDepth = tDepth; this.phSpread = tSpread;
-            this.phFb = tFb; this.phMix = tMix;
+            this.phCentre = t.centre; this.phDepth = t.depth; this.phSpread = t.spread;
+            this.phFb = t.fb; this.phMix = t.mix;
         }
 
         let k = laneGlide (n, sr);
-        this.phCentre += (tCentre - this.phCentre) * k;
-        this.phDepth += (tDepth - this.phDepth) * k;
-        this.phSpread += (tSpread - this.phSpread) * k;
+        this.phCentre += (t.centre - this.phCentre) * k;
+        this.phDepth += (t.depth - this.phDepth) * k;
+        this.phSpread += (t.spread - this.phSpread) * k;
         let fb0 = this.phFb, mix0 = this.phMix;
-        this.phFb += (tFb - this.phFb) * k;
-        this.phMix += (tMix - this.phMix) * k;
+        this.phFb += (t.fb - this.phFb) * k;
+        this.phMix += (t.mix - this.phMix) * k;
         let dfb = (this.phFb - fb0) / float (n), dmix = (this.phMix - mix0) / float (n);
 
         // the LFO at the end of this piece sets the coefficients it ramps to
-        this.phPhase += float64 (expKnob (0.02f, 20.0f, P[slot::Ph_Rate])) / sr * float64 (n);
+        this.phPhase += float64 (t.rate) / sr * float64 (n);
         this.phPhase -= floor (this.phPhase);
         let ln2 = 0.693147181;
         let sweepL = 3.0 * float64 (this.phDepth) * sin (twoPi * this.phPhase);
@@ -370,24 +364,20 @@ namespace porridge
     void laneFlanger (LaneFx& this, const float[numSlots]& P, float64 sr, float[blockSize]& l, float[blockSize]& r, bool both, int n)
     {
         let longest = float (laneFlangerLine - 4);
-        let tDelay = min (expKnob (0.1f, 20.0f, P[slot::Fl_Delay]) * 0.001f * float (sr), longest / 16.0f);
-        let tDepth = clamp (P[slot::Fl_Depth], 0.0f, 1.0f);
-        let tFb = clamp (P[slot::Fl_Feedback], -1.0f, 1.0f) * 0.97f;
-        let tMix = clamp (P[slot::Fl_Mix], 0.0f, 1.0f);
-        let inc = float64 (expKnob (0.02f, 20.0f, P[slot::Fl_Rate])) / sr;
-        let offset = float64 (clamp (P[slot::Fl_Phase], 0.0f, 180.0f)) / 360.0;
+        let t = flangerTargets (P, sr, longest);
+        let inc = t.inc, offset = t.offset;
 
         if (this.fresh)
         {
-            this.flDelay = tDelay; this.flDepth = tDepth; this.flFb = tFb; this.flMix = tMix;
+            this.flDelay = t.delay; this.flDepth = t.depth; this.flFb = t.fb; this.flMix = t.mix;
         }
 
         let k = laneGlide (n, sr);
         let d0 = this.flDelay, dp0 = this.flDepth, fb0 = this.flFb, mix0 = this.flMix;
-        this.flDelay += (tDelay - this.flDelay) * k;
-        this.flDepth += (tDepth - this.flDepth) * k;
-        this.flFb += (tFb - this.flFb) * k;
-        this.flMix += (tMix - this.flMix) * k;
+        this.flDelay += (t.delay - this.flDelay) * k;
+        this.flDepth += (t.depth - this.flDepth) * k;
+        this.flFb += (t.fb - this.flFb) * k;
+        this.flMix += (t.mix - this.flMix) * k;
         let step = 1.0f / float (n);
 
         for (int i = 0; i < n; ++i)
@@ -425,26 +415,20 @@ namespace porridge
 
     void laneUtility (LaneFx& this, const float[numSlots]& P, float64 sr, float[blockSize]& l, float[blockSize]& r, bool both, int n)
     {
-        let pan = clamp (P[slot::Ut_Pan], -1.0f, 1.0f);
-        let tPanL = min (1.0f, 1.0f - pan);
-        let tPanR = min (1.0f, 1.0f + pan);
-        let tGain = float (pow (10.0, float64 (clamp (P[slot::Ut_Gain], -48.0f, 24.0f)) * 0.05));
-        let tWidth = clamp (P[slot::Ut_Width], 0.0f, 2.0f);
-        let invL = P[slot::Ut_InvL] != 0 ? -1.0f : 1.0f;
-        let invR = P[slot::Ut_InvR] != 0 ? -1.0f : 1.0f;
-        let swap = P[slot::Ut_Swap] != 0;
+        let t = utilityTargets (P);
+        let invL = t.invL, invR = t.invR, swap = t.swap;
 
         if (this.fresh)
         {
-            this.utGain = tGain; this.utPanL = tPanL; this.utPanR = tPanR; this.utWidth = tWidth;
+            this.utGain = t.gain; this.utPanL = t.panL; this.utPanR = t.panR; this.utWidth = t.width;
         }
 
         let k = laneGlide (n, sr);
         let g0 = this.utGain, pl0 = this.utPanL, pr0 = this.utPanR, w0 = this.utWidth;
-        this.utGain += (tGain - this.utGain) * k;
-        this.utPanL += (tPanL - this.utPanL) * k;
-        this.utPanR += (tPanR - this.utPanR) * k;
-        this.utWidth += (tWidth - this.utWidth) * k;
+        this.utGain += (t.gain - this.utGain) * k;
+        this.utPanL += (t.panL - this.utPanL) * k;
+        this.utPanR += (t.panR - this.utPanR) * k;
+        this.utWidth += (t.width - this.utWidth) * k;
         let step = 1.0f / float (n);
 
         for (int i = 0; i < n; ++i)
@@ -459,7 +443,7 @@ namespace porridge
             }
 
             var a = l.at (i), b = r.at (i);
-            if (swap) { let t = a; a = b; b = t; }
+            if (swap) { let x = a; a = b; b = x; }
             a *= invL;
             b *= invR;
             let w = w0 + (this.utWidth - w0) * f;
