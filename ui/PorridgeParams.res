@@ -125,8 +125,8 @@ let signedPercentOrZero = x => x == 0. ? "0 %" : signedPercent(x)
 // Oat mode keeps the Oatmeal behaviour Porridge otherwise improves on: MIDI (and the
 // arpeggiator) applied at the start of the next 64-sample block instead of on its sample,
 // legato leaving the right side's filter envelopes untriggered (a stereo voice's right filter
-// stays shut), the distortion's oversampling filters (not unity gain, -11 to -24 dB at 19 kHz)
-// and the plain waveforms' tables, which alias from SR/256 to SR/128 (keys 53 to 64 at 44.1 kHz).
+// stays shut), and the distortion's oversampling filters (not unity gain, -11 to -24 dB at
+// 19 kHz).
 let oatSpecs = [{id: "Oat_Mode", name: "Oat mode", kind: Choice({names: onOff, init: 0})}]
 
 // Slow random pitch and cutoff offsets: per unison copy for pitch, per voice for cutoff.

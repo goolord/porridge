@@ -64,7 +64,7 @@ the macros `Macro_1`..`Macro_4`, then four per modulation slot (`ModN_Source`, `
 
 | parameters | |
 |---|---|
-| `Oat_Mode` | Oatmeal's MIDI timing (each message at the next 64-sample block) instead of sample-accurate, its legato filter envelopes, its distortion oversampling filters and its plain waveforms' table choice |
+| `Oat_Mode` | Oatmeal's MIDI timing (each message at the next 64-sample block) instead of sample-accurate, its legato filter envelopes and its distortion oversampling filters |
 | `Drift_Pitch`, `Drift_Cutoff`, `Drift_Rate` | analog drift: cents per unison copy, semitones of cutoff per voice, Hz |
 | `FX_Order` | the order of chorus, delay, reverb and EQ: the index of a permutation, in lexicographic order (0 is Oatmeal's) |
 | `PM_Feedback` | osc 1's self-feedback in the PM osc mix modes |
@@ -84,7 +84,7 @@ the macros `Macro_1`..`Macro_4`, then four per modulation slot (`ModN_Source`, `
 | `Ai_On`, `Ai_Air`, `Ai_Body`, `Ai_DarkFreq`, `Ai_Darken`, then `Ai2_On` ... `Ai4_Darken` | the air rack effect (Airwindows Air4): the highs and the rest (0.5: as they were), and its darkening; then its copies |
 
 They are appended to, never reordered, and each one's default leaves the sound exactly as
-Oatmeal's, except `Oat_Mode` (off: MIDI is sample-accurate, and Porridge's oversampling filters and waveform tables are used). **Export for Oatmeal** leaves
+Oatmeal's, except `Oat_Mode` (off: MIDI is sample-accurate, and Porridge's oversampling filters are used). **Export for Oatmeal** leaves
 them out and says so.
 
 Porridge also adds values after the last of some of Oatmeal's lists: the waveforms `Saw HQ`,

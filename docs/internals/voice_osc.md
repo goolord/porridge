@@ -208,8 +208,8 @@ mask = 2^shift - 1,  fracScale = f32(2^-shift)
 ```
 The table used contains exactly the harmonics h < SR/(2 f) (`hmax = ceil(0.5/f_norm) - 1`), except from `SR/256` to
 `SR/128` (`2^24 <= inc < 2^25`, e.g. 172 to 345 Hz at 44.1 kHz): M256top keeps harmonics up to 128, so those up to an
-octave over Nyquist alias (a saw's aliases are 25 to 34 dB under its total there, measured on the DLL; Porridge outside
-Oat mode uses the `else` branch from `2^24` instead). Below `SR/512`
+octave over Nyquist alias (a saw's aliases are 25 to 34 dB under its total there, measured on the DLL; Porridge keeps
+this for its plain waveforms in every mode, and the HQ ones are clean). Below `SR/512`
 (inc < 2^23, e.g. < 86 Hz at 44.1 kHz) the full (naive for saw/tri) table of the smallest length with a step of at
 most 1 sample is used. Above SR/4 only the fundamental is left, which aliases once f > SR/2. Sine never uses mip
 levels.
