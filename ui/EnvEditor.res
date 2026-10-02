@@ -127,48 +127,93 @@ let warp = (p: float, curve: float) => {
   k * p / (1. + (k - 1.) * p)
 }
 
-// The envelope a parameter prefix belongs to, as PorridgeParams names it.
-let envName = prefix =>
-  switch prefix {
-  | "" => "Amp"
-  | "F_" => "Filter"
-  | "M1_" => "Mod1"
-  | "OE1_" => PorridgeParams.oscEnvName(1)
-  | "OE2_" => PorridgeParams.oscEnvName(2)
-  | _ => "Mod2"
-  }
+// What scales what an envelope does: a parameter -1..1, its label, and what its 0 means.
+type depth = {id: string, label: string, atZero: string}
 
-// An oscillator's own envelope (PorridgeParams.oscEnvSpecs): its switch.
-let switchOf = prefix =>
-  switch prefix {
-  | "OE1_" | "OE2_" => Some(prefix ++ "On")
-  | _ => None
-  }
-
-// attack, decay 1, decay 2 and release
-let curveIds = prefix => {
-  let env = envName(prefix)
-  let curve = PorridgeParams.curveId(env, ...)
-  [curve("Attack"), PorridgeParams.decay1CurveId(env), curve("Decay"), curve("Release")]
+// The envelopes with attack, hold, decay 1 to the breakpoint, decay 2 to sustain and release.
+type envelope = {
+  // its parameters' prefix and its curves' name
+  params: PorridgeParams.envelope,
+  // for the hint
+  title: string,
+  // its switch, if it has one (an oscillator's own envelope)
+  switchId: option<string>,
+  // drawn in dB, like its readouts (else linear, like their percentages)
+  decibels: bool,
+  // run once per 64-sample block (the DSP's renderBlock): the stages' exponential paths as they
+  // are, and the release cut off at -60 dB. Else it's the DSP's renderAmp: smoothed by envCubic,
+  // its release rescaled to end at 0, and its decay 2 stopped at -80 dB.
+  block: bool,
+  depth: option<depth>,
+  // where a sounding note is on it (VoiceView), for a mark per note
+  clock: option<VoiceView.voice => float>,
 }
 
-// Attack, hold, decay 1 to the breakpoint, decay 2 to sustain, release. The amp envelope (and
-// the oscillators', which are like it) is drawn in dB like its readouts; the others are
-// linear, like their percentages. The amp envelope's levels are the DSP's renderAmp: smoothed
-// by envCubic, and its release rescaled to end at 0. The others are its renderBlock: the
-// stages' exponential paths as they are, and the release cut off at -60 dB.
-let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
+let amp = {
+  params: PorridgeParams.ampEnv,
+  title: "Amp envelope",
+  switchId: None,
+  decibels: true,
+  block: false,
+  depth: None,
+  clock: Some(v => v.ampMs),
+}
+
+// (the filter envelope moves the cutoff by its env mod at the top, up to 8 octaves either way)
+let filter = {
+  params: PorridgeParams.filterEnv,
+  title: "Filter envelope",
+  switchId: None,
+  decibels: false,
+  block: true,
+  depth: Some({id: "F_EnvMod", label: "env mod", atZero: "the cutoff stays put"}),
+  clock: Some(v => v.filterMs),
+}
+
+let modEnv = n => {
+  params: PorridgeParams.modEnv(n),
+  title: `Mod envelope ${Int.toString(n)}`,
+  switchId: None,
+  decibels: false,
+  block: true,
+  depth: None,
+  clock: Some(n == 1 ? v => v.mod1Ms : v => v.mod2Ms),
+}
+
+// An oscillator's own envelope (PorridgeParams.oscEnvSpecs): like the amp envelope, in blocks.
+let oscEnv = n => {
+  let params = PorridgeParams.oscEnv(n)
+  {
+    params,
+    title: `Osc ${Int.toString(n)} envelope`,
+    switchId: Some(params.prefix ++ "On"),
+    decibels: true,
+    block: true,
+    depth: None,
+    clock: None,
+  }
+}
+
+let envelopes = [amp, filter, modEnv(1), modEnv(2), oscEnv(1), oscEnv(2)]
+
+// attack, decay 1, decay 2 and release
+let curveIds = env => {
+  let name = env.params.curveName
+  let curve = PorridgeParams.curveId(name, ...)
+  [curve("Attack"), PorridgeParams.decay1CurveId(name), curve("Decay"), curve("Release")]
+}
+
+let adsr = (ctx: Ctx.t, env, ~w, ~h): shape => {
   let model = ctx.model
-  let id = k => prefix ++ k
+  let id = k => env.params.prefix ++ k
   let get = k => model->ParamModel.get(id(k))
-  let (attackCurve, decay1Curve, decay2Curve, releaseCurve) = switch curveIds(prefix) {
+  let (attackCurve, decay1Curve, decay2Curve, releaseCurve) = switch curveIds(env) {
   | [a, d1, d2, r] => (a, d1, d2, r)
   | _ => ("", "", "", "")
   }
   let curve = c => model->ParamModel.get(c)
   let levelDef = model->ParamModel.def(id("Sustain"))
-  let decibels = prefix == "" || switchOf(prefix) != None
-  let block = prefix != ""
+  let {decibels, block} = env
   let (top, bottom) = (margin, bottomOf(h))
   let yOf = v => {
     let f = decibels ? levelDef.toNorm(v) : v
@@ -233,7 +278,7 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
     // at -80 dB, this fraction of its time (an oscillator's runs all of its time, as above). It
     // falls past the bottom of a dB graph (-60 dB) before that, at progress `floorAt`; the
     // curve is stretched to end there, at the sustain point, and the time axis says when that is.
-    let reach = prefix == "" && sus == 0. ? Math.log(lo / bp) / Math.log(1e-6) : 1.
+    let reach = !block && sus == 0. ? Math.log(lo / bp) / Math.log(1e-6) : 1.
     let floorAt = if decibels && sus < 0.001 && decay2At(0.) > 0.001 {
       let (a, b) = (ref(0.), ref(1.))
       for _i in 1 to 40 {
@@ -304,32 +349,28 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
       model->ParamModel.set(l, l == id("Breakpoint") && fractionAt(y) > 0.985 ? 1. : levelAt(y))
     )
 
-  // the filter envelope moves the cutoff by its env mod at the top (up to 8 octaves either way)
-  let depth = switch prefix {
-  | "F_" =>
-    Some((
-      "F_EnvMod",
+  let depth =
+    env.depth->Option.map(({id, label, atZero}) => (
+      id,
       () =>
-        model->ParamModel.get("F_EnvMod") == 0.
-          ? "env mod 0: the cutoff stays put"
-          : "env mod " ++ model->ParamModel.shortText("F_EnvMod"),
+        model->ParamModel.get(id) == 0.
+          ? `${label} 0: ${atZero}`
+          : `${label} ${model->ParamModel.shortText(id)}`,
     ))
-  | _ => None
-  }
 
   {
     ids: [
       ...["Attack", "Hold", "Decay1", "Breakpoint", "Decay2", "Sustain", "Release"]->Array.map(id),
-      ...curveIds(prefix),
+      ...curveIds(env),
       ...depth->Option.mapOr([], ((id, _)) => [id]),
-      ...switchOf(prefix)->Option.mapOr([], id => [id]),
+      ...env.switchId->Option.mapOr([], id => [id]),
     ],
     fit,
     layout,
     setTime,
     setLevel,
     zero: None,
-    dimmed: () => switchOf(prefix)->Option.mapOr(false, id => model->ParamModel.get(id) == 0.),
+    dimmed: () => env.switchId->Option.mapOr(false, id => model->ParamModel.get(id) == 0.),
     depth,
   }
 }

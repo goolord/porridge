@@ -10,36 +10,33 @@ let (margin, gap) = (6., Grid.gap)
 let columnWidth = 358.
 let rowHeight = (Style.pageHeight - 2. * margin - gap) / 2.
 
-let envelopeFields = prefix => [
-  (prefix ++ "Attack", "attack"),
-  (prefix ++ "Hold", "hold"),
-  (prefix ++ "Decay1", "decay 1"),
-  (prefix ++ "Breakpoint", "breakpoint"),
-  (prefix ++ "Decay2", "decay 2"),
-  (prefix ++ "Sustain", "sustain"),
-  (prefix ++ "Release", "release"),
-  ...EnvEditor.curveIds(prefix)->Array.mapWithIndex((id, i) => (
-    id,
-    ["attack curve", "decay 1 curve", "decay 2 curve", "release curve"]->Array.getUnsafe(i),
-  )),
-]
+let envelopeFields = (env: EnvEditor.envelope) => {
+  let prefix = env.params.prefix
+  [
+    (prefix ++ "Attack", "attack"),
+    (prefix ++ "Hold", "hold"),
+    (prefix ++ "Decay1", "decay 1"),
+    (prefix ++ "Breakpoint", "breakpoint"),
+    (prefix ++ "Decay2", "decay 2"),
+    (prefix ++ "Sustain", "sustain"),
+    (prefix ++ "Release", "release"),
+    ...EnvEditor.curveIds(env)->Array.mapWithIndex((id, i) => (
+      id,
+      ["attack curve", "decay 1 curve", "decay 2 curve", "release curve"]->Array.getUnsafe(i),
+    )),
+  ]
+}
 
-// (each sounding note is marked where it is on the amp, filter and mod envelopes)
-let envelope = (ctx, parent, prefix, box: box, ~name) =>
+// (each sounding note is marked where it is on the envelopes that have a clock)
+let envelope = (ctx, parent, env: EnvEditor.envelope, box: box) =>
   EnvEditor.make(
     ctx,
     parent,
     box,
-    EnvEditor.adsr(ctx, prefix, ~w=box.w, ~h=box.h),
-    ~fields=envelopeFields(prefix),
-    ~name,
-    ~clock=?switch prefix {
-    | "" => Some((v: VoiceView.voice) => v.ampMs)
-    | "F_" => Some(v => v.filterMs)
-    | "M1_" => Some(v => v.mod1Ms)
-    | "M2_" => Some(v => v.mod2Ms)
-    | _ => None
-    },
+    EnvEditor.adsr(ctx, env, ~w=box.w, ~h=box.h),
+    ~fields=envelopeFields(env),
+    ~name=env.title,
+    ~clock=?env.clock,
   )
 
 // The button in the corner of a plot that opens its table on the Shapes page.
@@ -84,8 +81,9 @@ let oscillator = (ctx: Ctx.t, body, n) => {
 }
 
 let modEnvelope = (ctx: Ctx.t, body, n, box) => {
-  let prefix = `M${Int.toString(n)}_`
-  envelope(ctx, body, prefix, box, ~name=`Mod envelope ${Int.toString(n)}`)
+  let env = EnvEditor.modEnv(n)
+  let prefix = env.params.prefix
+  envelope(ctx, body, env, box)
   let g = Grid.make(ctx, body, ~x=box.x + box.w + 10.)
   g->Grid.param(prefix ++ "VeloSens", 0, 0, "velocity")
   for k in 1 to 4 {
@@ -360,24 +358,23 @@ let build = (ctx: Ctx.t, page) => {
   let envGrid = Grid.make(ctx, envs)
   let envHeight = (rowHeight - Grid.padTop - 10.) / 2.
   [1, 2]->Array.forEach(n => {
-    let prefix = PorridgeParams.oscEnvPrefix(n)
+    let env = EnvEditor.oscEnv(n)
     let name = `osc ${Int.toString(n)}`
     let row = 4 * (n - 1)
-    envGrid->Grid.toggle(prefix ++ "On", 0, row, name ++ " env")
+    env.switchId->Option.forEach(id => envGrid->Grid.toggle(id, 0, row, name ++ " env"))
     envGrid
     ->Grid.note(`${name}'s level follows it, under the amp envelope`, 0, row + 1, ~rows=2)
     ->ignore
     envelope(
       ctx,
       envs,
-      prefix,
+      env,
       {
         x: envGrid->Grid.cx(1) + 4.,
         y: envGrid->Grid.cy(row) + 2.,
         w: columnWidth - Grid.columnWidth - 16.,
         h: envHeight - 6.,
       },
-      ~name=`Osc ${Int.toString(n)} envelope`,
     )
   })
 
@@ -509,19 +506,13 @@ let build = (ctx: Ctx.t, page) => {
     keyEq->Grid.param(PorridgeParams.keyEqGainId(k), mod(k - 1, 4), 1 + (k - 1) / 4, label)
   }
   let top = Grid.padTop + 3. * Grid.rowHeight + 6.
-  envelope(
-    ctx,
-    filter.el,
-    "F_",
-    {x: 8., y: top, w: 340., h: rowHeight - top - 10.},
-    ~name="Filter envelope",
-  )
+  envelope(ctx, filter.el, EnvEditor.filter, {x: 8., y: top, w: 340., h: rowHeight - top - 10.})
 
   //==============================================================================
   // amp
   let amp = Panel.make(page, ~title="amp", ~x=x2, ~y=y0, ~w=lastWidth, ~h=rowHeight)
   let ampBox = {x: 8., y: 25., w: lastWidth - 18., h: rowHeight - 25. - Grid.rowHeight - 16.}
-  envelope(ctx, amp.el, "", ampBox, ~name="Amp envelope")
+  envelope(ctx, amp.el, EnvEditor.amp, ampBox)
   let ampGrid = Grid.make(ctx, amp.el, ~y=ampBox.y + ampBox.h + 4.)
   ampGrid->Grid.param("Gain", 0, 0, "output gain")
   ampGrid->Grid.param("VeloSens", 1, 0, "velocity")

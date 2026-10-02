@@ -363,9 +363,9 @@ let fromJsonObject = (d: dict<JSON.t>) => {
     }
   )
   // files from before decay 1 had a curve of its own: the decay curve bent both decays
-  PorridgeParams.envNames->Array.forEach(((env, _)) => {
-    let decay1 = PorridgeParams.decay1CurveId(env)
-    let decay = PorridgeParams.curveId(env, "Decay")
+  PorridgeParams.envelopes->Array.forEach(env => {
+    let decay1 = PorridgeParams.decay1CurveId(env.curveName)
+    let decay = PorridgeParams.curveId(env.curveName, "Decay")
     if params->Dict.get(decay1) == None {
       values->Map.get(decay)->Option.forEach(x => values->Map.set(decay1, x))
     }

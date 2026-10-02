@@ -183,7 +183,17 @@ let filterSpecs = [{id: "F_Morph", name: "Filter morph", kind: Float({min: 0., m
 // A shape per envelope stage: 0 is Oatmeal's (linear attack, exponential decays), positive
 // moves away from the start level faster, negative slower. "Decay" is decay 2's; decay 1's
 // came later, as a group of its own (decay1CurveSpecs).
-let envNames = [("Amp", "Amp"), ("Filter", "Filter"), ("Mod1", "Mod 1"), ("Mod2", "Mod 2")]
+//
+// An envelope: its parameters' prefix (Attack, F_Attack ...), the name its curves go by
+// (Curve_Amp_Attack ...), and its name in host parameter names.
+type envelope = {prefix: string, curveName: string, name: string}
+
+let ampEnv = {prefix: "", curveName: "Amp", name: "Amp"}
+let filterEnv = {prefix: "F_", curveName: "Filter", name: "Filter"}
+let modEnv = n => {prefix: `M${Int.toString(n)}_`, curveName: `Mod${Int.toString(n)}`, name: `Mod ${Int.toString(n)}`}
+// (each oscillator's own envelope came later, with its curves: oscEnv)
+let envelopes = [ampEnv, filterEnv, modEnv(1), modEnv(2)]
+
 let stageNames = [("Attack", "attack"), ("Decay", "decay 2"), ("Release", "release")]
 
 let curveId = (env, stage) => `Curve_${env}_${stage}`
@@ -191,17 +201,17 @@ let decay1CurveId = env => curveId(env, "Decay1")
 
 let curveKind = Float({min: -1., max: 1., init: 0., text: signedPercentOrZero})
 
-let curveSpecs = envNames->Array.flatMap(((env, envName)) =>
+let curveSpecs = envelopes->Array.flatMap(env =>
   stageNames->Array.map(((stage, stageName)) => {
-    id: curveId(env, stage),
-    name: `${envName} env ${stageName} curve`,
+    id: curveId(env.curveName, stage),
+    name: `${env.name} env ${stageName} curve`,
     kind: curveKind,
   })
 )
 
-let decay1CurveSpecs = envNames->Array.map(((env, envName)) => {
-  id: decay1CurveId(env),
-  name: `${envName} env decay 1 curve`,
+let decay1CurveSpecs = envelopes->Array.map(env => {
+  id: decay1CurveId(env.curveName),
+  name: `${env.name} env decay 1 curve`,
   kind: curveKind,
 })
 
@@ -744,13 +754,16 @@ let airCopySpecs = copySpecsOf(rackKinds->Array.filter(k => k.key == "air"))
 // amp envelope, which still ends the note). Its stages are like the amp envelope's, with curves
 // of their own; it runs once per 64-sample block, as the mod envelopes do, and the oscillator
 // ramps its level between blocks.
-let oscEnvPrefix = n => `OE${Int.toString(n)}_`
-let oscEnvName = n => `Osc${Int.toString(n)}`
+let oscEnv = n => {
+  prefix: `OE${Int.toString(n)}_`,
+  curveName: `Osc${Int.toString(n)}`,
+  name: `Osc ${Int.toString(n)}`,
+}
 
 let oscEnvSpecs = [1, 2]->Array.flatMap(n => {
-  let id = k => oscEnvPrefix(n) ++ k
-  let name = `Osc ${Int.toString(n)} env`
-  let env = oscEnvName(n)
+  let {prefix, curveName: env, name} = oscEnv(n)
+  let id = k => prefix ++ k
+  let name = name ++ " env"
   [
     {id: id("On"), name, kind: Choice({names: onOff, init: 0})},
     {id: id("Attack"), name: name ++ " attack", kind: Like("Attack")},
