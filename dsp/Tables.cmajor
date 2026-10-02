@@ -10,7 +10,8 @@
 //  Nyquist for the highest note it plays. They follow the six sets in 'sets'.
 //
 //  Each user waveform has two sets: the one the oscillators read, and one a new waveform can
-//  be built into a little at a time (a UserJob) while notes play, which then takes over.
+//  be built into a little at a time (startUserJob, stepJob) while notes play, which then
+//  takes over.
 
 namespace porridge
 {
