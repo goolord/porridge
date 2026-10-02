@@ -465,7 +465,7 @@ namespace porridge
 
             // (a distortion copy only runs while there is sound; the shifter and resonator only
             // in the voice lane)
-            if (kind < 0 || (kind == rack::distortionKind && ! active) || kind == rack::shifterKind || kind == rack::resonatorKind)
+            if (kind < 0 || (kind == rack::distortionKind && ! active) || ! rack::inRack.at (kind))
                 return active;
 
             let k = fx - rack::kindValue.at (kind);
@@ -3142,12 +3142,7 @@ namespace porridge
                 return -1;
 
             let kind = rack::kindOf.at (fx);
-
-            if (kind == rack::filterKind || kind == rack::distortionKind || kind == rack::eqKind || kind == rack::phaserKind
-                 || kind == rack::flangerKind || kind == rack::utilityKind || kind == rack::shifterKind || kind == rack::resonatorKind)
-                return kind;
-
-            return -1;
+            return kind >= 0 && rack::inLane.at (kind) ? kind : -1;
         }
 
         /// Whether lane slots from .. to - 1 hold anything a voice runs.

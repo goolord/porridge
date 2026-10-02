@@ -217,11 +217,14 @@ function rackKindTables ()
     return `
     /// the kinds above as tables: their indices, the kind each rack value runs (-1: none),
     /// each kind's first value, whether its first is in the rack (entry 0 runs unswapped),
-    /// and where its parameters start in allFirst and its copies' in allCopies
+    /// where it runs, and where its parameters start in allFirst and its copies' in allCopies
 ${rackKinds.map ((k, i) => `    let ${k.key}Kind = ${i};`).join ("\n")}
     let kindOf = int[${kindOf.length}] (${kindOf.join (", ")});
     let kindValue = int[${kindValue.length}] (${kindValue.join (", ")});
     let kindOwn = bool[${rackKinds.length}] (${rackKinds.map (k => k.firstInRack).join (", ")});
+    /// whether each kind runs in the rack, and in the voice lane (PorridgeParams' runsIn)
+    let inRack = bool[${rackKinds.length}] (${rackKinds.map (k => k.runsIn !== "LaneOnly").join (", ")});
+    let inLane = bool[${rackKinds.length}] (${rackKinds.map (k => k.runsIn !== "Rack").join (", ")});
     let firstOffset = int[${rackKinds.length + 1}] (${[...firstOffset, allFirst.length].join (", ")});
     let copiesOffset = int[${rackKinds.length}] (${copiesOffset.join (", ")});
     let allFirst = int[${allFirst.length}] (${allFirst.join (", ")});

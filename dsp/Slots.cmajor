@@ -1609,7 +1609,7 @@ namespace porridge::rack
 
     /// the kinds above as tables: their indices, the kind each rack value runs (-1: none),
     /// each kind's first value, whether its first is in the rack (entry 0 runs unswapped),
-    /// and where its parameters start in allFirst and its copies' in allCopies
+    /// where it runs, and where its parameters start in allFirst and its copies' in allCopies
     let chorusKind = 0;
     let delayKind = 1;
     let reverbKind = 2;
@@ -1630,6 +1630,9 @@ namespace porridge::rack
     let kindOf = int[63] (-1, -1, -1, -1, -1, 0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 8, 8, 8, 8, 9, 9, 10, 10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13, 14, 14, 14, 14, 15, 15, 16, 16);
     let kindValue = int[17] (5, 8, 11, 14, 17, 21, 25, 29, 33, 37, 39, 43, 47, 51, 55, 59, 61);
     let kindOwn = bool[17] (false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true);
+    /// whether each kind runs in the rack, and in the voice lane (PorridgeParams' runsIn)
+    let inRack = bool[17] (true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false);
+    let inLane = bool[17] (false, false, false, true, true, true, true, false, false, false, false, true, true, false, false, true, true);
     let firstOffset = int[18] (0, 8, 23, 36, 57, 115, 122, 132, 160, 170, 180, 186, 195, 203, 216, 221, 226, 233);
     let copiesOffset = int[17] (0, 24, 69, 108, 171, 403, 424, 454, 538, 568, 578, 596, 623, 647, 686, 701, 706);
     let allFirst = int[233] (2154, 2155, 2156, 2157, 2158, 2159, 2161, 2160, 2162, 2163, 2164, 2165, 2166, 2169, 2171, 2170, 2172, 2167, 2168, 2173, 2174, 2175, 2176, 2177, 2178, 2179, 2180, 2181, 2182, 2183, 2184, 2185, 2186, 2187, 2188, 2189, 2710, 2308, 2313, 2318, 2323, 2309, 2314, 2319, 2324, 2310, 2315, 2320, 2325, 2311, 2316, 2321, 2326, 2312, 2317, 2322, 2327, 2259, 2264, 2262, 2261, 2263, 2711, 2712, 2713, 2714, 2715, 2716, 2717, 2718, 2719, 2720, 2721, 2722, 2723, 2724, 2725, 2726, 2727, 2728, 2729, 2730, 2731, 2732, 2733, 2734, 2735, 2736, 2737, 2738, 2739, 2740, 2741, 2742, 2743, 2744, 2745, 2746, 2747, 2748, 2749, 2750, 2751, 2752, 2753, 2754, 2755, 2756, 2757, 2758, 2759, 3556, 3557, 3558, 3559, 3148, 3149, 3150, 3151, 3152, 3153, 3154, 3155, 3156, 3157, 3158, 3159, 3160, 3161, 3162, 3163, 3164, 3165, 3166, 3167, 3168, 3169, 3170, 3171, 3172, 3173, 3174, 3175, 3176, 3177, 3178, 3179, 3180, 3181, 3182, 3183, 3184, 3185, 3186, 3187, 3188, 3189, 3190, 3191, 3192, 3193, 3194, 3195, 3196, 3197, 3198, 3199, 3200, 3201, 3202, 3203, 3204, 3205, 3206, 3207, 3208, 3209, 3210, 3211, 3212, 3213, 3214, 3215, 3216, 3217, 3218, 3219, 3220, 3221, 3222, 3223, 3224, 3225, 3226, 3786, 3227, 3228, 3229, 3230, 3231, 3232, 3233, 3234, 3504, 3505, 3506, 3507, 3508, 3509, 3510, 3511, 3512, 3513, 3514, 3515, 3516, 3576, 3577, 3578, 3579, 3580, 3790, 3791, 3792, 3793, 3794, 3795, 3796, 3797, 3798, 3799, 3800, 3812);
