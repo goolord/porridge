@@ -21,6 +21,7 @@ namespace porridge
         input event ImpulseChunk impulseIn;
         input event int impulseViewIn;
         input event int panicIn;
+        input event int levelRequestIn;
 
         // test-only: lets the offline test graph replace the voices with a recorded signal
         input stream float<2> testIn;
@@ -31,6 +32,7 @@ namespace porridge
         output event int ccOut;
         output event CompMeter compMeterOut;
         output event ImpulseView impulseViewOut;
+        output event float levelOut;
 
         // MIDI is applied a block late (see the top of this file)
         processor.latency = blockSize;
@@ -91,6 +93,13 @@ namespace porridge
         int blockCount;                             // blocks rendered
         int[rack::convolveCount] convolverRan;      // the block each convolver last ran in
         int[rack::convolveCount] viewSent;          // the impulse each convolver last showed the view
+
+        // the level meter the view asks for (levelRequestIn): readings still to send, and the
+        // K-weighted power summed since the last one; the weighting's shelf and highpass, per
+        // channel
+        int levelReadings, levelFrames;
+        float64 levelSum;
+        KWeighting[2] kWeighting;
 
         // every distortion's custom shape (Oatmeal's first), rendered when its points change
         float[1026][1 + rack::distortionCount] shaperTables;
@@ -224,6 +233,17 @@ namespace porridge
 
         event tempoIn (std::timeline::Tempo t)          { if (t.bpm > 0) bpm = t.bpm; }
         event panicIn (int x)                           { panicPending = true; }
+
+        /// The view asks for n readings of the output's level (each 512 frames' K-weighted mean
+        /// power before the output gain, both channels; 0 stops them).
+        event levelRequestIn (int n)
+        {
+            levelReadings = max (0, n);
+            levelFrames = 0;
+            levelSum = 0;
+            kWeighting[0] = makeKWeighting (sampleRate);
+            kWeighting[1] = makeKWeighting (sampleRate);
+        }
 
         /// The view asks for the convolvers' impulses again (a tab opened).
         event impulseViewIn (int x)
@@ -3170,6 +3190,27 @@ namespace porridge
 
             let outputOn = active;
             let gain = P[slot::Gain];
+
+            // the level meter, before the output gain
+            if (levelReadings > 0)
+            {
+                for (wrap<blockSize> i)
+                {
+                    let l = outputOn ? kWeight (kWeighting[0], float64 (mix[i][0])) : 0.0;
+                    let r = outputOn ? kWeight (kWeighting[1], float64 (mix[i][1])) : 0.0;
+                    levelSum += l * l + r * r;
+                }
+
+                levelFrames += blockSize;
+
+                if (levelFrames >= 512)
+                {
+                    levelOut <- float (levelSum / float64 (2 * levelFrames));
+                    levelSum = 0;
+                    levelFrames = 0;
+                    --levelReadings;
+                }
+            }
 
             for (wrap<blockSize> i)
                 mix[i] = outputOn ? mix[i] * gain : float<2>();
