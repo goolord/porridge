@@ -127,6 +127,7 @@ namespace porridge
         Filter[4 * maxVoices] voiceFilters;
         Distortion[2 * maxVoices] voiceDistortions;
         LaneFx[laneSlots * maxVoices] voiceLanes;
+        LaneBuffers[laneSlots * maxVoices] voiceLaneBuffers;     // the lane slots' big parts (startLane clears them)
         int numActive;
 
         bool[256] keyReleased;
@@ -3276,7 +3277,7 @@ namespace porridge
                 if (kind >= 0)
                 {
                     readyLane (v, s);
-                    voiceLanes.at (laneSlots * v.index + int (s)).startLane (kind);
+                    voiceLanes.at (laneSlots * v.index + int (s)).startLane (voiceLaneBuffers.at (laneSlots * v.index + int (s)), kind);
                     voiceLanes.at (laneSlots * v.index + int (s)).fx = int (P.at (slot::VL_1 + int (s)));
                 }
                 else if (v.laneReady[s])
@@ -3310,7 +3311,7 @@ namespace porridge
 
                     if (voiceLanes.at (laneSlots * v.index + s).fx != fx)
                     {
-                        voiceLanes.at (laneSlots * v.index + s).startLane (kind);
+                        voiceLanes.at (laneSlots * v.index + s).startLane (voiceLaneBuffers.at (laneSlots * v.index + s), kind);
                         voiceLanes.at (laneSlots * v.index + s).fx = fx;
                     }
 
@@ -3322,18 +3323,18 @@ namespace porridge
                         split = true;
                     }
 
-                    if (kind == rack::filterKind)          voiceLanes.at (laneSlots * v.index + s).laneFilter (fxTables, P, noteHz, sampleRate, bufM, bufR, split, n);
+                    if (kind == rack::filterKind)          voiceLanes.at (laneSlots * v.index + s).laneFilter (voiceLaneBuffers.at (laneSlots * v.index + s), fxTables, P, noteHz, sampleRate, bufM, bufR, split, n);
                     else if (kind == rack::eqKind)         voiceLanes.at (laneSlots * v.index + s).laneEq (P, sampleRate, bufM, bufR, split, n);
                     else if (kind == rack::phaserKind)     voiceLanes.at (laneSlots * v.index + s).lanePhaser (P, noteHz, sampleRate, bufM, bufR, split, n);
-                    else if (kind == rack::flangerKind)    voiceLanes.at (laneSlots * v.index + s).laneFlanger (P, sampleRate, bufM, bufR, split, n);
+                    else if (kind == rack::flangerKind)    voiceLanes.at (laneSlots * v.index + s).laneFlanger (voiceLaneBuffers.at (laneSlots * v.index + s), P, sampleRate, bufM, bufR, split, n);
                     else if (kind == rack::utilityKind)    voiceLanes.at (laneSlots * v.index + s).laneUtility (P, sampleRate, bufM, bufR, split, n);
                     else if (kind == rack::shifterKind)    voiceLanes.at (laneSlots * v.index + s).laneShifter (hilbert, P, noteHz, sampleRate, bufM, bufR, split, n);
                     else if (kind == rack::resonatorKind)  voiceLanes.at (laneSlots * v.index + s).laneResonator (P, noteHz, sampleRate, bufM, bufR, split, n);
                     else if (kind == rack::distortionKind)
                     {
                         useShaper (k + 1);
-                        voiceLanes.at (laneSlots * v.index + s).dist[0].processMono (distTables, shaperTables.at (k + 1), P, 0.0f, sampleRate, bufM, n);
-                        if (split) voiceLanes.at (laneSlots * v.index + s).dist[1].processMono (distTables, shaperTables.at (k + 1), P, 0.0f, sampleRate, bufR, n);
+                        voiceLaneBuffers.at (laneSlots * v.index + s).dist[0].processMono (distTables, shaperTables.at (k + 1), P, 0.0f, sampleRate, bufM, n);
+                        if (split) voiceLaneBuffers.at (laneSlots * v.index + s).dist[1].processMono (distTables, shaperTables.at (k + 1), P, 0.0f, sampleRate, bufR, n);
                     }
 
                     voiceLanes.at (laneSlots * v.index + s).fresh = false;

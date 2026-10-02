@@ -16,18 +16,15 @@ namespace porridge
     let laneFlangerLine = 2048;     // 42 ms at 48 kHz (21 ms at 96): the flanger's delays and depth
 
     /// One lane slot's state in one voice, whichever kind it holds (only that kind's part is
-    /// used; a different value in the slot starts it afresh).
+    /// used; a different value in the slot starts it afresh). Its filters, distortions and
+    /// flanger line are in a LaneBuffers.
     struct LaneFx
     {
         int fx;
         bool fresh;
 
-        // filter: per side, and the cutoff (ln Hz), morph and mix, gliding per block
-        Filter[2] filt;
+        // filter: the cutoff (ln Hz), morph and mix, gliding per block
         float fHz, fMorph, fMix;
-
-        // distortion, per side
-        Distortion[2] dist;
 
         // EQ: each band's state per side
         float[5] eqL1, eqL2, eqR1, eqR2;
@@ -40,9 +37,8 @@ namespace porridge
         float phCentre, phDepth, phSpread, phFb, phMix;
         int phStages;
 
-        // flanger: the line (both sides), its write position, the LFO, and the gliding delay,
-        // depth, feedback and mix
-        float<2>[laneFlangerLine] flLine;
+        // flanger: the line's write position, the LFO, and the gliding delay, depth, feedback
+        // and mix
         int flPos;
         float64 flPhase;
         float flDelay, flDepth, flFb, flMix;
@@ -69,6 +65,16 @@ namespace porridge
         bool rsDesigned;
     }
 
+    /// A lane slot's big parts, which only its kind uses (and startLane clears for it): kept
+    /// apart from the rest of its state, which a new voice clears. The filter's and the
+    /// distortion's state per side, and the flanger's line (both sides).
+    struct LaneBuffers
+    {
+        Filter[2] filt;
+        Distortion[2] dist;
+        float<2>[laneFlangerLine] flLine;
+    }
+
     //==============================================================================
     /// The resonator's models (Rs_Model): each mode's frequency, relative to the note.
     let resonatorRatios = float[24] (1.0f, 2.0f, 3.0f, 4.0f,             // harmonic
@@ -85,19 +91,19 @@ namespace porridge
     }
 
     /// Clears what this kind keeps, for a note that starts or a slot that changes.
-    void startLane (LaneFx& this, int kind)
+    void startLane (LaneFx& this, LaneBuffers& bufs, int kind)
     {
         this.fresh = true;
 
         if (kind == rack::filterKind)
         {
-            this.filt[0].clearState();
-            this.filt[1].clearState();
+            bufs.filt[0].clearState();
+            bufs.filt[1].clearState();
         }
         else if (kind == rack::distortionKind)
         {
-            this.dist[0].clearState();
-            this.dist[1].clearState();
+            bufs.dist[0].clearState();
+            bufs.dist[1].clearState();
         }
         else if (kind == rack::eqKind)
         {
@@ -113,7 +119,7 @@ namespace porridge
         else if (kind == rack::flangerKind)
         {
             for (wrap<laneFlangerLine> i)
-                this.flLine[i] = float<2> (0.0f, 0.0f);
+                bufs.flLine[i] = float<2> (0.0f, 0.0f);
 
             this.flPos = 0;
             this.flPhase = 0;
@@ -147,7 +153,7 @@ namespace porridge
     //==============================================================================
     // filter
 
-    void laneFilter (LaneFx& this, const FxTables& tables, const float[numSlots]& P, float noteHz, float64 sr,
+    void laneFilter (LaneFx& this, LaneBuffers& bufs, const FxTables& tables, const float[numSlots]& P, float noteHz, float64 sr,
                      float[blockSize]& l, float[blockSize]& r, bool both, int n)
     {
         let t = int (P[slot::Ff_Type]);
@@ -179,7 +185,7 @@ namespace porridge
         float[blockSize] wet;
 
         wet = l;
-        this.filt[0].process (tables, t, exp (this.fHz - spread), res, this.fMorph, drive, sr, wet, n);
+        bufs.filt[0].process (tables, t, exp (this.fHz - spread), res, this.fMorph, drive, sr, wet, n);
 
         for (int i = 0; i < n; ++i)
             l.at (i) += (wet.at (i) - l.at (i)) * (mix0 + dm * float (i + 1));
@@ -187,7 +193,7 @@ namespace porridge
         if (both)
         {
             wet = r;
-            this.filt[1].process (tables, t, exp (this.fHz + spread), res, this.fMorph, drive, sr, wet, n);
+            bufs.filt[1].process (tables, t, exp (this.fHz + spread), res, this.fMorph, drive, sr, wet, n);
 
             for (int i = 0; i < n; ++i)
                 r.at (i) += (wet.at (i) - r.at (i)) * (mix0 + dm * float (i + 1));
@@ -357,17 +363,17 @@ namespace porridge
     //==============================================================================
     // flanger (FxExtra.cmajor's), on a shorter line: the note's own LFO, from the note-on
 
-    float laneFlangerRead (const LaneFx& this, float d, int ch)
+    float laneFlangerRead (const LaneFx& this, const LaneBuffers& bufs, float d, int ch)
     {
         let di = int (d);
         let t = d - float (di);
         let m = laneFlangerLine - 1;
         let p = this.flPos - di;
-        return hermite (this.flLine.at ((p + 1) & m).at (ch), this.flLine.at (p & m).at (ch),
-                        this.flLine.at ((p - 1) & m).at (ch), this.flLine.at ((p - 2) & m).at (ch), t);
+        return hermite (bufs.flLine.at ((p + 1) & m).at (ch), bufs.flLine.at (p & m).at (ch),
+                        bufs.flLine.at ((p - 1) & m).at (ch), bufs.flLine.at ((p - 2) & m).at (ch), t);
     }
 
-    void laneFlanger (LaneFx& this, const float[numSlots]& P, float64 sr, float[blockSize]& l, float[blockSize]& r, bool both, int n)
+    void laneFlanger (LaneFx& this, LaneBuffers& bufs, const float[numSlots]& P, float64 sr, float[blockSize]& l, float[blockSize]& r, bool both, int n)
     {
         let longest = float (laneFlangerLine - 4);
         let tDelay = min (expKnob (0.1f, 20.0f, P[slot::Fl_Delay]) * 0.001f * float (sr), longest / 16.0f);
@@ -401,14 +407,14 @@ namespace porridge
             let span = 4.0f * 0.693147181f * depth;
             let lfoL = 0.5f - 0.5f * float (cos (twoPi * this.flPhase));
             let lfoR = 0.5f - 0.5f * float (cos (twoPi * (this.flPhase + offset)));
-            let yL = this.laneFlangerRead (clamp (delay * exp (span * lfoL), 2.0f, longest), 0);
-            let yR = this.laneFlangerRead (clamp (delay * exp (span * lfoR), 2.0f, longest), 1);
+            let yL = this.laneFlangerRead (bufs, clamp (delay * exp (span * lfoL), 2.0f, longest), 0);
+            let yR = this.laneFlangerRead (bufs, clamp (delay * exp (span * lfoR), 2.0f, longest), 1);
 
             let xL = l.at (i);
             let xR = both ? r.at (i) : xL;
             let backL = extraSoftClip (fb * yL);
             let backR = extraSoftClip (fb * yR);
-            this.flLine.at (this.flPos) = float<2> (xL + backL + 1e-18f, xR + backR + 1e-18f);
+            bufs.flLine.at (this.flPos) = float<2> (xL + backL + 1e-18f, xR + backR + 1e-18f);
             this.flPos = (this.flPos + 1) & (laneFlangerLine - 1);
 
             l.at (i) = (xL + backL * min (1.0f, 2.0f * mix)) * (1.0f - mix) + yL * mix;
