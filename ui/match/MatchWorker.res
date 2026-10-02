@@ -26,8 +26,8 @@ let handle = async (request: request) =>
       post(Ready)
     | exception e => post(Failed({task: -1, message: messageOf(e, "the engine didn't start")}))
     }
-  | (Prepare({task, name, samples, sampleRate}), _) =>
-    switch SoundTarget.prepare(~name, {samples, sampleRate, frameSize: None, sides: None}) {
+  | (Prepare({task, name, samples, sides, sampleRate}), _) =>
+    switch SoundTarget.prepare(~name, {samples, sampleRate, frameSize: None, sides}) {
     | Ok(target) =>
       let (envelope, spectrum) =
         MatchSearch.targetPicture(Spectrum.measure(target.samples, ~period=SoundTarget.period(target)))

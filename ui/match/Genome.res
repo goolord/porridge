@@ -1,9 +1,13 @@
-// What the sound matcher searches: 40 genes, each from 0 to 1, that set the parts of a patch
-// that shape a single note (the oscillators and how they combine, the filter and its envelope,
-// the amp and pitch envelopes, vibrato and filter wobble, drive, chorus and reverb). A choice
-// gene picks one of its options by which equal part of 0..1 it falls in. `decode` turns genes
-// into parameter values, which go on top of the patch the match starts from (Init, or the
-// candidate a re-match keeps parts of).
+// What the sound matcher searches: 53 genes, each from 0 to 1, that set the parts of a patch
+// that shape a single note (the oscillators and how they combine, the filter, its envelope and
+// its second filter, the amp and pitch envelopes, a mod envelope on osc 2's pitch and level,
+// vibrato and filter wobble, drive, chorus and reverb, and the key EQ). A choice gene picks one
+// of its options by which equal part of 0..1 it falls in. `decode` turns genes into parameter
+// values, which go on top of the patch the match starts from (Init, or the candidate a
+// re-match keeps parts of).
+//
+// The key EQ's genes are never searched: each candidate gets the gains that best turn its
+// spectrum into the sample's (MatchSearch.fitEq), as it gets its amp envelope.
 //
 // Two genes only change how a candidate is rendered, not the patch: the octave and the tuning
 // it is played at against the sample's pitch, so that a pitch found an octave off or a little
@@ -18,9 +22,9 @@
 @get_index external get64: (Float64Array.t, int) => float = ""
 @set_index external set64: (Float64Array.t, int, float) => unit = ""
 
-type group = [#osc | #filter | #env | #mod | #fx]
+type group = [#osc | #filter | #env | #mod | #fx | #eq]
 
-let groups: array<group> = [#osc, #filter, #env, #mod, #fx]
+let groups: array<group> = [#osc, #filter, #env, #mod, #fx, #eq]
 
 let groupName = (g: group) =>
   switch g {
@@ -29,6 +33,7 @@ let groupName = (g: group) =>
   | #env => "Envelopes"
   | #mod => "Modulation"
   | #fx => "Effects"
+  | #eq => "Key EQ"
   }
 
 // options: 0 for a continuous gene, else the number of choices
@@ -40,8 +45,7 @@ let genes: array<gene> = [
   {key: "width", group: #osc, options: 0},
   {key: "o2Wave", group: #osc, options: 4},
   {key: "o2Level", group: #osc, options: 0},
-  {key: "o2Interval", group: #osc, options: 7},
-  {key: "o2Fine", group: #osc, options: 0},
+  {key: "o2Pitch", group: #osc, options: 0},
   {key: "o2Detune", group: #osc, options: 0},
   {key: "oscMix", group: #osc, options: 7},
   {key: "feedback", group: #osc, options: 0},
@@ -60,6 +64,9 @@ let genes: array<gene> = [
   {key: "filterSustain", group: #filter, options: 0},
   {key: "filterDrop", group: #filter, options: 0},
   {key: "filterDecay1", group: #filter, options: 0},
+  {key: "filterDouble", group: #filter, options: 3},
+  {key: "filterSplit", group: #filter, options: 0},
+  {key: "filterMix", group: #filter, options: 0},
   {key: "attack", group: #env, options: 0},
   {key: "decay", group: #env, options: 0},
   {key: "sustain", group: #env, options: 0},
@@ -71,11 +78,22 @@ let genes: array<gene> = [
   {key: "vibratoRate", group: #mod, options: 0},
   {key: "wobble", group: #mod, options: 0},
   {key: "wobbleRate", group: #mod, options: 0},
+  {key: "modEnvPitch", group: #mod, options: 0},
+  {key: "modEnvDepth", group: #mod, options: 0},
+  {key: "modEnvDecay", group: #mod, options: 0},
   {key: "drive", group: #fx, options: 0},
   {key: "chorus", group: #fx, options: 0},
   {key: "reverb", group: #fx, options: 0},
   {key: "reverbTime", group: #fx, options: 0},
+  ...Array.fromInitializer(~length=PorridgeParams.keyEqBands, k => {
+    key: `eq${Int.toString(k + 1)}`,
+    group: #eq,
+    options: 0,
+  }),
 ]
+
+// the key EQ's genes, in band order
+let eqKeys = Array.fromInitializer(~length=PorridgeParams.keyEqBands, k => `eq${Int.toString(k + 1)}`)
 
 let count = Array.length(genes)
 
@@ -114,7 +132,49 @@ let gene = i => genes->Array.getUnsafe(i)
 let waves = [0., 6., 7., 8., 4.] // sine, saw HQ, pulse HQ, triangle HQ, user (the fitted wave)
 let waveNames = ["sine", "saw", "pulse", "triangle", "fitted wave"]
 let fittedWave = 4
-let intervals = [0., 12., -12., 7., 19., 24., 5.]
+// osc 2's pitch against osc 1: a continuous gene that holds still at these intervals for half
+// of the way between each two (so that the search lands on them exactly) and slides through
+// the ratios between them for the rest
+let o2Anchors = [-12., -5., 0., 5., 7., 12., 19., 24.]
+let o2Hold = 0.25
+let o2Semitones = v => {
+  let n = Array.length(o2Anchors)
+  let pos = v * Int.toFloat(n) - 0.5
+  let at = i => o2Anchors->Array.getUnsafe(i)
+  if pos <= 0. {
+    at(0)
+  } else if pos >= Int.toFloat(n - 1) {
+    at(n - 1)
+  } else {
+    let i = Float.toInt(Math.floor(pos))
+    let t = pos - Int.toFloat(i)
+    let u = Math.max(0., Math.min(1., (t - o2Hold) / (1. - 2. * o2Hold)))
+    at(i) + (at(i + 1) - at(i)) * u
+  }
+}
+// the gene in the middle of an interval's hold
+let o2AnchorGene = i => (Int.toFloat(i) + 0.5) / Int.toFloat(Array.length(o2Anchors))
+let o2Unison = 2
+// the gene that plays st semitones (the middle of a hold for an interval)
+let o2PitchGene = st => {
+  let n = Array.length(o2Anchors)
+  let st = Math.max(o2Anchors->Array.getUnsafe(0), Math.min(o2Anchors->Array.getUnsafe(n - 1), st))
+  let i = ref(0)
+  while i.contents < n - 2 && st > o2Anchors->Array.getUnsafe(i.contents + 1) {
+    i := i.contents + 1
+  }
+  let (a, b) = (o2Anchors->Array.getUnsafe(i.contents), o2Anchors->Array.getUnsafe(i.contents + 1))
+  if Math.abs(st - a) < 1e-6 {
+    o2AnchorGene(i.contents)
+  } else if Math.abs(st - b) < 1e-6 {
+    o2AnchorGene(i.contents + 1)
+  } else {
+    let t = o2Hold + (st - a) / (b - a) * (1. - 2. * o2Hold)
+    (Int.toFloat(i.contents) + t + 0.5) / Int.toFloat(n)
+  }
+}
+// whether osc 2 is at one of the intervals
+let o2OnAnchor = v => o2Anchors->Array.some(a => Math.abs(o2Semitones(v) - a) < 0.01)
 // normal, hard sync, FM 1 > 2, PM 2 > 1, PM 1 feedback, ring 1 × 2, AM 2 > 1
 let mixModes = [0., 1., 2., 3., 4., 5., 6.]
 let mixNames = ["", "sync", "FM", "PM", "feedback", "ring", "AM"]
@@ -135,6 +195,8 @@ let filterTypes =
     "formant II",
     "formant III",
   ]->Array.map(FilterTypes.index)
+// the second filter (F_Double): off, beside the first, or after it
+let doubleNames = ["", "dual", "serial"]
 
 // a choice gene's option, and the gene value in the middle of an option
 let choiceOf = (x, options) => Math.Int.max(0, Math.Int.min(options - 1, Float.toInt(x * Int.toFloat(options))))
@@ -176,7 +238,17 @@ let ofBipolar = (st, range) => {
 }
 let pitchSemitones = v => bipolar(v, 36.)
 let pitchGene = st => ofBipolar(st, 36.)
-let fineSemitones = v => bipolar(v, 12.)
+// the mod envelope's sweep of osc 2's pitch (semitones at its start) and its change of osc 2's
+// level (as Oatmeal's mod env depth on "2 amp": 60 dB at 1, falling with the envelope when > 0)
+let modEnvSemitones = v => bipolar(v, 24.)
+let modEnvLevel = v => bipolar(v, 0.6)
+let modEnvMs = v => logScale(v, 10., 3000.)
+let modEnvOn = x =>
+  Math.abs(modEnvSemitones(x->get64(indexOf("modEnvPitch")))) >= 0.25 ||
+    Math.abs(modEnvLevel(x->get64(indexOf("modEnvDepth")))) >= 0.01
+// the key EQ: ±18 dB, flat in the middle
+let eqDb = v => 36. * (v - 0.5)
+let eqGene = db => clamp01(0.5 + db / 36.)
 // the breakpoint: below dropOff none (one decay stage); then from just under the peak to -36 dB
 let breakpointOf = v => v < 0.1 ? 1. : ampOfDb(-36. * (v - 0.1) / 0.9)
 let dropOf = bp => bp > 0.999 ? 0. : 0.1 + 0.9 * clamp01(-.dbOfAmp(bp) / 36.)
@@ -219,7 +291,7 @@ let decode = (x: Float64Array.t, ~note, ~base: string => float): array<(string, 
   set("O2_PWM_W", width)
   set("O1_PWM_D", 0.)
   set("O2_PWM_D", 0.)
-  set("Transpose", (intervals->Array.getUnsafe(choice(x, "o2Interval")) + fineSemitones(v("o2Fine"))) / 12.)
+  set("Transpose", o2Semitones(v("o2Pitch")) / 12.)
   set("Detune", 6. * v("o2Detune") * v("o2Detune"))
   set("OscMix", mixModes->Array.getUnsafe(mode))
   set("PM_Feedback", mode == 3 || mode == 4 ? v("feedback") : 0.)
@@ -234,8 +306,12 @@ let decode = (x: Float64Array.t, ~note, ~base: string => float): array<(string, 
 
   // the filter: the cutoff is the knob's at the matched key, half key-tracked from there
   set("Filter", Int.toFloat(filterTypes->Array.getUnsafe(choice(x, "filterType"))))
+  // the second filter (of the same type), up to two octaves above the first
+  let double = choice(x, "filterDouble")
   set("Filter2", 0.)
-  set("F_Double", 0.)
+  set("F_Double", Int.toFloat(double))
+  set("F_Split", double == 0 ? 0.2916666567325592 : v("filterSplit"))
+  set("F_Mix", double == 1 ? v("filterMix") : 0.5)
   set("Cutoff", v("cutoff"))
   set("Resonance", 0.85 * v("resonance"))
   set("F_Track", 0.5)
@@ -290,6 +366,30 @@ let decode = (x: Float64Array.t, ~note, ~base: string => float): array<(string, 
   set("LFO_2_Cutoff_1", wob < modOff ? 0. : 0.5 * Math.pow((wob - modOff) / (1. - modOff), ~exp=2.))
   set("LFO_2_Pitch", 0.)
 
+  // mod env 1, falling from full to nothing at once, on osc 2's pitch (unipolar: up to
+  // ±24 semitones at its start) and on osc 2's level (the depth of FM, PM, ring and AM)
+  let sweep = modEnvSemitones(v("modEnvPitch"))
+  let level = modEnvLevel(v("modEnvDepth"))
+  let sweepOn = Math.abs(sweep) >= 0.25
+  let levelOn = Math.abs(level) >= 0.01
+  let modDecay = modEnvMs(v("modEnvDecay"))
+  set("M1_Attack", 0.2)
+  set("M1_Hold", 0.)
+  set("M1_Decay1", 10.)
+  set("M1_Breakpoint", 1.)
+  set("M1_Decay2", modDecay)
+  set("M1_Sustain", 0.)
+  set("M1_Release", modDecay)
+  set("M1_VeloSens", 0.)
+  set("M1_Target_1", sweepOn ? 26. : 0.)
+  set("M1_Depth_1", sweepOn ? sweep / 24. : 0.)
+  set("M1_Target_2", levelOn ? 5. : 0.)
+  set("M1_Depth_2", levelOn ? level : 0.)
+  set("M1_Target_3", 0.)
+  set("M1_Depth_3", 0.)
+  set("M1_Target_4", 0.)
+  set("M1_Depth_4", 0.)
+
   // drive: a soft clip on each voice after the filter, its pregain made up for after
   let drive = v("drive")
   let driveOn = drive >= effectOff
@@ -317,6 +417,11 @@ let decode = (x: Float64Array.t, ~note, ~base: string => float): array<(string, 
   let kept = FxRack.read(base)->Array.filter(e => e != chorusFx && e != reverbFx)
   let rack = Array.concat(kept, [chorusOn ? Some(chorusFx) : None, reverbOn ? Some(reverbFx) : None]->Array.filterMap(e => e))
   FxRack.values(rack->Array.slice(~start=0, ~end=PorridgeParams.rackSlots))->Array.forEach(((id, x)) => set(id, x))
+
+  // the key EQ, on while any band moves
+  let gains = eqKeys->Array.map(key => Math.round(eqDb(v(key)) * 10.) / 10.)
+  set("KEQ_On", gains->Array.some(g => g != 0.) ? 1. : 0.)
+  gains->Array.forEachWithIndex((g, k) => set(PorridgeParams.keyEqGainId(k + 1), g))
   out
 }
 
@@ -370,9 +475,10 @@ let flatOf = (x: Float64Array.t) => {
 let wet = (x: Float64Array.t) =>
   get(x, "drive") >= effectOff || get(x, "chorus") >= effectOff || get(x, "reverb") >= effectOff
 
-// Where the search starts for a target: a saw through a lowpass, nothing else, with the amp
-// envelope fitted to the sample's loudness, the cutoff from its brightness and its pitch
-// movement as a sweep.
+// Where the search starts for a target: a saw through a lowpass, with the amp envelope fitted
+// to the sample's loudness, the cutoff from its brightness, and what the analysis heard in it
+// (SoundTarget): the filter envelope from how its brightness falls, its pitch movement as a
+// sweep, noise as loud as what lies between its harmonics, and unison when it is wide.
 let seed = (t: SoundTarget.t) => {
   let x = Float64Array.fromLength(count)
   let set = (key, value) => x->set64(indexOf(key), clamp01(value))
@@ -382,34 +488,50 @@ let seed = (t: SoundTarget.t) => {
   set("width", 0.)
   setChoice("o2Wave", 1)
   set("o2Level", 0.)
-  setChoice("o2Interval", 0)
-  set("o2Fine", 0.5)
+  set("o2Pitch", o2AnchorGene(o2Unison))
   set("o2Detune", 0.3)
   setChoice("oscMix", 0)
   set("feedback", 0.)
-  set("noise", 0.)
-  set("noiseColour", 0.)
-  setChoice("unison", 0)
-  set("unisonDetune", 0.4)
+  // noise: as loud against osc 1 (at 0 dB) as what lies between the harmonics says (a plain
+  // oscillator reads about -52 dB there, with noise at -29, -20 and -12 dB about -43, -36 and -29)
+  let noiseDb = 1.26 * t.noise + 25.
+  set("noise", t.noise < -46. ? 0. : noiseOff + (1. - noiseOff) * (noiseDb + 36.) / 36.)
+  set("noiseColour", 0.1)
+  // a wide sound: two voices of unison (spread), detuned more the wider it is
+  setChoice("unison", t.width > -18. ? 1 : 0)
+  set("unisonDetune", Math.max(0.2, Math.min(0.8, 0.6 + (t.width + 6.) / 30.)))
   setChoice("octave", 0)
   set("tune", 0.5)
   setChoice("filterType", 1)
-  let hz = Math.max(200., Math.min(10000., 2. * t.brightness))
+  // a brightness that falls is a filter envelope: the cutoff where it settles, the envelope
+  // taking it up by as many octaves as it falls, and down again in about the time it takes
+  let falls = t.brightnessDrop >= 0.4
+  let settled = t.brightness
+  let hz = Math.max(200., Math.min(10000., 2. * settled))
   set("cutoff", FilterTypes.cutoffOfHz(~filterType=filterTypes->Array.getUnsafe(1), hz))
   set("resonance", 0.1)
   let percussive = t.sustain < 0.1
-  set("filterEnv", percussive ? 0.6 : Math.sqrt(0.15 / 0.85))
+  let envmod = falls ? Math.min(0.7, t.brightnessDrop / 4.8) : percussive ? 0.15 : 0.
+  set("filterEnv", Math.sqrt((envmod + 0.15) / 0.85))
   set("filterAttack", 0.)
-  set("filterDecay", ofLogScale(Math.max(10., 1000. * t.decay * 0.7), 10., 10000.))
-  set("filterSustain", percussive ? 0.2 : 0.8)
+  let fall = falls ? 1000. * t.brightnessTime * 1.4 : 1000. * t.decay * 0.7
+  set("filterDecay", ofLogScale(Math.max(10., fall), 10., 10000.))
+  set("filterSustain", falls || percussive ? 0.1 : 0.8)
   set("filterDrop", 0.)
   set("filterDecay1", 0.3)
-  set("pitchEnv", Math.abs(t.pitchDrop) < 0.5 ? 0.5 : pitchGene(t.pitchDrop))
-  set("pitchTime", ofLogScale(60., 10., 3000.))
+  setChoice("filterDouble", 0)
+  set("filterSplit", 0.3)
+  set("filterMix", 0.5)
+  set("pitchEnv", Math.abs(t.pitchDrop) < 0.25 ? 0.5 : pitchGene(t.pitchDrop))
+  set("pitchTime", ofLogScale(Math.max(10., 1000. * t.pitchTime), 10., 3000.))
   set("vibrato", 0.)
   set("vibratoRate", ofLogScale(5., 1.5, 12.))
   set("wobble", 0.)
   set("wobbleRate", ofLogScale(2., 0.3, 12.))
+  set("modEnvPitch", 0.5)
+  set("modEnvDepth", 0.5)
+  set("modEnvDecay", ofLogScale(Math.max(10., 1000. * t.decay * 0.5), 10., 3000.))
+  eqKeys->Array.forEach(key => set(key, 0.5))
   set("drive", 0.)
   set("chorus", 0.)
   set("reverb", 0.)
@@ -441,23 +563,28 @@ let seed = (t: SoundTarget.t) => {
 }
 
 // How many of the optional parts the genes switch on (a second oscillator, noise, unison, a
-// mix mode, an off-harmonic ratio, a pitch sweep, vibrato, wobble, drive, chorus, reverb). The
-// search charges a little for each, so that a part stays only if it helps the match.
+// mix mode, an off-interval ratio, a pitch sweep, vibrato, wobble, the mod envelope, a second
+// filter, drive, chorus, reverb, the fitted wave). The search charges a little for each, so
+// that a part stays only if it helps the match (the fitted wave, which can stand in for much
+// else, only if it helps more than a plain wave would).
 let parts = (x: Float64Array.t) => {
   let v = get(x, ...)
   let mode = choice(x, "oscMix")
   [
     secondOscSounds(x) || modulates(mode),
     mode != 0,
-    Math.abs(fineSemitones(v("o2Fine"))) >= 0.05 && (secondOscSounds(x) || modulates(mode)),
+    !o2OnAnchor(v("o2Pitch")) && (secondOscSounds(x) || modulates(mode)),
     v("noise") >= noiseOff,
     choice(x, "unison") > 0,
     Math.abs(pitchSemitones(v("pitchEnv"))) >= 0.25,
     v("vibrato") >= modOff,
     v("wobble") >= modOff,
+    modEnvOn(x) && (secondOscSounds(x) || modulates(mode)),
+    choice(x, "filterDouble") != 0,
     v("drive") >= effectOff,
     v("chorus") >= effectOff,
     v("reverb") >= effectOff,
+    choice(x, "o1Wave") == fittedWave,
   ]->Array.reduce(0, (n, on) => on ? n + 1 : n)
 }
 
@@ -472,12 +599,14 @@ let structure = (x: Float64Array.t) => {
     choice(x, "o1Wave"),
     choice(x, "filterType"),
     mode,
-    o2 ? 1 + choice(x, "o2Wave") * 8 + choice(x, "o2Interval") : 0,
+    o2 ? 1 + choice(x, "o2Wave") * 100 + Float.toInt(Math.round(o2Semitones(v("o2Pitch")) + 50.)) : 0,
     choice(x, "unison"),
     v("noise") >= noiseOff ? 1 : 0,
     Math.abs(pitchSemitones(v("pitchEnv"))) >= 0.25 ? 1 : 0,
     v("vibrato") >= modOff ? 1 : 0,
     v("wobble") >= modOff ? 1 : 0,
+    modEnvOn(x) && o2 ? 1 : 0,
+    choice(x, "filterDouble"),
     v("drive") >= effectOff ? 1 : 0,
     v("chorus") >= effectOff ? 1 : 0,
     v("reverb") >= effectOff ? 1 : 0,
@@ -486,7 +615,8 @@ let structure = (x: Float64Array.t) => {
 
 // Which genes make a difference to a patch: those of the parts it has on (osc 2's when it
 // sounds or modulates, the noise colour with noise, the second decay stages with a breakpoint
-// and so on). The rest are left out where genes are compared or learned.
+// and so on). The rest are left out where genes are compared or learned; so are the key EQ's,
+// which are fitted to each candidate rather than searched or learned.
 let relevant = (x: Float64Array.t) => {
   let v = get(x, ...)
   let mode = choice(x, "oscMix")
@@ -495,7 +625,10 @@ let relevant = (x: Float64Array.t) => {
   genes->Array.map(g =>
     switch g.key {
     | "width" => pulse
-    | "o2Wave" | "o2Interval" | "o2Fine" | "o2Detune" => o2
+    | "o2Wave" | "o2Pitch" | "o2Detune" | "modEnvPitch" | "modEnvDepth" => o2
+    | "modEnvDecay" => o2 && modEnvOn(x)
+    | "filterSplit" => choice(x, "filterDouble") != 0
+    | "filterMix" => choice(x, "filterDouble") == 1
     | "feedback" => mode == 3 || mode == 4
     | "noiseColour" => v("noise") >= noiseOff
     | "unisonDetune" => choice(x, "unison") > 0
@@ -505,6 +638,7 @@ let relevant = (x: Float64Array.t) => {
     | "vibratoRate" => v("vibrato") >= modOff
     | "wobbleRate" => v("wobble") >= modOff
     | "reverbTime" => v("reverb") >= effectOff
+    | key if eqKeys->Array.includes(key) => false
     | _ => true
     }
   )
@@ -542,8 +676,19 @@ let random = (random: unit => float) => {
     set("pitchEnv", 0.5)
   }
   if often(0.6) {
-    set("o2Fine", 0.5)
+    set("o2Pitch", o2AnchorGene(Float.toInt(random() * Int.toFloat(Array.length(o2Anchors)))))
   }
+  if often(0.7) {
+    set("modEnvPitch", 0.5)
+  }
+  if often(0.6) {
+    set("modEnvDepth", 0.5)
+  }
+  if often(0.7) {
+    setChoice("filterDouble", 0)
+  }
+  // (the key EQ is fitted, not learned)
+  eqKeys->Array.forEach(key => set(key, 0.5))
   if often(0.5) {
     set("drop", 0.)
   }
@@ -568,6 +713,8 @@ let probes = () =>
     set("unison", valueOfChoice(3, 4))
     set("reverbTime", 1.)
     set("pitchEnv", k < 5 ? 0.95 : 0.05)
+    set("modEnvPitch", k < 5 ? 0.05 : 0.95)
+    set("modEnvDepth", k < 5 ? 0.95 : 0.05)
     x
   })
 
@@ -577,7 +724,7 @@ let describe = (x: Float64Array.t) => {
   let wave = key => waveNames->Array.getUnsafe(choice(x, key))
   let mode = choice(x, "oscMix")
   let o2 = secondOscSounds(x) || modulates(mode)
-  let semis = intervals->Array.getUnsafe(choice(x, "o2Interval")) + fineSemitones(v("o2Fine"))
+  let semis = o2Semitones(v("o2Pitch"))
   let rounded = Math.round(semis * 10.) / 10.
   let intervalText = rounded == 0. ? "" : (rounded > 0. ? " +" : " ") ++ Float.toString(rounded)
   let oscText =
@@ -599,7 +746,12 @@ let describe = (x: Float64Array.t) => {
     | n => ` ×${Float.toString(n)}`
     }
   let filterType = filterTypes->Array.getUnsafe(choice(x, "filterType"))
-  let filterText = Array.concat(FilterTypes.oatmealShort, FilterTypes.porridgeShort)->Array.getUnsafe(filterType)
+  let filterText =
+    Array.concat(FilterTypes.oatmealShort, FilterTypes.porridgeShort)->Array.getUnsafe(filterType) ++
+    switch choice(x, "filterDouble") {
+    | 0 => ""
+    | d => " " ++ doubleNames->Array.getUnsafe(d)
+    }
   let sustain = def("Sustain").fromNorm(v("sustain"))
   let shape = if attackMs(v("attack")) > 150. {
     "slow attack"
@@ -614,9 +766,11 @@ let describe = (x: Float64Array.t) => {
     Math.abs(pitchSemitones(v("pitchEnv"))) >= 0.25 ? Some("pitch sweep") : None,
     v("vibrato") >= modOff ? Some("vibrato") : None,
     v("wobble") >= modOff ? Some("wobble") : None,
+    modEnvOn(x) && o2 ? Some("mod env") : None,
     v("drive") >= effectOff ? Some("drive") : None,
     v("chorus") >= effectOff ? Some("chorus") : None,
     v("reverb") >= effectOff ? Some("reverb") : None,
+    eqKeys->Array.some(key => Math.abs(eqDb(v(key))) >= 0.5) ? Some("key EQ") : None,
   ]->Array.filterMap(e => e)
   [oscText, filterText, shape, ...extras]->Array.join(" · ")
 }

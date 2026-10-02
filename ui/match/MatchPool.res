@@ -170,7 +170,7 @@ let evaluate = (t, ~session, ~run, genes: Float64Array.t, weights, threshold, fi
   )
 
 let prepare = async (t, ~name, audio: AudioFile.t) =>
-  switch await request(t, task => Prepare({task, name, samples: audio.samples, sampleRate: audio.sampleRate})) {
+  switch await request(t, task => Prepare({task, name, samples: audio.samples, sides: audio.sides, sampleRate: audio.sampleRate})) {
   | Target({target, envelope, spectrum, suggestions}) => Ok((target, envelope, spectrum, suggestions))
   | Failed({message}) => Error(message)
   | _ => Error(`${name} couldn't be read`)

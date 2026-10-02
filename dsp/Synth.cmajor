@@ -688,6 +688,7 @@ namespace porridge
             v.fenv = Env[4]();
             v.ampEnv = Env(); v.modEnv1 = Env(); v.modEnv2 = Env();
             v.oscEnv = Env[2]();
+            v.keq = KeyEq();
             v.vel = 1.0f;
             v.randAmp = 1.0f;
             v.velGainTarget = 1.0f;
@@ -2714,6 +2715,16 @@ namespace porridge
 
             if (! voiceDist)
                 applyVelocityGain (v, smoothGain, stereo, n);
+
+            // the key EQ, on the note's harmonics
+            if (P[slot::KEQ_On] != 0)
+            {
+                for (int k = 0; k < keyEqBands; ++k)
+                    v.keq.setKeyEqBand (k, P.at (slot::KEQ_1_Gain + k), fG * float (1 << k), float (sampleRate));
+
+                v.keq.processKeyEq (false, bufM, n);
+                if (stereo) v.keq.processKeyEq (true, bufR, n);
+            }
 
             for (int i = 0; i < n; ++i)
             {

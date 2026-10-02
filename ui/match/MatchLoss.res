@@ -10,7 +10,18 @@
 //           difference) plus the mean distance between their logs (in units of 4 nepers),
 //           which only a patch the synth can make exactly brings to nothing; it counts a tenth;
 //
-// then the 10 ms loudness envelopes' mean distance in dB, in units of 20 dB.
+// then the 10 ms loudness envelopes' mean distance in dB, in units of 20 dB, each step weighed by
+// how loud the louder of the two is there (a step 60 dB under the target's loudest counts a
+// tenth: a tail's last whisper is heard less than its body);
+//
+//   grid    (with a pitch) what lies between the harmonics against them, band by band
+//           (Spectrum.measureGrid): the mean distance in dB, in units of 20 dB, over frames
+//           weighted by how loud the target is in them and bands by how loud they are in it;
+//           noise, unison's detuning and a rough recording show here where the bands can't
+//           tell them from more harmonic level;
+//   width   (for a stereo target) side against mid every 10 ms (as a ratio of their levels: a
+//           little width, 20 dB under, counts little against none; unison's, a few dB under,
+//           much), the mean distance over the steps weighted as the timbre's frames are.
 //
 // The candidate is first brought to the target's overall loudness, so only the shape of the
 // sound counts, not how loud the patch is. Levels more than 70 dB under the target's loudest
@@ -37,6 +48,13 @@ let standard = {envelope: 0.5, early: 1., treble: 1., resolutions: [1., 1., 1.]}
 
 let earlySeconds = 0.15
 let detailWeight = 0.1
+let gridWeight = 0.2
+let widthWeight = 0.4
+// a difference in the grid counts at most this many dB
+let gridCap = 30.
+// the envelope's steps: how far under the loudest one counts least, and how little
+let envelopeRange = 60.
+let envelopeLeast = 0.1
 let silence = 10.
 // a frame this far under the target's loudest counts least
 let quietRange = 50.
@@ -124,18 +142,72 @@ let compare = (w, target: Spectrum.features, c: Spectrum.features) =>
     let te = target.envelope
     let ce = c.envelope
     let steps = Math.Int.min(TypedArray.length(te), TypedArray.length(ce))
-    let floorDb = Spectrum.db(maxOf(te)) - 60.
+    let topDb = Spectrum.db(maxOf(te))
+    let floorDb = topDb - 60.
     let earlySteps = Float.toInt(earlySeconds * 100.)
     let (envSum, envWeight) = (ref(0.), ref(0.))
     for s in 0 to steps - 1 {
       let sw = s <= earlySteps ? w.early : 1.
       let a = Math.max(floorDb, Spectrum.db(te->get64(s)))
       let z = Math.max(floorDb, Spectrum.db(gain * ce->get64(s)))
-      envSum := envSum.contents + sw * Math.abs(a - z)
-      envWeight := envWeight.contents + sw
+      let lw = Math.max(envelopeLeast, Math.min(1., (Math.max(a, z) - (topDb - envelopeRange)) / envelopeRange))
+      envSum := envSum.contents + sw * lw * Math.abs(a - z)
+      envWeight := envWeight.contents + sw * lw
     }
     let envelope = envSum.contents / Math.max(envWeight.contents, 1e-30) / 20.
-    spectral + w.envelope * envelope
+
+    // the harmonic grid
+    let grid = switch (target.grid, c.grid) {
+    | (Some(tg), Some(cg)) =>
+      let bands = Spectrum.gridBands
+      let frames = Math.Int.min(tg.frames, cg.frames)
+      let frameLevel = f => {
+        let p = ref(0.)
+        for b in 0 to bands - 1 {
+          p := p.contents + Math.pow(10., ~exp=tg.level->get64(f * bands + b) / 10.)
+        }
+        10. * Math.log10(Math.max(p.contents, 1e-30))
+      }
+      let levels = Array.fromInitializer(~length=frames, frameLevel)
+      let top = levels->Array.reduce(neg_infinity, Math.max)
+      let (sum, weight) = (ref(0.), ref(0.))
+      for f in 0 to frames - 1 {
+        let fw = Math.max(0.02, Math.min(1., (levels->Array.getUnsafe(f) - (top - quietRange)) / quietRange))
+        let loudest = ref(neg_infinity)
+        for b in 0 to bands - 1 {
+          loudest := Math.max(loudest.contents, tg.level->get64(f * bands + b))
+        }
+        for b in 0 to bands - 1 {
+          let (a, z) = (tg.ratio->get64(f * bands + b), cg.ratio->get64(f * bands + b))
+          let bw = fw * Math.max(0., Math.min(1., (tg.level->get64(f * bands + b) - (loudest.contents - 40.)) / 40.))
+          if !Float.isNaN(a) && !Float.isNaN(z) && bw > 0. {
+            sum := sum.contents + bw * Math.min(gridCap, Math.abs(a - z))
+            weight := weight.contents + bw
+          }
+        }
+      }
+      weight.contents > 0. ? sum.contents / weight.contents / 20. : 0.
+    | _ => 0.
+    }
+
+    // the width
+    let width = switch (target.side, c.side) {
+    | (Some(ts), side) =>
+      let n = Math.Int.min(steps, TypedArray.length(ts))
+      let (sum, weight) = (ref(0.), ref(0.))
+      for s in 0 to n - 1 {
+        let m = te->get64(s)
+        let ratio = (side, mid) => mid > 1e-9 ? Math.min(1., side / mid) : 0.
+        let a = ratio(ts->get64(s), m)
+        let z = side->Option.mapOr(0., cs => ratio(cs->get64(s), ce->get64(s)))
+        let lw = Math.max(0.02, Math.min(1., (Spectrum.db(m) - (topDb - quietRange)) / quietRange))
+        sum := sum.contents + lw * Math.abs(a - z)
+        weight := weight.contents + lw
+      }
+      weight.contents > 0. ? sum.contents / weight.contents : 0.
+    | (None, _) => 0.
+    }
+    spectral + w.envelope * envelope + gridWeight * grid + widthWeight * width
   }
 
 // A loss as the percentage the cards show: two takes of one plucked string come out near 85%,
@@ -186,6 +258,8 @@ type objectiveData = {
   floorDb: float,
   detail: float,
   stepSamples: float,
+  envelopeRange: float,
+  envelopeLeast: float,
 }
 
 // One trial (plain JavaScript: this runs some fifty times a candidate).
@@ -232,12 +306,14 @@ let objectiveTrial: (objectiveData, Float64Array.t) => float = %raw(`(d, power) 
     if (ri === 0) spectral += d.rwSum * d.detail * logSum / Math.max(d.logWeight, 1e-30) / 4;
   }
   let envSum = 0, envWeight = 0;
+  const topDb = d.floorDb + 60, range = d.envelopeRange, least = d.envelopeLeast;
   for (let s = 0; s < steps; s++) {
     const sw = s <= d.earlySteps ? d.early : 1;
     const a = Math.max(d.floorDb, 20 * Math.log10(Math.max(d.te[s], 1e-9)));
     const z = Math.max(d.floorDb, 20 * Math.log10(Math.max(gain * d.fe[s] * Math.sqrt(stepPower[s]), 1e-9)));
-    envSum += sw * Math.abs(a - z);
-    envWeight += sw;
+    const lw = Math.max(least, Math.min(1, ((a > z ? a : z) - (topDb - range)) / range));
+    envSum += sw * lw * Math.abs(a - z);
+    envWeight += sw * lw;
   }
   return spectral / Math.max(d.rwSum, 1e-30) + d.envelope * envSum / Math.max(envWeight, 1e-30) / 20;
 }`)
@@ -343,6 +419,8 @@ let envelopeObjective = (w: weights, target: Spectrum.features, flat: Spectrum.f
     floorDb: Spectrum.db(maxOf(target.envelope)) - 60.,
     detail: detailWeight,
     stepSamples: Int.toFloat(Spectrum.envelopeStep),
+    envelopeRange,
+    envelopeLeast,
   }
   power => objectiveTrial(data, power)
 }

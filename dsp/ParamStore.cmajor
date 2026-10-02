@@ -1345,6 +1345,15 @@ processor ParamStore
     input event float Ai4_Body [[ name: "Air 4 Air body", min: 0, max: 1, init: 0.5 ]];
     input event float Ai4_DarkFreq [[ name: "Air 4 Air dark freq", min: 0, max: 1, init: 0.5199999809265137 ]];
     input event float Ai4_Darken [[ name: "Air 4 Air darken", min: 0, max: 1, init: 0 ]];
+    input event int KEQ_On [[ name: "Key EQ", min: 0, max: 1, init: 0, text: "off|on" ]];
+    input event float KEQ_1_Gain [[ name: "Key EQ 1× gain", min: -24, max: 24, init: 0 ]];
+    input event float KEQ_2_Gain [[ name: "Key EQ 2× gain", min: -24, max: 24, init: 0 ]];
+    input event float KEQ_3_Gain [[ name: "Key EQ 4× gain", min: -24, max: 24, init: 0 ]];
+    input event float KEQ_4_Gain [[ name: "Key EQ 8× gain", min: -24, max: 24, init: 0 ]];
+    input event float KEQ_5_Gain [[ name: "Key EQ 16× gain", min: -24, max: 24, init: 0 ]];
+    input event float KEQ_6_Gain [[ name: "Key EQ 32× gain", min: -24, max: 24, init: 0 ]];
+    input event float KEQ_7_Gain [[ name: "Key EQ 64× gain", min: -24, max: 24, init: 0 ]];
+    input event float KEQ_8_Gain [[ name: "Key EQ 128× gain", min: -24, max: 24, init: 0 ]];
 
     event O1_Waveform (int v) { paramOut <- porridge::ParamChange (2117, float (v)); }
     event O1_Amp (float v) { paramOut <- porridge::ParamChange (2127, v); }
@@ -2684,4 +2693,13 @@ processor ParamStore
     event Ai4_Body (float v) { paramOut <- porridge::ParamChange (3593, v); }
     event Ai4_DarkFreq (float v) { paramOut <- porridge::ParamChange (3594, v); }
     event Ai4_Darken (float v) { paramOut <- porridge::ParamChange (3595, v); }
+    event KEQ_On (int v) { paramOut <- porridge::ParamChange (3596, float (v)); }
+    event KEQ_1_Gain (float v) { paramOut <- porridge::ParamChange (3597, v); }
+    event KEQ_2_Gain (float v) { paramOut <- porridge::ParamChange (3598, v); }
+    event KEQ_3_Gain (float v) { paramOut <- porridge::ParamChange (3599, v); }
+    event KEQ_4_Gain (float v) { paramOut <- porridge::ParamChange (3600, v); }
+    event KEQ_5_Gain (float v) { paramOut <- porridge::ParamChange (3601, v); }
+    event KEQ_6_Gain (float v) { paramOut <- porridge::ParamChange (3602, v); }
+    event KEQ_7_Gain (float v) { paramOut <- porridge::ParamChange (3603, v); }
+    event KEQ_8_Gain (float v) { paramOut <- porridge::ParamChange (3604, v); }
 }

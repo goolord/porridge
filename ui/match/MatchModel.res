@@ -7,9 +7,11 @@
 // Its input (`features`) is the target's measurements: the long spectra (48 mel bands) over 11
 // stretches of time, the short ones (32 bands) over 7 in the first 150 ms, the loudness at 25
 // points, all in dB under the loudest, and the key, whether it has a pitch, its brightness,
-// length and pitch sweep. Its output is a value for each continuous gene (through a sigmoid)
-// and the options' scores for each choice gene; the render genes (octave, tune) say how far
-// the pitch found is from the sound's.
+// length and pitch sweep (and how long it takes), how far its brightness falls (and how fast),
+// how much lies between its harmonics (overall, and in each of the harmonic grid's bands) and
+// how wide it is. Its output is a value for each continuous gene (through a sigmoid) and the
+// options' scores for each choice gene, but the key EQ's, which are fitted to each candidate;
+// the render genes (octave, tune) say how far the pitch found is from the sound's.
 //
 // The file (ui/match/match-model.bin, bundle/match-model.bin in the plugin): "PMM1", the
 // header's length (u32), the header (JSON: inputs, layer sizes and the genes it was trained
@@ -27,7 +29,7 @@
 let longStretches = [0., 30., 60., 100., 150., 220., 310., 430., 600., 820., 1100., 1600.]
 let shortStretches = [0., 10., 20., 35., 50., 75., 100., 150.]
 let loudnessSteps = [0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 18, 22, 26, 31, 37, 44, 52, 61, 72, 85, 100, 118, 139, 159]
-let scalars = 5
+let scalars = 10 + Spectrum.gridBands
 
 let longBands = (Spectrum.resolutions->Array.getUnsafe(0)).bands
 let shortBands = (Spectrum.resolutions->Array.getUnsafe(2)).bands
@@ -93,13 +95,23 @@ let features = (t: SoundTarget.t) => {
   push(Math.log2(Math.max(50., t.brightness) / 1000.))
   push(SoundTarget.seconds(t) / 1.5)
   push(t.pitchDrop / 12.)
+  push(t.pitchTime * 5.)
+  push(t.brightnessDrop / 3.)
+  push(t.brightnessTime * 5.)
+  push(t.noise / 20.)
+  push(t.width / 20.)
+  let between =
+    t.hz->Option.flatMap(hz => Spectrum.measureGrid(t.samples, ~hz))->Option.mapOr([], Spectrum.gridMeanRatio)
+  for b in 0 to Spectrum.gridBands - 1 {
+    push(between[b]->Option.mapOr(-3., r => Math.max(-3., 10. * Math.log10(Math.max(r, 1e-6)) / 20.)))
+  }
   out
 }
 
 //==============================================================================
 // Outputs: the genes it predicts, and where each one's values are
 
-let predicted = Genome.genes
+let predicted = Genome.genes->Array.filter(g => g.group != #eq)
 
 // (gene index, first output, outputs)
 let layout = {
@@ -197,12 +209,14 @@ let probabilities = (out: Float32Array.t, first, width) => {
   e->Array.map(v => v / sum)
 }
 
-// Where the search should start for a target: the predicted genes; the same with the amp
-// envelope fitted to the sample (Genome.seed's); and the predicted genes with each of the next
-// most likely combinations of first wave, filter type and mix mode.
+// Where the search should start for a target: the predicted genes (the rest, the key EQ's, as
+// the seed has them); the same with the amp envelope fitted to the sample (Genome.seed's); and
+// the predicted genes with each of the next most likely combinations of first wave, filter type
+// and mix mode.
 let suggest = (model: t, target: SoundTarget.t) => {
   let out = run(model, features(target))
-  let x = Float64Array.fromLength(Genome.count)
+  let seed = Genome.seed(target)
+  let x = TypedArray.copy(seed)
   let probs = Map.make()
   layout->Array.forEach(((i, first, width)) => {
     let g = Genome.gene(i)
@@ -218,7 +232,6 @@ let suggest = (model: t, target: SoundTarget.t) => {
     }
   })
   let seeded = TypedArray.copy(x)
-  let seed = Genome.seed(target)
   Genome.envelopeKeys->Array.forEach(key => seeded->set64(Genome.indexOf(key), seed->get64(Genome.indexOf(key))))
 
   // the likeliest combinations after the best

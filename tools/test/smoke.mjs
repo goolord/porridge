@@ -130,6 +130,50 @@ for (const os of [0, 1, 2, 3])
     check (Math.abs (gate - base) < base * 0.05, `osc envelopes as a gate  ${base.toFixed (4)} vs ${gate.toFixed (4)}`);
 }
 
+// the key EQ: a saw's harmonics at A3, each band moving its own (harmonic 1, 2, 4 ... of the
+// note) by its gain and leaving those two octaves away nearly alone; switched on flat, it changes
+// nothing; with unison spread, both channels go through it
+{
+    const one = join (dir, "keq_events.txt");
+    writeFileSync (one, "0 144 57 100\n44100 128 57 0\n");
+    const init = join (root, "tools", "re", "init_prog.bin");
+    const plain = { O1_Waveform: 1, O2_Amp: 0, N_Amp: 0, Filter: 0, Oat_Mode: 1 };
+    const harmonicsDb = (name, sets) =>
+    {
+        const [l] = render ({ program: init, events: one, frames: rate, rate, sets: { ...plain, ...sets }, out: join (dir, name + ".f32") });
+        const from = Math.floor (0.3 * rate), size = 16384;
+        // the level at each harmonic (the highest of the DFT's nearby bins, Hann windowed)
+        return [1, 2, 4, 8, 16].map (h =>
+        {
+            let best = 0;
+            for (let hz = h * 220 * 0.98; hz <= h * 220 * 1.02; hz += 1)
+            {
+                let re = 0, im = 0;
+                for (let i = 0; i < size; ++i)
+                {
+                    const w = 0.5 - 0.5 * Math.cos (2 * Math.PI * i / size);
+                    const a = 2 * Math.PI * hz * i / rate;
+                    re += w * l[from + i] * Math.cos (a);
+                    im += w * l[from + i] * Math.sin (a);
+                }
+                best = Math.max (best, Math.hypot (re, im));
+            }
+            return 20 * Math.log10 (best + 1e-12);
+        });
+    };
+    const off = harmonicsDb ("keq_off", {});
+    const flat = harmonicsDb ("keq_flat", { KEQ_On: 1 });
+    const boost = harmonicsDb ("keq_boost", { KEQ_On: 1, KEQ_3_Gain: 12 });
+    const cut = harmonicsDb ("keq_cut", { KEQ_On: 1, KEQ_5_Gain: -18 });
+    const show = a => a.map (v => v.toFixed (1)).join (" ");
+    check (flat.every ((v, i) => Math.abs (v - off[i]) < 0.01), `key EQ flat changes nothing  ${show (off)} | ${show (flat)}`);
+    check (Math.abs (boost[2] - off[2] - 12) < 1 && Math.abs (boost[0] - off[0]) < 1.5,
+           `key EQ band 3 (4x) +12 dB  4x ${(boost[2] - off[2]).toFixed (2)} dB, 1x ${(boost[0] - off[0]).toFixed (2)} dB`);
+    check (Math.abs (cut[4] - off[4] + 18) < 1.5 && Math.abs (cut[2] - off[2]) < 1.5,
+           `key EQ band 5 (16x) -18 dB  16x ${(cut[4] - off[4]).toFixed (2)} dB, 4x ${(cut[2] - off[2]).toFixed (2)} dB`);
+    sounds ("key EQ, unison spread", { KEQ_On: 1, KEQ_2_Gain: 18, KEQ_6_Gain: -24, KEQ_8_Gain: 24, U_Voices: 4, U_Spread: 1 }, { tail: false });
+}
+
 // the noise source, on the pitch and on the cutoff
 const noise = ModMatrix.sourceIndex ("noise");
 sounds ("noise > pitch", { Mod1_Source: noise, Mod1_Target: ModMatrix.targetIndex ("finePitch"), Mod1_Amount: 0.5 }, { tail: false });
