@@ -115,18 +115,39 @@ namespace porridge
         this.nzGain = src.nzGain;
     }
 
+    /// The oscillator noise's lowpass coefficient and gain for a colour (see setNoise), the
+    /// same for every voice: worked out once, and again only when the colour changes.
+    struct NoiseCoefs
+    {
+        bool valid;
+        float colour, coef, gain;
+    }
+
+    void update (NoiseCoefs& this, float colour, float64 sampleRate)
+    {
+        if (this.valid && colour == this.colour)
+            return;
+
+        let fc = 50.0 * pow (2.0, 9.0 * float64 (colour));
+        let c = 1.0 - exp (-2.0 * pi * min (fc, 0.45 * sampleRate) / sampleRate);
+        this.valid = true;
+        this.colour = colour;
+        this.coef = float (c);
+        this.gain = float (sqrt (3.0 * (2.0 - c) / c));
+    }
+
     /// The oscillator's noise for depth 0..1 (deviation up to half the frequency, as RMS, on a
-    /// square law) and colour 0..1 (the noise lowpassed at 50 Hz .. 25.6 kHz).
-    void setNoise (Osc& this, float depth, float colour, float64 sampleRate)
+    /// square law) and colour 0..1 (the noise lowpassed at 50 Hz .. 25.6 kHz). coefs: the
+    /// colour's, by the sample rate (NoiseCoefs.update), updated here when the noise is on.
+    void setNoise (Osc& this, float depth, float colour, NoiseCoefs& coefs, float64 sampleRate)
     {
         this.nzDepth = 0.5f * depth * depth;
 
         if (this.nzDepth > 0)
         {
-            let fc = 50.0 * pow (2.0, 9.0 * float64 (colour));
-            let c = 1.0 - exp (-2.0 * pi * min (fc, 0.45 * sampleRate) / sampleRate);
-            this.nzCoef = float (c);
-            this.nzGain = float (sqrt (3.0 * (2.0 - c) / c));
+            coefs.update (colour, sampleRate);
+            this.nzCoef = coefs.coef;
+            this.nzGain = coefs.gain;
         }
     }
 
@@ -584,6 +605,220 @@ namespace porridge
         return h2;
     }
 
+    /// The samples of warm-up past which the resonant noise takes a draw of the filters' state
+    /// instead, outside Oat mode (see warmUp).
+    let noiseExactMax = 1024;
+
+    /// Oatmeal starts the resonant noise's filters (with the first block's F and q) on half a
+    /// second of noise, K calls of rand() with two filter ticks each, so that a note starts at
+    /// the noise's full level. Only the last calls still count: the filters forget a difference
+    /// in their state by about qF a sample, and a run of the last 256 + 80 / qF from rest lands
+    /// on the same state bit for bit (measured over F 0.01 .. 1.2, resonance 0 .. 1 and 300
+    /// seeds each: 30 / qF at most; were it ever short, the difference would be a rounding
+    /// error, under 2^-30 of the noise). So the calls before it are skipped. Where even that
+    /// run is longer than noiseExactMax (strong resonance on low notes), outside Oat mode the
+    /// state is drawn instead from its distribution after the K samples (warmDraw): the same
+    /// sound, another draw of the noise, which the filters forget as they would the first.
+    void warmUp (Noise& this, Rand& rng, int K, bool exact)
+    {
+        let need = 256.0 + 80.0 / max (float64 (this.q) * float64 (this.F), 1e-12);
+        let tail = need >= float64 (K) ? K : int (need);
+
+        if (tail > noiseExactMax && ! exact)
+        {
+            this.warmDraw (rng, K);
+            return;
+        }
+
+        skipRand (rng, K - tail);
+
+        for (int k = 0; k < tail; ++k)
+        {
+            let x = rng.bipolar();
+            this.noiseSvf (x, this.F, this.q);
+            this.noiseSvf (x, this.F, this.q);
+        }
+    }
+
+    /// Leaves rng where n calls of rand() would (in log2 n steps).
+    void skipRand (Rand& rng, int n)
+    {
+        var a = 214013i64;          // 2^i calls: s -> a s + c (mod 2^32)
+        var c = 2531011i64;
+        var A = 1i64;               // the calls so far: s -> A s + C
+        var C = 0i64;
+        var k = n;
+
+        while (k > 0)
+        {
+            if ((k & 1) != 0)
+            {
+                A = mulU32 (a, A);
+                C = (mulU32 (a, C) + c) & u32;
+            }
+
+            c = (mulU32 (a, c) + c) & u32;
+            a = mulU32 (a, a);
+            k >>= 1;
+        }
+
+        rng.state = (mulU32 (A, rng.state) + C) & u32;
+    }
+
+    /// x y mod 2^32 for x, y < 2^32 (without overflowing an int64).
+    int64 mulU32 (int64 x, int64 y)
+    {
+        return (x * (y & 0xffff) + (((x * (y >> 16)) & 0xffff) << 16)) & u32;
+    }
+
+    /// The filters' state after K samples of the warm-up from rest is a sum of K random inputs
+    /// through them: near enough Gaussian, with covariance sum_t A^t u u^T A^tT var(x) (A, u: a
+    /// sample's two ticks, on the state and from the input), which doubling works out. The
+    /// state is that covariance's Cholesky factor times four Gaussian draws, made from the
+    /// first four of the K calls of rand() (the rest are skipped).
+    void warmDraw (Noise& this, Rand& rng, int K)
+    {
+        let F = float64 (this.F), q = float64 (this.q);
+
+        // one tick: s -> T s + w x, from the tick on each unit state and on a unit input
+        float64[16] T;
+
+        for (int j = 0; j < 4; ++j)
+        {
+            float64[4] e;
+            e.at (j) = 1.0;
+            let s = noiseTick64 (e, 0.0, F, q);
+
+            for (int i = 0; i < 4; ++i)
+                T.at (i * 4 + j) = s.at (i);
+        }
+
+        let w = noiseTick64 (float64[4](), 1.0, F, q);
+        let A = mat4Mul (T, T);
+        let Tw = mat4Apply (T, w);
+        let u = float64[4] (Tw[0] + w[0], Tw[1] + w[1], Tw[2] + w[2], Tw[3] + w[3]);
+
+        // G: the sum over m = 2^i samples, P = A^m; R and PR: over the samples so far
+        float64[16] G, R;
+        var P = A;
+        var PR = float64[16] (1.0, 0.0, 0.0, 0.0,  0.0, 1.0, 0.0, 0.0,  0.0, 0.0, 1.0, 0.0,  0.0, 0.0, 0.0, 1.0);
+
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j)
+                G.at (i * 4 + j) = u.at (i) * u.at (j);
+
+        var k = K;
+
+        while (k > 0)
+        {
+            if ((k & 1) != 0)
+            {
+                R = mat4AddSandwich (R, PR, G);
+                PR = mat4Mul (PR, P);
+            }
+
+            G = mat4AddSandwich (G, P, G);
+            P = mat4Mul (P, P);
+            k >>= 1;
+        }
+
+        // x = r / 16384 - 1, r uniform over 0 .. 32767
+        let variance = (32768.0 * 32768.0 - 1.0) / 12.0 / (16384.0 * 16384.0);
+
+        // Cholesky (a factor of zero where the covariance is singular)
+        float64[16] L;
+
+        for (int j = 0; j < 4; ++j)
+        {
+            var d = R.at (j * 4 + j) * variance;
+
+            for (int m = 0; m < j; ++m)
+                d -= L.at (j * 4 + m) * L.at (j * 4 + m);
+
+            let ljj = d > 0 ? sqrt (d) : 0.0;
+            L.at (j * 4 + j) = ljj;
+
+            for (int i = j + 1; i < 4; ++i)
+            {
+                var s = R.at (i * 4 + j) * variance;
+
+                for (int m = 0; m < j; ++m)
+                    s -= L.at (i * 4 + m) * L.at (j * 4 + m);
+
+                L.at (i * 4 + j) = ljj > 0 ? s / ljj : 0.0;
+            }
+        }
+
+        // four Gaussian draws (Box-Muller)
+        float64[4] z;
+
+        for (int i = 0; i < 4; i += 2)
+        {
+            let u1 = float64 (rng.next() + 1) / 32768.0;
+            let u2 = float64 (rng.next()) / 32768.0;
+            let r = sqrt (-2.0 * log (u1));
+            z.at (i) = r * cos (twoPi * u2);
+            z.at (i + 1) = r * sin (twoPi * u2);
+        }
+
+        skipRand (rng, K - 4);
+
+        let s = mat4Apply (L, z);
+        this.l1 = float (s[0]);
+        this.b1 = float (s[1]);
+        this.l2 = float (s[2]);
+        this.b2 = float (s[3]);
+    }
+
+    /// noiseSvf on a state (l1, b1, l2, b2) in float64, exact arithmetic aside.
+    float64[4] noiseTick64 (float64[4] s, float64 x, float64 F, float64 q)
+    {
+        let l1 = s[0] + F * s[1];
+        let h1 = q * x - l1 - q * s[1];
+        let b1 = s[1] + F * h1;
+        let l2 = s[2] + F * s[3];
+        let h2 = q * l1 - l2 - q * s[3];
+        let b2 = s[3] + F * h2;
+        return float64[4] (l1, b1, l2, b2);
+    }
+
+    // 4 x 4 matrices, row by row
+    float64[16] mat4Mul (const float64[16]& a, const float64[16]& b)
+    {
+        float64[16] r;
+
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j)
+                r.at (i * 4 + j) = a.at (i * 4) * b.at (j) + a.at (i * 4 + 1) * b.at (4 + j)
+                                    + a.at (i * 4 + 2) * b.at (8 + j) + a.at (i * 4 + 3) * b.at (12 + j);
+
+        return r;
+    }
+
+    float64[4] mat4Apply (const float64[16]& a, const float64[4]& v)
+    {
+        float64[4] r;
+
+        for (int i = 0; i < 4; ++i)
+            r.at (i) = a.at (i * 4) * v[0] + a.at (i * 4 + 1) * v[1] + a.at (i * 4 + 2) * v[2] + a.at (i * 4 + 3) * v[3];
+
+        return r;
+    }
+
+    /// r + p g p^T
+    float64[16] mat4AddSandwich (const float64[16]& r, const float64[16]& p, const float64[16]& g)
+    {
+        let pg = mat4Mul (p, g);
+        var out = r;
+
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j)
+                out.at (i * 4 + j) += pg.at (i * 4) * p.at (j * 4) + pg.at (i * 4 + 1) * p.at (j * 4 + 1)
+                                       + pg.at (i * 4 + 2) * p.at (j * 4 + 2) + pg.at (i * 4 + 3) * p.at (j * 4 + 3);
+
+        return out;
+    }
+
     /// Writes one block of noise into buf (white, or resonant band-pass when N resonance > 0).
     void renderNoise (Noise& this, Rand& rng, const float[numSlots]& P, float Rg, float at, float ampMod, float resMod,
                       float64 sr, float[blockSize]& buf, int n)
@@ -633,14 +868,7 @@ namespace porridge
             this.F = F;
             this.q = q;
             this.g = g;
-            let warm = int ((sr + 1.0) * 0.5);
-
-            for (int k = 0; k < warm; ++k)
-            {
-                let x = rng.bipolar();
-                this.noiseSvf (x, this.F, this.q);
-                this.noiseSvf (x, this.F, this.q);
-            }
+            this.warmUp (rng, int ((sr + 1.0) * 0.5), P[slot::Oat_Mode] != 0);
         }
 
         let dF = (F - this.F) / float (n);

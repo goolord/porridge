@@ -1,6 +1,7 @@
-//  Voice state. A voice holds 16 unison copies of both oscillators, the noise source, four
-//  filters (filter 1/2 for left or mono, and for right when unison spreads the voice in
-//  stereo), two distortion stages, and its envelopes and per-note LFOs.
+//  Voice state. A voice holds 16 unison copies of both oscillators, the noise source, and its
+//  envelopes and per-note LFOs. Its four filters (filter 1/2 for left or mono, and for right
+//  when unison spreads the voice in stereo), two distortion stages and voice lane slots are the
+//  synth's, by voice (Synth.voiceFilters, voiceDistortions, voiceLanes).
 
 namespace porridge
 {
@@ -21,10 +22,17 @@ namespace porridge
         int uniU;
         float uniD, uniJ, uniCurve, uniOct;
 
-        // filters 1 and 2 and their envelopes for left (or mono), then for right: [isF2 + 2 right]
-        Filter[4] filt;
+        // the voice's index in the pool, and whether its filters, distortions and lane slots are in
+        // use since it started: they live outside the voice (in the synth), so that starting one
+        // doesn't clear a quarter of a megabyte, and each is cleared when it's first used
+        // (Voice() makes them all unused)
+        int index;
+        bool[4] filtReady;
+        bool[2] distReady;
+        bool[laneSlots] laneReady;
+
+        // filter envelopes, by filter (Synth.voiceFilters): [isF2 + 2 right]
         Env[4] fenv;
-        Distortion[2] dist;             // left (or mono), right
 
         Env ampEnv, modEnv1, modEnv2;
         Env[2] oscEnv;                  // the oscillators' own envelopes (OE1_On, OE2_On)
@@ -76,9 +84,8 @@ namespace porridge
         float viewCutoff;
         float[viewTargets] targetPos;
 
-        // the voice lane's slots (dsp/VoiceFx.cmajor), and the tail after the amp envelope ends
-        // while effects after it still ring: whether it's in one, and for how long
-        LaneFx[laneSlots] lane;
+        // the tail after the amp envelope ends while the voice lane's effects after it still
+        // ring: whether it's in one, and for how long
         bool tailing;
         int tailSamples;
     }
