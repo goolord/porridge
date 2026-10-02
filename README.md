@@ -59,13 +59,17 @@ ui/                     patch view (ReScript)
                           sources include chord position, gap, legato and the sounding
                           pitch); ModScope.res says
                           which sources each note has its own of and which targets are in the
-                          voice or on the whole sound, for PageMod.res (the Mod page);
-                          Modulators.res says what moves each parameter (connections and
-                          Oatmeal's own routings), which the parameter rows and the graphs'
-                          points show in the sources' colours, and what each source moves,
+                          voice or on the whole sound, for PageMod.res (the Mod page: every
+                          route in one list, Oatmeal's own included, and the selected source's
+                          editor, which SourceEditors.res builds for it and the synth page);
+                          Modulators.res lists every route in every system: what moves each
+                          parameter, which the parameter rows, the graphs' points and the
+                          envelopes show in the sources' colours, and what each source moves,
                           which Destinations.res shows as chips on the source's panel;
-                          ModEdit.res connects a source to a control, and ModTray.res is the
-                          source tray (from the status line) whose chips drop onto any control
+                          ModFocus.res lights what a selected source moves on every page;
+                          ModEdit.res connects a source to a control (as does a control's menu,
+                          Controls.contextMenu), and ModTray.res is the source tray (from the
+                          status line) whose chips drop onto any control
   PresetBrowser.res       the preset browser; Library.res searches and filters for it, and
                           BankLibrary.res asks the plugin for the banks it keeps
   random/                 random patches: RandomDrawer.res (the drawer: the wildness knobs,

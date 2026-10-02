@@ -23,9 +23,6 @@ let macroName = (programs, i) => {
 
 let sourceColor = s => ModMatrix.sources[s]->Option.mapOr(ModMatrix.playColour, s => s.colour)
 
-// a name short enough for a small chip
-let shortLabel = s => ModMatrix.sources[s]->Option.mapOr("", s => s.short)
-
 // The macro knob source s is (0 the first), if it's one.
 let macroOf = s =>
   switch ModMatrix.sources[s] {
@@ -33,7 +30,57 @@ let macroOf = s =>
   | _ => None
   }
 
+// A source's name, the same in every list of sources and routes: a macro's as its program names
+// it ("tone", not "macro 2"), the others by their labels.
+let sourceName = (programs, s) =>
+  switch (macroOf(s), ModMatrix.sources[s]) {
+  | (Some(i), _) => macroName(programs, i)
+  | (None, Some(source)) => source.label
+  | (None, None) => ""
+  }
+
+// The pitch envelope: a source of Oatmeal's own routing (to the pitch) that the matrix can't
+// connect, so it has no index there. Routes and source chips know it by this key.
+let pitchEnvKey = "pitchEnv"
+let pitchEnvName = "pitch env"
+
+// a source's name and colour by its key (ModMatrix.sources, or the pitch envelope)
+let keyName = (programs, key) => key == pitchEnvKey ? pitchEnvName : sourceName(programs, ModMatrix.sourceIndex(key))
+let keyColour = key => key == pitchEnvKey ? ModMatrix.envColour : sourceColor(ModMatrix.sourceIndex(key))
+
 let isController = s => ModMatrix.sources[s]->Option.mapOr(false, s => s.kind == Controller)
+
+// The sources in their groups for menus, by index; sources no group names go in a last group.
+let sourceGroups = {
+  let grouped = ModMatrix.sourceGroups->Array.map(((title, keys)) => (
+    title,
+    keys->Array.map(ModMatrix.sourceIndex)->Array.filter(i => i > 0),
+  ))
+  let named = grouped->Array.flatMap(Pair.second)
+  let rest = sourceOrder->Array.filter(i => !(named->Array.includes(i)))
+  rest == [] ? grouped : [...grouped, ("other", rest)]
+}
+
+// a swatch in a source's colour, for menus
+let swatch = colour => {
+  let e = el("span", ~cls="icw")
+  el("i", ~cls="msw", ~parent=e)->setStyle("background", colour)
+  e
+}
+
+// A menu of every source by group (each item's value its index), named as the program names
+// them; with ~taken, those it holds for are checked and can't be picked.
+let sourceItems = (programs, ~taken=?) =>
+  sourceGroups->Array.flatMap(((title, members)) =>
+    members->Array.mapWithIndex((s, i) => {
+      Menu.label: sourceName(programs, s),
+      value: s,
+      icon: swatch(sourceColor(s)),
+      heading: ?(i == 0 ? Some(title) : None),
+      checked: ?taken->Option.map(taken => taken(s)),
+      disabled: taken->Option.mapOr(false, taken => taken(s)),
+    })
+  )
 
 let isUsed = (get, k) => {
   let s = ModMatrix.readSlot(get, k)

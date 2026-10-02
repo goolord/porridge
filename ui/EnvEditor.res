@@ -147,6 +147,8 @@ type envelope = {
   depth: option<depth>,
   // where a sounding note is on it (VoiceView), for a mark per note
   clock: option<VoiceView.voice => float>,
+  // the modulation source it is (ModMatrix.sources), if it's one
+  source: option<string>,
 }
 
 let amp = {
@@ -157,6 +159,7 @@ let amp = {
   block: false,
   depth: None,
   clock: Some(v => v.ampMs),
+  source: Some("ampEnv"),
 }
 
 // (the filter envelope moves the cutoff by its env mod at the top, up to 8 octaves either way)
@@ -168,6 +171,7 @@ let filter = {
   block: true,
   depth: Some({id: "F_EnvMod", label: "env mod", atZero: "the cutoff stays put"}),
   clock: Some(v => v.filterMs),
+  source: Some("filterEnv"),
 }
 
 let modEnv = n => {
@@ -178,6 +182,7 @@ let modEnv = n => {
   block: true,
   depth: None,
   clock: Some(n == 1 ? v => v.mod1Ms : v => v.mod2Ms),
+  source: Some(`modEnv${Int.toString(n)}`),
 }
 
 // An oscillator's own envelope (PorridgeParams.oscEnvSpecs): like the amp envelope, in blocks.
@@ -191,6 +196,7 @@ let oscEnv = n => {
     block: true,
     depth: None,
     clock: None,
+    source: None,
   }
 }
 
@@ -510,7 +516,10 @@ let xOfClock = (times: array<stretch>, ms, ~released) => {
 }
 
 // fields: the raw parameters shown by the "values" switch, this many to a row; clock: where each
-// sounding note is on this envelope (VoiceView), for a mark per note
+// sounding note is on this envelope (VoiceView), for a mark per note; source: the modulation
+// source it is, whose envelope mark (Modulators.envMark: what moves the envelope as a whole, its
+// speed, velocity's say in it, the voice's level) shows down its left edge in the modulators'
+// colours, saying what they are while hovered
 let make = (
   ctx: Ctx.t,
   parent,
@@ -520,9 +529,25 @@ let make = (
   ~columns=4,
   ~name,
   ~clock: option<VoiceView.voice => float>=?,
+  ~source: option<string>=?,
 ) => {
   let model = ctx.model
   let ed = NodeEditor.make(ctx, parent, box, ~hint=hintFor(name), ~columns)
+  let marks = source->Option.mapOr([], key => [Modulators.envMark(key)])
+  marks->Array.forEach(mark => {
+    let strip = el("span", ~cls="me", ~parent=ed.g.root)
+    let draw = () => {
+      let ms = Modulators.on(model, mark)
+      strip->setTextContent("")
+      ms->Array.forEach(m => el("i", ~parent=strip)->setStyle("background", Modulators.colour(m)))
+      strip->setStyle("display", ms == [] ? "none" : "")
+    }
+    Modulators.watch(model, draw)
+    draw()
+    ctx.status->Status.hover(strip, () => name ++ Modulators.statusText(model, [mark]))
+  })
+  // (lit while the selected source moves it, or a point of it)
+  ModFocus.register(model, ed.g.root, () => [...marks, ...shape.ids], ~counted=true)
   let zero = ed.g.under->Plots.line(2., 0., box.w - 2., 0.)
   let fill = FxGraph.path(ed.g.under, ~cls="fill")
   let ticks = FxGraph.group(ed.g.under)

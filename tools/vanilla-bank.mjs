@@ -51,11 +51,13 @@ const lfoMode = choices ("LFO_1_Sync", { perNote: "per note", globalReset: "glob
 const steps = choices ("LFO_1_Steps", { off: "off", 2: "2", 3: "3", 4: "4", 6: "6", 8: "8", 12: "12", 16: "16", 24: "24", 32: "32" });
 const delayUnit = choices ("D_Unit", { ms: "ms", sixteenth: "16ths", eighth: "8ths", quarter: "quarter notes" });
 const poly = choices ("PolyMode", { mono: "Monophonic", poly: "Polyphonic", legato: "Monophonic, legato" });
-// Oatmeal's own mod envelope targets (M1_Target_N, M2_Target_N)
-const mTarget = choices ("M1_Target_1", { cutoff1: "cutoff 1", cutoff2: "cutoff 2", resonance: "resonance", amp1: "1 amp",
-                                          amp2: "2 amp", noiseAmp: "noise amp", pitch1: "1 pitch", pitch2: "2 pitch",
-                                          pw1: "1 pulsewidth", pwmRate1: "1 PWM rate", pwmDepth1: "1 PWM depth",
-                                          pw2: "2 pulsewidth", lfo1Depth: "LFO 1 depth", lfo2Depth: "LFO 2 depth",
+// Oatmeal's own mod envelope targets (M1_Target_N, M2_Target_N), by the names the view gives them
+// (OatmealParams.targetName)
+const mTarget = choices ("M1_Target_1", { cutoff1: "cutoff", cutoff2: "filter split", resonance: "resonance",
+                                          amp1: "osc 1 level", amp2: "osc 2 level", noiseAmp: "noise level",
+                                          pitch1: "osc 1 pitch", pitch2: "osc 2 transpose", pw1: "osc 1 pulse width",
+                                          pwmRate1: "osc 1 pwm rate", pwmDepth1: "osc 1 pwm depth",
+                                          pw2: "osc 2 pulse width", lfo1Depth: "LFO 1 depth", lfo2Depth: "LFO 2 depth",
                                           filterMix: "filter mix" });
 
 // osc 2's transpose is in octaves

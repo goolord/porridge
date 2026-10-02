@@ -1,13 +1,13 @@
 // Synth page: the voice, as a signal path. Its flow runs along the top (VoiceFlow); below it the
-// oscillators, the filter and the amp, then the modulation sources (each with what it moves, as
-// chips: Destinations) and the voice's settings. What a sound is made of shows; the rest waits in
+// oscillators, the filter and the amp, then the modulation sources (SourceEditors, as the Mod page
+// has them: each with what it moves, as chips) and the voice's settings. What a sound is made of shows; the rest waits in
 // tabs, each marked while what it holds is in use (Features), and controls that do nothing for
 // the current settings (pulse width without a pulse wave, a filter type's unused morph) stay
 // hidden. Graphs are the main controls of what they draw: drag their points.
 
 open! Web
 
-let hint = "Drag or scroll to change a value, shift for fine steps. Double-click to type, right-click to reset. Click a list to pick from it, right-click to step through it."
+let hint = "Drag or scroll to change a value, shift for fine steps. Double-click to type, right-click to reset, ctrl+right-click for more (modulate, copy, host menu). Click a list to pick from it, right-click to step through it."
 
 let (margin, gap) = (6., Grid.gap)
 let flowHeight = 30.
@@ -16,43 +16,6 @@ let rowHeight = (Style.pageHeight - top - margin - gap) / 2.
 let (oscWidth, filterWidth) = (380., 400.)
 let lastWidth = Style.designWidth - 2. * margin - 2. * gap - oscWidth - filterWidth
 let modWidth = oscWidth + gap + filterWidth
-
-// the modulation panel's right column (a source's velocity, and what it moves), and the LFOs'
-// controls left of it
-let chipsWidth = 176.
-let chipsX = modWidth - 8. - chipsWidth
-let lfoColumn = 82.
-let lfoX = chipsX - 8. - 3. * lfoColumn
-
-let envelopeFields = (env: EnvEditor.envelope) => {
-  let prefix = env.params.prefix
-  [
-    (prefix ++ "Attack", "attack"),
-    (prefix ++ "Hold", "hold"),
-    (prefix ++ "Decay1", "decay 1"),
-    (prefix ++ "Breakpoint", "breakpoint"),
-    (prefix ++ "Decay2", "decay 2"),
-    (prefix ++ "Sustain", "sustain"),
-    (prefix ++ "Release", "release"),
-    ...EnvEditor.curveIds(env)->Array.mapWithIndex((id, i) => (
-      id,
-      ["attack curve", "decay 1 curve", "decay 2 curve", "release curve"]->Array.getUnsafe(i),
-    )),
-  ]
-}
-
-// (each sounding note is marked where it is on the envelopes that have a clock)
-let envelope = (ctx, parent, env: EnvEditor.envelope, box: box, ~columns=?) =>
-  EnvEditor.make(
-    ctx,
-    parent,
-    box,
-    EnvEditor.adsr(ctx, env, ~w=box.w, ~h=box.h),
-    ~fields=envelopeFields(env),
-    ~columns?,
-    ~name=env.title,
-    ~clock=?env.clock,
-  )
 
 // Controls on grid g that show only while shown() holds, because they do nothing otherwise: make
 // places them (on the grid it's given), and whether they show is checked again whenever one of
@@ -64,26 +27,6 @@ let shownWhile = (ctx: Ctx.t, g: Grid.t, ids, shown, make: Grid.t => unit) => {
   ctx.model->ParamModel.listenEach(ids, update)
   update()
 }
-
-// A "?" filling a grid cell's height at its right end, with text in a tooltip tipW wide (from
-// its left, with ~left).
-let help = (g: Grid.t, c, r, text, ~tipW=260., ~left=?) => {
-  let size = Style.controlHeight
-  g->Grid.at(c, r, "a help button", b => Controls.help(g.el, text, ~x=b.x + b.w - size, ~y=b.y, ~size, ~tipW, ~left?))
-}
-
-// The button in the corner of a plot that opens its table in the shapes editor.
-let drawButton = (ctx: Ctx.t, body, plot: box, ~status, table) =>
-  Controls.button(
-    ctx,
-    body,
-    "draw",
-    ~x=plot.x + plot.w - 48.,
-    ~y=plot.y + plot.h - 23.,
-    ~w=44.,
-    ~status,
-    () => ctx.openShape(table),
-  )->ignore
 
 //==============================================================================
 // the oscillators
@@ -200,10 +143,9 @@ let oscPanel = (ctx: Ctx.t, page) => {
     let env = EnvEditor.oscEnv(n)
     let g = Grid.make(ctx, envs, ~y=Grid.padTop + Int.toFloat(n - 1) * envHeight, ~cw)
     env.switchId->Option.forEach(id => g->Grid.toggle(id, 0, 0, `osc ${Int.toString(n)} env`))
-    envelope(ctx, envs, env, {x: g->Grid.cx(1) + 4., y: g->Grid.cy(0) + 2., w: oscWidth - cw - 16., h: envHeight - 6.})
+    SourceEditors.envelope(ctx, envs, env, {x: g->Grid.cx(1) + 4., y: g->Grid.cy(0) + 2., w: oscWidth - cw - 16., h: envHeight - 6.})
     if n == 1 {
-      help(
-        g,
+      g->Grid.help(
         0,
         1,
         "While its envelope is on, an oscillator's level follows it, under the amp envelope (which still ends the note).",
@@ -281,7 +223,7 @@ let filterPanel = (ctx: Ctx.t, page) => {
     alsoIds: ["Filter", "Filter2", "F_Double", "F_Split"],
   }
   refreshResponse := FilterGraph.make(ctx, body, {x: 8., y: graphTop, w: graphW, h: graphH}, source, ~voices=true)
-  envelope(ctx, body, EnvEditor.filter, {x: 14. + graphW, y: graphTop, w: graphW, h: graphH}, ~columns=3)
+  SourceEditors.envelope(ctx, body, EnvEditor.filter, {x: 14. + graphW, y: graphTop, w: graphW, h: graphH}, ~columns=3)
 
   let dual = Grid.make(ctx, filter->Panel.body(1), ~cw=Grid.fitColumns(filterWidth, 4))
   dual->Grid.choice("Filter2", 0, 0, "filter 2", ~span=2)
@@ -293,8 +235,7 @@ let filterPanel = (ctx: Ctx.t, page) => {
   // the key EQ: a band on each of the note's harmonics 1, 2, 4 ... 128
   let keyEq = Grid.make(ctx, filter->Panel.body(2), ~cw=Grid.fitColumns(filterWidth, 4))
   keyEq->Grid.toggle("KEQ_On", 0, 0, "key EQ")
-  help(
-    keyEq,
+  keyEq->Grid.help(
     3,
     0,
     "A low shelf under each note, then octave-wide bands on its harmonics: the curve moves with the key.",
@@ -304,102 +245,6 @@ let filterPanel = (ctx: Ctx.t, page) => {
     keyEq->Grid.param(PorridgeParams.keyEqGainId(k), mod(k - 1, 4), 1 + (k - 1) / 4, label)
   }
   filter
-}
-
-//==============================================================================
-// the modulation sources
-
-let modEnvelope = (ctx: Ctx.t, body, n) => {
-  let env = EnvEditor.modEnv(n)
-  envelope(ctx, body, env, {x: 8., y: 27., w: chipsX - 16., h: rowHeight - 37.})
-  Controls.param(ctx, body, env.params.prefix ++ "VeloSens", ~x=chipsX, ~y=Grid.padTop, ~w=chipsWidth, ~label="velocity")
-  Destinations.make(
-    ctx,
-    body,
-    `modEnv${Int.toString(n)}`,
-    {x: chipsX, y: Grid.padTop + Grid.rowHeight, w: chipsWidth, h: rowHeight - Grid.padTop - Grid.rowHeight - 8.},
-  )
-}
-
-let pitchEnvelope = (ctx: Ctx.t, body) => {
-  let graph = {x: 8., y: 27., w: chipsX - 16., h: rowHeight - 37.}
-  EnvEditor.make(
-    ctx,
-    body,
-    graph,
-    EnvEditor.pitch(ctx, ~w=graph.w, ~h=graph.h),
-    ~fields=[
-      ("PEnv_Start", "start"),
-      ("PEnv_Attack", "attack"),
-      ("PEnv_Peak", "peak"),
-      ("PEnv_Decay", "decay"),
-      ("PEnv_Sustain", "sustain"),
-      ("PEnv_Release", "release"),
-    ],
-    ~name="Pitch envelope",
-  )
-  let g = Grid.make(ctx, body, ~x=chipsX, ~cw=chipsWidth + Grid.columnGap)
-  g->Grid.toggle("PEnv_On", 0, 0, "on")
-  g->Grid.param("PEnv_VeloSens", 0, 1, "velocity")
-}
-
-// The LFOs share a layout: their picture, then shape and mode, rate, delay and fade, and phase,
-// in that order as far as each has them, and what they move on the right.
-let lfoGraph = {x: 8., y: 27., w: lfoX - 16., h: rowHeight - 37.}
-let lfoGrid = (ctx, body) => Grid.make(ctx, body, ~x=lfoX, ~cw=lfoColumn)
-let lfoDestinations = (ctx, body, key) =>
-  Destinations.make(ctx, body, key, {x: chipsX, y: Grid.padTop, w: chipsWidth, h: rowHeight - Grid.padTop - 8.})
-
-let lfo = (ctx: Ctx.t, body, n) => {
-  let lfo = Int.toString(n)
-  let prefix = `LFO_${lfo}_`
-  Plots.lfo(ctx, body, n - 1, lfoGraph)
-  drawButton(ctx, body, lfoGraph, ~status=`Draw LFO ${lfo}'s user shape`, n == 1 ? LfoShape1 : LfoShape2)
-  let g = lfoGrid(ctx, body)
-  g->Grid.choice(prefix ++ "Shape", 0, 0, "shape")
-  g->Grid.at(1, 0, ~span=2, prefix ++ "Sync", b => Controls.lfoMode(ctx, body, prefix ++ "Sync", ~x=b.x, ~y=b.y, ~w=b.w))
-  g->Grid.choice(prefix ++ "Unit", 0, 1, "unit")
-  g->Grid.param(prefix ++ "Speed", 1, 1, "rate")
-  g->Grid.toggle(prefix ++ "Quantize", 2, 1, "quantize")
-  g->Grid.param(prefix ++ "Delay", 0, 2, "delay")
-  g->Grid.param(prefix ++ "Fade", 1, 2, "fade in")
-  g->Grid.param(prefix ++ "Slew", 2, 2, "slew")
-  // (one phase for both LFOs, as Oatmeal has it)
-  g->Grid.param("LFOPhase", 0, 3, "phase 1+2")
-  g->Grid.param("LFOPhaseRand", 1, 3, "rand 1+2")
-  g->Grid.toggle("LFORetrig", 2, 3, "retrig 1+2")
-  g->Grid.choice(prefix ++ "Steps", 0, 4, "s&h steps")
-  g->Grid.toggle(prefix ++ "OneShot", 1, 4, "one-shot")
-  lfoDestinations(ctx, body, "lfo" ++ lfo)
-}
-
-// LFO 3, and the wander source's rate.
-let lfo3 = (ctx: Ctx.t, body) => {
-  Plots.lfo3(ctx, body, lfoGraph)
-  let g = lfoGrid(ctx, body)
-  g->Grid.choice("LFO_3_Shape", 0, 0, "shape")
-  g->Grid.at(1, 0, ~span=2, "LFO_3_Mode", b => Controls.lfoMode(ctx, body, "LFO_3_Mode", ~x=b.x, ~y=b.y, ~w=b.w))
-  g->Grid.choice("LFO_3_Sync", 0, 1, "sync")
-  // (the rate is the sync's when it has one)
-  let rate = g->Grid.at(1, 1, "LFO_3_Rate", b =>
-    Controls.paramControl(ctx, body, "LFO_3_Rate", ~x=b.x, ~y=b.y, ~w=b.w, ~label="rate")
-  )
-  g->Grid.param("LFO_3_Delay", 0, 2, "delay")
-  g->Grid.param("LFO_3_Fade", 1, 2, "fade in")
-  g->Grid.param("LFO_3_Phase", 0, 3, "phase")
-  g->Grid.param("LFO_3_PhaseRand", 1, 3, "random phase")
-  g->Grid.param("Wander_Rate", 0, 4, "wander rate")
-  help(
-    g,
-    1,
-    4,
-    "Wander is a source of its own: a slow random drift each voice has, at this rate. Like LFO 3, it moves things through connections.",
-    ~tipW=250.,
-  )
-  let dim = () => rate->toggleClass("dim", ctx.model->ParamModel.get("LFO_3_Sync") != 0.)
-  ctx.model->ParamModel.listen("LFO_3_Sync", dim)
-  dim()
-  lfoDestinations(ctx, body, "lfo3")
 }
 
 //==============================================================================
@@ -530,7 +375,7 @@ let build = (ctx: Ctx.t, page) => {
   let ampX = margin + oscWidth + gap + filterWidth + gap
   let amp = Panel.make(page, ~title="amp", ~x=ampX, ~y=top, ~w=lastWidth, ~h=rowHeight)
   let ampBox = {x: 8., y: 25., w: lastWidth - 18., h: rowHeight - 25. - Grid.rowHeight - 12.}
-  envelope(ctx, amp.el, EnvEditor.amp, ampBox)
+  SourceEditors.envelope(ctx, amp.el, EnvEditor.amp, ampBox)
   let ampGrid = Grid.make(ctx, amp.el, ~y=ampBox.y + ampBox.h + 4., ~cw=Grid.fitColumns(lastWidth, 3))
   ampGrid->Grid.param("Gain", 0, 0, "output gain")
   ampGrid->Grid.param("VeloSens", 1, 0, "velocity")
@@ -547,12 +392,10 @@ let build = (ctx: Ctx.t, page) => {
   [Features.modEnv1, Features.modEnv2, Features.pitchEnv, Features.lfo1, Features.lfo2, Features.lfo3]->Array.forEachWithIndex(
     (f, i) => modulation->Panel.mark(model, i, [f])->ignore,
   )
-  modEnvelope(ctx, modulation->Panel.body(0), 1)
-  modEnvelope(ctx, modulation->Panel.body(1), 2)
-  pitchEnvelope(ctx, modulation->Panel.body(2))
-  lfo(ctx, modulation->Panel.body(3), 1)
-  lfo(ctx, modulation->Panel.body(4), 2)
-  lfo3(ctx, modulation->Panel.body(5))
+  // (the Mod page shows the same editors: SourceEditors)
+  ["modEnv1", "modEnv2", "pitchEnv", "lfo1", "lfo2", "lfo3"]->Array.forEachWithIndex((key, i) =>
+    SourceEditors.make(ctx, modulation->Panel.body(i), key, ~w=modWidth, ~h=rowHeight)
+  )
 
   voicePanel(ctx, page)
 

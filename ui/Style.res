@@ -233,6 +233,21 @@ let css = `
 .dchip.add:hover { background: var(--panel-hi); color: var(--ink); }
 .dchip.add b { font-size: 15px; }
 .dchip:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
+.dests.wide { flex-direction: row; flex-wrap: wrap; align-content: flex-start; }
+.dests.wide .dchip { width: 176px; }
+/* the selected modulation source (ModFocus): what it moves ringed in its colour, the other
+   controls a little dimmer, the tabs of the panels and pages that hold what it moves marked */
+.pv-stage.mfocus .pv-page:not(.modp) .p:not(.mlit) { opacity: 0.6; }
+.p.mlit { background: var(--paper); box-shadow: inset 0 0 0 2px var(--mc); }
+.ed.mlit { box-shadow: 0 0 0 2px var(--mc); }
+/* what moves an envelope as a whole (EnvEditor): its modulators' colours down its left edge */
+.ed > .me { position: absolute; left: 1px; top: 4px; bottom: 16px; width: 4px; z-index: 2; display: flex;
+    flex-direction: column; gap: 1px; cursor: help; }
+.ed > .me i { flex: 1; border-radius: 1px; }
+.fnd.mlit { box-shadow: inset 0 0 0 2px var(--mc); }
+.ptab.mlit { box-shadow: inset 0 -3px 0 var(--mc); }
+.pv-head .pages .btn .pcount { margin-left: 5px; font-weight: 700; }
+.pv-head .pages .btn.on .pcount { color: var(--paper) !important; }
 .plot path.flow { fill: none; stroke: var(--ink-soft); stroke-width: 1.5; }
 .plot path.flowhead { fill: none; stroke: var(--ink-soft); stroke-width: 1.5; stroke-linejoin: round; }
 
@@ -305,11 +320,12 @@ let css = `
     position: absolute; top: 0; bottom: 0; background: var(--signal);
 }
 /* the range modulation sweeps */
-.p .t .mb em { position: absolute; height: 4px; background: var(--mod); opacity: 0.7; display: none; pointer-events: none; }
-/* what moves it with no known range on the knob (Oatmeal's own routings): its colours down the left edge */
-.p .me { position: absolute; left: 1px; top: 3px; bottom: 3px; width: 2px; display: flex; flex-direction: column;
-    gap: 1px; pointer-events: none; }
-.p .me i { flex: 1; display: none; opacity: 0.85; border-radius: 1px; }
+.p .t .mb em { position: absolute; height: 4px; background: var(--mod); opacity: 0.7; display: none; cursor: pointer; }
+/* what moves it with no known range on the knob (Oatmeal's own routings): its colours down the left edge
+   (a press on one selects its source, so the marks take a little more room than they show) */
+.p .me { position: absolute; left: 1px; top: 3px; bottom: 3px; width: 5px; display: flex; flex-direction: column;
+    gap: 1px; cursor: pointer; }
+.p .me i { flex: 1; display: none; margin-right: 3px; opacity: 0.85; border-radius: 1px; }
 /* the same on a graph's point: dots around it */
 .mdots { pointer-events: none; }
 /* a source from the tray over it */
@@ -529,6 +545,7 @@ let css = `
 .mchip i { position: absolute; left: 4px; top: 4px; bottom: 4px; width: 3px; border-radius: 2px; }
 .mchip:hover { background: var(--panel-hi); box-shadow: inset 0 0 0 1px var(--edge); }
 .mchip.vary { font-weight: 700; padding-right: 9px; }
+.mchip.sel { background: var(--paper); box-shadow: inset 0 0 0 1.5px var(--signal); }
 .mghost { position: absolute; z-index: 80; height: 20px; padding: 0 8px; box-sizing: border-box; border: 2px solid;
     border-radius: 2px; background: var(--paper); font-size: 11.5px; line-height: 16px; pointer-events: none; white-space: nowrap; }
 
@@ -637,7 +654,23 @@ let css = `
 .tgt .jk { left: 6px; }
 .jk.on { background: var(--ink); }
 .src:hover, .tgt:hover, .src.lit, .src:focus-visible, .tgt:focus-visible { background: var(--panel-hi); box-shadow: inset 0 0 0 1px var(--edge); }
-.src.sel { background: var(--paper); box-shadow: inset 0 0 0 1.5px var(--signal); }
+.src.sel, .src.pick { background: var(--paper); box-shadow: inset 0 0 0 1.5px var(--signal); }
+.src.sel { box-shadow: inset 0 0 0 2px var(--signal); font-weight: 700; }
+.src.nojack { padding-right: 8px; cursor: pointer; }
+.tgt.fixed { cursor: default; }
+/* the selected source's rows stand out; Oatmeal's own routings carry a badge */
+.mrows.focus .conn:not(.sel) { opacity: 0.45; }
+.mbadge { position: absolute; height: 18px; box-sizing: border-box; padding: 0 7px; border: 1px solid var(--edge);
+    border-radius: 9px; font-size: 10.5px; line-height: 16px; color: var(--ink-soft); white-space: nowrap; cursor: help; }
+.mopt.mmore { font-size: 15px; font-weight: 700; color: var(--ink-soft); }
+/* the selected source's editor, over the lower part of the connections */
+.srced { display: none; z-index: 15; border-color: var(--signal); box-shadow: 0 -3px 0 rgba(31,26,14,0.15); }
+.srced.on { display: block; }
+.srced .xclose { height: 18px; line-height: 16px; font-size: 13px; padding: 0; }
+.srced .mdesc { font-size: 12px; color: var(--ink-soft); }
+.mempty .msub { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.mempty .msub .btn.help { position: static; width: 20px; height: 20px; }
+.mempty .tip { left: 50%; width: 380px; margin-left: -190px; top: 62px; text-align: left; }
 .src.plug { padding: 0; cursor: grab; }
 .tgt.on { font-weight: 700; }
 .tgt.on .jk { background: var(--ink); }
