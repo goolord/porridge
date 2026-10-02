@@ -506,6 +506,8 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
   s->Grid.param(id("R_2"), 2, 1, "diffusion 2")
   s->Grid.param(id("R_3"), 3, 1, "diffusion 3")
   s->Grid.param(id("R_Rotation"), 4, 1, "stereo mix")
+  // (the other reverbs, rooms and impulses, which take its place)
+  s->Grid.at(5, 1, ~span=2, "model", b => SpaceModels.picker(ctx, settingsPanel.el, e, ~x=b.x, ~y=b.y, ~w=b.w))
 
   () => {
     soundRedraw.now()

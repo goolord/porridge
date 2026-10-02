@@ -83,14 +83,19 @@ ui/                     patch view (ReScript)
   PageMain.res            the synth page: VoiceFlow.res draws the voice's signal flow along its
                           top; Features.res says which features a patch uses, which the
                           panels' tabs mark (Panel.res)
-  FilterTypes.res         the filter types; FilterGraph.res their response pictures, with a
-                          point to drag for cutoff and resonance
+  ValueList.res           the list parameters' value lists: names, field texts, the values
+                          Porridge adds, and menus by sound (families, variant chips, "more"),
+                          which Menu.res shows and Controls.res' lists open
+  FilterTypes.res         the filter types, and their families for the menu; FilterGraph.res
+                          their response pictures, with a point to drag for cutoff and resonance
   FxPanels.res            the tabs of Porridge's own effects (CompEditor.res: the compressor's);
                           Impulse.res the convolvers' impulse files; AmbienceSim.res runs the
-                          ambience's models on an impulse for its graphs
-  DistTypes.res           the distortion's types: names, menu groups, what each model's knobs
-                          are; DistEditor.res its tab; AirwindowsSim.res runs the Airwindows
-                          models on a sine (and the air on sines) for their graphs
+                          ambience's models on an impulse for its graphs; SpaceModels.res is
+                          the space effects' one model list (reverb, ambience, convolution),
+                          swapping an effect for another kind in its place
+  DistTypes.res           the distortion's types: names, characters for the menu, what each
+                          model's knobs are; DistEditor.res its tab; AirwindowsSim.res runs the
+                          Airwindows models on a sine (and the air on sines) for their graphs
   oatmeal/                file formats, parameter table, value texts
   bindings/               Cmajor PatchConnection and browser API bindings
 worker/PatchWorker.res  restores shapes/curves and installs the factory bank
@@ -119,7 +124,8 @@ tools/
                           what changed
   test/                   native C++ test host built from the patch (cmaj generate --target=cpp),
                           golden.mjs (bit-exact factory renders, in Oat mode), presets.mjs
-                          (format round trips), library.mjs (the preset browser's search),
+                          (format round trips), pickers.mjs (every list value maps to and
+                          from its menu), library.mjs (the preset browser's search),
                           smoke.mjs (Porridge's own effects and filter types sound, stay
                           bounded and fall silent, the ambience's models and the distortion's
                           types too, and the distortion's mix lines up with oversampling; the
