@@ -17,7 +17,9 @@
 //                               base64; the last part adds it, and is answered with the banks
 //   ?remove=<id>                forgets an opened file, and answers with the banks
 // The banks are { banks: [ { id, name, origin ("folder" | "opened"), path, folder, size,
-// modified, file } ] }.
+// modified, file } ], scanned: [the folders the last scan walked] }; the view asks for ?list
+// when it opens and scans only when its folders aren't the scanned ones (a new folder, or an
+// index from before it was kept) or when the user asks.
 //
 // No includes of its own: PorridgeBridge.h includes it where the headers it needs already are
 // (<filesystem>, <fstream>, <vector>, choc's files, JSON and base64), and so can a test.
@@ -155,10 +157,24 @@ namespace porridge::library
             return withBanks (choc::value::createEmptyArray());
         }
 
-        static choc::value::Value withBanks (const choc::value::ValueView& banks)
+        /// The folders the index was last scanned with, or void: the view scans on its own only
+        /// when the folders it wants are others.
+        static choc::value::Value scannedOf (const choc::value::ValueView& index)
+        {
+            if (index.isObject() && index.hasObjectMember ("scanned") && index["scanned"].isArray())
+                return choc::value::Value (index["scanned"]);
+
+            return {};
+        }
+
+        static choc::value::Value withBanks (const choc::value::ValueView& banks, const choc::value::ValueView& scanned = {})
         {
             auto index = choc::value::createObject ({});
             index.addMember ("banks", banks);
+
+            if (scanned.isArray())
+                index.addMember ("scanned", scanned);
+
             return index;
         }
 
@@ -315,7 +331,7 @@ namespace porridge::library
             }
 
             removeDropped (oldBanks, banks);
-            index = withBanks (banks);
+            index = withBanks (banks, folders);
             saveIndex (index);
             return index;
         }
@@ -393,6 +409,7 @@ namespace porridge::library
                 return loadIndex();
 
             auto index = loadIndex();
+            auto scanned = scannedOf (index);
             auto oldBanks = index["banks"];
             auto banks = choc::value::createEmptyArray();
 
@@ -402,7 +419,7 @@ namespace porridge::library
 
             banks.addArrayElement (entry (id, args["name"].toString(), file, "opened", {}, {},
                                           static_cast<double> (fs::file_size (cache / file, ec)), modifiedTime (cache / file)));
-            index = withBanks (banks);
+            index = withBanks (banks, scanned);
             saveIndex (index);
             return index;
         }
@@ -410,6 +427,7 @@ namespace porridge::library
         choc::value::Value remove (std::string_view id) const
         {
             auto index = loadIndex();
+            auto scanned = scannedOf (index);
             auto oldBanks = index["banks"];
             auto banks = choc::value::createEmptyArray();
 
@@ -418,7 +436,7 @@ namespace porridge::library
                     banks.addArrayElement (oldBanks[i]);
 
             removeDropped (oldBanks, banks);
-            index = withBanks (banks);
+            index = withBanks (banks, scanned);
             saveIndex (index);
             return index;
         }

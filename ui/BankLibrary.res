@@ -26,14 +26,15 @@ type t = {
   mutable available: bool,
   mutable banks: array<bank>,
   mutable scanning: bool,
-  // whether this view has scanned the folders yet
+  // whether this view has asked for the banks yet
   mutable scanned: bool,
+  // whether the next list is this view's first: the folders are scanned then only if they
+  // aren't the ones the plugin last scanned
+  mutable verifying: bool,
   listeners: array<unit => unit>,
   // reads in progress, by id: the parts so far, and what gets the file
   reads: Map.t<string, (array<Uint8Array.t>, option<Uint8Array.t> => unit)>,
 }
-
-let settingKey = "bankFolders"
 
 // banks parsed already, by id and version: they're read again only when they change
 let parsed: Map.t<string, result<array<Preset.t>, string>> = Map.make()
@@ -97,6 +98,29 @@ let onRead = (t, d: dict<JSON.t>) => {
   )
 }
 
+let strings = items =>
+  items->Array.filterMap(x =>
+    switch x {
+    | JSON.String(s) => Some(s)
+    | _ => None
+    }
+  )
+
+let settingKey = "bankFolders"
+
+let folders = t =>
+  switch t.settings->Settings.savedValue(settingKey) {
+  | Some(Array(items)) => strings(items)
+  | _ => []
+  }
+
+let scan = t => {
+  t.scanned = true
+  t.scanning = true
+  changed(t)
+  t.channel->HostChannel.request("scan=" ++ JSON.stringify(Array(folders(t)->Array.map(s => JSON.String(s)))))
+}
+
 let onReply = (t, reply: dict<JSON.t>) =>
   switch (reply->Dict.get("read"), reply->Dict.get("banks")) {
   | (Some(Object(d)), _) => onRead(t, d)
@@ -105,6 +129,18 @@ let onReply = (t, reply: dict<JSON.t>) =>
     t.scanning = false
     t.banks = banks->Array.filterMap(bankOf)
     changed(t)
+    // the first list: scan if the plugin hasn't walked these folders (a folder added since,
+    // or a library from before it noted them); otherwise its cache is what the browser shows
+    if t.verifying {
+      t.verifying = false
+      let scannedBefore = switch reply->Dict.get("scanned") {
+      | Some(Array(items)) => Some(strings(items))
+      | _ => None
+      }
+      if folders(t) != [] && scannedBefore != Some(folders(t)) {
+        scan(t)
+      }
+    }
   | _ =>
     t.scanning = false
     changed(t)
@@ -118,6 +154,7 @@ let make = (pc, settings) => {
     banks: [],
     scanning: false,
     scanned: false,
+    verifying: false,
     listeners: [],
     reads: Map.make(),
   }
@@ -129,27 +166,16 @@ let dispose = t => t.channel->HostChannel.dispose
 
 let listen = (t, fn) => t.listeners->Array.push(fn)
 
-let folders = t =>
-  switch t.settings->Settings.savedValue(settingKey) {
-  | Some(Array(items)) =>
-    items->Array.filterMap(x =>
-      switch x {
-      | String(s) => Some(s)
-      | _ => None
-      }
-    )
-  | _ => []
+// The banks as the plugin last listed them. The first time the view asks, the folders are
+// scanned only if the plugin hasn't scanned these ones yet (see onReply); a scan is otherwise up
+// to the user ("look again") or to a change of folders.
+let refresh = t => {
+  if !t.scanned {
+    t.scanned = true
+    t.verifying = true
   }
-
-let scan = t => {
-  t.scanned = true
-  t.scanning = true
-  changed(t)
-  t.channel->HostChannel.request("scan=" ++ JSON.stringify(Array(folders(t)->Array.map(s => JSON.String(s)))))
+  t.channel->HostChannel.request("list")
 }
-
-// The banks: scanned the first time the view asks, then as the plugin last listed them.
-let refresh = t => t.scanned ? t.channel->HostChannel.request("list") : scan(t)
 
 let setFolders = (t, list) => {
   t.settings->Settings.save(settingKey, Array(list->Array.map(s => JSON.String(s))))

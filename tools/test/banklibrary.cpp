@@ -63,6 +63,8 @@ int main()
     auto scanned = library.handle ("scan=" + choc::json::toString (folders));
     check (count (scanned, "folder") == 3, "a scan finds the three banks and skips the rest");
     check (fs::exists (root / "cache" / "index.json"), "the index is written");
+    check (choc::json::toString (library.handle ("list")["scanned"]) == choc::json::toString (folders),
+           "the index remembers the folders it scanned, for a list to answer");
 
     auto id = [&] (const choc::value::ValueView& index, std::string_view name)
     {
@@ -109,6 +111,7 @@ int main()
     auto withOpened = put (1, std::string_view (opened).substr (5));
     check (count (withOpened, "opened") == 1
              && choc::file::loadFileAsString (root / "cache" / "o0123abc.porridge") == opened, "an opened file is added");
+    check (choc::json::toString (withOpened["scanned"]) == choc::json::toString (folders), "and the scanned folders are kept");
 
     // a folder out of reach keeps its banks, and so does the opened file
     fs::rename (folder, root / "moved");
@@ -121,6 +124,7 @@ int main()
 
     auto removed = library.handle ("remove=o0123abc");
     check (count (removed, "opened") == 0 && ! fs::exists (root / "cache" / "o0123abc.porridge"), "an opened file is removed");
+    check (removed["scanned"].isArray() && removed["scanned"].size() == 0, "the scanned folders survive that too (none, after the empty scan)");
     check (library.handle ("list")["banks"].size() == 0, "the list is empty");
     check (library.handle ("put={\"id\":\"../x\",\"ext\":\".porridge\",\"data\":\"\"}").isVoid(), "an unsafe id is refused");
 

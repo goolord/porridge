@@ -533,7 +533,7 @@ let show = t => {
           ~text=library.scanning ? "looking for banks…" : "↻ look again",
           ~parent=side,
         )
-        rescan->setAttribute("title", Str("Look through the folders for new and changed banks"))
+        rescan->setAttribute("title", Str("Walk the folders again for new and changed banks (the list is otherwise kept from the last time)"))
         rescan->onMouse(#click, _ => library->BankLibrary.scan)
       }
     }
