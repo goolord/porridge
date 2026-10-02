@@ -1068,7 +1068,8 @@ namespace porridge
     /// 40 clean drive: a soft-clipping drive in front of a state-variable filter whose band
     ///    integrator saturates gently; clean at drive 0.
     /// 41 PZ SVF: a state-variable filter with tanh integrators (taken by their gain at the last
-    ///    sample's level) and a saturating band.
+    ///    sample's level) and a saturating band, giving way to damping that grows with the band
+    ///    as the morph goes to high-pass.
     /// c: g k drive output lpW bpW hpW clipLevel
     void extraAnalog (Filter& this, int t, float hz, float res, float morph, float drive, float64 sr,
                       float[blockSize]& buf, int n, bool first)
@@ -1173,15 +1174,26 @@ namespace porridge
                 // p1: last high-pass value; both integrators' gains are scaled by the first one's
                 // tanh, 1.5 tanh (v / 1.5) / v at its input's last value (the same scale for both
                 // keeps the damping, so the filter slows down rather than ringing harder), and
-                // the band integrator's output saturates (3 tanh (v / 3)), which holds the resonance
-                let ge = g * filterTanhGain (p1 * (1.0f / 1.5f));
-                bp = (s1 + ge * (x - s2)) / (1.0f + ge * (ge + k));
-                bp = 3.0f * filterTanh (bp * (1.0f / 3.0f));
+                // the band integrator's output saturates (3 tanh (v / 3)), which holds the resonance.
+                // As the morph brings in the high-pass both give way (w, 0 to 1 by the time the
+                // high-pass's weight is a quarter, at morph 5/8) to damping that grows with the
+                // band's last level s3 (to 2 as it grows): a high-pass's stop band is the
+                // difference of x and the other two, which any slowing down or saturation of the
+                // band fills with the note (below the cutoff, a loud note would come through up
+                // to 20 dB louder than a quiet one, and slowing down lets more through, which
+                // slows it more); more damping changes it little there, and still holds the
+                // resonance.
+                let w = min (4.0f * cc[6], 1.0f);
+                let ge = g * (1.0f - (1.0f - filterTanhGain (p1 * (1.0f / 1.5f))) * (1.0f - w));
+                let kd = k + w * (2.0f - k) * (1.0f - filterTanhGain (s3 * (1.0f / 3.0f)));
+                let v = (s1 + ge * (x - s2)) / (1.0f + ge * (ge + kd));
+                bp = v + (1.0f - w) * (3.0f * filterTanh (v * (1.0f / 3.0f)) - v);
                 lp = s2 + ge * bp;
                 s1 = 2.0f * bp - s1;
                 s2 = 2.0f * lp - s2;
-                hp = x - k * bp - lp;
+                hp = x - kd * bp - lp;
                 p1 = hp;
+                s3 = bp;
             }
 
             buf.at (i) = (cc[4] * lp + cc[5] * bp + cc[6] * hp) * cc[3];
