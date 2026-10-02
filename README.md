@@ -43,8 +43,9 @@ ui/                     patch view (ReScript)
                           envelope, brightness, noise, width, fitted wave), Genome.res (what is
                           searched, as parameter values), EnvelopeFit.res (the amp envelope
                           that follows the sample), Spectrum.res and MatchLoss.res (how close
-                          a render is: spectra, loudness, the harmonic grid, width), Cmaes.res
-                          (the optimizer), MatchModel.res and match-model.bin (the predictor),
+                          a render is: spectra, loudness, the harmonic grid and fine spectrum,
+                          width), Cmaes.res (the optimizer), MatchModel.res and match-model.bin
+                          (the predictor),
                           MatchSearch.res and MatchRun.res (the outline and the four searches,
                           and the key EQ fitted to each candidate), MatchPool.res,
                           MatchWorker.res and MatchEngine.res (the workers and their synth)

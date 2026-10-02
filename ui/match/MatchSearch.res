@@ -252,7 +252,7 @@ type candidate = {
   // its card
   slot: int,
   genes: array<float>,
-  // the parameter values that make it, on the base (with its level set)
+  // the parameter values that make it, on the base (with its level and tuning set)
   values: array<(string, float)>,
   // the key it is played at to sound at the sample's pitch
   note: int,
@@ -274,7 +274,12 @@ let candidateOf = (ctx, x, note, values, y, f: Spectrum.features) => {
     island: -1,
     slot: -1,
     genes: Array.fromInitializer(~length=TypedArray.length(x), i => x->get64(i)),
-    values: values->Array.concat([("Gain", levelGain(ctx, y))]),
+    // (with the tuning it was heard at: the sample's, moved by the tune gene, so that the card
+    // plays at the sample's pitch as it was scored)
+    values: values->Array.concat([
+      ("Gain", levelGain(ctx, y)),
+      ("Tune_Main", 440. * Math.pow(2., ~exp=Genome.playedCents(x, ~cents=ctx.target.cents) / 1200.)),
+    ]),
     note,
     fitted: Genome.choice(x, "o1Wave") == Genome.fittedWave,
     similarity: MatchLoss.similarity(MatchLoss.compare(MatchLoss.standard, ctx.measured, f)),
@@ -335,8 +340,15 @@ let shaped = (f: Spectrum.features, power) => {
     energy := energy.contents + e * e * Int.toFloat(Spectrum.envelopeStep)
     e
   })
-  // (the harmonic grid is a ratio within each frame, which a level doesn't move)
-  {...f, spectra, envelope, energy: energy.contents, side: f.side->Option.map(side => side->TypedArray.mapWithIndex((v, s) => v * gain(s)))}
+  // (the harmonic grid, whose windows are long and whose fine spectrum an envelope moves within
+  // them, is measured on the shaped samples: evaluate)
+  {
+    ...f,
+    spectra,
+    envelope,
+    energy: energy.contents,
+    side: f.side->Option.map(side => side->TypedArray.mapWithIndex((v, s) => v * gain(s))),
+  }
 }
 
 // Where a flat render with the envelope put on it would start, as SoundTarget.onsetOf finds
@@ -363,15 +375,22 @@ let onsetMs = (y: Float32Array.t, power) => {
   Math.max(0., Int.toFloat(first.contents) - 2.)
 }
 
-// A flat render with the envelope put on it, sample by sample (its level each millisecond).
+// A flat render with the envelope put on it, sample by sample: its level each millisecond, at
+// the millisecond's middle, and between them a line (a level held for each millisecond would
+// step, and its steps' splatter would stand over a quiet tail).
 let shapedSamples = (y: Float32Array.t, power) => {
-  let ms = Float.toInt(1000. * Int.toFloat(TypedArray.length(y)) / Spectrum.sampleRate) + 1
+  let ms = Float.toInt(1000. * Int.toFloat(TypedArray.length(y)) / Spectrum.sampleRate) + 2
   let gains = Float64Array.fromLength(ms)
   for t in 0 to ms - 1 {
     gains->set64(t, Math.sqrt(power(Int.toFloat(t), Int.toFloat(t + 1))))
   }
   let perMs = Spectrum.sampleRate / 1000.
-  y->TypedArray.mapWithIndex((v, i) => v * gains->get64(Float.toInt(Int.toFloat(i) / perMs)))
+  y->TypedArray.mapWithIndex((v, i) => {
+    let at = Math.max(0., Int.toFloat(i) / perMs - 0.5)
+    let t = Float.toInt(at)
+    let u = at - Int.toFloat(t)
+    v * ((1. - u) * gains->get64(t) + u * gains->get64(Math.Int.min(ms - 1, t + 1)))
+  })
 }
 
 // x with the amp envelope that suits a flat render of it best by these weights: where the
@@ -400,6 +419,7 @@ let measureOf = (ctx, y, ~side=?, ~hz) =>
     y,
     ~period=SoundTarget.period(ctx.target),
     ~gridHz=?ctx.target.hz->Option.map(_ => hz),
+    ~axisHz=?ctx.target.hz,
     ~side?,
   )
 
@@ -713,7 +733,24 @@ let evaluate = (ctx, x, ~weights, ~threshold, ~fit: fitting, ~short) => {
     // later than the flat one with a slow attack: the envelope moves on by as much
     let onset = onsetMs(flatY, power)
     let power = onset > 0. ? (a, b) => power(a +. onset, b +. onset) : power
-    finish(x, note, () => shapedSamples(flatY, power), () => flatSide->Option.map(s => shapedSamples(s, power)), shaped(flatF, power))
+    let y = shapedSamples(flatY, power)
+    let side = flatSide->Option.map(s => shapedSamples(s, power))
+    // (the spectra as `shaped` puts the envelope on them; the rest measured on the shaped
+    // samples, as a level that falls within a 10 ms step or a long window can't be put on a
+    // measurement: a whole evaluation's energy, loudness and side, and the harmonic grid)
+    // (with the EQ fitted, all of it is measured again on the render with the EQ: finish)
+    let f = shaped(flatF, power)
+    let grid = fit.eq
+      ? None
+      : ctx.target.hz->Option.flatMap(target => Spectrum.measureGrid(y, ~hz=playedHz(ctx, x), ~axisHz=target))
+    let f = fit.eq || short
+      ? {...f, grid}
+      : {
+          let energy = ref(0.)
+          y->TypedArray.forEach(v => energy := energy.contents + v * v)
+          {...f, grid, energy: energy.contents, envelope: Spectrum.envelope(y), side: side->Option.map(Spectrum.envelope)}
+        }
+    finish(x, note, () => y, () => side, f)
   }
 }
 
@@ -842,6 +879,9 @@ type rec search = {
   mutable archive: array<entry>,
   // what its screens found: short evaluations' scores and genes
   mutable screened: array<(float, Float64Array.t)>,
+  // osc 2's pitches (semitones) the second screen tries besides the intervals: those the
+  // starts play it at off them (a second series of partials the sample was heard to have)
+  o2Pitches: array<float>,
 }
 
 let apart = (s, x) => {
@@ -890,6 +930,12 @@ let gridOf = (starts: array<Float64Array.t>, lo, hi) => {
 
 // The outline: `starts` (the seed, or what the predictor suggests, best guess first) within
 // the bounds the locks leave.
+let o2PitchesOf = (starts: array<Float64Array.t>) =>
+  starts->Array.filterMap(x => {
+    let v = Genome.get(x, "o2Pitch")
+    Genome.secondOscSounds(x) && !Genome.o2OnAnchor(v) ? Some(Genome.o2Semitones(v)) : None
+  })
+
 let outline = (~starts, ~fitted, ~fit, ~locks, ~reference, ~budget, ~sigma, ~seed) => {
   let (lo, hi) = boundsFor(None, ~fitted, ~locks, ~reference)
   {
@@ -910,6 +956,7 @@ let outline = (~starts, ~fitted, ~fit, ~locks, ~reference, ~budget, ~sigma, ~see
     rivals: [],
     archive: [],
     screened: [],
+    o2Pitches: o2PitchesOf(starts),
   }
 }
 
@@ -950,6 +997,7 @@ let branch = (outline: search, islandIndex, ~fitted, ~locks, ~reference, ~budget
     rivals: [],
     archive: [],
     screened: [],
+    o2Pitches: outline.o2Pitches,
   }
 }
 
@@ -960,17 +1008,17 @@ let isDone = s =>
   }
 
 // The second screen's structures on a first-screen winner: osc 2 at a middle level with each
-// wave it may take at each interval, each mix mode with a sine or saw osc 2 in unison, a fifth
-// or an octave up, unison (two and four voices, a little and much detuned), noise (some and
-// much), and the second filter (beside and after the first, a little and well above it); all
-// within the bounds.
-let secondScreen = (x: Float64Array.t, lo, hi) => {
+// wave it may take at each interval (and at the pitches the starts play it at off them), each
+// mix mode with a sine or saw osc 2 in unison, a fifth or an octave up, unison (two and four
+// voices, a little and much detuned), noise (some and much), and the second filter (beside and
+// after the first, a little and well above it); all within the bounds.
+let secondScreen = (x: Float64Array.t, lo, hi, ~o2Pitches) => {
   let set = (y, key, v) => y->set64(Genome.indexOf(key), v)
   let choice = (key, o) => Genome.valueOfChoice(o, Genome.gene(Genome.indexOf(key)).options)
   let anchor = st => Genome.o2PitchGene(st)
   let plain =
     allowed("o2Wave", lo, hi)->Array.flatMap(w =>
-      Genome.o2Anchors->Array.map(st => {
+      Array.concat(Genome.o2Anchors, o2Pitches)->Array.map(st => {
         let y = TypedArray.copy(x)
         set(y, "oscMix", choice("oscMix", 0))
         set(y, "o2Level", 0.55)
@@ -1174,7 +1222,7 @@ let tell = (s, pending, results: array<result>) => {
         kept->Array.length >= count || kept->Array.some(y => key(y) == key(x)) ? kept : Array.concat(kept, [x])
       )
     let bases = best(x => [Genome.choice(x, "o1Wave"), Genome.choice(x, "filterType"), Genome.choice(x, "octave")], screenBases)
-    let second = level == 1 ? distinct(bases->Array.flatMap(x => secondScreen(x, s.lo, s.hi))) : []
+    let second = level == 1 ? distinct(bases->Array.flatMap(x => secondScreen(x, s.lo, s.hi, ~o2Pitches=s.o2Pitches))) : []
     s.stage =
       second == []
         ? Grid(best(x => Array.concat(Genome.structure(x), [Genome.choice(x, "octave")]), screenKept))
