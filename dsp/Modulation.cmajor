@@ -83,6 +83,52 @@ namespace porridge
         return float (float64 (from) * exp (warp (p, float64 (k)) * span));
     }
 
+    /// warpPath sample by sample through a stage whose level is multiplied by the same step
+    /// every sample (the amp envelope's decays and release): the progress's log and the warped
+    /// level's exp are moved on from the last sample's rather than worked out afresh. Exact to
+    /// about 1e-13 (the step's rounding of the level is followed too); starts over on a new stage
+    /// and with every renderAmp call.
+    struct WarpTrack
+    {
+        int stage;          // the stage it follows (-1: none)
+        float lastL;        // the level it last saw
+        float64 logStep;    // log (step)
+        float64 q;          // log (lastL / from)
+        float64 x, e;       // the warped level's exponent (log (level / from)) and exp (x)
+    }
+
+    /// warpPath (L, from, span, k) for L the last call's times step (or a new stage's start).
+    float warpPathTracked (WarpTrack& this, int stage, float L, float step, float from, float64 span, float k)
+    {
+        if (k == 1.0f || span == 0)
+            return L;
+
+        if (stage != this.stage)
+        {
+            this.stage = stage;
+            this.logStep = log (float64 (step));
+            this.q = log (float64 (L) / float64 (from));
+            this.x = warp (clamp (this.q / span, 0.0, 1.0), float64 (k)) * span;
+            this.e = exp (this.x);
+        }
+        else
+        {
+            // L = lastL * step, rounded to a float: the product is exact in float64, and the
+            // rounding moves the log by log (1 + eps)
+            let exact = float64 (this.lastL) * float64 (step);
+            let eps = (float64 (L) - exact) / exact;
+            this.q += this.logStep + eps * (1.0 - 0.5 * eps);
+            let x = warp (clamp (this.q / span, 0.0, 1.0), float64 (k)) * span;
+            let d = x - this.x;
+            this.e = abs (d) > 0.03 ? exp (x)
+                                    : this.e * (1.0 + d * (1.0 + d * 0.5 * (1.0 + d * (1.0 / 3.0) * (1.0 + d * 0.25 * (1.0 + d * 0.2)))));
+            this.x = x;
+        }
+
+        this.lastL = L;
+        return float (float64 (from) * this.e);
+    }
+
     /// Envelope stages (Env.stage).
     namespace envStage
     {
@@ -243,6 +289,8 @@ namespace porridge
 
         this.settleDecay2 (bp, sus);
 
+        WarpTrack track;
+        track.stage = -1;
         var i = 0;
         var guard = 0;
 
@@ -291,14 +339,14 @@ namespace porridge
             }
             else if (s == envStage::decay1)
             {
-                this.y += (envCubic (warpPath (this.L, 1.0f, spanD1, c.kD1), bp, 1.0) - this.y) * sm;
+                this.y += (envCubic (track.warpPathTracked (s, this.L, d1, 1.0f, spanD1, c.kD1), bp, 1.0) - this.y) * sm;
                 out.at (i) = this.y;
                 this.L *= d1;
                 if (this.L <= bp) { this.L = bp; this.stage = stageAfterBreakpoint (bp, sus); continue; }
             }
             else if (s == envStage::decay2Down || s == envStage::decay2Up)
             {
-                this.y += (envCubic (warpPath (this.L, bp, spanD2, c.kD), sus, bp) - this.y) * sm;
+                this.y += (envCubic (track.warpPathTracked (s, this.L, d2, bp, spanD2, c.kD), sus, bp) - this.y) * sm;
                 out.at (i) = this.y;
                 this.L *= d2;
 
@@ -326,7 +374,7 @@ namespace porridge
             {
                 if (this.L > 0.001f)
                 {
-                    this.y += ((warpPath (this.L, this.X, spanR, c.kR) - 0.001f) * this.k - this.y) * sm;
+                    this.y += ((track.warpPathTracked (s, this.L, rel, this.X, spanR, c.kR) - 0.001f) * this.k - this.y) * sm;
                     this.L *= rel;
                 }
                 else
