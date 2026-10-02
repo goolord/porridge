@@ -1,7 +1,8 @@
 // Play page: what is played rather than edited. The macro knobs (named per program, with what
-// each moves) and the arpeggiator across the top; the XY pad with its targets, the pitch and mod
-// wheels, and the MIDI input (MidiInput: MPE, the pedal, the controllers, the velocity and
-// aftertouch maps, the channels) below.
+// each moves) and the arpeggiator across the top; the XY pad with its targets below, and beside
+// it the patch summary (Summary: what the program is made of, each line a link to its editor),
+// the pitch and mod wheels, and the MIDI input (MidiInput: MPE, the pedal, the controllers, the
+// velocity and aftertouch maps, the channels).
 
 open! Web
 
@@ -162,12 +163,18 @@ let build = (ctx: Ctx.t, page) => {
   let xyWidth = 594.
   xy(ctx, page, ~x=margin, ~y, ~w=xyWidth, ~h)
 
-  // the pitch and mod wheels, between the pad and the input
-  let wheelsX = margin + xyWidth + Grid.gap
-  let wheelsWidth = 96.
-  let wheels = Panel.make(page, ~title="wheels", ~x=wheelsX, ~y, ~w=wheelsWidth, ~h)
+  // beside the pad, the patch summary (a line each); under it the pitch and mod wheels, and the
+  // MIDI input
+  let rightX = margin + xyWidth + Grid.gap
+  let rightWidth = Style.designWidth - margin - rightX
+  let summaryHeight = Grid.padTop + 5. * Summary.lineHeight + 8.
+  Summary.make(ctx, page, ~x=rightX, ~y, ~w=rightWidth, ~h=summaryHeight)
+  let y = y + summaryHeight + Grid.gap
+  let h = h - summaryHeight - Grid.gap
+  let wheelsWidth = 80.
+  let wheels = Panel.make(page, ~title="wheels", ~x=rightX, ~y, ~w=wheelsWidth, ~h)
   Wheels.make(ctx, wheels.el, {x: 8., y: Grid.padTop, w: wheelsWidth - 18., h: h - Grid.padTop - 8.})
 
-  let inputX = wheelsX + wheelsWidth + Grid.gap
+  let inputX = rightX + wheelsWidth + Grid.gap
   MidiInput.build(ctx, page, ~x=inputX, ~y, ~w=Style.designWidth - margin - inputX, ~h)
 }

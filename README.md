@@ -45,12 +45,17 @@ dsp/                    Cmajor DSP
                           multiples of a voice's note) and the air rack effect (Air4)
   Convolve.cmajor         the convolver: zero-latency partitioned convolution, built-in impulses
 ui/                     patch view (ReScript)
-  Index.res               entry point; View.res builds the header (pages, program, the ≡ menu),
-                          the four pages and the shapes editor over them (ShapesOverlay.res),
-                          and binds undo and redo: ParamModel.res records every edit, a
-                          gesture a step, and ProgramStore.res whole-program changes
-  PagePlay.res            the Play page: macros, arpeggiator, XY pad, wheels and the MIDI input
-                          (MidiInput.res); SlotRows.res shows target slots as used rows + "+"
+  Index.res               entry point; View.res builds the header (pages, program and its A/B
+                          versions, the ≡ menu), the four pages and the shapes editor over
+                          them (ShapesOverlay.res), and binds undo and redo: ParamModel.res
+                          records every edit, a gesture a step, and ProgramStore.res
+                          whole-program changes (A/B switches too)
+  Palette.res             search (ctrl+K, /): any control, page, tab, effect or command by
+                          name, typed values, connections; Reach.res knows where each control
+                          lives (its page, tab, effect, values) and goes there
+  PagePlay.res            the Play page: macros, arpeggiator, XY pad, the patch summary
+                          (Summary.res, each line a link to its editor), wheels and the MIDI
+                          input (MidiInput.res); SlotRows.res shows target slots as used rows + "+"
   VoiceView.res           the sounding notes as the DSP reports them: a mark per note on the
                           envelopes, LFOs, the filter graph and the modulated controls
   Preset.res              Porridge's preset format; PorridgeParams.res and ModMatrix.res

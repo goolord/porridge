@@ -138,7 +138,7 @@ let hookMenus = (c, e) => {
 
 // A control's element: focusable, with its label (after an on/off box, with ~box), showing the
 // parameter's status text while hovered, its menu on ctrl+right-click and the host's menu on a
-// double right-click.
+// double right-click. Search finds it where it is (Reach).
 // (more: what the status text says after the parameter's own)
 let frame = (ctx: Ctx.t, parent, id, ~cls, ~x, ~y, ~w=?, ~label=?, ~labelCls=?, ~box=false, ~more=() => "") => {
   let e = el("div", ~cls, ~parent)->place(x, y, ~w?)
@@ -150,6 +150,7 @@ let frame = (ctx: Ctx.t, parent, id, ~cls, ~x, ~y, ~w=?, ~label=?, ~labelCls=?, 
     status: ctx.status->Status.live(e, () => def.longText(ctx.model->ParamModel.get(id)) ++ more()),
   }
   e->setTabIndex(0)
+  Reach.control(ctx.model, id, e)
   if box {
     el("b", ~parent=e)->ignore
   }
@@ -470,15 +471,23 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
     edit()
   })
   e->suppressContextMenu
+  // the arrow keys: a hundredth of the knob, a thousandth with shift, a tenth with ctrl; a whole
+  // number goes by one (a tenth of its range with ctrl)
+  let nudge = (ev, up) => {
+    ev->preventDefault
+    let d = up ? 1. : -1.
+    if c.def.isInt {
+      let coarse = Math.max(1., Math.round((c.def.max - c.def.min) / 10.))
+      gestureSet(c, current(c) + (ev->commandKey ? d * coarse : d))
+    } else {
+      let step = ev->shiftKey ? 0.001 : ev->commandKey ? 0.1 : 0.01
+      gestureSet(c, c.def.fromNorm(clamp01(norm() + d * step)))
+    }
+  }
   e->onKeyDown(ev => {
-    let step = ev->shiftKey ? 0.001 : 0.01
     switch ev->key {
-    | "ArrowUp" | "ArrowRight" =>
-      setNorm(norm() + step)
-      ev->preventDefault
-    | "ArrowDown" | "ArrowLeft" =>
-      setNorm(norm() - step)
-      ev->preventDefault
+    | "ArrowUp" | "ArrowRight" => nudge(ev, true)
+    | "ArrowDown" | "ArrowLeft" => nudge(ev, false)
     | "Enter" =>
       ev->preventDefault
       edit()
@@ -698,6 +707,7 @@ let lfoMode = (ctx: Ctx.t, parent, id, ~x, ~y, ~w) => {
   let def = model->ParamModel.def(id)
   let e = el("div", ~cls="seg", ~parent)->place(x, y, ~w)
   e->setTabIndex(0)
+  Reach.control(model, id, e)
   let each = el("span", ~text="per-voice", ~parent=e)
   let shared = el("span", ~parent=e)
   let c = {
@@ -779,14 +789,16 @@ let help = (parent, text, ~x, ~y, ~size, ~tipW, ~left=false, ~above=false) => {
 }
 
 // The corner switch of a graphical editor: swaps the graph for the raw values by toggling
-// the editor's "expanded" class.
+// the editor's "expanded" class. Returns the function that shows the values.
 let expandSwitch = (ctx: Ctx.t, editor) => {
   let e = el("button", ~cls="btn xbtn", ~text="values", ~parent=editor)
   let expanded = ref(false)
-  e->onMouse(#click, _ => {
-    expanded := !expanded.contents
-    editor->toggleClass("expanded", expanded.contents)
-    e->setTextContent(expanded.contents ? "graph" : "values")
-  })
+  let set = on => {
+    expanded := on
+    editor->toggleClass("expanded", on)
+    e->setTextContent(on ? "graph" : "values")
+  }
+  e->onMouse(#click, _ => set(!expanded.contents))
   ctx.status->Status.hover(e, () => "Switch between the graph and the raw values")
+  () => set(true)
 }

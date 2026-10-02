@@ -127,6 +127,8 @@ let css = `
 /* a panel the synth page's flow just opened */
 @keyframes pflash { from { box-shadow: 0 0 0 3px var(--signal); } to { box-shadow: 0 0 0 3px transparent; } }
 .blk.flash { animation: pflash 0.8s ease-out; }
+/* what search went to, or a summary line opened (Reach.flash) */
+.found { animation: pflash 0.6s ease-out 2; }
 .blk > .hdr, .pbody > .hdr { position: absolute; right: 6px; top: 1px; width: 40px; height: 18px; }
 
 /* the FX page: the strip is the signal path, per-voice (tinted) then the whole sound, with a tab
@@ -510,6 +512,14 @@ let css = `
 .pv-head .btn.panic { width: 22px; color: #8a2a1a; }
 .pv-head .btn.panic .ic { height: 13px; }
 .pv-head .btn.panic:active { color: var(--paper); }
+/* A/B: the program's two versions, the live one lit (B faint until it is made) */
+.pv-head .ab { display: flex; flex: none; height: 20px; margin-left: 2px; border: 1px solid var(--edge); border-radius: 2px; overflow: hidden; }
+.pv-head .ab span { width: 17px; text-align: center; line-height: 20px; font-size: 11.5px; font-weight: 700; cursor: pointer;
+    color: var(--ink-soft); background: var(--panel-hi); }
+.pv-head .ab span + span { border-left: 1px solid var(--edge); }
+.pv-head .ab span:hover { color: var(--ink); background: var(--paper); }
+.pv-head .ab span.on { color: var(--paper); background: var(--signal); cursor: default; }
+.pv-head .ab:not(.two) span:not(.on) { color: var(--ink-faint); }
 
 /* status line: hover texts, or a hint for the page */
 .pv-status {
@@ -651,6 +661,24 @@ let css = `
 }
 .toast.on { display: block; }
 
+/* search (Palette): a box over the page, and what it finds */
+.pal { position: absolute; left: 270px; top: 40px; width: 560px; z-index: 75; display: none; box-sizing: border-box;
+    background: var(--paper); border: 1px solid var(--ink); box-shadow: 3px 3px 0 rgba(31,26,14,0.35); }
+.pal.on { display: block; }
+.pal-q { display: block; width: 100%; height: 32px; box-sizing: border-box; padding: 0 10px; border: none;
+    border-bottom: 1px solid var(--tile-edge); background: transparent; font: inherit; font-size: 15px; color: var(--ink); outline: none; }
+.pal-q::placeholder { color: var(--ink-faint); }
+.pal-list { max-height: 292px; overflow-y: auto; padding: 2px 0; }
+.pal-row { display: flex; align-items: baseline; gap: 10px; height: 24px; line-height: 24px; padding: 0 10px;
+    font-size: 13px; white-space: nowrap; cursor: pointer; }
+.pal-row .t { flex: none; max-width: 330px; overflow: hidden; text-overflow: ellipsis; }
+.pal-row .d { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; color: var(--ink-faint); }
+.pal-row .v { flex: none; font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.pal-row.on { background: var(--signal); color: var(--paper); }
+.pal-row.on .d, .pal-row.on .v { color: var(--paper); }
+.pal-none { padding: 4px 10px; font-size: 12.5px; color: var(--ink-faint); }
+.pal-foot { padding: 3px 10px 4px; border-top: 1px solid var(--tile-edge); font-size: 11px; color: var(--ink-faint); white-space: pre; }
+
 /* mod page: source chips (with a jack on the right), target chips (jack on the left) */
 .src, .tgt {
     position: absolute; box-sizing: border-box; height: ${px(controlHeight)}; border-radius: 2px;
@@ -773,6 +801,13 @@ let css = `
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mdest.none { color: var(--ink-faint); }
 .mdest:hover { color: var(--signal); }
+/* the Play page's patch summary: a line each, a link to where it is edited */
+.psum { position: absolute; display: flex; gap: 6px; height: 19px; line-height: 19px; border-radius: 2px;
+    font-size: 12.5px; white-space: nowrap; cursor: pointer; }
+.psum b { flex: none; width: 40px; padding-left: 3px; font-size: 11px; color: var(--ink-faint); }
+.psum span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.psum:hover { background: var(--panel-hi); }
+.psum:hover span { color: var(--signal); }
 .ptab.mark::after { content: ""; display: inline-block; width: 5px; height: 5px; margin-left: 4px; vertical-align: 2px;
     border-radius: 50%; background: var(--mod); }
 

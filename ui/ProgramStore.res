@@ -2,11 +2,17 @@
 // bank and the current program's shapes live in the patch's stored state so the host saves
 // them with the session (parameters are saved by the host on their own).
 //
-// What changes a program as a whole (loading one, init, a rename, the tuning...) is one undo
-// step in ParamModel's history: the bank as it was and as it is after. Previews (the browser's,
+// What changes a program as a whole (loading one, init, a rename, the tuning, switching between
+// its A and B...) is one undo step in ParamModel's history: the bank as it was and as it is after
+// (with the A/B versions waiting beside it). Previews (the browser's,
 // the random drawer's) are not steps; undo stops at the program they started from.
 
 open OatmealFormat
+
+// A/B: a program can have a second version to compare with. The live one is the program (what
+// plays, and what is saved); the other waits beside it while the view is open, and is not saved.
+type slot = A | B
+type compare = {live: slot, other: Preset.t}
 
 type t = {
   pc: PatchConnection.t,
@@ -36,7 +42,11 @@ type t = {
   mutable trying: option<Preset.t>,
   // inside a program step (one may call another: init loads a program)
   mutable stepping: bool,
+  // each program's other version, if it has one
+  mutable compares: array<option<compare>>,
 }
+
+let noCompares = () => Array.make(~length=bankPrograms, None)
 
 let make = (pc, model, ~onMessage) => {
   let programs = Preset.fillBank([])
@@ -62,6 +72,7 @@ let make = (pc, model, ~onMessage) => {
     listeners: None,
     trying: None,
     stepping: false,
+    compares: noCompares(),
   }
 }
 
@@ -83,6 +94,7 @@ let onState = (t, {key, value}: PatchConnection.storedStateEvent) =>
     Preset.decodeNamedBank(bank)->Option.forEach(((name, presets, warnings)) => {
       t.programs = Preset.fillBank(presets)
       t.bankName = name
+      t.compares = noCompares()
       // (the host's state: the steps before it no longer apply)
       t.model->ParamModel.clearHistory
       changed(t)
@@ -230,9 +242,10 @@ let keepCurrent = t => t.programs->Array.setUnsafe(t.current, captureCurrent(t))
 
 // The bank as an undo step keeps it: the current program with its live edits, or as it was
 // before a preview.
-type snapshot = {bank: array<Preset.t>, index: int, name: string}
+type snapshot = {bank: array<Preset.t>, index: int, name: string, compares: array<option<compare>>}
 
 let snapshot = t => {
+  compares: t.compares->Array.copy,
   bank: t.programs->Array.mapWithIndex((p, i) =>
     switch t.trying {
     | _ if i != t.current => p
@@ -293,6 +306,7 @@ let apply = (t, preset: Preset.t) => {
 let putBack = (t, s: snapshot) => {
   t.programs = s.bank->Array.copy
   t.bankName = s.name
+  t.compares = s.compares->Array.copy
   t.current = s.index
   apply(t, currentProgram(t))
   StoredState.send(t.pc, StoredState.Program, t.current)
@@ -434,11 +448,46 @@ let initCurrent = t => {
   step(t, "init", () => loadIntoCurrent(t, {...init, meta: {...init.meta, author: meta(t).author}}))
 }
 
+// A/B: which version of the current program is live, and whether it has the other yet.
+let otherOf = (t: t) => t.compares[t.current]->Option.flatMap(c => c)
+let slot = t => otherOf(t)->Option.mapOr(A, c => c.live)
+let hasOther = t => otherOf(t)->Option.isSome
+let slotName = s => s == A ? "A" : "B"
+let otherSlot = s => s == A ? B : A
+
+// Switches the current program to its other version. The first time, that is a copy of this
+// one, which waits as the other. Its name and program info stay as they are.
+let switchSlot = t => {
+  let to = otherSlot(slot(t))
+  step(t, "compare " ++ slotName(to), () => {
+    let now = captureCurrent(t)
+    switch otherOf(t) {
+    | Some({other}) =>
+      let p = {...other, meta: now.meta}
+      t.programs->Array.setUnsafe(t.current, p)
+      apply(t, p)
+    | None => keepCurrent(t)
+    }
+    t.compares->Array.setUnsafe(t.current, Some({live: to, other: now}))
+    bankChanged(t)
+  })
+}
+
+// Makes the other version a copy of the live one.
+let copyToOther = t => {
+  let live = slot(t)
+  step(t, `copy ${slotName(live)} to ${slotName(otherSlot(live))}`, () => {
+    t.compares->Array.setUnsafe(t.current, Some({live, other: captureCurrent(t)}))
+    changed(t)
+  })
+}
+
 // A bank of Init programs to start writing one: its name, and the author of every program.
 let newBank = (t, ~name, ~author) => {
   step(t, "new bank", () => {
     t.programs = Preset.fillBank([])->Array.map(p => {...p, meta: {...Preset.emptyMeta("Init"), author}})
     t.bankName = name
+    t.compares = noCompares()
     select(t, 0, ~keepEdits=false)
   })
   t.message(`New bank${name == "" ? "" : ` "${name}"`}: ${Int.toString(bankPrograms)} Init programs`)
@@ -451,6 +500,7 @@ let loadBank = (t, programs, ~name, ~index=0) => {
   step(t, name == "" ? "load a bank" : `load bank “${name}”`, () => {
     t.programs = Preset.fillBank(programs->Array.slice(~start, ~end=start + bankPrograms))
     t.bankName = name
+    t.compares = noCompares()
     select(t, index - start, ~keepEdits=false)
   })
 }
