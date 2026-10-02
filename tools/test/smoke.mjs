@@ -165,6 +165,9 @@ for (const os of [0, 1, 2, 3])
     const flat = harmonicsDb ("keq_flat", { KEQ_On: 1 });
     const boost = harmonicsDb ("keq_boost", { KEQ_On: 1, KEQ_3_Gain: 12 });
     const cut = harmonicsDb ("keq_cut", { KEQ_On: 1, KEQ_5_Gain: -18 });
+    const shelf = harmonicsDb ("keq_shelf", { KEQ_On: 1, KEQ_1_Gain: 12 });
+    check (shelf[0] - off[0] > 1 && shelf[0] - off[0] < 8 && Math.abs (shelf[3] - off[3]) < 0.5,
+           `key EQ low shelf +12 dB  1x ${(shelf[0] - off[0]).toFixed (2)} dB (half an octave over its corner), 8x ${(shelf[3] - off[3]).toFixed (2)} dB`);
     const show = a => a.map (v => v.toFixed (1)).join (" ");
     check (flat.every ((v, i) => Math.abs (v - off[i]) < 0.01), `key EQ flat changes nothing  ${show (off)} | ${show (flat)}`);
     check (Math.abs (boost[2] - off[2] - 12) < 1 && Math.abs (boost[0] - off[0]) < 1.5,
@@ -172,6 +175,36 @@ for (const os of [0, 1, 2, 3])
     check (Math.abs (cut[4] - off[4] + 18) < 1.5 && Math.abs (cut[2] - off[2]) < 1.5,
            `key EQ band 5 (16x) -18 dB  16x ${(cut[4] - off[4]).toFixed (2)} dB, 4x ${(cut[2] - off[2]).toFixed (2)} dB`);
     sounds ("key EQ, unison spread", { KEQ_On: 1, KEQ_2_Gain: 18, KEQ_6_Gain: -24, KEQ_8_Gain: 24, U_Voices: 4, U_Spread: 1 }, { tail: false });
+
+    // an oscillator's noise roughens it: what lies between its harmonics rises well over the
+    // clean saw's, its level stays about as it was; with unison and hard sync it stays bounded
+    const between = sets =>
+    {
+        const [l] = render ({ program: init, events: one, frames: rate, rate, sets: { ...plain, ...sets }, out: join (dir, "osc_noise.f32") });
+        const from = Math.floor (0.3 * rate), size = 16384;
+        const at = hz =>
+        {
+            let re = 0, im = 0;
+            for (let i = 0; i < size; ++i)
+            {
+                const w = 0.5 - 0.5 * Math.cos (2 * Math.PI * i / size), a = 2 * Math.PI * hz * i / rate;
+                re += w * l[from + i] * Math.cos (a);
+                im += w * l[from + i] * Math.sin (a);
+            }
+            return 20 * Math.log10 (Math.hypot (re, im) + 1e-12);
+        };
+        let rms = 0;
+        for (let i = from; i < from + size; ++i) rms += l[i] * l[i];
+        return { gap: [2.5, 4.5, 8.5].map (h => at (h * 220)).reduce ((a, b) => a + b) / 3, level: 10 * Math.log10 (rms / size) };
+    };
+    const clean = between ({}), rough = between ({ O1_Noise: 0.5 });
+    check (rough.gap - clean.gap > 15 && Math.abs (rough.level - clean.level) < 3,
+           `osc noise fills the gaps  ${(rough.gap - clean.gap).toFixed (1)} dB between harmonics, level ${(rough.level - clean.level).toFixed (2)} dB`);
+    sounds ("osc noise, unison, sync", { O1_Noise: 0.8, O2_Noise: 0.8, O2_NoiseColour: 1, U_Voices: 4, OscMix: 1 }, { tail: false });
+    // osc 2 heard in PM 2 > 1 (a sine a twelfth up): the sound gets louder by osc 2's own
+    const pm = between ({ OscMix: 3, O2_Amp: 0.5, Transpose: 19 / 12, O2_Waveform: 0 });
+    const heardPm = between ({ OscMix: 3, O2_Amp: 0.5, Transpose: 19 / 12, O2_Waveform: 0, O2_PairMix: 1 });
+    check (heardPm.level - pm.level > 0.5, `osc 2 heard in PM  level ${(heardPm.level - pm.level).toFixed (2)} dB`);
 }
 
 // the noise source, on the pitch and on the cutoff

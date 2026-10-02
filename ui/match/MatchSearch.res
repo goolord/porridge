@@ -104,10 +104,11 @@ let islands = [
 ]
 
 // what each optional part a candidate switches on costs it (Genome.parts), about 0.5% of match;
-// noise twice that (between the harmonics, a little noise can stand in for partials that
-// modulation would put there, and an oscillator or two modulated is the likelier sound)
+// noise over three times that (between the harmonics, a little noise can stand in for partials
+// that modulation or a roughened oscillator would put there, which are the likelier sound, and a
+// hiss the sample hasn't is heard more than the loss hears it)
 let partCost = 0.006
-let noiseCost = 0.006
+let noiseCost = 0.014
 
 //==============================================================================
 // Rendering and scoring a candidate (in a worker)
@@ -468,7 +469,8 @@ let extend = (f: Spectrum.features, ~like: Spectrum.features) => {
 // The key EQ, fitted
 
 // Band k's response in dB at f for gain g dB on a note at hz, as the DSP has it (dsp/Voice.cmajor
-// setKeyEqBand: RBJ peaking, Q = sqrt 2, sitting at 18 kHz and fading out past it).
+// setKeyEqBand: RBJ peaking, Q = sqrt 2, or for the first a low shelf half an octave under the
+// note; sitting at 18 kHz and fading out past it).
 let eqBandDb = (~k, ~g, ~hz, ~f) => {
   let centre = hz * PorridgeParams.keyEqHarmonic(k + 1)
   let over = centre > 18000. ? Math.log2(centre / 18000.) : 0.
@@ -476,13 +478,20 @@ let eqBandDb = (~k, ~g, ~hz, ~f) => {
   if Math.abs(gain) <= 0.01 {
     0.
   } else {
-    let fc = Math.min(Math.min(centre, 18000.), 0.45 * Spectrum.sampleRate)
+    let fc = Math.min(Math.min(k == 0 ? centre * 0.70710678 : centre, 18000.), 0.45 * Spectrum.sampleRate)
     let w = Spectrum.twoPi * fc / Spectrum.sampleRate
     let a = Math.pow(10., ~exp=gain / 40.)
-    let alpha = Math.sin(w) / (2. * Math.sqrt(2.))
     let c = Math.cos(w)
-    let (b0, b1, b2) = (1. + alpha * a, -2. * c, 1. - alpha * a)
-    let (a0, a1, a2) = (1. + alpha / a, -2. * c, 1. - alpha / a)
+    let ((b0, b1, b2), (a0, a1, a2)) = if k == 0 {
+      let beta = 2. * Math.sqrt(a) * Math.sin(w) / Math.sqrt(2.)
+      (
+        (a * ((a + 1.) - (a - 1.) * c + beta), 2. * a * ((a - 1.) - (a + 1.) * c), a * ((a + 1.) - (a - 1.) * c - beta)),
+        ((a + 1.) + (a - 1.) * c + beta, -2. * ((a - 1.) + (a + 1.) * c), (a + 1.) + (a - 1.) * c - beta),
+      )
+    } else {
+      let alpha = Math.sin(w) / (2. * Math.sqrt(2.))
+      ((1. + alpha * a, -2. * c, 1. - alpha * a), (1. + alpha / a, -2. * c, 1. - alpha / a))
+    }
     let v = Spectrum.twoPi * Math.min(f, 0.5 * Spectrum.sampleRate) / Spectrum.sampleRate
     let (c1, s1, c2, s2) = (Math.cos(v), Math.sin(v), Math.cos(2. * v), Math.sin(2. * v))
     let num = Math.pow(b0 + b1 * c1 + b2 * c2, ~exp=2.) + Math.pow(b1 * s1 + b2 * s2, ~exp=2.)
@@ -534,7 +543,10 @@ let bandPoints = (r: Spectrum.resolution, ~hz, ~grid: option<Spectrum.grid>) => 
       }
       m := m.contents + 1
     }
+    // (a band wholly under the note holds what lies under it, as its weights spread it)
+    let under = Int.toFloat(last) * binHz < 0.75 * hz
     switch between {
+    | _ if under => spread == [] ? [(r.centres->get64(b), 1.)] : spread
     | None => spread == [] ? [(r.centres->get64(b), 1.)] : spread
     | Some(ratios) =>
       let nearest = Math.max(1., Math.round(r.centres->get64(b) / hz))
@@ -651,10 +663,18 @@ let applyEq: (Float32Array.t, array<float>, float) => Float32Array.t = %raw(`(x,
     const over = centre > 18000 ? Math.log2(centre / 18000) : 0;
     const gain = g * Math.max(0, 1 - over);
     if (Math.abs(gain) <= 0.01) return;
-    const f = Math.min(centre, 18000, 0.45 * sr);
-    const w = 2 * Math.PI * f / sr, A = Math.pow(10, gain / 40), alpha = Math.sin(w) / (2 * Math.SQRT2), c = Math.cos(w);
-    const a0 = 1 + alpha / A;
-    const b0 = (1 + alpha * A) / a0, b1 = -2 * c / a0, b2 = (1 - alpha * A) / a0, a1 = -2 * c / a0, a2 = (1 - alpha / A) / a0;
+    const f = Math.min(k === 0 ? centre * 0.70710678 : centre, 18000, 0.45 * sr);
+    const w = 2 * Math.PI * f / sr, A = Math.pow(10, gain / 40), c = Math.cos(w);
+    let b0, b1, b2, a1, a2;
+    if (k === 0) {
+      const beta = 2 * Math.sqrt(A) * Math.sin(w) / Math.SQRT2, s0 = (A + 1) + (A - 1) * c + beta;
+      b0 = A * ((A + 1) - (A - 1) * c + beta) / s0; b1 = 2 * A * ((A - 1) - (A + 1) * c) / s0;
+      b2 = A * ((A + 1) - (A - 1) * c - beta) / s0; a1 = -2 * ((A - 1) + (A + 1) * c) / s0;
+      a2 = ((A + 1) + (A - 1) * c - beta) / s0;
+    } else {
+      const alpha = Math.sin(w) / (2 * Math.SQRT2), a0 = 1 + alpha / A;
+      b0 = (1 + alpha * A) / a0; b1 = -2 * c / a0; b2 = (1 - alpha * A) / a0; a1 = -2 * c / a0; a2 = (1 - alpha / A) / a0;
+    }
     let s1 = 0, s2 = 0;
     for (let i = 0; i < out.length; i++) {
       const v = out[i], y = b0 * v + s1;
@@ -754,6 +774,46 @@ let evaluate = (ctx, x, ~weights, ~threshold, ~fit: fitting, ~short) => {
           {...f, grid, energy: energy.contents, envelope: Spectrum.envelope(y), side: side->Option.map(Spectrum.envelope)}
         }
     finish(x, note, () => y, () => side, f)
+  }
+}
+
+// What a refinement's evaluation gives (MatchRefine): the loss, the similarity, the pictures, and
+// the output gain that sets the patch's level (as candidateOf's).
+type valued = {
+  loss: float,
+  similarity: float,
+  envelope: array<float>,
+  spectrum: array<float>,
+  gain: float,
+}
+
+// Renders a patch given as parameter values (a card's, with what a refinement adds), played at
+// `note` and the tuning in its Tune_Main, as the drawer plays it; its own Gain is left out of the
+// render (the level is measured, and set again, from the base's).
+let evaluateValues = (ctx, values: array<(string, float)>, ~note) => {
+  let values = values->Array.filter(((id, _)) => id != "Gain")
+  let tune = values->Array.find(((id, _)) => id == "Tune_Main")->Option.mapOr(440., ((_, v)) => v)
+  let cents = 1200. * Math.log2(tune / 440.)
+  let n = frames(ctx)
+  let (y, side) = switch ctx.target.side {
+  | Some(_) =>
+    let (y, side) = MatchEngine.renderSides(ctx.engine, values, ~note, ~cents, ~frames=n + onsetRoom)
+    (y, Some(side))
+  | None => (MatchEngine.render(ctx.engine, values, ~note, ~cents, ~frames=n + onsetRoom), None)
+  }
+  let start = Math.Int.min(onsetRoom, SoundTarget.onsetOf(y))
+  let cut = a => a->TypedArray.subarray(~start, ~end=start + n)
+  let (y, side) = (cut(y), side->Option.map(cut))
+  let hz = 440. * Math.pow(2., ~exp=(Int.toFloat(note) + cents / 100. - 69.) / 12.)
+  let f = measureOf(ctx, y, ~side?, ~hz)
+  let loss = MatchLoss.compare(MatchLoss.standard, ctx.measured, f)
+  let gain = f.energy > 0. ? Math.sqrt(ctx.measured.energy / f.energy) : 1.
+  {
+    loss,
+    similarity: MatchLoss.similarity(loss),
+    envelope: Spectrum.envelopeOverview(f, ~points=envelopePoints, ~gain),
+    spectrum: Spectrum.averageSpectrum(f, ~gain),
+    gain: levelGain(ctx, y),
   }
 }
 
@@ -918,8 +978,10 @@ let allowed = (key, lo, hi) => {
 
 // The outline's grid: the starting points, then the first with each allowed first wave and
 // filter type, and played an octave either side; and for the first pitch in o2Pitches (a second
-// series of partials the sample was heard to have), the first with osc 2 sounding there, with
-// each wave it may take through each filter type.
+// series of partials the sample was heard to have), the first with osc 2 sounding there
+// (roughened, as a second series is often a waveform wavering on its own, and without noise),
+// with each wave it may take, beside osc 1 as it is, the fitted wave or a pulse, through the
+// plainest filter types; mixed beside osc 1, and phase-modulating it while heard beside it.
 let gridOf = (starts: array<Float64Array.t>, lo, hi, ~o2Pitches) => {
   let first = starts->Array.getUnsafe(0)
   let variant = changes => {
@@ -934,21 +996,41 @@ let gridOf = (starts: array<Float64Array.t>, lo, hi, ~o2Pitches) => {
       ? []
       : waves->Array.flatMap(w => filters->Array.map(f => variant([("o1Wave", w), ("filterType", f)])))
   let octaves = allowed("octave", lo, hi)->Array.filter(v => Genome.choiceOf(v, 3) != 0)->Array.map(v => variant([("octave", v)]))
+  // (osc 1 as it is, the fitted wave, which leaves the second series' partials to osc 2, or a
+  // pulse, which has no even harmonics to beat against it; through the four plainest filters)
+  let firstWave = Genome.get(first, "o1Wave")
+  let seriesWaves =
+    waves->Array.filter(w =>
+      w == firstWave || [Genome.fittedWave, 2]->Array.includes(Genome.choiceOf(w, Genome.gene(Genome.indexOf("o1Wave")).options))
+    )
   let series = o2Pitches->Array.slice(~start=0, ~end=1)->Array.flatMap(st =>
-    allowed("o2Wave", lo, hi)->Array.flatMap(w =>
-      filters->Array.map(f =>
-        variant([
-          ("o2Pitch", Genome.o2PitchGene(st)),
-          ("o2Wave", w),
-          ("o2Level", 0.6),
-          ("oscMix", Genome.valueOfChoice(0, 7)),
-          ("width", 0.),
-          ("filterType", f),
-        ])
+    seriesWaves->Array.flatMap(w1 =>
+      allowed("o2Wave", lo, hi)->Array.flatMap(w =>
+        filters->Array.slice(~start=0, ~end=4)->Array.map(f =>
+          variant([
+            ("o1Wave", w1),
+            ("o2Pitch", Genome.o2PitchGene(st)),
+            ("o2Wave", w),
+            ("o2Level", 0.6),
+            ("o2Rough", Genome.roughGeneOf(0.5)),
+            ("noise", 0.),
+            ("oscMix", Genome.valueOfChoice(0, 7)),
+            ("width", 0.),
+            ("filterType", f),
+          ])
+        )
       )
     )
   )
-  [starts, structures, octaves, series]->Array.flat->Array.map(x => clampInto(x, lo, hi))
+  // (and osc 2 phase-modulating osc 1 while heard beside it, as Synplant's B does)
+  let heard = series->Array.map(x => {
+    let y = TypedArray.copy(x)
+    y->set64(Genome.indexOf("oscMix"), Genome.valueOfChoice(3, 7))
+    y->set64(Genome.indexOf("o2Heard"), 0.6)
+    y->set64(Genome.indexOf("feedback"), 0.)
+    y
+  })
+  [starts, structures, octaves, series, heard]->Array.flat->Array.map(x => clampInto(x, lo, hi))
 }
 
 // The outline: `starts` (the seed, or what the predictor suggests, best guess first) within
@@ -1037,8 +1119,8 @@ let isDone = s =>
 // wave it may take at each interval (and at the pitches the starts play it at off them), each
 // mix mode with a sine or saw osc 2 in unison, a fifth or an octave up (and at those pitches:
 // the sidebands of modulation at an odd ratio, which noise would otherwise stand in for),
-// unison (two and four voices, a little and much detuned), noise (none, some and much), and
-// the second filter (beside and after the first, a little and well above it); all within the
+// unison (two and four voices, a little and much detuned), noise (none, some and much), osc 1
+// roughened (a little and much), and the second filter (beside and after the first, a little and well above it); all within the
 // bounds.
 let secondScreen = (x: Float64Array.t, lo, hi, ~o2Pitches) => {
   let set = (y, key, v) => y->set64(Genome.indexOf(key), v)
@@ -1065,24 +1147,33 @@ let secondScreen = (x: Float64Array.t, lo, hi, ~o2Pitches) => {
     ->Array.filter(v => Genome.choiceOf(v, 4) == 1 || Genome.choiceOf(v, 4) == 3)
     ->Array.flatMap(u => [0.35, 0.7]->Array.map(d => variant([("unison", u), ("unisonDetune", d)])))
   let noise = [0., 0.45, 0.75]->Array.map(n => variant([("noise", n), ("noiseColour", 0.1)]))
+  // (and osc 1 roughened by its own noise, which a noise floor would otherwise stand in for)
+  let rough = [0.35, 0.6]->Array.map(d => variant([("o1Rough", Genome.roughGeneOf(d)), ("roughColour", 0.7)]))
   let doubled =
     allowed("filterDouble", lo, hi)
     ->Array.filter(v => Genome.choiceOf(v, 3) != 0)
     ->Array.flatMap(d => [0.25, 0.6]->Array.map(split => variant([("filterDouble", d), ("filterSplit", split), ("filterMix", 0.5)])))
-  let extras = Array.concat(Array.concat(unison, noise), doubled)
+  let extras = [unison, noise, rough, doubled]->Array.flat
   let mixes =
     allowed("oscMix", lo, hi)
     ->Array.filter(v => Genome.choiceOf(v, 7) != 0)
     ->Array.flatMap(m =>
       [0, 1]->Array.flatMap(w =>
-        Array.concat([0., 7., 12.], o2Pitches)->Array.map(i => {
+        Array.concat([0., 7., 12.], o2Pitches)->Array.flatMap(i => {
           let y = TypedArray.copy(x)
           set(y, "oscMix", m)
           set(y, "o2Level", 0.55)
           set(y, "feedback", 0.3)
           set(y, "o2Wave", choice("o2Wave", w))
           set(y, "o2Pitch", anchor(i))
-          y
+          // (at a second series' pitch, with osc 2 heard beside osc 1 too)
+          if o2Pitches->Array.includes(i) {
+            let z = TypedArray.copy(y)
+            set(z, "o2Heard", 0.6)
+            [y, z]
+          } else {
+            [y]
+          }
         })
       )
     )
@@ -1111,6 +1202,9 @@ type pending = {
 let switches = [
   ("noise", 0.),
   ("o2Level", 0.),
+  ("o2Rough", 0.),
+  ("o1Rough", 0.),
+  ("o2Heard", 0.),
   ("vibrato", 0.),
   ("wobble", 0.),
   ("drive", 0.),
@@ -1314,7 +1408,7 @@ let tell = (s, pending, results: array<result>) => {
       if Some(Genome.structure(x)) == heldShape {
         // (with osc 2's level and pitch, the noise and the second filter free too: a series
         // found on its own needs them set around it)
-        let es = coreRun(s, x, ~seed=s.seed + k, ~extra=["o2Level", "o2Pitch", "noise", "filterSplit", "filterMix"])
+        let es = coreRun(s, x, ~seed=s.seed + k, ~extra=["o2Level", "o2Pitch", "o2Rough", "roughColour", "o2Heard", "feedback", "noise", "filterSplit", "filterMix"])
         heldRuns->WeakMap.set(es, true)->ignore
         es
       } else {

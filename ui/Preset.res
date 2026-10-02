@@ -182,6 +182,8 @@ let porridgeOnly = p => {
     changed(Curves) || changed(Decay1Curves) ? Some("the envelope curves") : None,
     changed(OscEnvs) ? Some("the oscillator envelopes") : None,
     changed(KeyEq) ? Some("the key EQ") : None,
+    changed(OscNoise) ? Some("the oscillator noise") : None,
+    changed(PairMix) ? Some("osc 2 heard in PM, ring and AM") : None,
     changed(LfoExtras) ? Some("the LFO delay, slew, steps and one-shot") : None,
     changed(UnisonExtras) ? Some("the unison extras") : None,
     extended(["Sat_Type"]) ? Some("Porridge's distortion types (exported as soft clipping)") : None,

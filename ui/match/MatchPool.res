@@ -169,6 +169,16 @@ let evaluate = (t, ~session, ~run, genes: Float64Array.t, weights, threshold, fi
     }
   )
 
+// Renders and scores a patch given as values in a session (MatchRun.evaluateValues); a failure
+// scores nothing.
+let evaluateValues = (t, ~session, ~run, values, note) =>
+  request(t, ~session, ~run, task => EvaluateValues({task, values, note}))->Promise.thenResolve(r =>
+    switch r {
+    | Valued({valued}) => valued
+    | _ => ({loss: infinity, similarity: 0., envelope: [], spectrum: [], gain: 1.}: MatchSearch.valued)
+    }
+  )
+
 let prepare = async (t, ~name, audio: AudioFile.t) =>
   switch await request(t, task => Prepare({task, name, samples: audio.samples, sides: audio.sides, sampleRate: audio.sampleRate})) {
   | Target({target, envelope, spectrum, suggestions}) => Ok((target, envelope, spectrum, suggestions))

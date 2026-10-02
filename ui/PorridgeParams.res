@@ -678,9 +678,10 @@ let oscEnvSpecs = [1, 2]->Array.flatMap(n => {
   ]
 })
 
-// The key EQ: eight peaking bands at the end of each voice, an octave wide and an octave
-// apart, centred on the note's harmonics 1, 2, 4 ... 128, so that its curve moves with the note
-// (a band past 18 kHz fades out over the next octave). The sound matcher fits it to a sample.
+// The key EQ: eight bands at the end of each voice, an octave apart on the note's harmonics 1,
+// 2, 4 ... 128, so that its curve moves with the note: a low shelf half an octave under the note,
+// then peaks an octave wide (a band past 18 kHz fades out over the next octave). The sound
+// matcher fits it to a sample.
 let keyEqBands = 8
 let keyEqGainId = k => `KEQ_${Int.toString(k)}_Gain`
 let keyEqHarmonic = k => Math.pow(2., ~exp=Int.toFloat(k - 1))
@@ -689,10 +690,25 @@ let keyEqSpecs = [
   {id: "KEQ_On", name: "Key EQ", kind: Choice({names: onOff, init: 0})},
   ...Array.fromInitializer(~length=keyEqBands, i => {
     id: keyEqGainId(i + 1),
-    name: `Key EQ ${Float.toString(keyEqHarmonic(i + 1))}× gain`,
+    name: i == 0 ? "Key EQ low shelf gain" : `Key EQ ${Float.toString(keyEqHarmonic(i + 1))}× gain`,
     kind: decibels(-24., 24., 0.),
   }),
 ]
+
+// Each oscillator's noise: its pitch moved every sample by lowpassed noise (how far, and how
+// bright the noise is), which roughens the waveform without any hiss of its own.
+let oscNoiseSpecs = [1, 2]->Array.flatMap(n => {
+  let osc = Int.toString(n)
+  [
+    {id: `O${osc}_Noise`, name: `Osc ${osc} noise`, kind: Float({min: 0., max: 1., init: 0., text: percent})},
+    {id: `O${osc}_NoiseColour`, name: `Osc ${osc} noise colour`, kind: Float({min: 0., max: 1., init: 0.7, text: percent})},
+  ]
+})
+
+// In the PM 2 > 1, ring and AM osc mixes, osc 2 heard as well as modulating (at this much of
+// its level, which is also the depth): an oscillator that modulates another and sounds beside
+// it, as Synplant's B does.
+let pairMixSpecs = [{id: "O2_PairMix", name: "Osc 2 heard", kind: Float({min: 0., max: 1., init: 0., text: percent})}]
 
 type feature =
   | Macros
@@ -718,6 +734,8 @@ type feature =
   | DistModels
   | AirEffect
   | KeyEq
+  | OscNoise
+  | PairMix
 
 let groups = [
   (Macros, macroSpecs),
@@ -744,6 +762,8 @@ let groups = [
   (DistModels, Array.concat(distModelSpecs, distModelCopySpecs)),
   (AirEffect, Array.concat(airSpecs, airCopySpecs)),
   (KeyEq, keyEqSpecs),
+  (OscNoise, oscNoiseSpecs),
+  (PairMix, pairMixSpecs),
 ]
 
 let all = groups->Array.flatMap(((_, specs)) => specs)

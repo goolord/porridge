@@ -7,7 +7,9 @@
 //    until Keep, and closing the drawer puts back what was playing before (unless the card
 //    was edited meanwhile, which keeps the edits). Keep can be undone while the drawer is open.
 //  - Vary makes four variations of a card, a little, some or a lot apart, which can be varied
-//    in turn; the row above the cards goes back.
+//    in turn; the row above the cards goes back. Its refine tries additions beyond what the
+//    matching sets (an effect, a modulation) on top of the card, one at a time, keeping those
+//    that bring it closer (MatchRefine.res): the card as it is and with one, two or three.
 //  - The locks keep parts of the chosen card (its oscillators, filter, envelopes, modulation
 //    or effects) while re-matching or varying the rest.
 //
@@ -20,6 +22,8 @@ let slotCount = 4
 // short one has more: MatchSearch.budgetFor)
 let budget = 1000
 let amounts = [("a little", 0.15), ("some", 0.35), ("a lot", 0.7)]
+// the renders a refinement has (MatchRefine.res)
+let refineBudget = 800
 
 type card = {
   root: element,
@@ -282,7 +286,9 @@ let make = (ctx: Ctx.t, stage): t => {
     }
     status->Status.hover(card.play, () => "Play this patch on the synth at the sample's pitch; the program isn't changed until Keep")
     status->Status.hover(card.keep, () => "Put this patch in the current program, named after the sample")
-    status->Status.hover(card.vary, () => "Four variations of this patch: a little, some or a lot apart")
+    status->Status.hover(card.vary, () =>
+      "Four variations of this patch, a little, some or a lot apart; or refined, with an effect or modulation or more added"
+    )
     status->Status.hover(card.title, () => blurbAt.contents(slot))
     status->Status.hover(card.best, () => "The closest of these to the sample")
     status->Status.hover(card.score, () => "How close it sounds to the sample")
@@ -606,8 +612,8 @@ let make = (ctx: Ctx.t, stage): t => {
   let lockedNow = () => chosen.contents == None ? [] : Genome.groups->Array.filter(g => locks->Set.has(g))
 
   // Shows a new row of cards and starts what fills it, once the workers are going: `start`
-  // gets them and how to evaluate genes in this run.
-  let push = (gen: generation, l: loaded, start: (MatchPool.t, MatchRun.evaluate) => MatchRun.t) => {
+  // gets them and how to evaluate genes (and values) in this run.
+  let push = (gen: generation, l: loaded, start: (MatchPool.t, MatchRun.evaluate, MatchRun.evaluateValues) => MatchRun.t) => {
     cancelShown()
     generations->Array.push(gen)
     chosen := None
@@ -628,7 +634,8 @@ let make = (ctx: Ctx.t, stage): t => {
           let run = MatchPool.newRun(p)
           let evaluate = (x, weights, threshold, fit, short) =>
             MatchPool.evaluate(p, ~session, ~run, x, weights, threshold, fit, short)
-          gen.run = Some((start(p, evaluate), run))
+          let evaluateValues = (values, note) => MatchPool.evaluateValues(p, ~session, ~run, values, note)
+          gen.run = Some((start(p, evaluate, evaluateValues), run))
         }
       | Error(text) =>
         gen.running = false
@@ -664,7 +671,7 @@ let make = (ctx: Ctx.t, stage): t => {
         run: None,
         running: true,
       }
-      push(gen, l, (_, evaluate) =>
+      push(gen, l, (_, evaluate, _) =>
         MatchRun.search(
           evaluate,
           MatchSearch.makeMatch(
@@ -706,7 +713,40 @@ let make = (ctx: Ctx.t, stage): t => {
         ~count=slotCount,
         ~seed=104729 * runs.contents,
       )
-      push(gen, l, (_, evaluate) => MatchRun.vary(evaluate, mutants, handlersFor(gen)))
+      push(gen, l, (_, evaluate, _) => MatchRun.vary(evaluate, mutants, handlersFor(gen)))
+    | _ => ()
+    }
+
+  // A card refined: as it is, and with each addition that brings it closer.
+  let startRefine = slot =>
+    switch (loaded.contents, candidateAt(slot), shown()) {
+    | (Some(l), Some(c), Some(parent)) =>
+      let (parentTitle, _) = parent.heads[slot]->Option.getOr(("", ""))
+      runs := runs.contents + 1
+      let gen = {
+        label: `${parentTitle->String.toLowerCase}, refined`,
+        heads: Array.fromInitializer(~length=slotCount, i => (
+          i == 0 ? "as it is" : `+${Int.toString(i)}`,
+          i == 0
+            ? `${parentTitle}, as it plays`
+            : `${parentTitle} with ${i == 1 ? "an addition" : Int.toString(i) ++ " additions"} (an effect or a modulation) that bring it closer`,
+        )),
+        found: Array.make(~length=slotCount, None),
+        progress: Array.make(~length=slotCount, 0.),
+        run: None,
+        running: true,
+      }
+      let initValues = Lazy.get(init).values
+      push(gen, l, (_, _, evaluateValues) =>
+        MatchRun.refine(
+          evaluateValues,
+          c,
+          ~base=id => initValues->Map.get(id)->Option.getOr(0.),
+          ~budget=refineBudget,
+          ~seed=104729 * runs.contents,
+          handlersFor(gen),
+        )
+      )
     | _ => ()
     }
 
@@ -832,9 +872,12 @@ let make = (ctx: Ctx.t, stage): t => {
       if candidateAt(slot) != None {
         ctx.menu->Menu.show(
           card.vary,
-          amounts->Array.mapWithIndex(((name, _), i) => {Menu.label: "vary " ++ name, value: i}),
+          Array.concat(
+            amounts->Array.mapWithIndex(((name, _), i) => {Menu.label: "vary " ++ name, value: i}),
+            [{Menu.label: "refine", value: -2}],
+          ),
           -1,
-          i => amounts[i]->Option.forEach(a => startVary(slot, a)),
+          i => i == -2 ? startRefine(slot) : amounts[i]->Option.forEach(a => startVary(slot, a)),
         )
       }
     })

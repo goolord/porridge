@@ -2556,6 +2556,8 @@ namespace porridge
                           pw1 + pwMod1, pwmDepth1 + pwmDepthMod1 + P[slot::O1_PWM_D], pwmRate1 + pwmRateMod1, P[slot::O1_PWM_R]);
             setOscParams (v.osc2[0], int (P[slot::O2_Waveform]), amp2 * P[slot::O2_Amp] * atGain, P[slot::O2_PWM_W],
                           pw2 + pwMod2, pwmDepth2 + pwmDepthMod2 + P[slot::O2_PWM_D], pwmRate2 + pwmRateMod2, P[slot::O2_PWM_R]);
+            v.osc1[0].setNoise (P[slot::O1_Noise], P[slot::O1_NoiseColour], sampleRate);
+            v.osc2[0].setNoise (P[slot::O2_Noise], P[slot::O2_NoiseColour], sampleRate);
 
             // oscillators
             let oscMix = int (P[slot::OscMix]);
@@ -2841,13 +2843,23 @@ namespace porridge
             }
         }
 
-        /// One unison copy of an osc mix mode pair, added into buf.
+        /// One unison copy of an osc mix mode pair, added into buf. In PM 2 > 1, ring and AM, osc 2
+        /// is heard too at O2_PairMix of its level (which is also the depth).
         void renderPairCopy (Voice& v, int k, int mode, float m1, float m2, float feedback, float[blockSize]& buf, int n)
         {
             if (mode == oscMixMode::pmFeedback)
+            {
                 v.osc2.at (k).renderPlain (tables, setUser2, m2, buf, n);
+            }
             else
+            {
                 v.osc2.at (k).renderRaw (tables, setUser2, m2, bufX, bufMod, n);
+                let heard = P[slot::O2_PairMix];
+
+                if (heard > 0)
+                    for (int i = 0; i < n; ++i)
+                        buf.at (i) += heard * bufX.at (i) * bufMod.at (i);
+            }
 
             v.osc1.at (k).renderShaped (tables, setUser1, m1, buf, bufX, bufMod, mode, feedback, n);
         }

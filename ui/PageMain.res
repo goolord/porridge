@@ -67,6 +67,12 @@ let oscillator = (ctx: Ctx.t, body, n) => {
   g->Grid.choice("OscMix", 0, 2, "mix", ~span=2)
   g->Grid.param("OscAftertouch", 2, 2, "touch > amp")
   g->Grid.param("PM_Feedback", 3, 2, "pm feedback")
+  // its noise: the pitch roughened every sample
+  g->Grid.param(prefix ++ "Noise", 0, 3, "noise")
+  g->Grid.param(prefix ++ "NoiseColour", 1, 3, "noise colour")
+  if n == 2 {
+    g->Grid.param("O2_PairMix", 2, 3, "heard in pm")
+  }
 }
 
 let modEnvelope = (ctx: Ctx.t, body, n, box) => {
@@ -331,10 +337,10 @@ let build = (ctx: Ctx.t, page) => {
   let keyEq = Grid.make(ctx, filter->Panel.body(3))
   keyEq->Grid.toggle("KEQ_On", 0, 0, "key EQ")
   keyEq
-  ->Grid.note("Octave-wide bands on the note's harmonics, at the end of each voice: they move with the key", 1, 0, ~span=3)
+  ->Grid.note("A low shelf under the note, then octave-wide bands on its harmonics: they move with the key", 1, 0, ~span=3)
   ->ignore
   for k in 1 to PorridgeParams.keyEqBands {
-    let label = Float.toString(PorridgeParams.keyEqHarmonic(k)) ++ "×"
+    let label = k == 1 ? "low shelf" : Float.toString(PorridgeParams.keyEqHarmonic(k)) ++ "×"
     keyEq->Grid.param(PorridgeParams.keyEqGainId(k), mod(k - 1, 4), 1 + (k - 1) / 4, label)
   }
   let top = Grid.padTop + 3. * Grid.rowHeight + 6.

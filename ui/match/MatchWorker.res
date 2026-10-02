@@ -45,11 +45,16 @@ let handle = async (request: request) =>
       post(Evaluated({task, result}))
     | None => post(Failed({task, message: "nothing to match"}))
     }
+  | (EvaluateValues({task, values, note}), Some(_)) =>
+    switch context.contents {
+    | Some(ctx) => post(Valued({task, valued: MatchSearch.evaluateValues(ctx, values, ~note)}))
+    | None => post(Failed({task, message: "nothing to match"}))
+    }
   }
 
 let taskOf = (request: request) =>
   switch request {
-  | Prepare({task}) | Evaluate({task}) => task
+  | Prepare({task}) | Evaluate({task}) | EvaluateValues({task}) => task
   | Init(_) | Setup(_) => -1
   }
 

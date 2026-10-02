@@ -1346,7 +1346,7 @@ processor ParamStore
     input event float Ai4_DarkFreq [[ name: "Air 4 Air dark freq", min: 0, max: 1, init: 0.5199999809265137 ]];
     input event float Ai4_Darken [[ name: "Air 4 Air darken", min: 0, max: 1, init: 0 ]];
     input event int KEQ_On [[ name: "Key EQ", min: 0, max: 1, init: 0, text: "off|on" ]];
-    input event float KEQ_1_Gain [[ name: "Key EQ 1× gain", min: -24, max: 24, init: 0 ]];
+    input event float KEQ_1_Gain [[ name: "Key EQ low shelf gain", min: -24, max: 24, init: 0 ]];
     input event float KEQ_2_Gain [[ name: "Key EQ 2× gain", min: -24, max: 24, init: 0 ]];
     input event float KEQ_3_Gain [[ name: "Key EQ 4× gain", min: -24, max: 24, init: 0 ]];
     input event float KEQ_4_Gain [[ name: "Key EQ 8× gain", min: -24, max: 24, init: 0 ]];
@@ -1354,6 +1354,11 @@ processor ParamStore
     input event float KEQ_6_Gain [[ name: "Key EQ 32× gain", min: -24, max: 24, init: 0 ]];
     input event float KEQ_7_Gain [[ name: "Key EQ 64× gain", min: -24, max: 24, init: 0 ]];
     input event float KEQ_8_Gain [[ name: "Key EQ 128× gain", min: -24, max: 24, init: 0 ]];
+    input event float O1_Noise [[ name: "Osc 1 noise", min: 0, max: 1, init: 0 ]];
+    input event float O1_NoiseColour [[ name: "Osc 1 noise colour", min: 0, max: 1, init: 0.699999988079071 ]];
+    input event float O2_Noise [[ name: "Osc 2 noise", min: 0, max: 1, init: 0 ]];
+    input event float O2_NoiseColour [[ name: "Osc 2 noise colour", min: 0, max: 1, init: 0.699999988079071 ]];
+    input event float O2_PairMix [[ name: "Osc 2 heard", min: 0, max: 1, init: 0 ]];
 
     event O1_Waveform (int v) { paramOut <- porridge::ParamChange (2117, float (v)); }
     event O1_Amp (float v) { paramOut <- porridge::ParamChange (2127, v); }
@@ -2702,4 +2707,9 @@ processor ParamStore
     event KEQ_6_Gain (float v) { paramOut <- porridge::ParamChange (3602, v); }
     event KEQ_7_Gain (float v) { paramOut <- porridge::ParamChange (3603, v); }
     event KEQ_8_Gain (float v) { paramOut <- porridge::ParamChange (3604, v); }
+    event O1_Noise (float v) { paramOut <- porridge::ParamChange (3605, v); }
+    event O1_NoiseColour (float v) { paramOut <- porridge::ParamChange (3606, v); }
+    event O2_Noise (float v) { paramOut <- porridge::ParamChange (3607, v); }
+    event O2_NoiseColour (float v) { paramOut <- porridge::ParamChange (3608, v); }
+    event O2_PairMix (float v) { paramOut <- porridge::ParamChange (3609, v); }
 }

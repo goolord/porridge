@@ -23,7 +23,9 @@ dsp/                    Cmajor DSP
   ModTables.cmajor        modulation sources, targets and knob laws (generated)
   Synth.cmajor            MIDI, voice manager, arpeggiator, per-voice rendering, effects chain
   Oscillator, Filter, Modulation, Effects, Tables, Voice, Types
-                          (Voice.cmajor also has the key EQ: bands on each voice's harmonics)
+                          (Voice.cmajor also has the key EQ: a low shelf under each voice's
+                          note and bands on its harmonics; Oscillator.cmajor each oscillator's
+                          roughness, noise in its phase)
   FxExtra.cmajor          Porridge's flanger, phaser, compressor, bode, rack filter and utility
   Space.cmajor            the algo reverb (hall, plate, nitrous, basin, vintage)
   Ambience.cmajor         the ambience: very small spaces (room, and Airwindows' ClearCoat
@@ -47,7 +49,8 @@ ui/                     patch view (ReScript)
                           width), Cmaes.res (the optimizer), MatchModel.res and match-model.bin
                           (the predictor),
                           MatchSearch.res and MatchRun.res (the outline and the four searches,
-                          and the key EQ fitted to each candidate), MatchPool.res,
+                          and the key EQ fitted to each candidate), MatchRefine.res (a
+                          card's refinement: effects and modulations added on top), MatchPool.res,
                           MatchWorker.res and MatchEngine.res (the workers and their synth)
   NewBankDialog.res       starts a new bank of Init programs, for someone writing one
   FilterTypes.res         the filter types; FilterGraph.res their response pictures, with a
@@ -91,7 +94,8 @@ tools/
                           smoke.mjs (Porridge's own effects and filter types sound, stay
                           bounded and fall silent, the ambience's models and the distortion's
                           types too, and the distortion's mix lines up with oversampling; the
-                          oscillator envelopes and the noise source; the key EQ's bands),
+                          oscillator envelopes and the noise source; the key EQ's bands and
+                          shelf; oscillator roughness; osc 2 heard in PM),
                           banklibrary.cpp (the plugin's bank library on real files), oneshot.mjs (one-shot LFOs hold their
                           end), levels.mjs (the Vanilla bank's gains, levels and motion),
                           match.mjs (the sound matcher on programs from the banks and on
