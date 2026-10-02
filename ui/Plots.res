@@ -117,17 +117,23 @@ let waveSample = (wave, pw, user, phase) =>
 let isHQ = wave => wave >= 6 && wave <= 8
 
 // Oscillator waveform: built-in shapes are drawn analytically, user shapes come from
-// the program store (512 points). The HQ shapes carry a badge, and their ripple can rise
-// past ±1, so every shape is drawn a little smaller to leave it room.
-let wave = (ctx: Ctx.t, parent, osc, box) => {
+// the program store (512 points). The HQ shapes carry a badge (unless the list beside a small
+// one says so already), and their ripple can rise past ±1, so every shape is drawn a little
+// smaller to leave it room. Returns the plot.
+let wave = (ctx: Ctx.t, parent, osc, box, ~badge=true) => {
   let s = svg(parent, box)
   background(s, box)
   s->line(2., box.h / 2., box.w - 2., box.h / 2.)->ignore
   let curve = s->svgEl("path", [("class", Str("curve"))])
   let prefix = osc == 0 ? "O1_" : "O2_"
-  let badge = el("span", ~cls="hq plotbadge", ~text="HQ", ~parent)->place(box.x + box.w - 24., box.y + 5.)
-  badge->setAttribute("title", Str(hqHint))
-  ctx.status->Status.hover(badge, () => hqHint)
+  let badge = badge
+    ? {
+        let b = el("span", ~cls="hq plotbadge", ~text="HQ", ~parent)->place(box.x + box.w - 24., box.y + 5.)
+        b->setAttribute("title", Str(hqHint))
+        ctx.status->Status.hover(b, () => hqHint)
+        Some(b)
+      }
+    : None
 
   let draw = () => {
     let wave = Float.toInt(ctx.model->ParamModel.get(prefix ++ "Waveform"))
@@ -142,12 +148,13 @@ let wave = (ctx: Ctx.t, parent, osc, box) => {
       (3. + f * w, 4. + (0.5 - scale * Float.clamp(v, ~min=-1.2, ~max=1.2)) * h)
     })
     curve->setAttribute("d", Str(pathFrom(points)))
-    badge->toggleClass("hidden", !isHQ(wave))
+    badge->Option.forEach(b => b->toggleClass("hidden", !isHQ(wave)))
   }
 
   ctx.model->ParamModel.listenEach([prefix ++ "Waveform", prefix ++ "PWM_W"], draw)
   ctx.programs->ProgramStore.onShapes(draw)
   draw()
+  s
 }
 
 // LFO 3's value (-1..1) at a phase (0..1) of its cycle k, for its shape (PorridgeParams.lfo3Shapes);

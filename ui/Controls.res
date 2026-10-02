@@ -567,10 +567,10 @@ let button = (ctx: Ctx.t, parent, text, ~x, ~y, ~w, ~h=?, ~cls="", ~icon=?, ~sta
 }
 
 // A small "?" button, size wide and high at (x, y), that shows text in a tooltip tipW wide while
-// the pointer is over it, right-aligned under it.
-let help = (parent, text, ~x, ~y, ~size, ~tipW) => {
+// the pointer is over it, right-aligned under it (left-aligned, near a left edge, with ~left).
+let help = (parent, text, ~x, ~y, ~size, ~tipW, ~left=false) => {
   let e = el("button", ~cls="btn help", ~text="?", ~parent)->place(x, y, ~w=size, ~h=size)
-  let tip = el("div", ~cls="tip", ~text, ~parent)->place(x + size - tipW, y + size + 4., ~w=tipW)
+  let tip = el("div", ~cls="tip", ~text, ~parent)->place(left ? x : x + size - tipW, y + size + 4., ~w=tipW)
   e->onMouse(#mouseenter, _ => tip->addClass("on"))
   e->onMouse(#mouseleave, _ => tip->removeClass("on"))
 }
