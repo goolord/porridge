@@ -26,6 +26,8 @@
 //    device pixel ratio); ?dismiss closes it, for a press or Escape in the view, which the
 //    menu never hears on Windows. The menu is shown from on_main_thread, once the view's
 //    message has been handled. See ui/HostMenu.res.
+//  - Only the transport's tempo reaches the patch, and only when it changes (the rest costs
+//    more than a small block's synth work, and the patch doesn't read it).
 //  - A CPU diagnostic, off unless PORRIDGE_PERF is set: the process calls of each instance are
 //    timed and summarised in porridge-perf.log in the temp folder (tools/clap/PorridgePerf.h).
 //  - The latency is the synth's 64 samples (dsp/Synth.cmajor applies MIDI a block late, on
@@ -587,6 +589,41 @@ insertAfter(
         }
 
 `,
+);
+
+// Porridge reads only the transport's tempo, so that is all it is sent, and only when it
+// changes (a host sends the transport with every call, and with small buffers that is a thousand
+// times a second; each event cost more than the synth's own work for a block). It is sent again
+// when processing starts, in case the patch was built again.
+insertAfter(`    double frequency = 0;
+`, `    float lastSentTempo = -1.0f;   // Porridge: see clapPlugin_process's transport case
+`);
+replace(
+  `            patch.sendTransportState (isRecording, isPlaying, isLooping, 0);
+
+            if (event.flags & CLAP_TRANSPORT_HAS_TEMPO)
+                patch.sendBPM (static_cast<float> (event.tempo), 0);
+
+            if (event.flags & CLAP_TRANSPORT_HAS_TIME_SIGNATURE)
+                patch.sendTimeSig (static_cast<int> (event.tsig_num), static_cast<int> (event.tsig_denom), 0);
+`,
+  `            (void) isRecording; (void) isPlaying; (void) isLooping;
+
+            if ((event.flags & CLAP_TRANSPORT_HAS_TEMPO) && static_cast<float> (event.tempo) != lastSentTempo)
+            {
+                lastSentTempo = static_cast<float> (event.tempo);
+                patch.sendBPM (lastSentTempo, 0);
+            }
+
+            return;   // the patch has no use for the time signature, the position or the transport state
+`,
+);
+replace(
+  `    blockRestartRequests = false;
+    return patch.isPlayable();`,
+  `    blockRestartRequests = false;
+    lastSentTempo = -1.0f;
+    return patch.isPlayable();`,
 );
 
 // With PORRIDGE_PERF set, the process calls are timed and logged (tools/clap/PorridgePerf.h)
