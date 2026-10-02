@@ -117,23 +117,30 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
   g.redraw = draw
 
   // each side's dots, the dry sound's then the voices': made again only when the number of
-  // sides or voices changes, and moved each frame
-  let made = ref((0, 0, []))
+  // sides or voices changes, and moved each frame (each dot's cx, cy and r as last set, to set
+  // only what changed)
+  let made = ref((0, 0, [], []))
   let dotsFor = (sides, count) =>
     switch made.contents {
-    | (s, c, els) if s == sides && c == count => els
+    | (s, c, els, set) if s == sides && c == count => (els, set)
     | _ =>
       dots->setTextContent("")
-      let els = Array.fromInitializer(~length=sides * (count + 1), i =>
+      let n = sides * (count + 1)
+      let els = Array.fromInitializer(~length=n, i =>
         svgEl(dots, "circle", [("class", Str(mod(i, count + 1) == 0 ? "dry" : "voice"))])
       )
-      made := (sides, count, els)
-      els
+      let set = Array.make(~length=3 * n, Float.Constants.nan)
+      made := (sides, count, els, set)
+      (els, set)
     }
-  let place = (dot, x, y, r) => {
-    dot->setAttribute("cx", Num(x))
-    dot->setAttribute("cy", Num(y))
-    dot->setAttribute("r", Num(r))
+  let place = ((els, set), i, x, y, r) => {
+    let dot = els->Array.getUnsafe(i)
+    [("cx", x), ("cy", y), ("r", r)]->Array.forEachWithIndex(((name, v), k) =>
+      if set->Array.getUnsafe(3 * i + k) != v {
+        dot->setAttribute(name, Num(v))
+        set->Array.setUnsafe(3 * i + k, v)
+      }
+    )
   }
 
   // the voices at the moment `t` (seconds)
@@ -150,18 +157,18 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
     let size = 3. + 5. * Math.sqrt(mix / Int.toFloat(voices))
     let sides = lanes()
     let count = Array.length(offsets)
-    let els = dotsFor(Array.length(sides), count)
+    let made = dotsFor(Array.length(sides), count)
     sides->Array.forEachWithIndex(((_, y, height), side) => {
       let yc = stereo == 0 ? y : y + height / 2.
       let first = side * (count + 1)
       // the dry sound, at 0
-      place(els->Array.getUnsafe(first), xOf(0.), yc, 4. + 6. * (1. -. mix))
+      place(made, first, xOf(0.), yc, 4. + 6. * (1. -. mix))
       offsets->Array.forEachWithIndex(((offL, offR), v) => {
         let spread = (Int.toFloat(v) - (Int.toFloat(voices) - 1.) / 2.) * Math.min(14., (height - 20.) / Int.toFloat(voices))
         let seed = Int.toFloat(v) + (side == 1 ? 0.5 : 0.)
         let amount = at(seed, side == 1 ? offR : offL)
         let x = xOf(lo + amount * (hi - lo))
-        place(els->Array.getUnsafe(first + 1 + v), x, yc + spread, size)
+        place(made, first + 1 + v, x, yc + spread, size)
       })
     })
   }
