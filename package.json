@@ -6,7 +6,6 @@
     "res": "rescript",
     "bundle": "node tools/bundle.mjs",
     "build": "rescript && node tools/bundle.mjs",
-    "engine": "node tools/match-engine.mjs",
     "watch": "rescript watch",
     "clean": "rescript clean"
   },
