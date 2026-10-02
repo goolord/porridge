@@ -1,12 +1,22 @@
-// Dragging one of a row of elements sideways to another place in the row (the FX page's tabs and
-// rack cards), or with ~vertical one of a column up or down: past a few pixels the element
-// follows the pointer and a mark shows where it will land; a press that doesn't move is a click.
+// Dragging one of a row of elements sideways to another place in the row (the FX page's tabs),
+// or with ~vertical one of a column up or down: past a few pixels the element follows the
+// pointer and a mark shows where it will land; a press that doesn't move is a click. ~markAt
+// says where the mark goes for a place, as an element and whether before it, when the places
+// aren't simply between the others (Oatmeal's distortion: before or after the filter).
 
 open! Web
 
 let threshold = 4.
 
-let start = (ev, item: element, ~others: array<element>, ~onDrop: int => unit, ~onClick: unit => unit, ~vertical=false) => {
+let start = (
+  ev,
+  item: element,
+  ~others: array<element>,
+  ~onDrop: int => unit,
+  ~onClick: unit => unit,
+  ~vertical=false,
+  ~markAt=?,
+) => {
   let along = e => vertical ? e->clientY : e->clientX
   let startX = along(ev)
   // css pixels per screen pixel (the view is scaled to the window)
@@ -37,11 +47,16 @@ let start = (ev, item: element, ~others: array<element>, ~onDrop: int => unit, ~
         let pos = landing(along(mv))
         target := Some(pos)
         clearMarks()
-        switch (others[pos], others[pos - 1]) {
-        | (Some(o), _) => o->toggleClass("drop-before", true)
-        | (None, Some(o)) => o->toggleClass("drop-after", true)
-        | _ => ()
+        let mark = switch markAt {
+        | Some(at) => at(pos)
+        | None =>
+          switch (others[pos], others[pos - 1]) {
+          | (Some(o), _) => Some((o, true))
+          | (None, Some(o)) => Some((o, false))
+          | _ => None
+          }
         }
+        mark->Option.forEach(((o, before)) => o->toggleClass(before ? "drop-before" : "drop-after", true))
       }
     },
     ~onUp=() => {

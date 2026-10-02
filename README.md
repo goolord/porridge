@@ -72,8 +72,8 @@ ui/                     patch view (ReScript)
   NewBankDialog.res       starts a new bank of Init programs, for someone writing one
   VoiceLane.res           editing the voice lane (FxRack.res reads it beside the rack): its
                           effects in order with the filter and the amp, moving an effect between
-                          the voices and the whole sound; the FX page's "each note" tabs, the
-                          routing tab's voice row and the synth page's voice fx tab use it
+                          per-voice and the whole sound; the FX page's strip (PageFx.res: the
+                          signal path, a tab per effect) and the synth page use it
   FilterTypes.res         the filter types; FilterGraph.res their response pictures, with a
                           point to drag for cutoff and resonance
   FxPanels.res            the tabs of Porridge's own effects (CompEditor.res: the compressor's);

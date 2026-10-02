@@ -1,7 +1,7 @@
 // Editing the voice lane (FxRack's lane; dsp/VoiceFx.cmajor): its effects in order with the
 // filter and the amp envelope among them, adding and taking out effects, and moving one between
-// the lane (in every voice) and the rack (on the whole sound). The FX page's tabs and routing,
-// and the synth page's voice FX tab, all edit it through here.
+// the lane (per-voice) and the rack (the whole sound). The FX page's strip and the synth page
+// edit it through here.
 
 open! Web
 
@@ -126,9 +126,10 @@ let move = (model, x, pos) => {
 
 let label = (model, e) => FxRack.label(lane(model), e)
 
-// The add menu's kinds that can be added, in these groups, and its items, each with its icon.
-let kindMenu = (~groups, ~addable) => {
-  let kinds = groups->Array.flatMap(((title, kinds)) =>
+// An add menu's kinds that can be added, in their groups (FxRack.menuGroups), and its items,
+// each with its icon.
+let kindMenu = (~addable) => {
+  let kinds = FxRack.menuGroups->Array.flatMap(((title, kinds)) =>
     kinds
     ->Array.filter(k => addable->Array.includes(k))
     ->Array.mapWithIndex((k, i) => (k, i == 0 ? Some(title) : None))
@@ -151,9 +152,9 @@ let kindMenu = (~groups, ~addable) => {
 let addMenu = (ctx: Ctx.t, anchor, ~onAdded) => {
   let model = ctx.model
   let addable = FxRack.addable(rack(model), ~lane=lane(model), ~forLane=true)
-  let (kinds, items) = kindMenu(~groups=FxRack.laneMenuGroups, ~addable)
+  let (kinds, items) = kindMenu(~addable)
   if kinds == [] {
-    ctx.toast(`Every voice already has ${Int.toString(PorridgeParams.laneSlots)} effects`)
+    ctx.toast(`There are already ${Int.toString(PorridgeParams.laneSlots)} per-voice effects`)
   } else {
     ctx.menu->Menu.show(anchor, items, -1, i => kinds[i]->Option.forEach(k => add(model, k)->Option.forEach(onAdded)))
   }
@@ -169,7 +170,7 @@ let menu = (ctx: Ctx.t, e: FxRack.effect, anchor, ~onRemoved=() => ()) => {
     [
       ...canCopy ? [{Menu.label: "duplicate", value: 0}] : [],
       ...canMove ? [{Menu.label: "move to the whole sound", value: 1}] : [],
-      {Menu.label: "take out of the voices", value: 2},
+      {Menu.label: "remove", value: 2},
     ],
     -1,
     v =>
