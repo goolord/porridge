@@ -154,7 +154,9 @@ let curveIds = prefix => {
 
 // Attack, hold, decay 1 to the breakpoint, decay 2 to sustain, release. The amp envelope (and
 // the oscillators', which are like it) is drawn in dB like its readouts; the others are
-// linear, like their percentages.
+// linear, like their percentages. The amp envelope's levels are the DSP's renderAmp: smoothed
+// by envCubic, and its release rescaled to end at 0. The others are its renderBlock: the
+// stages' exponential paths as they are, and the release cut off at -60 dB.
 let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
   let model = ctx.model
   let id = k => prefix ++ k
@@ -166,6 +168,7 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
   let curve = c => model->ParamModel.get(c)
   let levelDef = model->ParamModel.def(id("Sustain"))
   let decibels = prefix == "" || switchOf(prefix) != None
+  let block = prefix != ""
   let (top, bottom) = (margin, bottomOf(h))
   let yOf = v => {
     let f = decibels ? levelDef.toNorm(v) : v
@@ -187,7 +190,7 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
   let layout = f => {
     let after = (x0, k) => x0 + segmentGap + units(get(k)) * f.unitPx
     let skip = skipped()
-    let bp = skip ? 1. : Math.max(get("Breakpoint"), 1e-4)
+    let bp = skip ? 1. : Math.max(get("Breakpoint"), block ? 1e-6 : 1e-4)
     let sus = get("Sustain")
     let x0 = margin
     let xa = after(x0, "Attack")
@@ -206,7 +209,7 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
     let (ca, cd1, cd2, cr) = (curve(attackCurve), curve(decay1Curve), curve(decay2Curve), curve(releaseCurve))
     let attackMid = sample(x0, xa, t => {
       let a = warp(t, ca)
-      (2. - a) * a
+      block ? a : (2. - a) * a
     })
     points->Array.push((xh, yOf(1.)))
     let decay1Mid = if skip {
@@ -214,26 +217,52 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
       points->Array.push((xb, yOf(1.)))
       ((xh + xb) / 2., yOf(1.))
     } else {
-      sample(xh, xb, t => envCubic(Math.pow(bp, ~exp=warp(t, cd1)), bp, 1.))
+      sample(xh, xb, t => {
+        let l = Math.pow(bp, ~exp=warp(t, cd1))
+        block ? l : envCubic(l, bp, 1.)
+      })
     }
-    let lo = Math.max(sus, 1e-4)
-    let decay2Mid = sample(xb, xs, t => envCubic(bp * Math.pow(lo / bp, ~exp=warp(t, cd2)), lo, bp))
+    // A block envelope's decay 2 aims at the sustain level, but no lower than 120 dB under the
+    // breakpoint: at a sustain of 0 it falls that far in its time, then stays there.
+    let lo = block ? Math.max(sus, bp * 1e-6) : Math.max(sus, 1e-4)
+    let decay2At = p => {
+      let l = bp * Math.pow(lo / bp, ~exp=warp(p, cd2))
+      block ? l : envCubic(l, lo, bp)
+    }
+    // A sustain at -inf: the amp envelope's decay 2 aims 120 dB under the breakpoint and stops
+    // at -80 dB, this fraction of its time (an oscillator's runs all of its time, as above). It
+    // falls past the bottom of a dB graph (-60 dB) before that, at progress `floorAt`; the
+    // curve is stretched to end there, at the sustain point, and the time axis says when that is.
+    let reach = prefix == "" && sus == 0. ? Math.log(lo / bp) / Math.log(1e-6) : 1.
+    let floorAt = if decibels && sus < 0.001 && decay2At(0.) > 0.001 {
+      let (a, b) = (ref(0.), ref(1.))
+      for _i in 1 to 40 {
+        let m = (a.contents + b.contents) / 2.
+        decay2At(m) > 0.001 ? (a := m) : (b := m)
+      }
+      b.contents
+    } else {
+      1.
+    }
+    let decay2Mid = sample(xb, xs, t => decay2At(t * floorAt))
     points->Array.push((xs, yOf(sus)))
     // The release falls 60 dB in its time, from the sustain level to 0.001, where it ends: this
-    // fraction of its time. Its curve warps its progress along that path, and it reaches the
-    // bottom of the graph (0, or -60 dB for the amp) at progress `bottom`. The curve is
-    // stretched to end there, and the time axis says when that is.
-    let k = sus / (sus - 0.001)
+    // fraction of its time. Its curve warps its progress along that path. The amp's is rescaled
+    // to end at 0, and reaches the bottom of its graph (-60 dB) at progress `bottom`; a block
+    // envelope's drops to 0 from 0.001, at the end of the path. The curve is stretched to end
+    // there, and the time axis says when that is.
+    let k = block ? 1. : sus / (sus - 0.001)
     let (path, bottom) = if sus <= 0.001 {
       (1., 1.)
     } else {
       let path = Math.log10(sus / 0.001) / 3.
-      let floor = decibels ? 0.001 : 0.
-      (path, warp(Math.log10(sus / (floor / k + 0.001)) / 3. / path, -.cr))
+      (path, block ? 1. : warp(Math.log10(sus / (0.001 / k + 0.001)) / 3. / path, -.cr))
     }
     let fall = Math.min(1., path * bottom)
     let releaseMid = sample(xs, xr, t =>
-      sus <= 0.001 ? 0. : (sus * Math.pow(10., ~exp=-3. * path * warp(t * bottom, cr)) - 0.001) * k
+      sus <= 0.001
+        ? 0.
+        : (sus * Math.pow(10., ~exp=-3. * path * warp(t * bottom, cr)) - (block ? 0. : 0.001)) * k
     )
     let ta = get("Attack")
     let th = ta + get("Hold")
@@ -242,7 +271,7 @@ let adsr = (ctx: Ctx.t, prefix, ~w, ~h): shape => {
       stretch(x0, xa, 0., ta),
       stretch(xa, xh, ta, th),
       stretch(xh, xb, th, tb),
-      stretch(xb, xs, tb, tb + get("Decay2")),
+      stretch(xb, xs, tb, tb + get("Decay2") * reach * floorAt),
       stretch(~release=true, xs, xr, 0., get("Release") * fall),
     ]
 
