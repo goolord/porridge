@@ -77,7 +77,8 @@ static std::vector<uint8_t> readFile (const std::string& path)
     return std::vector<uint8_t> ((std::istreambuf_iterator<char> (f)), std::istreambuf_iterator<char>());
 }
 
-struct Event { long frame; int status, d1, d2; std::string param, value; };
+// a MIDI message, or a parameter's handle (non-zero) and its value's 4 bytes
+struct Event { long frame; int status, d1, d2; uint32_t param; unsigned char value[4]; };
 
 // sends a float or an int32
 template <typename T>
@@ -181,18 +182,24 @@ int main (int argc, char** argv)
         }
     }
 
-    // a parameter by its endpoint ID, as an int or a float as the program's fields say
-    auto set = [&] (const std::string& id, const std::string& val)
+    // a parameter's value by its endpoint ID, as an int or a float as the program's fields say
+    auto encode = [] (const std::string& id, const std::string& val, unsigned char* bytes)
     {
         bool isInt = false;
         for (auto& f : porridgeFields)
             if (id == f.id) isInt = f.isInt;
-        if (isInt) send (*patch, id.c_str(), atoi (val.c_str()));
-        else send (*patch, id.c_str(), (float) atof (val.c_str()));
+        const int32_t i = atoi (val.c_str());
+        const float x = (float) atof (val.c_str());
+        memcpy (bytes, isInt ? (const void*) &i : (const void*) &x, 4);
     };
 
     for (auto& [id, val] : overrides)
-        set (id, val);
+    {
+        unsigned char b[4];
+        encode (id, val, b);
+        if (auto h = Patch::getEndpointHandleForName (id.c_str())) patch->addEvent (h, 0, b);
+        else fprintf (stderr, "no endpoint %s%c", id.c_str(), 10);
+    }
 
     // --tuning: 128 numbers, each key's pitch in semitones from 440 Hz
     if (! tuningPath.empty())
@@ -222,7 +229,14 @@ int main (int argc, char** argv)
             std::string a;
             if (! (ss >> e.frame >> a)) continue;
             if (isdigit ((unsigned char) a[0])) { e.status = atoi (a.c_str()); if (ss >> e.d1 >> e.d2) events.push_back (e); }
-            else if (ss >> e.value) { e.param = a; events.push_back (e); }
+            else if (std::string v; ss >> v)
+            {
+                // resolved here, so that the render loop times the patch, not the lookup
+                e.param = Patch::getEndpointHandleForName (a.c_str());
+                encode (a, v, e.value);
+                if (e.param != 0) events.push_back (e);
+                else fprintf (stderr, "no endpoint %s%c", a.c_str(), 10);
+            }
         }
         std::stable_sort (events.begin(), events.end(), [] (auto& a, auto& b) { return a.frame < b.frame; });
         for (auto& e : events) e.frame += preroll;
@@ -261,7 +275,7 @@ int main (int argc, char** argv)
         if (! clockStarted && pos >= timeFrom) { clock.start(); clockStarted = true; }
         while (ei < events.size() && events[ei].frame <= pos)
         {
-            if (! events[ei].param.empty()) { set (events[ei].param, events[ei].value); ++ei; continue; }
+            if (events[ei].param != 0) { patch->addEvent (events[ei].param, 0, events[ei].value); ++ei; continue; }
             int32_t msg = (events[ei].status << 16) | (events[ei].d1 << 8) | events[ei].d2;
             unsigned char b[4]; memcpy (b, &msg, 4);
             patch->addEvent (midiHandle, 0, b);
