@@ -114,6 +114,8 @@ tools/
                           interface size setting, the host's parameter menu, the
                           64-sample latency, and a faster start (a QuickJS worker, one
                           rebuild per activation)
+  event-switch.mjs        turns the generated class's event dispatch into a switch (in the
+                          plugin and the test host), so MIDI doesn't try every parameter first
   clap/PorridgeBridge.h   the settings file, zoom and host menu code clap-patch.mjs adds
   sync-dir.mjs            copies the regenerated CLAP project over the old one, touching only
                           what changed
@@ -125,7 +127,9 @@ tools/
                           types too, and the distortion's mix lines up with oversampling; the
                           oscillator envelopes and the noise source; the key EQ's bands and
                           shelf; oscillator roughness; osc 2 heard in PM),
-                          host.cpp's --time prints the render's own CPU time, for benchmarks;
+                          host.cpp's --time prints the render's own CPU time, for benchmarks
+                          (--timefrom skips the attacks; an events file can also set
+                          parameters at given frames);
                           banklibrary.cpp (the plugin's bank library on real files), oneshot.mjs (one-shot LFOs hold their
                           end), levels.mjs (the Vanilla bank's gains, levels and motion),
                           random.mjs (random patches: sound values, the wildness knobs, the
