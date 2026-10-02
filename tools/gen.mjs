@@ -37,10 +37,11 @@ function writeGenerated (path, text)
 }
 
 // The synth mirrors the program struct as float P[NUM_SLOTS], slot = chunk offset / 4.
-// Filter 1 and filter 2 share one int in the chunk; they get their own virtual slots.
-// Porridge's own parameters follow from slot 2600.
+// Filter 1 and filter 2 share one int in the chunk; they get their own virtual slots, the two
+// after the struct's. Porridge's own parameters follow from slot 2600.
 const NUM_SLOTS = porridgeSlot (porridgeParams.length);
-const VIRTUAL = { filter1: 2594, filter2: 2595 };
+const VIRTUAL = { filter1: programSize / 4, filter2: programSize / 4 + 1 };
+if (VIRTUAL.filter2 >= porridgeSlot (0)) throw new Error ("the virtual slots run into Porridge's own");
 
 function slotOf ({ offset, kind })
 {
@@ -340,9 +341,10 @@ ModMatrix.targets.forEach ((t, i) =>
         if (! d || ! f) throw new Error (`unknown modulation target ${law._0}`);
         targetSlot.push (f.slot);
         const row = Array.from ({ length: TABLE }, (_, k) => cf (d.fromNorm (k / (TABLE - 1))));
-        // a pulse width is a 32-bit phase, so the top of its knob (100 %) wraps to 0: end the
-        // table on its last step instead, or the inverse lookup lands at the wrong end
-        if (/_PWM_W$/.test (law._0)) row[TABLE - 1] = row[TABLE - 2];
+        // a pulse width (ParamDefs' isPw) is a 32-bit phase, so the top of its knob (100 %) wraps
+        // to 0, as Oatmeal's does: end the table on its last step instead, or the inverse lookup
+        // lands at the wrong end
+        if (d.kind === "pw") row[TABLE - 1] = row[TABLE - 2];
         // targets with the same law (an effect and its copies, say) share a row
         const text = row.join (", ");
         if (! rowOf.has (text))
