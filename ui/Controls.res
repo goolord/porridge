@@ -556,6 +556,15 @@ let button = (ctx: Ctx.t, parent, text, ~x, ~y, ~w, ~h=?, ~cls="", ~icon=?, ~sta
   e
 }
 
+// A small "?" button, size wide and high at (x, y), that shows text in a tooltip tipW wide while
+// the pointer is over it, right-aligned under it.
+let help = (parent, text, ~x, ~y, ~size, ~tipW) => {
+  let e = el("button", ~cls="btn help", ~text="?", ~parent)->place(x, y, ~w=size, ~h=size)
+  let tip = el("div", ~cls="tip", ~text, ~parent)->place(x + size - tipW, y + size + 4., ~w=tipW)
+  e->onMouse(#mouseenter, _ => tip->addClass("on"))
+  e->onMouse(#mouseleave, _ => tip->removeClass("on"))
+}
+
 // The corner switch of a graphical editor: swaps the graph for the raw values by toggling
 // the editor's "expanded" class.
 let expandSwitch = (ctx: Ctx.t, editor) => {

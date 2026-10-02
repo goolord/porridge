@@ -594,16 +594,19 @@ let build = (ctx: Ctx.t, page) => {
   v->Grid.param("RandomAmp", 2, 2, "random amp")
   v->Grid.param("FreqPan", 3, 2, "freq > pan")
   v->Grid.choice("AftertouchMode", 0, 3, "touch")
-  v->Grid.toggle("Oat_Mode", 1, 3, "Oat mode", ~span=2)
-  v
-  ->Grid.note(
-    "Oat mode keeps Oatmeal's MIDI timing (notes, controllers and arpeggiator steps start on the next 64-sample block, not on their own sample) and its legato quirk: a stereo voice's right filter envelopes never start.",
-    0,
-    4,
-    ~span=3,
-    ~rows=2,
-  )
-  ->ignore
+  // the switch, with a "?" at its end that explains it
+  v->Grid.at(1, 3, ~span=2, "Oat_Mode", b => {
+    let size = Style.controlHeight
+    Controls.toggle(ctx, v.el, "Oat_Mode", ~x=b.x, ~y=b.y, ~w=b.w - size - Grid.columnGap, ~label="Oat mode")
+    Controls.help(
+      v.el,
+      "Oat mode keeps Oatmeal's MIDI timing (notes, controllers and arpeggiator steps start on the next 64-sample block, not on their own sample) and its legato quirk: a stereo voice's right filter envelopes never start.",
+      ~x=b.x + b.w - size,
+      ~y=b.y,
+      ~size,
+      ~tipW=Grid.controlWidth(v, 3),
+    )
+  })
   // the pitch and mod wheels, as on the Arp / XY page, side by side in the last column
   v->Grid.at(3, 4, ~rows=4, "the wheels", box => Wheels.make(ctx, voice->Panel.body(0), box, ~gap=Grid.columnGap))
 

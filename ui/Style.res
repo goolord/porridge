@@ -367,6 +367,13 @@ let css = `
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .btn.withicon { display: flex; align-items: center; justify-content: center; gap: 5px; }
 .btn.withicon > span { overflow: hidden; text-overflow: ellipsis; }
+/* a "?" that explains the control beside it in a tooltip */
+.btn.help { padding: 0; font-weight: 700; color: var(--ink-soft); background: var(--tile); border-color: var(--tile-edge); }
+.btn.help:hover { color: var(--ink); background: var(--panel-hi); border-color: var(--edge); }
+.tip { position: absolute; display: none; z-index: 5; box-sizing: border-box; padding: 6px 8px; pointer-events: none;
+    background: var(--paper); border: 1px solid var(--edge); border-radius: 2px; box-shadow: 3px 3px 0 rgba(31,26,14,0.25);
+    font-size: 12px; line-height: 1.35; color: var(--ink); white-space: normal; }
+.tip.on { display: block; }
 
 .plot { position: absolute; display: block; }
 .plot path.curve { fill: none; stroke: var(--signal); stroke-width: 1.4; }
