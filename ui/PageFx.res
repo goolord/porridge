@@ -227,7 +227,7 @@ let build = (ctx: Ctx.t, page) => {
   let (distTab, _) = tab(
     Distortion,
     ~label="distortion",
-    ~onToggle=() => toggleSwitch("Sat_Type", ~onValue=2.),
+    ~onToggle=() => toggle(FxRack.oatmealDistortion),
     ~title=() => "Oatmeal's distortion: in every voice, or on the whole sound before the rack (see routing)",
     selectOnPress(Distortion, ...),
   )
@@ -367,7 +367,7 @@ let build = (ctx: Ctx.t, page) => {
           "lit",
           switch dest {
           | Routing => false
-          | Distortion => get("Sat_Type") != 0.
+          | Distortion => FxRack.isOn(FxRack.oatmealDistortion, get)
           | Rack(e) => FxRack.isOn(e, get)
           },
         )
@@ -410,7 +410,10 @@ let build = (ctx: Ctx.t, page) => {
   })
   let rackIds = Array.fromInitializer(~length=PorridgeParams.rackSlots, k => PorridgeParams.rackId(k + 1))
   model->ParamModel.listenEach([...rackIds, "FX_Order", ...VoiceLane.ids], rackChanged)
-  model->ParamModel.listenEach(["Sat_Type", ...FxRack.all->Array.map(FxRack.switchId)], perFrame(lights))
+  model->ParamModel.listenEach(
+    [FxRack.oatmealDistortion, ...FxRack.all]->Array.map(FxRack.switchId),
+    perFrame(lights),
+  )
 
   layoutStrip()
   lights()

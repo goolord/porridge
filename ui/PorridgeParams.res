@@ -274,9 +274,22 @@ let shaperSpecs = [
 let rackSlots = 8
 let rackId = k => `FX_Rack_${Int.toString(k)}`
 
+// Where a kind of effect can run: only on the whole sound (the rack), there or in every voice
+// (the voice lane, VL_1..4), or only in the voice lane.
+type runsIn = Rack | Both | LaneOnly
+
 type rackKind = {
   key: string,
+  // its host parameters' name
   name: string,
+  // its name in the add menus and the rack (the key when left out)
+  menuName?: string,
+  // what it does, for the add menus' hover texts
+  about: string,
+  // the value of its switch (its first parameter) that switches it on, by label ("on" when left
+  // out): a chorus comes on as a sine, a distortion as soft clipping
+  onLabel?: string,
+  runsIn: runsIn,
   // the first's parameters, with names for the copies' host parameters
   params: array<(string, string)>,
   // the copies' numbers
@@ -502,17 +515,100 @@ let newKindSpecs = [flangerSpecs, phaserSpecs, compressorSpecs, spaceSpecs, conv
 let rackParams = specs => specs->Array.map(s => (s.id, s.name))
 
 let newKinds = [
-  {key: "flanger", name: "Flanger", params: rackParams(flangerSpecs), copies: [2, 3, 4], firstInRack: true},
-  {key: "phaser", name: "Phaser", params: rackParams(phaserSpecs), copies: [2, 3, 4], firstInRack: true},
-  {key: "compressor", name: "Compressor", params: rackParams(compressorSpecs), copies: [2, 3, 4], firstInRack: true},
-  {key: "space", name: "Algo reverb", params: rackParams(spaceSpecs), copies: [2, 3, 4], firstInRack: true},
-  {key: "convolve", name: "Convolve", params: rackParams(convolveSpecs), copies: [2], firstInRack: true},
-  {key: "bode", name: "Bode", params: rackParams(bodeSpecs), copies: [2, 3, 4], firstInRack: true},
-  {key: "filter", name: "Filter", params: rackParams(filterFxSpecs), copies: [2, 3, 4], firstInRack: true},
-  {key: "utility", name: "Utility", params: rackParams(utilitySpecs), copies: [2, 3, 4], firstInRack: true},
+  {
+    key: "flanger",
+    name: "Flanger",
+    about: "a flanger: a short swept delay",
+    runsIn: Both,
+    params: rackParams(flangerSpecs),
+    copies: [2, 3, 4],
+    firstInRack: true,
+  },
+  {
+    key: "phaser",
+    name: "Phaser",
+    about: "a phaser: swept notches",
+    runsIn: Both,
+    params: rackParams(phaserSpecs),
+    copies: [2, 3, 4],
+    firstInRack: true,
+  },
+  {
+    key: "compressor",
+    name: "Compressor",
+    about: "a compressor, one band or three (like OTT)",
+    runsIn: Rack,
+    params: rackParams(compressorSpecs),
+    copies: [2, 3, 4],
+    firstInRack: true,
+  },
+  {
+    key: "space",
+    name: "Algo reverb",
+    menuName: "algo reverb",
+    about: "an algorithmic reverb: hall, plate, nitrous, basin, vintage",
+    runsIn: Rack,
+    params: rackParams(spaceSpecs),
+    copies: [2, 3, 4],
+    firstInRack: true,
+  },
+  {
+    key: "convolve",
+    name: "Convolve",
+    menuName: "convolution",
+    about: "a convolver: rooms, cabinets and odd spaces from impulses, or a file of your own",
+    runsIn: Rack,
+    params: rackParams(convolveSpecs),
+    copies: [2],
+    firstInRack: true,
+  },
+  {
+    key: "bode",
+    name: "Bode",
+    menuName: "freq shifter",
+    about: "a frequency shifter (Bode), and a shifted delay",
+    runsIn: Rack,
+    params: rackParams(bodeSpecs),
+    copies: [2, 3, 4],
+    firstInRack: true,
+  },
+  {
+    key: "filter",
+    name: "Filter",
+    about: "a filter of any of the synth's types",
+    runsIn: Both,
+    params: rackParams(filterFxSpecs),
+    copies: [2, 3, 4],
+    firstInRack: true,
+  },
+  {
+    key: "utility",
+    name: "Utility",
+    about: "gain, pan, width, phase and bass mono",
+    runsIn: Both,
+    params: rackParams(utilitySpecs),
+    copies: [2, 3, 4],
+    firstInRack: true,
+  },
   // (after the others: rack values and parameters added later go at the end)
-  {key: "ambience", name: "Ambience", params: rackParams(ambienceSpecs), copies: [2, 3, 4], firstInRack: true},
-  {key: "air", name: "Air", params: rackParams(airSpecs), copies: [2, 3, 4], firstInRack: true},
+  {
+    key: "ambience",
+    name: "Ambience",
+    about: "a very small space: a little stereo and tone",
+    runsIn: Rack,
+    params: rackParams(ambienceSpecs),
+    copies: [2, 3, 4],
+    firstInRack: true,
+  },
+  {
+    key: "air",
+    name: "Air",
+    about: "air: lifts or tames the very top (Airwindows Air4)",
+    runsIn: Rack,
+    params: rackParams(airSpecs),
+    copies: [2, 3, 4],
+    firstInRack: true,
+  },
 ]
 
 // The distortion's knobs for its model types (dsp/Airwindows.cmajor), whose meaning each
@@ -562,10 +658,21 @@ let resonatorSpecs = [
 let resonatorGainSpecs = [{id: "Rs_Gain", name: "Resonator gain", kind: decibels(-24., 24., 0.)}]
 
 let voiceKinds = [
-  {key: "shifter", name: "Shifter", params: rackParams(shifterSpecs), copies: [2], firstInRack: true},
+  {
+    key: "shifter",
+    name: "Shifter",
+    menuName: "key shifter",
+    about: "a frequency shifter that follows the key: each note's partials move by a part of its own pitch",
+    runsIn: LaneOnly,
+    params: rackParams(shifterSpecs),
+    copies: [2],
+    firstInRack: true,
+  },
   {
     key: "resonator",
     name: "Resonator",
+    about: "a resonator tuned to each note: strings, bars, bells and drums ringing at its pitch",
+    runsIn: LaneOnly,
     params: [...rackParams(resonatorSpecs), ...rackParams(resonatorGainSpecs)],
     copies: [2],
     firstInRack: true,
@@ -581,6 +688,9 @@ let rackKinds = [
   {
     key: "chorus",
     name: "Chorus",
+    about: "Oatmeal's chorus: detuned copies of the sound",
+    onLabel: "sine",
+    runsIn: Rack,
     params: [
       ("C_Mode", "mode"),
       ("C_Stereo", "stereo"),
@@ -597,6 +707,8 @@ let rackKinds = [
   {
     key: "delay",
     name: "Delay",
+    about: "Oatmeal's delay: echoes, left and right",
+    runsIn: Rack,
     params: [
       ("D_On", "on"),
       ("D_Unit", "unit"),
@@ -620,6 +732,8 @@ let rackKinds = [
   {
     key: "reverb",
     name: "Reverb",
+    about: "Oatmeal's reverb",
+    runsIn: Rack,
     params: [
       ("R_On", "on"),
       ("R_Size", "size"),
@@ -641,7 +755,10 @@ let rackKinds = [
   {
     key: "eq",
     name: "EQ",
-    params: [("EQ_On", "on"), ...[1, 2, 3, 4, 5]->Array.flatMap(b => {
+    menuName: "EQ",
+    about: "Oatmeal's EQ: five bands",
+    runsIn: Both,
+    params:[("EQ_On", "on"), ...[1, 2, 3, 4, 5]->Array.flatMap(b => {
       let n = Int.toString(b)
       [
         (`EQ_${n}_Freq`, `band ${n} freq`),
@@ -656,6 +773,9 @@ let rackKinds = [
   {
     key: "distortion",
     name: "Distortion",
+    about: "a distortion: Oatmeal's curves, a shape of your own, or the Airwindows models",
+    onLabel: "soft clip",
+    runsIn: Both,
     params: [
       ("Sat_Type", "type"),
       ("Sat_Oversample", "oversample"),

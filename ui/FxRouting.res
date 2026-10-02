@@ -89,7 +89,8 @@ let make = (ctx: Ctx.t, body, ~w, ~h, ops) => {
     "The amp envelope: drag it sideways. The voice's effects after it react to how each note swells and fades, and ring on after the note ends; those before it are shaped by it"
   )
 
-  let typeId = "Sat_Type"
+  let dist = FxRack.oatmealDistortion
+  let typeId = FxRack.switchId(dist)
   let modeId = "Sat_Mode"
   let modeValue = label => ParamDefs.choiceValue(modeId, label)
   let (modeGlobal, modePost, modePre, modeBoth) = (
@@ -109,8 +110,8 @@ let make = (ctx: Ctx.t, body, ~w, ~h, ops) => {
       }
       switch ev->button {
       | 0 =>
-        if get(typeId) == 0. {
-          model->ParamModel.gestureSet(typeId, 2.)
+        if !FxRack.isOn(dist, get) {
+          model->ParamModel.gestureSet(typeId, FxRack.onValue(dist))
         }
         model->ParamModel.gestureSet(modeId, mode)
       | 2 => model->ParamModel.gestureSet(typeId, 0.)
@@ -244,7 +245,7 @@ let make = (ctx: Ctx.t, body, ~w, ~h, ops) => {
   }
 
   let drawSlots = () => {
-    let on = get(typeId) != 0.
+    let on = FxRack.isOn(dist, get)
     let mode = Float.toInt(get(modeId))->Int.toFloat
     let typeName = model->ParamModel.shortText(typeId)
     [

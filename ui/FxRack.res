@@ -59,37 +59,15 @@ let kinds: array<kind> = [
 
 let key = (k: kind) => (k :> string)
 
-let kindName = (k: kind) =>
-  switch k {
-  | #eq => "EQ"
-  | #space => "algo reverb"
-  | #bode => "freq shifter"
-  | #convolve => "convolution"
-  | #shifter => "key shifter"
-  | k => key(k)
-  }
+let kindOfKey = s => kinds->Array.find(k => key(k) == s)
+
+let spec = (k: kind) =>
+  PorridgeParams.rackKinds->Array.find(r => r.key == key(k))->Option.getOrThrow
+
+let kindName = (k: kind) => spec(k).menuName->Option.getOr(key(k))
 
 // What it does, for the add menu's hover texts.
-let about = (k: kind) =>
-  switch k {
-  | #chorus => "Oatmeal's chorus: detuned copies of the sound"
-  | #delay => "Oatmeal's delay: echoes, left and right"
-  | #reverb => "Oatmeal's reverb"
-  | #eq => "Oatmeal's EQ: five bands"
-  | #distortion => "a distortion: Oatmeal's curves, a shape of your own, or the Airwindows models"
-  | #flanger => "a flanger: a short swept delay"
-  | #phaser => "a phaser: swept notches"
-  | #compressor => "a compressor, one band or three (like OTT)"
-  | #space => "an algorithmic reverb: hall, plate, nitrous, basin, vintage"
-  | #convolve => "a convolver: rooms, cabinets and odd spaces from impulses, or a file of your own"
-  | #bode => "a frequency shifter (Bode), and a shifted delay"
-  | #filter => "a filter of any of the synth's types"
-  | #utility => "gain, pan, width, phase and bass mono"
-  | #ambience => "a very small space: a little stereo and tone"
-  | #air => "air: lifts or tames the very top (Airwindows Air4)"
-  | #shifter => "a frequency shifter that follows the key: each note's partials move by a part of its own pitch"
-  | #resonator => "a resonator tuned to each note: strings, bars, bells and drums ringing at its pitch"
-  }
+let about = (k: kind) => spec(k).about
 
 // The add menu's groups, in order.
 let menuGroups: array<(string, array<kind>)> = [
@@ -100,8 +78,8 @@ let menuGroups: array<(string, array<kind>)> = [
 ]
 
 // The kinds a voice can run, and the voice lane's add menu.
-let laneKinds: array<kind> = [#filter, #distortion, #eq, #phaser, #flanger, #utility, #shifter, #resonator]
-let laneOnly = (k: kind) => k == #shifter || k == #resonator
+let laneKinds = kinds->Array.filter(k => spec(k).runsIn != Rack)
+let laneOnly = (k: kind) => spec(k).runsIn == LaneOnly
 let laneMenuGroups: array<(string, array<kind>)> = [
   ("follows the key", [#resonator, #shifter]),
   ("tone & drive", [#filter, #distortion, #eq]),
@@ -109,17 +87,9 @@ let laneMenuGroups: array<(string, array<kind>)> = [
   ("level & place", [#utility]),
 ]
 
-// Oatmeal's chorus, delay, reverb and EQ (and its distortion, before the rack)
-let isOatmeal = (k: kind) =>
-  switch k {
-  | #chorus | #delay | #reverb | #eq | #distortion => true
-  | _ => false
-  }
-
-let kindOfKey = s => kinds->Array.find(k => key(k) == s)
-
-let spec = (k: kind) =>
-  PorridgeParams.rackKinds->Array.find(r => r.key == key(k))->Option.getOrThrow
+// Oatmeal's chorus, delay, reverb and EQ (and its distortion, before the rack): the kinds whose
+// first isn't one of the rack's own entries
+let isOatmeal = (k: kind) => !spec(k).firstInRack
 
 // every effect, by the value a rack slot holds for it (0 is empty)
 let entries: array<option<effect>> = PorridgeParams.rackEntries->Array.map(entry =>
@@ -133,6 +103,9 @@ let ofValue = v => entries[v]->Option.flatMap(e => e)
 // Oatmeal's four, by their place in FX_Order's permutations (PorridgeParams.fxNames)
 let firsts = [{kind: #chorus, copy: 1}, {kind: #delay, copy: 1}, {kind: #reverb, copy: 1}, {kind: #eq, copy: 1}]
 let isFirst = e => e.copy == 1 && isOatmeal(e.kind)
+
+// Oatmeal's distortion: in the voices or before the rack (Sat_Mode), never in it.
+let oatmealDistortion = {kind: #distortion, copy: 1}
 
 // This effect's parameter for the first's (e.g. "D_Wet" for delay copy 3 is "D3_Wet").
 let id = (e, first) => e.copy == 1 ? first : PorridgeParams.copyId(first, e.copy)
@@ -149,11 +122,7 @@ let eqBandTypes = e => [1, 2, 3, 4, 5]->Array.map(b => id(e, `EQ_${Int.toString(
 let isOn = (e, get: string => float) => get(switchId(e)) != 0.
 
 // The value that switches it on: a chorus as a sine, a distortion as soft clipping.
-let onValue = e =>
-  switch e.kind {
-  | #distortion => 2.
-  | _ => 1.
-  }
+let onValue = e => ParamDefs.choiceValue(switchId(e), spec(e.kind).onLabel->Option.getOr("on"))
 
 // The rack's effects in the order they run, read like the DSP reads it.
 let read = (get: string => float): array<effect> => {
