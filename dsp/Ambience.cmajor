@@ -9,6 +9,9 @@
 //    clear coat  Airwindows ClearCoat (Chris Johnson, MIT licence): seventeen bright
 //                ambiences, each four stages of 4x4 Householder matrices per side (dual mono).
 //                Size picks the room, from a 96-seat room (5 to 51 ms) up to a 1541-seat hall.
+//                It runs at the output's level (the input times the output gain, the wet over
+//                it): the rack comes before the output gain, and ClearCoat clips at 1 and its
+//                SubTight bends anything near that.
 //    verb tiny   Airwindows VerbTiny (MIT licence): one 4x4 Householder reverb cross-fed
 //                between the sides, run at a lower rate (Bezier undersampling); size divides
 //                the rate by 1 .. 4 more, which makes the room bigger and darker.
@@ -397,10 +400,13 @@ namespace porridge
         return x - clamp (s, -0.25f, 0.25f) * 16.0f;
     }
 
-    void ambClearCoat (Ambience& this, const float<2>[blockSize]& pre, float<2>[blockSize]& wet, float regen)
+    /// `level` scales the input to the plugin's output level (the output gain), where ClearCoat's
+    /// clip and SubTight expect it, and the wet back by its inverse.
+    void ambClearCoat (Ambience& this, const float<2>[blockSize]& pre, float<2>[blockSize]& wet, float regen, float level)
     {
         let cycleEnd = ambCycleEnd (this.sr);
         let subRate = float (0.001 * 44100.0 / this.sr);
+        let outGain = ambClearCoatGain / level;
 
         for (wrap<blockSize> i)
         {
@@ -409,8 +415,8 @@ namespace porridge
             if (this.cycle >= cycleEnd)
             {
                 // a reverb sample, at about 44.1 kHz; the samples between are drawn straight
-                let yL = this.ambClearCoatSide (pre[i][0], 2, 0, regen, this.mulchL);
-                let yR = this.ambClearCoatSide (pre[i][1], 18, 4, regen, this.mulchR);
+                let yL = this.ambClearCoatSide (pre[i][0] * level, 2, 0, regen, this.mulchL);
+                let yR = this.ambClearCoatSide (pre[i][1] * level, 18, 4, regen, this.mulchR);
                 let oldL = this.refL.at (cycleEnd), oldR = this.refR.at (cycleEnd);
 
                 // (at the full rate the reverb's sample comes out at once)
@@ -436,7 +442,7 @@ namespace porridge
                 l = al; r = ar;
             }
 
-            wet[i] = float<2> (l, r) * ambClearCoatGain;
+            wet[i] = float<2> (l, r) * outGain;
         }
     }
 
@@ -638,7 +644,8 @@ namespace porridge
         if (model == ambienceModel::room)
             this.ambRoom (pre, wet, densT, 0.7f * timeT, ambShelfGain (timeT, hiTime), ambShelfGain (timeT, loTime));
         else if (model == ambienceModel::clearCoat)
-            this.ambClearCoat (pre, wet, 0.0625f * 0.999f * timeT);     // (ClearCoat's own is at time 2/3)
+            this.ambClearCoat (pre, wet, 0.0625f * 0.999f * timeT,      // (ClearCoat's own is at time 2/3)
+                               max (P[slot::Gain], 0.001f));
         else
             this.ambVerbTiny (pre, wet, timeT, size);
 
