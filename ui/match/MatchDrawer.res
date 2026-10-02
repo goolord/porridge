@@ -17,7 +17,7 @@ open! Web
 
 let slotCount = 4
 // the renders a match has, for the outline and the four searches together
-let budget = 1400
+let budget = 1000
 let amounts = [("a little", 0.15), ("some", 0.35), ("a lot", 0.7)]
 
 type card = {
@@ -624,7 +624,8 @@ let make = (ctx: Ctx.t, stage): t => {
             s
           }
           let run = MatchPool.newRun(p)
-          let evaluate = (x, weights, threshold) => MatchPool.evaluate(p, ~session, ~run, x, weights, threshold)
+          let evaluate = (x, weights, threshold, fit, short) =>
+            MatchPool.evaluate(p, ~session, ~run, x, weights, threshold, fit, short)
           gen.run = Some((start(p, evaluate), run))
         }
       | Error(text) =>
@@ -733,7 +734,7 @@ let make = (ctx: Ctx.t, stage): t => {
       player->SamplePlayer.stop
       root->removeClass("on")
       ctx.menu->Menu.close
-      // the workers go (they hold about 45 MB each); a new match starts them again
+      // the workers go (they hold about 50 MB each); a new match starts them again
       withPool(MatchPool.dispose)
       pool := None
       loaded.contents->Option.forEach(l => l.session = None)

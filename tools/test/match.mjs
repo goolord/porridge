@@ -104,7 +104,23 @@ async function matcher ({ budget, wav, useModel })
 
         const t0 = performance.now ();
         const ctx = MatchSearch.makeContext (engine, target, init.values, init.tables);
-        const score = x => MatchSearch.evaluate (ctx, x, MatchLoss.standard, -1)[0] - MatchSearch.cost (x);
+        // renders are repeatable: the same genes after others (each a different kind of patch)
+        // render the same, as only the pages renders change are put back between them
+        const probe = Genome.random (Cmaes.makeRandom (31 + job.index));
+        const first = MatchSearch.renderGenes (ctx, undefined, probe)[2].slice ();
+        for (const x of Genome.probes ()) MatchSearch.renderGenes (ctx, undefined, x);
+        const again = MatchSearch.renderGenes (ctx, undefined, probe)[2];
+        const repeatable = first.every ((v, i) => v === again[i]);
+        // an envelope put on a flat render's measurements scores as a render with it does
+        const shapedOff = Array.from ({ length: 4 }, (_, k) =>
+        {
+            const x = Genome.random (Cmaes.makeRandom (57 + 13 * job.index + k));
+            for (const key of ["drive", "chorus", "reverb"]) x[Genome.indexOf (key)] = 0;
+            const fitted = MatchSearch.evaluate (ctx, x, MatchLoss.standard, -1, true, false);
+            const real = MatchSearch.evaluate (ctx, Float64Array.from (fitted.genes), MatchLoss.standard, -1, false, false);
+            return Math.abs (MatchLoss.similarity (fitted.loss) - MatchLoss.similarity (real.loss));
+        });
+        const score = x => MatchSearch.evaluate (ctx, x, MatchLoss.standard, -1, false, false).loss - MatchSearch.cost (x);
         const similarity = loss => MatchLoss.similarity (loss);
         const seedGenes = Genome.seed (target);
         const suggestions = model ? MatchModel.suggest (model, target) : [];
@@ -120,7 +136,7 @@ async function matcher ({ budget, wav, useModel })
             return score (x);
         })))) : undefined;
         const m = MatchSearch.makeMatch ([seedGenes, ...suggestions], target.wave !== undefined, [], undefined, budget, 0.25, 1234);
-        const evaluate = (x, weights, threshold) => Promise.resolve (MatchSearch.evaluate (ctx, x, weights, threshold));
+        const evaluate = (x, weights, threshold, fit, short) => Promise.resolve (MatchSearch.evaluate (ctx, x, weights, threshold, fit, short));
         await new Promise (done => MatchRun.search (evaluate, m, { onCandidate: () => {}, onProgress: () => {}, onDone: done }));
         const ms = performance.now () - t0;
         const searches = m.searches;
@@ -137,7 +153,7 @@ async function matcher ({ budget, wav, useModel })
             }
         }
         return {
-            job, name, seed, predicted, truth, evals, ms,
+            job, name, seed, predicted, truth, evals, ms, repeatable, shapedOff,
             pitch: SoundTarget.pitchText (target),
             shape: `${SoundTarget.seconds (target).toFixed (2)} s, attack ${(target.attack * 1000).toFixed (0)} ms, decay ${(target.decay * 1000).toFixed (0)} ms, sustain ${target.sustain.toFixed (2)}`,
             outline: m.outline.best?.similarity,
@@ -159,7 +175,7 @@ else
     const flag = name => { const i = args.indexOf (name); return i >= 0 ? args.splice (i, 2)[1] : undefined; };
     const wav = args.includes ("--wav");
     const useModel = ! args.includes ("--no-model");
-    const budget = Number (flag ("--budget") ?? 1400);
+    const budget = Number (flag ("--budget") ?? 1000);
     const genomes = Number (flag ("--genomes") ?? 12);
     const jobs = Number (flag ("--jobs") ?? Math.max (1, Math.min (12, availableParallelism () - 2)));
     const only = args.filter (a => ! a.startsWith ("--"));
@@ -207,6 +223,8 @@ else
         if (! r || r.error) continue;
         const name = r.name;
         const found = r.cards.filter (Boolean);
+        check (r.repeatable, `${name}: a render is the same after others`);
+        check (Math.max (...r.shapedOff) < 4, `${name}: a fitted envelope scores as rendered (off by ${Math.max (...r.shapedOff).toFixed (2)} points)`);
         check (found.length === r.cards.length, `${name}: every search found a patch`);
         for (const c of found)
             check (c.similarity >= r.seed - 1, `${name}: ${c.title} (${c.similarity.toFixed (1)}%) is no further than the seed (${r.seed.toFixed (1)}%)`);

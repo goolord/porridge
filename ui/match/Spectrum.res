@@ -173,34 +173,57 @@ let transform = (r, x: Float32Array.t, a, b) => {
     re->set64(k, ja >= 0 && ja < n ? x->get32(ja) * w : 0.)
     im->set64(k, jb >= 0 && jb < n ? x->get32(jb) * w : 0.)
   }
+  // The butterflies, two stages at a time (radix 2²: each element is read and written once
+  // for both), after a single stage of 2 when there is an odd number of them.
   let (twCos, twSin) = (r.twCos, r.twSin)
-  let len = ref(2)
-  while len.contents <= size {
-    let l = len.contents
-    let h = l / 2
-    let step = size / l
+  let m = ref(1)
+  if mod(Float.toInt(Math.round(Math.log2(Int.toFloat(size)))), 2) == 1 {
     let i = ref(0)
     while i.contents < size {
-      let base = i.contents
-      for k in 0 to h - 1 {
-        let wr = twCos->get64(k * step)
-        let wi = -.(twSin->get64(k * step))
-        let a = base + k
-        let b = a + h
-        let br = re->get64(b)
-        let bi = im->get64(b)
-        let xr = br * wr - bi * wi
-        let xi = br * wi + bi * wr
-        let ar = re->get64(a)
-        let ai = im->get64(a)
-        re->set64(b, ar - xr)
-        im->set64(b, ai - xi)
-        re->set64(a, ar + xr)
-        im->set64(a, ai + xi)
-      }
-      i := base + l
+      let (a, b) = (i.contents, i.contents + 1)
+      let (ar, ai, br, bi) = (re->get64(a), im->get64(a), re->get64(b), im->get64(b))
+      re->set64(a, ar + br)
+      im->set64(a, ai + bi)
+      re->set64(b, ar - br)
+      im->set64(b, ai - bi)
+      i := i.contents + 2
     }
-    len := l * 2
+    m := 2
+  }
+  while 4 * m.contents <= size {
+    let q = m.contents
+    let block = 4 * q
+    // W(4q)^k is the table's entry k * step
+    let step = size / block
+    let base = ref(0)
+    while base.contents < size {
+      for k in 0 to q - 1 {
+        let i0 = base.contents + k
+        let (i1, i2, i3) = (i0 + q, i0 + 2 * q, i0 + 3 * q)
+        // the first stage's twiddle, W(4q)^2k, on x1 and x3
+        let (w1r, w1i) = (twCos->get64(2 * k * step), -.(twSin->get64(2 * k * step)))
+        let (x1r, x1i, x3r, x3i) = (re->get64(i1), im->get64(i1), re->get64(i3), im->get64(i3))
+        let (t1r, t1i) = (x1r * w1r - x1i * w1i, x1r * w1i + x1i * w1r)
+        let (t3r, t3i) = (x3r * w1r - x3i * w1i, x3r * w1i + x3i * w1r)
+        let (x0r, x0i, x2r, x2i) = (re->get64(i0), im->get64(i0), re->get64(i2), im->get64(i2))
+        let (a0r, a0i, a1r, a1i) = (x0r + t1r, x0i + t1i, x0r - t1r, x0i - t1i)
+        let (a2r, a2i, a3r, a3i) = (x2r + t3r, x2i + t3i, x2r - t3r, x2i - t3i)
+        // the second's, W(4q)^k on a2, and -j W(4q)^k on a3
+        let (w2r, w2i) = (twCos->get64(k * step), -.(twSin->get64(k * step)))
+        let (u2r, u2i) = (a2r * w2r - a2i * w2i, a2r * w2i + a2i * w2r)
+        let (u3r, u3i) = (a3r * w2r - a3i * w2i, a3r * w2i + a3i * w2r)
+        re->set64(i0, a0r + u2r)
+        im->set64(i0, a0i + u2i)
+        re->set64(i2, a0r - u2r)
+        im->set64(i2, a0i - u2i)
+        re->set64(i1, a1r + u3i)
+        im->set64(i1, a1i - u3r)
+        re->set64(i3, a1r - u3i)
+        im->set64(i3, a1i + u3r)
+      }
+      base := base.contents + block
+    }
+    m := block
   }
   let (pa, pb) = (r.powerA, r.powerB)
   for k in 0 to size / 2 {
@@ -319,4 +342,30 @@ let envelopeOverview = (f: features, ~points, ~gain=1.) => {
     }
     db(gain * m.contents)
   })
+}
+
+// How much of a level that changes over time reaches a frame: the frame's window squared
+// weights it (a Hann window's power), here in eight stretches. `power(a, b)` is the mean square
+// over [a, b) ms; the frame is `size` samples centred at `centreMs`.
+let windowSegments = 8
+let windowWeights = {
+  // the integral of sin⁴(πx)
+  let integral = x =>
+    3. * x / 8. - Math.sin(twoPi * x) / (4. * Math.Constants.pi) + Math.sin(2. * twoPi * x) / (32. * Math.Constants.pi)
+  let raw = Array.fromInitializer(~length=windowSegments, k =>
+    integral(Int.toFloat(k + 1) / Int.toFloat(windowSegments)) - integral(Int.toFloat(k) / Int.toFloat(windowSegments))
+  )
+  let sum = raw->Array.reduce(0., (s, v) => s + v)
+  raw->Array.map(v => v / sum)
+}
+let windowPower = (power: (float, float) => float, ~centreMs, ~size) => {
+  let span = 1000. * Int.toFloat(size) / sampleRate
+  let step = span / Int.toFloat(windowSegments)
+  let start = centreMs - span / 2.
+  let p = ref(0.)
+  windowWeights->Array.forEachWithIndex((w, k) => {
+    let a = start + Int.toFloat(k) * step
+    p := p.contents + w * power(a, a + step)
+  })
+  p.contents
 }

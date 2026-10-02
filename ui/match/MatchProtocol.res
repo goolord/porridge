@@ -18,7 +18,7 @@ type request =
   | @as("setup") Setup({session: int, setup: setup})
   // renders and scores genes (MatchSearch.evaluate)
   | @as("evaluate")
-  Evaluate({task: int, genes: array<float>, weights: MatchLoss.weights, threshold: float})
+  Evaluate({task: int, genes: array<float>, weights: MatchLoss.weights, threshold: float, fit: bool, short: bool})
 
 @tag("type")
 type response =
@@ -33,4 +33,4 @@ type response =
       spectrum: array<float>,
       suggestions: array<Float64Array.t>,
     })
-  | @as("evaluated") Evaluated({task: int, loss: float, candidate: option<MatchSearch.candidate>})
+  | @as("evaluated") Evaluated({task: int, result: MatchSearch.result})

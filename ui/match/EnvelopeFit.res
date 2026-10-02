@@ -14,10 +14,27 @@ let envCubic = (l: float, lo: float, hi: float) =>
   (-2. * l * l * l + 3. * (lo + hi) * l * l - 6. * lo * hi * l + (lo + hi) * lo * hi) /
     Math.max((hi - lo) * (hi - lo), 1e-8)
 
+// Decay 2 as the synth runs it: from the breakpoint it heads for the sustain level, or a
+// millionth under that, and stops on reaching the sustain level, or a ten-thousandth (so with
+// no sustain it falls half as fast again as towards a ten-thousandth). The level it holds, its
+// path's ratio over its length, and when it stops (ms into it).
+let decay2 = (s: stages, bp) => {
+  let sus = Math.max(s.sustain, 1e-4)
+  let ratio = Math.max(s.sustain, 1e-6) / bp
+  let stops = if Math.abs(sus - bp) <= 1e-6 {
+    0.
+  } else if Math.abs(ratio - sus / bp) < 1e-12 {
+    s.decay2Ms
+  } else {
+    s.decay2Ms * Math.log(sus / bp) / Math.log(ratio)
+  }
+  (sus, ratio, stops)
+}
+
 // The envelope's level at t ms after the note starts.
 let level = (s: stages, t) => {
   let bp = s.breakpoint > 0.998 ? 1. : Math.max(s.breakpoint, 1e-4)
-  let sus = Math.max(s.sustain, 1e-4)
+  let (sus, ratio, stops) = decay2(s, bp)
   if t < s.attackMs {
     let l = t / s.attackMs
     (2. - l) * l
@@ -30,8 +47,8 @@ let level = (s: stages, t) => {
     }
     if !after1 {
       envCubic(Math.pow(bp, ~exp=t / s.decay1Ms), bp, 1.)
-    } else if t < s.decay2Ms && Math.abs(sus - bp) > 1e-6 {
-      envCubic(bp * Math.pow(sus / bp, ~exp=t / s.decay2Ms), Math.min(sus, bp), Math.max(sus, bp))
+    } else if t < stops {
+      envCubic(bp * Math.pow(ratio, ~exp=t / s.decay2Ms), Math.min(sus, bp), Math.max(sus, bp))
     } else {
       s.sustain < 0.001 ? 0. : sus
     }
@@ -122,4 +139,64 @@ let minimize = (f: Float64Array.t => float, start: Float64Array.t, ~step, ~itera
   }
   points->Array.sort(((_, a), (_, b)) => Float.compare(a, b))
   points->Array.getUnsafe(0)
+}
+
+// How far an envelope is from what a render needs to match a sample: the sample's loudness
+// (dB at each 10 ms step) against the render's with a flat envelope (attack at once, held at
+// full) and this envelope on it, brought to the level that suits it best, both held above
+// `floor` dB under the sample's loudest (as the loss's envelope term measures them).
+let distanceOver = (s: stages, ~target: array<float>, ~flat: array<float>, ~floor) => {
+  let n = Math.Int.min(Array.length(target), Array.length(flat))
+  let top = target->Array.reduce(neg_infinity, Math.max)
+  let floor = top + floor
+  let shaped = Array.fromInitializer(~length=n, i =>
+    flat->Array.getUnsafe(i) + 20. * Math.log10(Math.max(level(s, (Int.toFloat(i) + 0.5) * 10.), 1e-6))
+  )
+  let (sum, count) = (ref(0.), ref(0))
+  for i in 0 to n - 1 {
+    let a = target->Array.getUnsafe(i)
+    if a > floor + 20. {
+      sum := sum.contents + a - shaped->Array.getUnsafe(i)
+      count := count.contents + 1
+    }
+  }
+  let gain = count.contents > 0 ? sum.contents / Int.toFloat(count.contents) : 0.
+  let total = ref(0.)
+  for i in 0 to n - 1 {
+    let z = Math.max(floor, shaped->Array.getUnsafe(i) + gain)
+    total := total.contents + Math.abs(Math.max(floor, target->Array.getUnsafe(i)) - z)
+  }
+  total.contents / Int.toFloat(Math.Int.max(1, n))
+}
+
+// The envelope's level at the middle of each of the first `ms` milliseconds, as level gives
+// it, worked out step by step: each decay is one multiplication a step after its first.
+let levels = (s: stages, ~ms) => {
+  let out = Float64Array.fromLength(ms)
+  let bp = s.breakpoint > 0.998 ? 1. : Math.max(s.breakpoint, 1e-4)
+  let (sus, ratio, stops) = decay2(s, bp)
+  let decay1End = bp < 1. ? s.attackMs +. s.decay1Ms : s.attackMs
+  let decay2End = decay1End +. stops
+  let (lo, hi) = (Math.min(sus, bp), Math.max(sus, bp))
+  // each decay's path, once it has started (-1 before), and its factor per step
+  let (l1, l2) = (ref(-1.), ref(-1.))
+  let k1 = Math.pow(bp, ~exp=1. /. Math.max(s.decay1Ms, 1e-3))
+  let k2 = Math.pow(ratio, ~exp=1. /. Math.max(s.decay2Ms, 1e-3))
+  for i in 0 to ms - 1 {
+    let t = Int.toFloat(i) +. 0.5
+    let v = if t < s.attackMs {
+      let l = t /. s.attackMs
+      (2. -. l) *. l
+    } else if t < decay1End {
+      l1 := (l1.contents < 0. ? Math.pow(bp, ~exp=(t -. s.attackMs) /. s.decay1Ms) : l1.contents *. k1)
+      envCubic(l1.contents, bp, 1.)
+    } else if t < decay2End {
+      l2 := (l2.contents < 0. ? bp *. Math.pow(ratio, ~exp=(t -. decay1End) /. s.decay2Ms) : l2.contents *. k2)
+      envCubic(l2.contents, lo, hi)
+    } else {
+      s.sustain < 0.001 ? 0. : sus
+    }
+    out->set64(i, v)
+  }
+  out
 }

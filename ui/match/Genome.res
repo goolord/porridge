@@ -330,6 +330,46 @@ let stagesOf = (e: Float64Array.t): EnvelopeFit.stages => {
   sustain: def("Sustain").fromNorm(e->get64(4)),
 }
 
+// x with the amp envelope that best turns a render of it with a flat envelope (flatOf) into the
+// sample's loudness (both dB per 10 ms step): from x's own and from a plain pluck.
+let fitEnvelope = (x: Float64Array.t, ~target: array<float>, ~flat: array<float>) => {
+  let own = Float64Array.fromArray(envelopeKeys->Array.map(key => get(x, key)))
+  let pluck = Float64Array.fromArray([0.05, 0.3, 0., 0.5, 0.])
+  let fit = e => EnvelopeFit.distanceOver(stagesOf(e), ~target, ~flat, ~floor=-60.)
+  let (best, _) = [own, pluck]
+  ->Array.map(s => EnvelopeFit.minimize(fit, s, ~step=0.15, ~iterations=35))
+  ->Array.reduce(None, (best, (e, f)) =>
+    switch best {
+    | Some((_, b)) if b <= f => best
+    | _ => Some((e, f))
+    }
+  )
+  ->Option.getOr((own, 0.))
+  let y = TypedArray.copy(x)
+  envelopeKeys->Array.forEachWithIndex((key, i) => y->set64(indexOf(key), best->get64(i)))
+  y
+}
+
+// x with a flat amp envelope (at full at once, and held) and without what comes after the
+// envelope or depends on its level (drive, chorus, reverb): its render shows the sound the
+// envelope shapes.
+let flatOf = (x: Float64Array.t) => {
+  let y = TypedArray.copy(x)
+  let set = (key, value) => y->set64(indexOf(key), value)
+  set("attack", 0.)
+  set("sustain", 1.)
+  set("drop", 0.)
+  set("decay", 1.)
+  set("drive", 0.)
+  set("chorus", 0.)
+  set("reverb", 0.)
+  y
+}
+
+// whether x has what comes after the envelope or depends on its level
+let wet = (x: Float64Array.t) =>
+  get(x, "drive") >= effectOff || get(x, "chorus") >= effectOff || get(x, "reverb") >= effectOff
+
 // Where the search starts for a target: a saw through a lowpass, nothing else, with the amp
 // envelope fitted to the sample's loudness, the cutoff from its brightness and its pitch
 // movement as a sweep.
@@ -514,6 +554,22 @@ let random = (random: unit => float) => {
   set("tune", 0.5)
   x
 }
+
+// Patches that between them switch every part on (each mix mode, filter type and wave, with
+// unison, noise, sweeps, modulation, drive, chorus and the longest reverb): rendering them shows
+// which of the engine's memory a candidate's render can change (MatchEngine.learnPages).
+let probes = () =>
+  Array.fromInitializer(~length=10, k => {
+    let x = Float64Array.fromLength(count)
+    genes->Array.forEachWithIndex((g, i) => x->set64(i, g.options == 0 ? 0.8 : valueOfChoice(mod(k, g.options), g.options)))
+    let set = (key, value) => x->set64(indexOf(key), value)
+    set("octave", valueOfChoice(0, 3))
+    set("tune", 0.5)
+    set("unison", valueOfChoice(3, 4))
+    set("reverbTime", 1.)
+    set("pitchEnv", k < 5 ? 0.95 : 0.05)
+    x
+  })
 
 // A short description of a patch, for its card: "saw + pulse +12 · 4P LP · pluck · reverb".
 let describe = (x: Float64Array.t) => {

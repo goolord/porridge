@@ -90,7 +90,8 @@ tools/
                           oscillator envelopes and the noise source), banklibrary.cpp (the plugin's bank library on real files), oneshot.mjs (one-shot LFOs hold their
                           end), levels.mjs (the Vanilla bank's gains, levels and motion),
                           match.mjs (the sound matcher on programs from the banks and on
-                          random patches whose genes are known);
+                          random patches whose genes are known), match-speed.mjs (how fast it
+                          scores candidates, and how long a whole match takes);
                           lib.mjs has what they share
   vanilla-bank.mjs        builds presets/vanilla.porridge
   re/                     comparisons against Oatmeal.dll (32-bit Python) and data checks

@@ -38,11 +38,11 @@ let handle = async (request: request) =>
   | (_, None) => post(Failed({task: -1, message: "the engine isn't ready"}))
   | (Setup({setup}), Some(engine)) =>
     context := Some(MatchSearch.makeContext(engine, setup.target, ~base=setup.base, ~tables=setup.tables))
-  | (Evaluate({task, genes, weights, threshold}), Some(_)) =>
+  | (Evaluate({task, genes, weights, threshold, fit, short}), Some(_)) =>
     switch context.contents {
     | Some(ctx) =>
-      let (loss, candidate) = MatchSearch.evaluate(ctx, Float64Array.fromArray(genes), ~weights, ~threshold)
-      post(Evaluated({task, loss, candidate}))
+      let result = MatchSearch.evaluate(ctx, Float64Array.fromArray(genes), ~weights, ~threshold, ~fit, ~short)
+      post(Evaluated({task, result}))
     | None => post(Failed({task, message: "nothing to match"}))
     }
   }
