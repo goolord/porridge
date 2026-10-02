@@ -757,6 +757,46 @@ let evaluate = (ctx, x, ~weights, ~threshold, ~fit: fitting, ~short) => {
   }
 }
 
+// What a refinement's evaluation gives (MatchRefine): the loss, the similarity, the pictures, and
+// the output gain that sets the patch's level (as candidateOf's).
+type valued = {
+  loss: float,
+  similarity: float,
+  envelope: array<float>,
+  spectrum: array<float>,
+  gain: float,
+}
+
+// Renders a patch given as parameter values (a card's, with what a refinement adds), played at
+// `note` and the tuning in its Tune_Main, as the drawer plays it; its own Gain is left out of the
+// render (the level is measured, and set again, from the base's).
+let evaluateValues = (ctx, values: array<(string, float)>, ~note) => {
+  let values = values->Array.filter(((id, _)) => id != "Gain")
+  let tune = values->Array.find(((id, _)) => id == "Tune_Main")->Option.mapOr(440., ((_, v)) => v)
+  let cents = 1200. * Math.log2(tune / 440.)
+  let n = frames(ctx)
+  let (y, side) = switch ctx.target.side {
+  | Some(_) =>
+    let (y, side) = MatchEngine.renderSides(ctx.engine, values, ~note, ~cents, ~frames=n + onsetRoom)
+    (y, Some(side))
+  | None => (MatchEngine.render(ctx.engine, values, ~note, ~cents, ~frames=n + onsetRoom), None)
+  }
+  let start = Math.Int.min(onsetRoom, SoundTarget.onsetOf(y))
+  let cut = a => a->TypedArray.subarray(~start, ~end=start + n)
+  let (y, side) = (cut(y), side->Option.map(cut))
+  let hz = 440. * Math.pow(2., ~exp=(Int.toFloat(note) + cents / 100. - 69.) / 12.)
+  let f = measureOf(ctx, y, ~side?, ~hz)
+  let loss = MatchLoss.compare(MatchLoss.standard, ctx.measured, f)
+  let gain = f.energy > 0. ? Math.sqrt(ctx.measured.energy / f.energy) : 1.
+  {
+    loss,
+    similarity: MatchLoss.similarity(loss),
+    envelope: Spectrum.envelopeOverview(f, ~points=envelopePoints, ~gain),
+    spectrum: Spectrum.averageSpectrum(f, ~gain),
+    gain: levelGain(ctx, y),
+  }
+}
+
 // The target's picture, in the candidates' terms.
 let targetPicture = (measured: Spectrum.features) => (
   Spectrum.envelopeOverview(measured, ~points=envelopePoints),
@@ -918,8 +958,10 @@ let allowed = (key, lo, hi) => {
 
 // The outline's grid: the starting points, then the first with each allowed first wave and
 // filter type, and played an octave either side; and for the first pitch in o2Pitches (a second
-// series of partials the sample was heard to have), the first with osc 2 sounding there, with
-// each wave it may take through each filter type.
+// series of partials the sample was heard to have), the first with osc 2 sounding there
+// (roughened, as a second series is often a waveform wavering on its own, and without noise),
+// with each wave it
+// may take through each filter type.
 let gridOf = (starts: array<Float64Array.t>, lo, hi, ~o2Pitches) => {
   let first = starts->Array.getUnsafe(0)
   let variant = changes => {
@@ -941,6 +983,8 @@ let gridOf = (starts: array<Float64Array.t>, lo, hi, ~o2Pitches) => {
           ("o2Pitch", Genome.o2PitchGene(st)),
           ("o2Wave", w),
           ("o2Level", 0.6),
+          ("o2Rough", Genome.roughGeneOf(0.5)),
+          ("noise", 0.),
           ("oscMix", Genome.valueOfChoice(0, 7)),
           ("width", 0.),
           ("filterType", f),
@@ -1037,8 +1081,8 @@ let isDone = s =>
 // wave it may take at each interval (and at the pitches the starts play it at off them), each
 // mix mode with a sine or saw osc 2 in unison, a fifth or an octave up (and at those pitches:
 // the sidebands of modulation at an odd ratio, which noise would otherwise stand in for),
-// unison (two and four voices, a little and much detuned), noise (none, some and much), and
-// the second filter (beside and after the first, a little and well above it); all within the
+// unison (two and four voices, a little and much detuned), noise (none, some and much), osc 1
+// roughened (a little and much), and the second filter (beside and after the first, a little and well above it); all within the
 // bounds.
 let secondScreen = (x: Float64Array.t, lo, hi, ~o2Pitches) => {
   let set = (y, key, v) => y->set64(Genome.indexOf(key), v)
@@ -1065,11 +1109,13 @@ let secondScreen = (x: Float64Array.t, lo, hi, ~o2Pitches) => {
     ->Array.filter(v => Genome.choiceOf(v, 4) == 1 || Genome.choiceOf(v, 4) == 3)
     ->Array.flatMap(u => [0.35, 0.7]->Array.map(d => variant([("unison", u), ("unisonDetune", d)])))
   let noise = [0., 0.45, 0.75]->Array.map(n => variant([("noise", n), ("noiseColour", 0.1)]))
+  // (and osc 1 roughened by its own noise, which a noise floor would otherwise stand in for)
+  let rough = [0.35, 0.6]->Array.map(d => variant([("o1Rough", Genome.roughGeneOf(d)), ("roughColour", 0.7)]))
   let doubled =
     allowed("filterDouble", lo, hi)
     ->Array.filter(v => Genome.choiceOf(v, 3) != 0)
     ->Array.flatMap(d => [0.25, 0.6]->Array.map(split => variant([("filterDouble", d), ("filterSplit", split), ("filterMix", 0.5)])))
-  let extras = Array.concat(Array.concat(unison, noise), doubled)
+  let extras = [unison, noise, rough, doubled]->Array.flat
   let mixes =
     allowed("oscMix", lo, hi)
     ->Array.filter(v => Genome.choiceOf(v, 7) != 0)
@@ -1111,6 +1157,8 @@ type pending = {
 let switches = [
   ("noise", 0.),
   ("o2Level", 0.),
+  ("o2Rough", 0.),
+  ("o1Rough", 0.),
   ("vibrato", 0.),
   ("wobble", 0.),
   ("drive", 0.),
@@ -1314,7 +1362,7 @@ let tell = (s, pending, results: array<result>) => {
       if Some(Genome.structure(x)) == heldShape {
         // (with osc 2's level and pitch, the noise and the second filter free too: a series
         // found on its own needs them set around it)
-        let es = coreRun(s, x, ~seed=s.seed + k, ~extra=["o2Level", "o2Pitch", "noise", "filterSplit", "filterMix"])
+        let es = coreRun(s, x, ~seed=s.seed + k, ~extra=["o2Level", "o2Pitch", "o2Rough", "roughColour", "noise", "filterSplit", "filterMix"])
         heldRuns->WeakMap.set(es, true)->ignore
         es
       } else {

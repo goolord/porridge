@@ -47,6 +47,9 @@ let genes: array<gene> = [
   {key: "o2Level", group: #osc, options: 0},
   {key: "o2Pitch", group: #osc, options: 0},
   {key: "o2Detune", group: #osc, options: 0},
+  {key: "o1Rough", group: #osc, options: 0},
+  {key: "o2Rough", group: #osc, options: 0},
+  {key: "roughColour", group: #osc, options: 0},
   {key: "oscMix", group: #osc, options: 7},
   {key: "feedback", group: #osc, options: 0},
   {key: "noise", group: #osc, options: 0},
@@ -260,6 +263,12 @@ let dropOf = bp => bp > 0.999 ? 0. : 0.1 + 0.9 * clamp01(-.dbOfAmp(bp) / 36.)
 let tuneCents = v => 100. * (v - 0.5)
 // below these a gene switches its part off
 let o2Off = 0.12
+// an oscillator roughened by its own noise (O1_Noise, O2_Noise: its pitch moved every sample by
+// lowpassed noise, as Synplant's oscillator noise does), which a noise floor would otherwise
+// stand in for: a waveform that wavers on its own, without a hiss
+let roughOff = 0.15
+let roughness = v => v < roughOff ? 0. : (v - roughOff) / (1. - roughOff)
+let roughGeneOf = depth => roughOff + (1. - roughOff) * Math.max(0., Math.min(1., depth))
 let noiseOff = 0.12
 let effectOff = 0.15
 let modOff = 0.2
@@ -302,6 +311,10 @@ let decode = (x: Float64Array.t, ~note, ~base: string => float): array<(string, 
   set("O2_PWM_D", 0.)
   set("Transpose", o2Semitones(v("o2Pitch")) / 12.)
   set("Detune", 6. * v("o2Detune") * v("o2Detune"))
+  set("O1_Noise", roughness(v("o1Rough")))
+  set("O2_Noise", roughness(v("o2Rough")))
+  set("O1_NoiseColour", v("roughColour"))
+  set("O2_NoiseColour", v("roughColour"))
   set("OscMix", mixModes->Array.getUnsafe(mode))
   set("PM_Feedback", mode == 3 || mode == 4 ? v("feedback") : 0.)
   let noise = v("noise")
@@ -499,6 +512,9 @@ let seed = (t: SoundTarget.t) => {
   set("o2Level", 0.)
   set("o2Pitch", o2AnchorGene(o2Unison))
   set("o2Detune", 0.3)
+  set("o1Rough", 0.)
+  set("o2Rough", 0.)
+  set("roughColour", 0.7)
   setChoice("oscMix", 0)
   set("feedback", 0.)
   // noise: as loud against osc 1 (at 0 dB) as the floor between the harmonics says (a plain
@@ -583,7 +599,7 @@ let seed = (t: SoundTarget.t) => {
 
 // Where the search starts: the seed; when the sample has a second series of partials
 // (SoundTarget.partialsOf), the seed with osc 2 playing it beside osc 1 (at 0 dB): at its
-// ratio, a square wave where only its odd multiples are there and a sine where not, about as
+// ratio, roughened and without noise, a square wave where only its odd multiples are there and a sine where not, about as
 // loud as it is; and for each of the ratios its partials off the harmonics suggest, the seed
 // with a sine osc 2 there phase-modulating osc 1 (whose sidebands would put them there).
 let seeds = (t: SoundTarget.t) => {
@@ -610,6 +626,9 @@ let seeds = (t: SoundTarget.t) => {
       set("width", 0.)
       set("o2Pitch", o2PitchGene(st))
       set("o2Level", o2Off + (1. - o2Off) * (level + 3. + 30.) / 36.)
+      set("o2Rough", roughGeneOf(0.5))
+      // (what lies between the harmonics is likelier its roughness than a noise floor)
+      set("noise", 0.)
       [y]
     } else {
       []
@@ -631,6 +650,8 @@ let parts = (x: Float64Array.t) => {
     secondOscSounds(x) || modulates(mode),
     mode != 0,
     !o2OnAnchor(v("o2Pitch")) && (secondOscSounds(x) || modulates(mode)),
+    v("o2Rough") >= roughOff && (secondOscSounds(x) || modulates(mode)),
+    v("o1Rough") >= roughOff,
     v("noise") >= noiseOff,
     choice(x, "unison") > 0,
     Math.abs(pitchSemitones(v("pitchEnv"))) >= 0.25,
@@ -657,6 +678,8 @@ let structure = (x: Float64Array.t) => {
     choice(x, "filterType"),
     mode,
     o2 ? 1 + choice(x, "o2Wave") * 100 + Float.toInt(Math.round(o2Semitones(v("o2Pitch")) + 50.)) : 0,
+    o2 && v("o2Rough") >= roughOff ? 1 : 0,
+    v("o1Rough") >= roughOff ? 1 : 0,
     choice(x, "unison"),
     v("noise") >= noiseOff ? 1 : 0,
     Math.abs(pitchSemitones(v("pitchEnv"))) >= 0.25 ? 1 : 0,
@@ -682,7 +705,8 @@ let relevant = (x: Float64Array.t) => {
   genes->Array.map(g =>
     switch g.key {
     | "width" => pulse
-    | "o2Wave" | "o2Pitch" | "o2Detune" | "modEnvPitch" | "modEnvDepth" => o2
+    | "o2Wave" | "o2Pitch" | "o2Detune" | "o2Rough" | "modEnvPitch" | "modEnvDepth" => o2
+    | "roughColour" => v("o1Rough") >= roughOff || o2 && v("o2Rough") >= roughOff
     | "modEnvDecay" => o2 && modEnvOn(x)
     | "filterSplit" => choice(x, "filterDouble") != 0
     | "filterMix" => choice(x, "filterDouble") == 1
@@ -742,6 +766,12 @@ let random = (random: unit => float) => {
     set("modEnvDepth", 0.5)
   }
   if often(0.7) {
+    set("o2Rough", 0.)
+  }
+  if often(0.8) {
+    set("o1Rough", 0.)
+  }
+  if often(0.7) {
     setChoice("filterDouble", 0)
   }
   // (the key EQ is fitted, not learned)
@@ -797,6 +827,9 @@ let describe = (x: Float64Array.t) => {
           }
     ) ++
     (mode == 1 || mode == 4 ? " " ++ mixNames->Array.getUnsafe(mode) : "") ++
+    (v("o1Rough") >= roughOff || o2 && v("o2Rough") >= roughOff
+      ? " (" ++ (v("o1Rough") >= roughOff ? "1" : "") ++ (o2 && v("o2Rough") >= roughOff ? "2" : "") ++ " rough)"
+      : "") ++
     (v("noise") >= noiseOff ? " + noise" : "") ++
     switch unisonVoices->Array.getUnsafe(choice(x, "unison")) {
     | 1. => ""

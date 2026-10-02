@@ -694,6 +694,16 @@ let keyEqSpecs = [
   }),
 ]
 
+// Each oscillator's noise: its pitch moved every sample by lowpassed noise (how far, and how
+// bright the noise is), which roughens the waveform without any hiss of its own.
+let oscNoiseSpecs = [1, 2]->Array.flatMap(n => {
+  let osc = Int.toString(n)
+  [
+    {id: `O${osc}_Noise`, name: `Osc ${osc} noise`, kind: Float({min: 0., max: 1., init: 0., text: percent})},
+    {id: `O${osc}_NoiseColour`, name: `Osc ${osc} noise colour`, kind: Float({min: 0., max: 1., init: 0.7, text: percent})},
+  ]
+})
+
 type feature =
   | Macros
   | Modulations
@@ -718,6 +728,7 @@ type feature =
   | DistModels
   | AirEffect
   | KeyEq
+  | OscNoise
 
 let groups = [
   (Macros, macroSpecs),
@@ -744,6 +755,7 @@ let groups = [
   (DistModels, Array.concat(distModelSpecs, distModelCopySpecs)),
   (AirEffect, Array.concat(airSpecs, airCopySpecs)),
   (KeyEq, keyEqSpecs),
+  (OscNoise, oscNoiseSpecs),
 ]
 
 let all = groups->Array.flatMap(((_, specs)) => specs)

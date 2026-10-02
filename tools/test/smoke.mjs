@@ -172,6 +172,32 @@ for (const os of [0, 1, 2, 3])
     check (Math.abs (cut[4] - off[4] + 18) < 1.5 && Math.abs (cut[2] - off[2]) < 1.5,
            `key EQ band 5 (16x) -18 dB  16x ${(cut[4] - off[4]).toFixed (2)} dB, 4x ${(cut[2] - off[2]).toFixed (2)} dB`);
     sounds ("key EQ, unison spread", { KEQ_On: 1, KEQ_2_Gain: 18, KEQ_6_Gain: -24, KEQ_8_Gain: 24, U_Voices: 4, U_Spread: 1 }, { tail: false });
+
+    // an oscillator's noise roughens it: what lies between its harmonics rises well over the
+    // clean saw's, its level stays about as it was; with unison and hard sync it stays bounded
+    const between = sets =>
+    {
+        const [l] = render ({ program: init, events: one, frames: rate, rate, sets: { ...plain, ...sets }, out: join (dir, "osc_noise.f32") });
+        const from = Math.floor (0.3 * rate), size = 16384;
+        const at = hz =>
+        {
+            let re = 0, im = 0;
+            for (let i = 0; i < size; ++i)
+            {
+                const w = 0.5 - 0.5 * Math.cos (2 * Math.PI * i / size), a = 2 * Math.PI * hz * i / rate;
+                re += w * l[from + i] * Math.cos (a);
+                im += w * l[from + i] * Math.sin (a);
+            }
+            return 20 * Math.log10 (Math.hypot (re, im) + 1e-12);
+        };
+        let rms = 0;
+        for (let i = from; i < from + size; ++i) rms += l[i] * l[i];
+        return { gap: [2.5, 4.5, 8.5].map (h => at (h * 220)).reduce ((a, b) => a + b) / 3, level: 10 * Math.log10 (rms / size) };
+    };
+    const clean = between ({}), rough = between ({ O1_Noise: 0.5 });
+    check (rough.gap - clean.gap > 15 && Math.abs (rough.level - clean.level) < 3,
+           `osc noise fills the gaps  ${(rough.gap - clean.gap).toFixed (1)} dB between harmonics, level ${(rough.level - clean.level).toFixed (2)} dB`);
+    sounds ("osc noise, unison, sync", { O1_Noise: 0.8, O2_Noise: 0.8, O2_NoiseColour: 1, U_Voices: 4, OscMix: 1 }, { tail: false });
 }
 
 // the noise source, on the pitch and on the cutoff

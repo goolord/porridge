@@ -26,6 +26,12 @@ namespace porridge
         int ringIdx;
         float s1, s2, fx1, fy1;
         float fb1, fb2;                 // PM feedback: the last two outputs
+
+        // the oscillator's noise (O1_Noise, O2_Noise): its pitch moved every sample by lowpassed
+        // noise, depth as the deviation's RMS (a fraction of the frequency), the lowpass's
+        // coefficient and the gain that keeps the noise's RMS whatever its colour
+        float nzDepth, nzCoef, nzGain, nzLp;
+        Lcg nz;
     }
 
     /// The fields of a new oscillator that don't start at zero (the rest must be zero).
@@ -104,6 +110,38 @@ namespace porridge
         this.pw = src.pw;
         this.pwmDepth = src.pwmDepth;
         this.pwmInc = src.pwmInc;
+        this.nzDepth = src.nzDepth;
+        this.nzCoef = src.nzCoef;
+        this.nzGain = src.nzGain;
+    }
+
+    /// The oscillator's noise for depth 0..1 (deviation up to half the frequency, as RMS, on a
+    /// square law) and colour 0..1 (the noise lowpassed at 50 Hz .. 25.6 kHz).
+    void setNoise (Osc& this, float depth, float colour, float64 sampleRate)
+    {
+        this.nzDepth = 0.5f * depth * depth;
+
+        if (this.nzDepth > 0)
+        {
+            let fc = 50.0 * pow (2.0, 9.0 * float64 (colour));
+            let c = 1.0 - exp (-2.0 * pi * min (fc, 0.45 * sampleRate) / sampleRate);
+            this.nzCoef = float (c);
+            this.nzGain = float (sqrt (3.0 * (2.0 - c) / c));
+        }
+    }
+
+    /// A phase step with the oscillator's noise on it (as it is without).
+    int64 noisyInc (Osc& this, int64 inc)
+    {
+        if (this.nzDepth <= 0)
+            return inc;
+
+        if (this.nz.state == 0)
+            this.nz.state = ((this.phase >> 1) | 1) & 0x7fffffff;
+
+        this.nzLp += this.nzCoef * (this.nz.nextSigned() - this.nzLp);
+        let f = 1.0 + float64 (this.nzDepth * this.nzGain * this.nzLp);
+        return int64 (float64 (inc) * max (f, 0.0)) & u32;
     }
 
     /// Pulse, user PWM and HQ pulse: the difference of two phases of a waveform.
@@ -255,7 +293,11 @@ namespace porridge
     /// Moves the phase on by one sample, and the pitch ramp (offset) on by its slope.
     void stepPhase (Osc& this, const OscBlock& b)
     {
-        this.phase = (this.phase + this.base + this.offset) & u32;
+        if (this.nzDepth > 0)
+            this.phase = (this.phase + this.noisyInc ((this.base + this.offset) & u32)) & u32;
+        else
+            this.phase = (this.phase + this.base + this.offset) & u32;
+
         this.offset = (this.offset + b.slope) & u32;
     }
 
@@ -390,7 +432,7 @@ namespace porridge
             this.ring.at (this.ringIdx) = 0;
             this.ringIdx = (this.ringIdx + 1) & 31;
 
-            let inc = (this.base + this.offset) & u32;
+            let inc = this.noisyInc ((this.base + this.offset) & u32);
             this.phase = (this.phase + inc) & u32;
 
             if (isSlave)

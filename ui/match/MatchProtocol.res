@@ -27,6 +27,8 @@ type request =
       fit: MatchSearch.fitting,
       short: bool,
     })
+  // renders and scores a patch given as values (MatchSearch.evaluateValues, for MatchRefine)
+  | @as("evaluateValues") EvaluateValues({task: int, values: array<(string, float)>, note: int})
 
 @tag("type")
 type response =
@@ -42,3 +44,4 @@ type response =
       suggestions: array<Float64Array.t>,
     })
   | @as("evaluated") Evaluated({task: int, result: MatchSearch.result})
+  | @as("valued") Valued({task: int, valued: MatchSearch.valued})

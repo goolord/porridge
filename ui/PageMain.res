@@ -67,6 +67,9 @@ let oscillator = (ctx: Ctx.t, body, n) => {
   g->Grid.choice("OscMix", 0, 2, "mix", ~span=2)
   g->Grid.param("OscAftertouch", 2, 2, "touch > amp")
   g->Grid.param("PM_Feedback", 3, 2, "pm feedback")
+  // its noise: the pitch roughened every sample
+  g->Grid.param(prefix ++ "Noise", 0, 3, "noise")
+  g->Grid.param(prefix ++ "NoiseColour", 1, 3, "noise colour")
 }
 
 let modEnvelope = (ctx: Ctx.t, body, n, box) => {
