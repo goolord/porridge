@@ -752,6 +752,13 @@ let css = `
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mdest.none { color: var(--ink-faint); }
 .mdest:hover { color: var(--signal); }
+/* the Play page's patch summary: a line each, a link to where it is edited */
+.psum { position: absolute; display: flex; gap: 6px; height: 19px; line-height: 19px; border-radius: 2px;
+    font-size: 12.5px; white-space: nowrap; cursor: pointer; }
+.psum b { flex: none; width: 40px; padding-left: 3px; font-size: 11px; color: var(--ink-faint); }
+.psum span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.psum:hover { background: var(--panel-hi); }
+.psum:hover span { color: var(--signal); }
 .ptab.mark::after { content: ""; display: inline-block; width: 5px; height: 5px; margin-left: 4px; vertical-align: 2px;
     border-radius: 50%; background: var(--mod); }
 
