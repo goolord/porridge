@@ -44,13 +44,17 @@ external asRaw: JSON.t => raw = "%identity"
 
 let targetsPerVoice = 16
 
+// What redraws marks from a report, and the element whose being on screen it is told (hidden,
+// it shows no notes).
+type listener = (Dom.element, bool => unit)
+
 type t = {
   mutable voices: array<voice>,
   // each modulated target's knob position in each note, by target index
   mutable positions: Map.t<int, array<float>>,
-  listeners: array<unit => unit>,
+  listeners: array<listener>,
   // by target: what redraws its controls' marks
-  targetListeners: Map.t<int, array<unit => unit>>,
+  targetListeners: Map.t<int, array<listener>>,
 }
 
 let views: WeakMap.t<PatchConnection.t, t> = WeakMap.make()
@@ -84,12 +88,17 @@ let receive = (t, json) => {
     )
   }
   t.positions = positions
-  t.listeners->Array.forEach(f => f())
   // the targets in this report or the last
   let touched = Set.make()
   before->Map.forEachWithKey((_, k) => touched->Set.add(k))
   positions->Map.forEachWithKey((_, k) => touched->Set.add(k))
-  touched->Set.forEach(k => t.targetListeners->Map.get(k)->Option.forEach(fs => fs->Array.forEach(f => f())))
+  let calls = [...t.listeners]
+  touched->Set.forEach(k => t.targetListeners->Map.get(k)->Option.forEach(fs => calls->Array.pushMany(fs)))
+  // whether each is on screen, all asked before any of them draws: a question after a change
+  // would lay the page out again
+  calls
+  ->Array.map(((e, f)) => (f, e->offsetParent->Option.isSome))
+  ->Array.forEach(((f, shown)) => f(shown))
 }
 
 // The connection's notes, asked for the first time one is wanted.
@@ -110,12 +119,13 @@ let stop = pc =>
     pc->PatchConnection.sendEventOrValue("voiceView", 0)
   }
 
-let listen = (t, f) => t.listeners->Array.push(f)
+// f redraws from each report, told whether e is on screen.
+let listen = (t, e, f) => t.listeners->Array.push((e, f))
 
-let listenTarget = (t, target, f) =>
+let listenTarget = (t, target, e, f) =>
   switch t.targetListeners->Map.get(target) {
-  | Some(fs) => fs->Array.push(f)
-  | None => t.targetListeners->Map.set(target, [f])
+  | Some(fs) => fs->Array.push((e, f))
+  | None => t.targetListeners->Map.set(target, [(e, f)])
   }
 
 // the knob positions the notes have moved a target's knob to (none while nothing moves it)

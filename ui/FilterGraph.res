@@ -343,8 +343,8 @@ let make = (ctx: Ctx.t, parent, box: box, src: source, ~voices=false) => {
   if voices {
     let notes = VoiceView.marks(voiceLayer)
     let ticks = VoiceView.marks(voiceLayer)
-    VoiceView.get(ctx.pc)->VoiceView.listen(() => {
-      let vs = parent->offsetParent->Option.isSome ? VoiceView.get(ctx.pc).voices : []
+    VoiceView.get(ctx.pc)->VoiceView.listen(parent, shown => {
+      let vs = shown ? VoiceView.get(ctx.pc).voices : []
       let at = vs->Array.filter(v => v.cutoff >= 20. && v.cutoff <= 20000.)->Array.map(v => (xOfHz(v.cutoff), v.released))
       notes->VoiceView.show(at->Array.map(((x, released)) => (x, top + 4., released)))
       ticks->VoiceView.show(at->Array.map(((x, released)) => (x, bottom - 3., released)))

@@ -565,10 +565,10 @@ let make = (
   // a mark per sounding note, on the curve where its envelope is
   let notes = VoiceView.marks(FxGraph.group(ed.g.under))
   let lastLayout = ref(([], []))
-  let drawNotes = () =>
+  let drawNotes = shown =>
     clock->Option.forEach(clock => {
       let (points, times) = lastLayout.contents
-      let voices = parent->offsetParent->Option.isSome ? VoiceView.get(ctx.pc).voices : []
+      let voices = shown ? VoiceView.get(ctx.pc).voices : []
       notes->VoiceView.show(
         voices->Array.filterMap(v =>
           xOfClock(times, clock(v), ~released=v.released)->Option.map(x => (x, VoiceView.yAt(points, x), v.released))
@@ -576,7 +576,7 @@ let make = (
       )
     })
   if clock != None {
-    VoiceView.get(ctx.pc)->VoiceView.listen(drawNotes)
+    VoiceView.get(ctx.pc)->VoiceView.listen(parent, drawNotes)
   }
 
   let draw = () => {

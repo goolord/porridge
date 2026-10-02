@@ -366,8 +366,8 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
   }
   ticks->Option.forEach(box => {
     let notes = VoiceView.get(ctx.pc)
-    notes->VoiceView.listenTarget(target, () => {
-      let positions = e->offsetParent->Option.isSome ? notes->VoiceView.positionsOf(target) : []
+    notes->VoiceView.listenTarget(target, e, shown => {
+      let positions = shown ? notes->VoiceView.positionsOf(target) : []
       let marks = box->querySelectorAll("b")->nodesToArray
       positions->Array.forEachWithIndex((p, i) => {
         let mark = switch marks[i] {
