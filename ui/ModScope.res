@@ -23,7 +23,8 @@ let targetScope = (get: string => float, t): ModMatrix.scope =>
   // an effect in the voice lane: each voice runs its own
   | Some(_) if effectOf(t)->Option.mapOr(false, e => FxRack.holds(FxRack.readLane(get), e)) => EachNote
   // Oatmeal's distortion: in the voices unless it's on the whole sound alone
-  | Some({group: "distortion"}) if effectOf(t) == None => get("Sat_Mode") == 0. ? Shared : EachNote
+  | Some({group: "distortion"}) if effectOf(t) == None =>
+    get("Sat_Mode") == ParamDefs.choiceValue("Sat_Mode", "global") ? Shared : EachNote
   | _ => Shared
   }
 

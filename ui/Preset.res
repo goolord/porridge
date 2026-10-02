@@ -52,8 +52,8 @@ type t = {
   impulses: array<option<Impulse.t>>,
 }
 
-let defs = Lazy.make(() => ParamDefs.makeDefs())
-let defsById = Lazy.make(() => Lazy.get(defs)->Array.map(d => (d.id, d))->Map.fromArray)
+let defs = ParamDefs.all
+let defsById = ParamDefs.byId
 
 let defaultValues = () => Lazy.get(defs)->Array.map(d => (d.ParamDefs.id, d.init))->Map.fromArray
 

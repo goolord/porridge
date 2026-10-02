@@ -21,17 +21,18 @@ let clipboard = ref(None)
 // oscillator or LFO to it (a "User PWM" waveform stays as it is).
 let player = (table: OatmealFormat.table) =>
   switch table {
-  | Wave1 => Some(("O1_Waveform", 4.))
-  | Wave2 => Some(("O2_Waveform", 4.))
-  | LfoShape1 => Some(("LFO_1_Shape", 6.))
-  | LfoShape2 => Some(("LFO_2_Shape", 6.))
+  | Wave1 => Some("O1_Waveform")
+  | Wave2 => Some("O2_Waveform")
+  | LfoShape1 => Some("LFO_1_Shape")
+  | LfoShape2 => Some("LFO_2_Shape")
   | VelocityCurve | AftertouchCurve => None
-  }
+  }->Option.map(id => (id, ParamDefs.choiceValue(id, "User")))
 
 let useShape = (ctx: Ctx.t, table) =>
   player(table)->Option.forEach(((id, user)) => {
     let now = ctx.model->ParamModel.get(id)
-    let isUser = id->String.endsWith("Waveform") ? now == 4. || now == 5. : now == user
+    let isUser =
+      now == user || id->String.endsWith("Waveform") && now == ParamDefs.choiceValue(id, "User PWM")
     if !isUser {
       ctx.model->ParamModel.gestureSet(id, user)
     }

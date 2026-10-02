@@ -91,14 +91,21 @@ let make = (ctx: Ctx.t, body, ~w, ~h, ops) => {
 
   let typeId = "Sat_Type"
   let modeId = "Sat_Mode"
+  let modeValue = label => ParamDefs.choiceValue(modeId, label)
+  let (modeGlobal, modePost, modePre, modeBoth) = (
+    modeValue("global"),
+    modeValue("per voice, after filter"),
+    modeValue("per voice, before filter"),
+    modeValue("double (before filter and global)"),
+  )
   let slot = (where, x, y) => {
     let e = el("div", ~cls="fslot", ~parent=root)->place(x, y, ~w=150., ~h=nodeH)
     e->onPointer(#pointerdown, ev => {
       ev->preventDefault
       let mode = switch where {
-      | Pre => get(modeId) == 3. ? 3. : 2.
-      | Post => 1.
-      | Global => get(modeId) == 3. ? 3. : 0.
+      | Pre => get(modeId) == modeBoth ? modeBoth : modePre
+      | Post => modePost
+      | Global => get(modeId) == modeBoth ? modeBoth : modeGlobal
       }
       switch ev->button {
       | 0 =>
@@ -238,9 +245,13 @@ let make = (ctx: Ctx.t, body, ~w, ~h, ops) => {
 
   let drawSlots = () => {
     let on = get(typeId) != 0.
-    let mode = Float.toInt(get(modeId))
+    let mode = Float.toInt(get(modeId))->Int.toFloat
     let typeName = model->ParamModel.shortText(typeId)
-    [(pre, mode == 2 || mode == 3), (post, mode == 1), (global, mode == 0 || mode == 3)]->Array.forEach(((
+    [
+      (pre, mode == modePre || mode == modeBoth),
+      (post, mode == modePost),
+      (global, mode == modeGlobal || mode == modeBoth),
+    ]->Array.forEach(((
       e,
       here,
     )) => {

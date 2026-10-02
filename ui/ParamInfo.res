@@ -24,7 +24,7 @@ let renamed = id =>
   | _ => None
   }
 
-let defs = Lazy.make(() => ParamDefs.makeDefs())
+let defs = ParamDefs.all
 
 let unitFor = (d: ParamDefs.t) =>
   if d.names != None || d.isInt {

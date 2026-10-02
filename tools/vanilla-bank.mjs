@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import * as Preset from "../ui/Preset.res.mjs";
 import * as FilterTypes from "../ui/FilterTypes.res.mjs";
 import * as PorridgeParams from "../ui/PorridgeParams.res.mjs";
+import { choiceValue } from "../ui/ParamDefs.res.mjs";
 
 const root = join (dirname (fileURLToPath (import.meta.url)), "..");
 const author = "Porridge";
@@ -26,9 +27,12 @@ const author = "Porridge";
 //==============================================================================
 // helpers
 
-// list values
-const wave = { sine: 0, saw: 1, pulse: 2, tri: 3, user: 4, userPwm: 5, sawHQ: 6, pulseHQ: 7, triHQ: 8 };
-const mix = { normal: 0, sync: 1, fm: 2, pm: 3, pmFeedback: 4, ring: 5, am: 6 };
+// list values: short names here for the labels a parameter's list has (ParamDefs.choiceValue)
+const choices = (id, labels) => Object.fromEntries (Object.entries (labels).map (([k, label]) => [k, choiceValue (id, label)]));
+const wave = choices ("O1_Waveform", { sine: "Sine", saw: "Saw", pulse: "Pulse", tri: "Triangle", user: "User",
+                                       userPwm: "User PWM", sawHQ: "Saw HQ", pulseHQ: "Pulse HQ", triHQ: "Triangle HQ" });
+const mix = choices ("OscMix", { normal: "normal", sync: "hardsync", fm: "FM (1 -> 2, 1 silent)", pm: "PM 2 > 1",
+                                 pmFeedback: "PM 1 feedback", ring: "ring 1 × 2", am: "AM 2 > 1" });
 const filter = Object.fromEntries (Object.entries ({
     off: "off", lp2: "2P lowpass", lp4: "4P lowpass", hp2: "2P highpass", hp4: "4P highpass", bpWide: "2P wide bandpass",
     bp: "2P narrow bandpass", nlLp4: "nonlinear 4P lowpass", svf: "SVF LP > BP > HP", ladder: "ladder", diode: "diode ladder",
@@ -36,17 +40,23 @@ const filter = Object.fromEntries (Object.entries ({
     acid: "acid ladder", cleanDrive: "clean drive", combPlus: "comb +", formant1: "formant I", formant2: "formant II",
     formant3: "formant III",
 }).map (([k, name]) => [k, FilterTypes.index (name)]));
-const dist = { off: 0, hard: 1, soft: 2, sine: 3, asym: 4 };
-const distMode = { global: 0, voicePost: 1, voicePre: 2, double: 3 };
-const lfoUnit = { ms: 0, ms10: 1, sec: 2, sixteenth: 5, eighthTriplet: 7, eighth: 8, quarter: 11, half: 14, whole: 17 };
-const lfoShape = { sine: 0, saw: 1, square: 2, tri: 3, smoothRandom: 4, steppingRandom: 5, user: 6 };
-const lfoMode = { perNote: 0, globalReset: 1, globalFree: 2 };
-const steps = { off: 0, 2: 1, 3: 2, 4: 3, 6: 4, 8: 5, 12: 6, 16: 7, 24: 8, 32: 9 };
-const delayUnit = { ms: 0, sixteenth: 5, eighth: 8, quarter: 11 };
-const poly = { mono: 0, poly: 1, legato: 2 };
+const dist = choices ("Sat_Type", { off: "off", hard: "hard clip", soft: "soft clip", sine: "sine", asym: "asymmetric" });
+const distMode = choices ("Sat_Mode", { global: "global", voicePost: "per voice, after filter",
+                                        voicePre: "per voice, before filter", double: "double (before filter and global)" });
+const lfoUnit = choices ("LFO_1_Unit", { ms: "ms", ms10: "10 ms", sec: "sec", sixteenth: "16ths", eighthTriplet: "2/3 8ths",
+                                         eighth: "8ths", quarter: "quarter notes", half: "half notes", whole: "whole notes" });
+const lfoShape = choices ("LFO_1_Shape", { sine: "Sine", saw: "Saw", square: "Square", tri: "Triangle",
+                                           smoothRandom: "Smooth random", steppingRandom: "Stepping random", user: "User" });
+const lfoMode = choices ("LFO_1_Sync", { perNote: "per note", globalReset: "global, reset on note", globalFree: "global, free" });
+const steps = choices ("LFO_1_Steps", { off: "off", 2: "2", 3: "3", 4: "4", 6: "6", 8: "8", 12: "12", 16: "16", 24: "24", 32: "32" });
+const delayUnit = choices ("D_Unit", { ms: "ms", sixteenth: "16ths", eighth: "8ths", quarter: "quarter notes" });
+const poly = choices ("PolyMode", { mono: "Monophonic", poly: "Polyphonic", legato: "Monophonic, legato" });
 // Oatmeal's own mod envelope targets (M1_Target_N, M2_Target_N)
-const mTarget = { cutoff1: 1, cutoff2: 2, resonance: 3, amp1: 4, amp2: 5, noiseAmp: 6, pitch1: 7, pitch2: 8, pw1: 10,
-                  pwmRate1: 11, pwmDepth1: 12, pw2: 13, lfo1Depth: 20, lfo2Depth: 21, filterMix: 22 };
+const mTarget = choices ("M1_Target_1", { cutoff1: "cutoff 1", cutoff2: "cutoff 2", resonance: "resonance", amp1: "1 amp",
+                                          amp2: "2 amp", noiseAmp: "noise amp", pitch1: "1 pitch", pitch2: "2 pitch",
+                                          pw1: "1 pulsewidth", pwmRate1: "1 PWM rate", pwmDepth1: "1 PWM depth",
+                                          pw2: "2 pulsewidth", lfo1Depth: "LFO 1 depth", lfo2Depth: "LFO 2 depth",
+                                          filterMix: "filter mix" });
 
 // osc 2's transpose is in octaves
 const ratio = r => Math.log2 (r);
@@ -112,8 +122,8 @@ const flangerMs = knob (0.1, 20), bodeMs = knob (1, 1000), reverbSeconds = knob 
 const bodeHz = PorridgeParams.bodeShiftValue;
 const bassMono = PorridgeParams.bassMonoValue;
 const impulse = name => PorridgeParams.impulseNames.indexOf (name);
-const reverbModel = { hall: 0, plate: 1, nitrous: 2, basin: 3, vintage: 4 };
-const eqType = { off: 0, peak: 1, lowShelf: 2, highShelf: 3 };
+const reverbModel = choices ("Rv_Model", { hall: "hall", plate: "plate", nitrous: "nitrous", basin: "basin", vintage: "vintage" });
+const eqType = choices ("EQ_1_Type", { off: "off", peak: "peak/notch", lowShelf: "low shelf", highShelf: "high shelf" });
 
 // a gentle single-band compressor: just downward compression above the threshold
 const glue = (thresh, ratio, attack, release, makeup) => ({
