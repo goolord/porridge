@@ -494,6 +494,14 @@ let css = `
 .pv-head .btn.panic { width: 22px; color: #8a2a1a; }
 .pv-head .btn.panic .ic { height: 13px; }
 .pv-head .btn.panic:active { color: var(--paper); }
+/* A/B: the program's two versions, the live one lit (B faint until it is made) */
+.pv-head .ab { display: flex; flex: none; height: 20px; margin-left: 2px; border: 1px solid var(--edge); border-radius: 2px; overflow: hidden; }
+.pv-head .ab span { width: 17px; text-align: center; line-height: 20px; font-size: 11.5px; font-weight: 700; cursor: pointer;
+    color: var(--ink-soft); background: var(--panel-hi); }
+.pv-head .ab span + span { border-left: 1px solid var(--edge); }
+.pv-head .ab span:hover { color: var(--ink); background: var(--paper); }
+.pv-head .ab span.on { color: var(--paper); background: var(--signal); cursor: default; }
+.pv-head .ab:not(.two) span:not(.on) { color: var(--ink-faint); }
 
 /* status line: hover texts, or a hint for the page */
 .pv-status {

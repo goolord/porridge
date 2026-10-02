@@ -45,10 +45,11 @@ dsp/                    Cmajor DSP
                           multiples of a voice's note) and the air rack effect (Air4)
   Convolve.cmajor         the convolver: zero-latency partitioned convolution, built-in impulses
 ui/                     patch view (ReScript)
-  Index.res               entry point; View.res builds the header (pages, program, the ≡ menu),
-                          the four pages and the shapes editor over them (ShapesOverlay.res),
-                          and binds undo and redo: ParamModel.res records every edit, a
-                          gesture a step, and ProgramStore.res whole-program changes
+  Index.res               entry point; View.res builds the header (pages, program and its A/B
+                          versions, the ≡ menu), the four pages and the shapes editor over
+                          them (ShapesOverlay.res), and binds undo and redo: ParamModel.res
+                          records every edit, a gesture a step, and ProgramStore.res
+                          whole-program changes (A/B switches too)
   PagePlay.res            the Play page: macros, arpeggiator, XY pad, wheels and the MIDI input
                           (MidiInput.res); SlotRows.res shows target slots as used rows + "+"
   VoiceView.res           the sounding notes as the DSP reports them: a mark per note on the

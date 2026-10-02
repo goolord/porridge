@@ -1,7 +1,7 @@
 // The patch view: pages on a fixed-size stage that is scaled to fit the window, a header with
-// the page tabs, the program and a menu of the file and program commands, the shapes editor
-// over the pages, and a status line. Undo and redo (ParamModel's history) are on ctrl+Z and
-// ctrl+shift+Z / ctrl+Y everywhere but in a text field.
+// the page tabs, the program (with its A/B versions) and a menu of the file and program
+// commands, the shapes editor over the pages, and a status line. Undo and redo (ParamModel's
+// history) are on ctrl+Z and ctrl+shift+Z / ctrl+Y everywhere but in a text field.
 
 open! Web
 
@@ -248,6 +248,33 @@ let make = (host, pc) => {
     programs->ProgramStore.select(programs.current + 1)
   )->ignore
 
+  // A/B: the program's two versions, the live one lit (B is dim until it is made)
+  let compareText = () => {
+    let live = ProgramStore.slotName(programs->ProgramStore.slot)
+    let other = ProgramStore.slotName(ProgramStore.otherSlot(programs->ProgramStore.slot))
+    programs->ProgramStore.hasOther
+      ? `Compare: ${live} is playing. Click ${other} to hear the other version (undo takes a switch back); ≡ copies ${live} to ${other}. The version that isn't playing is kept until the window closes, not saved.`
+      : "Compare: click B to try changes on a copy of this program, then switch between A and B to hear which is better. B is kept until the window closes; what plays is what's saved."
+  }
+  let compare = el("div", ~cls="ab", ~parent=prog)
+  let slotButtons = [ProgramStore.A, B]->Array.map(s => {
+    let b = el("span", ~text=ProgramStore.slotName(s), ~parent=compare)
+    b->onPointer(#pointerdown, ev => {
+      ev->preventDefault
+      if ev->Web.button == 0 && programs->ProgramStore.slot != s {
+        programs->ProgramStore.switchSlot
+      }
+    })
+    (s, b)
+  })
+  status->Status.hover(compare, compareText)
+  let updateCompare = () => {
+    slotButtons->Array.forEach(((s, b)) => b->toggleClass("on", programs->ProgramStore.slot == s))
+    compare->toggleClass("two", programs->ProgramStore.hasOther)
+  }
+  programs->ProgramStore.onChanged(updateCompare)
+  updateCompare()
+
   let browser = PresetBrowser.make(ctx, stage, settings)
   let browse = () =>
     if !(browser->PresetBrowser.isOpen) {
@@ -302,12 +329,24 @@ let make = (host, pc) => {
       }
     }
 
-  // the menu of everything else: files, the program, the bank, undo, Oat mode and panic
-  let menuButton = button(head, "≡", "Load and save, export for Oatmeal, program info, init, undo, Oat mode, panic", () => ())
+  let compareLabels = () => {
+    let live = programs->ProgramStore.slot
+    let (a, b) = (ProgramStore.slotName(live), ProgramStore.slotName(ProgramStore.otherSlot(live)))
+    (`Switch to ${b}`, `Copy ${a} to ${b}`)
+  }
+
+  // the menu of everything else: files, the program, the bank, A/B, undo, Oat mode and panic
+  let menuButton = button(
+    head,
+    "≡",
+    "Load and save, export for Oatmeal, program info, init, compare A/B, undo, Oat mode, panic",
+    () => (),
+  )
   menuButton->addClass("icon")
   menuButton->addClass("menu-btn")
   let oatMode = () => model->ParamModel.get("Oat_Mode") != 0.
   menuButton->onMouse(#click, _ => {
+    let (switchLabel, copyLabel) = compareLabels()
     let undoLabel = model->ParamModel.undoLabel
     let redoLabel = model->ParamModel.redoLabel
     // (every item has a place for a check mark, which Oat mode's takes)
@@ -339,6 +378,8 @@ let make = (host, pc) => {
           7,
           ~hint="Start a bank of your own: every program Init, with your name as their author",
         ),
+        item(switchLabel, 12, ~rule=true, ~hint=compareText()),
+        item(copyLabel, 13, ~hint="Make the other version a copy of this one, to try changes on"),
         item(
           undoLabel->Option.mapOr("Undo", l => "Undo " ++ l),
           8,
@@ -369,6 +410,8 @@ let make = (host, pc) => {
         | 8 => undo()
         | 9 => redo()
         | 10 => model->ParamModel.gestureSet("Oat_Mode", oatMode() ? 0. : 1.)
+        | 12 => programs->ProgramStore.switchSlot
+        | 13 => programs->ProgramStore.copyToOther
         | _ => panic()
         },
     )
