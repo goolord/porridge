@@ -167,6 +167,7 @@ let porridgeOnly = p => {
   [
     changed(Modulations) || changed(MoreModulations) ? Some("modulations") : None,
     changed(Lfo3) ? Some("LFO 3 and the wander rate") : None,
+    changed(VoiceLane) ? Some("the voices' own effects (and the FX filter's note tracking)") : None,
     changed(Macros) ? Some("macros") : None,
     changed(Mpe) ? Some("MPE settings") : None,
     changed(Drift) ? Some("the analog drift") : None,

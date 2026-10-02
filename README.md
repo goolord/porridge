@@ -62,6 +62,10 @@ ui/                     patch view (ReScript)
                           estimate of its level), LevelTables.res (what the estimate knows
                           of the synth's levels, measured by tools/random-levels.mjs)
   NewBankDialog.res       starts a new bank of Init programs, for someone writing one
+  VoiceLane.res           editing the voice lane (FxRack.res reads it beside the rack): its
+                          effects in order with the filter and the amp, moving an effect between
+                          the voices and the whole sound; the FX page's "each note" tabs, the
+                          routing tab's voice row and the synth page's voice fx tab use it
   FilterTypes.res         the filter types; FilterGraph.res their response pictures, with a
                           point to drag for cutoff and resonance
   FxPanels.res            the tabs of Porridge's own effects (CompEditor.res: the compressor's);
@@ -104,6 +108,7 @@ tools/
                           types too, and the distortion's mix lines up with oversampling; the
                           oscillator envelopes and the noise source; the key EQ's bands and
                           shelf; oscillator roughness; osc 2 heard in PM),
+                          host.cpp's --time prints the render's own CPU time, for benchmarks;
                           banklibrary.cpp (the plugin's bank library on real files), oneshot.mjs (one-shot LFOs hold their
                           end), levels.mjs (the Vanilla bank's gains, levels and motion),
                           random.mjs (random patches: sound values, the wildness knobs, the

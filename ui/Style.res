@@ -192,6 +192,47 @@ let css = `
 .card.off .csum { opacity: 0.55; }
 .card.compact .cctl { display: none; }
 .card.compact .csum { top: 34px; }
+/* a voice lane card: one line, a light, the name and × */
+.lcard {
+    position: absolute; box-sizing: border-box; border-radius: 3px; background: var(--tile);
+    box-shadow: inset 0 0 0 1px var(--signal); display: flex; align-items: center; gap: 6px; padding: 0 6px;
+    cursor: grab; font-size: 13px;
+}
+.lcard:hover { background: var(--panel-hi); }
+.lcard .ctitle { flex: 1; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lcard .led { flex: none; width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--ink-faint);
+    cursor: pointer; position: relative; }
+.lcard .led::after { content: ""; position: absolute; inset: -5px; }
+.lcard .led.lit { background: var(--signal); border-color: var(--signal); }
+.lcard .cx { font-weight: 400; font-size: 15px; color: var(--ink-faint); cursor: pointer; }
+.lcard .cx:hover { color: var(--ink); }
+.lcard.off .ctitle { opacity: 0.55; }
+.lcard.drag, .fnode.drag { z-index: 3; box-shadow: inset 0 0 0 1.5px var(--signal), 3px 3px 0 rgba(31,26,14,0.25); background: var(--panel-hi); }
+.lcard.drop-before, .fnode.drop-before { box-shadow: inset 0 0 0 1px var(--edge), -4px 0 0 var(--signal); }
+.lcard.drop-after, .fnode.drop-after { box-shadow: inset 0 0 0 1px var(--edge), 4px 0 0 var(--signal); }
+.fnode.grab { cursor: grab; }
+/* the synth page's voice fx tab: a row per effect, and the filter's and amp's */
+.vrow { position: absolute; box-sizing: border-box; height: ${px(controlHeight)}; border-radius: 2px; }
+.vrow .vname { position: absolute; left: 0; top: 0; bottom: 0; width: 40%; box-sizing: border-box; padding-left: 22px;
+    line-height: ${px(controlHeight)}; font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; cursor: grab; }
+.vrow.node { background: var(--paper); box-shadow: inset 0 0 0 1px var(--edge); }
+.vrow.node .vname { width: 100%; padding-left: 10px; font-weight: 400; }
+.vrow.fx { background: var(--tile); box-shadow: inset 0 0 0 1px var(--signal); }
+.vrow.fx .vname:hover, .vrow.node .vname:hover { background: var(--panel-hi); }
+.vrow .led { position: absolute; left: 8px; top: 9px; width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box;
+    border: 1.5px solid var(--ink-faint); cursor: pointer; z-index: 1; }
+.vrow .led.lit { background: var(--signal); border-color: var(--signal); }
+.vrow .vx { position: absolute; right: 6px; top: 0; line-height: ${px(controlHeight)}; font-weight: 400; font-size: 15px;
+    color: var(--ink-faint); cursor: pointer; }
+.vrow .vx:hover { color: var(--ink); }
+.vrow.off .vname { opacity: 0.55; }
+.vrow.drag { z-index: 3; box-shadow: inset 0 0 0 1.5px var(--signal), 3px 3px 0 rgba(31,26,14,0.25); }
+.vrow.drop-before { box-shadow: inset 0 0 0 1px var(--edge), 0 -3px 0 var(--signal); }
+.vrow.drop-after { box-shadow: inset 0 0 0 1px var(--edge), 0 3px 0 var(--signal); }
+.addrow.vadd { height: ${px(controlHeight)}; }
+/* the FX page's strip: which tabs are in each note, which on the whole sound */
+.fxgrp { font-size: 11px; font-weight: 700; color: var(--paper); opacity: 0.8; white-space: nowrap; padding: 0 2px; }
 .addcard {
     position: absolute; box-sizing: border-box; border: 1.5px dashed var(--edge); border-radius: 3px;
     display: flex; align-items: center; justify-content: center; font-size: 20px; color: var(--ink-soft); cursor: pointer;

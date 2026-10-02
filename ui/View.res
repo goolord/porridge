@@ -150,6 +150,10 @@ let make = (host, pc) => {
     programs,
     hostMenu,
     scale: () => scale.contents,
+    openEffect: e => {
+      showPage(#fx)
+      PageFx.openEffect.contents(e)
+    },
     openShape: table => {
       showPage(#shapes)
       shapesPage.contents->Option.forEach((s: PageShapes.t) => s.select(table))

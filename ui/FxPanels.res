@@ -1,5 +1,6 @@
 // The tabs of Porridge's own rack effects (flanger, phaser, algo reverb, convolve, bode,
-// filter, utility, ambience, air; the compressor has CompEditor): their controls in panels across the top, and below them a graph of
+// filter, utility, ambience, air; the compressor has CompEditor) and the voice lane's shifter and
+// resonator: their controls in panels across the top, and below them a graph of
 // what the effect does with these settings. Also each one's controls and summary on the
 // routing tab's card.
 //
@@ -465,6 +466,107 @@ let drawBode = (p: FxGraph.plot, get: string => float) => {
 }
 
 //==============================================================================
+// shifter: two notes' partials before (dim) and after the shift, which follows the key
+
+let drawShifter = (p: FxGraph.plot, get: string => float) => {
+  FxGraph.frequencyGrid(p, ~lo=-30., ~hi=0., ~step=10.)
+  let ratioOf = v => 2. * v * v * v
+  let hzOf = v => 1000. * v * v * v
+  let ratio = ratioOf(get("Sh_Ratio"))
+  let offset = hzOf(get("Sh_Hz"))
+  let mode = Float.toInt(get("Sh_Mode"))
+  let partial = (cls, f: float, k, ~level) => {
+    let x = FxGraph.xOfHz(p, Math.abs(f))
+    let y = FxGraph.yOf(p, level - 20. * Math.log10(Int.toFloat(k)), -30., 0.)
+    if Math.abs(f) >= 20. && Math.abs(f) <= 20000. {
+      FxGraph.line(p.layer, ~cls, x, p.bottom, x, y)
+    }
+  }
+  // a low note and one two octaves up: each moves by the same share of its own pitch
+  [(110., 0.), (440., -6.)]->Array.forEach(((base, level)) => {
+    let shift = base * ratio + offset
+    for k in 1 to 10 {
+      let f = base * Int.toFloat(k)
+      partial("mark", f, k, ~level)
+      switch mode {
+      | 0 => partial("curve", f + shift, k, ~level)
+      | 1 => partial("curve", f - shift, k, ~level)
+      | _ =>
+        partial("curve", f + shift, k, ~level)
+        partial(mode == 2 ? "curve alt" : "curve", f - shift, k, ~level)
+      }
+    }
+  })
+  FxGraph.note(
+    p,
+    `110 Hz and 440 Hz notes' partials (dim), each shifted by ${PorridgeParams.shifterRatioText(get("Sh_Ratio"))}` ++
+    (offset != 0. ? ` ${PorridgeParams.shifterHzText(get("Sh_Hz"))}` : "") ++
+    (mode == 2 ? ": up on the left, down on the right" : mode == 3 ? ": both ways, as ring modulation" : ""),
+  )
+}
+
+//==============================================================================
+// resonator: its four resonances for a 220 Hz note, over the note's partials
+
+let resonatorRatios = [
+  [1., 2., 3., 4.],
+  [1., 3., 5., 7.],
+  [1., 1.5, 2., 3.],
+  [1., 2.756, 5.404, 8.933],
+  [1., 2., 2.4, 3.],
+  [1., 1.593, 2.136, 2.296],
+]
+
+let drawResonator = (p: FxGraph.plot, get: string => float) => {
+  FxGraph.frequencyGrid(p, ~lo=-36., ~hi=6., ~step=12.)
+  let base = 220. * Math.pow(2., ~exp=get("Rs_Pitch") / 12.)
+  let decay = expValue(10., 10000., get("Rs_Decay")) / 1000.
+  let bright = get("Rs_Bright")
+  let ratios = resonatorRatios[Float.toInt(get("Rs_Model"))]->Option.getOr([1., 2., 3., 4.])
+  let sr = 48000.
+  // each mode as the DSP makes it: a two-pole resonance of this decay, weighted
+  let modes = ratios->Array.map(ratio => {
+    let hz = base * ratio
+    let t = decay / Math.sqrt(ratio)
+    let r = Math.exp(-6.907755 / (t * sr))
+    (hz, r, Math.pow(ratio, ~exp=2. * bright - 1.5))
+  })
+  let total = modes->Array.reduce(0., (s, (hz, _, w)) => hz < 0.45 * sr ? s + w : s)
+  for k in 1 to 12 {
+    let f = 220. * Int.toFloat(k)
+    let x = FxGraph.xOfHz(p, f)
+    if f <= 20000. {
+      FxGraph.line(p.layer, ~cls="mark", x, p.bottom, x, FxGraph.yOf(p, -20. * Math.log10(Int.toFloat(k)), -36., 6.))
+    }
+  }
+  let n = Float.toInt(p.right - p.left)
+  let points = Array.fromInitializer(~length=n + 1, i => {
+    let x = p.left + Int.toFloat(i)
+    let hz = FxGraph.hzAt(p, x)
+    let w = 2. * pi * hz / sr
+    let wet = modes->Array.reduce(Complex.make(0., 0.), (sum, (mhz, r, weight)) =>
+      if mhz >= 0.45 * sr {
+        sum
+      } else {
+        let wm = 2. * pi * mhz / sr
+        // (1 - r^2) / 2 (1 - z^-2) / (1 - 2 r cos wm z^-1 + r^2 z^-2)
+        let z1 = Complex.expj(-.w)
+        let z2 = Complex.expj(-2. * w)
+        let num = Complex.scale(Complex.add(Complex.one, Complex.scale(z2, -1.)), (1. - r * r) / 2.)
+        let den = Complex.add(Complex.add(Complex.one, Complex.scale(z1, -2. * r * Math.cos(wm))), Complex.scale(z2, r * r))
+        Complex.add(sum, Complex.scale(Complex.div(num, den), weight / total * 2.))
+      }
+    )
+    (x, FxGraph.yOf(p, Math.max(-36., db(Complex.abs(wet))), -36., 6.))
+  })
+  FxGraph.path(p.layer, ~cls="curve")->FxGraph.setPath(Plots.pathFrom(points))
+  FxGraph.note(
+    p,
+    `its resonances for a 220 Hz note (its partials dim), ringing for ${PorridgeParams.msText(decay * 1000.)}: each note gets its own`,
+  )
+}
+
+//==============================================================================
 // utility: where a left, centre and right sound end up
 
 let utilityMatrix = (get: string => float) => {
@@ -718,7 +820,13 @@ let sections = (k: FxRack.kind) =>
     ]
   | #filter => [
       {title: "filter", rows: [[List("Ff_Type", "type"), Knob("Ff_Cutoff", "cutoff"), Knob("Ff_Resonance", "resonance")], [Knob("Ff_Morph", "morph"), Knob("Ff_Drive", "drive"), Knob("Ff_Spread", "stereo spread")]]},
-      {title: "level", rows: [[Knob("Ff_Mix", "mix")]]},
+      {title: "level & key", rows: [[Knob("Ff_Mix", "mix")], [Knob("Ff_Track", "note track")]]},
+    ]
+  | #shifter => [
+      {title: "key shifter", rows: [[Knob("Sh_Ratio", "ratio of the note"), Knob("Sh_Hz", "offset"), List("Sh_Mode", "mode")], [Knob("Sh_Mix", "mix")]]},
+    ]
+  | #resonator => [
+      {title: "resonator", rows: [[List("Rs_Model", "model"), Knob("Rs_Pitch", "pitch"), Knob("Rs_Decay", "decay")], [Knob("Rs_Bright", "brightness"), Knob("Rs_Mix", "mix")]]},
     ]
   | #utility => [
       {title: "utility", rows: [[Knob("Ut_Gain", "gain"), Knob("Ut_Pan", "pan"), Knob("Ut_Width", "width")], [Switch("Ut_InvL", "invert L"), Switch("Ut_InvR", "invert R"), Switch("Ut_Swap", "swap L/R")]]},
@@ -744,6 +852,8 @@ let graphTitle = (k: FxRack.kind) =>
   | #bode => "partials"
   | #utility => "stereo"
   | #ambience | #air => "tone"
+  | #shifter => "partials: each note moves by a share of its own pitch"
+  | #resonator => "response for a 220 Hz note"
   | _ => ""
   }
 
@@ -831,6 +941,8 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
     | #utility => drawUtility(p, get)
     | #ambience => drawAmbience(p, get)
     | #air => drawAir(p, get)
+    | #shifter => drawShifter(p, get)
+    | #resonator => drawResonator(p, get)
     | _ => ()
     }
   }
@@ -915,6 +1027,8 @@ let cardControls = (k: FxRack.kind) =>
   | #utility => ("on", Some(("Ut_Gain", "gain")))
   | #ambience => ("on", Some(("Am_Mix", "mix")))
   | #air => ("on", Some(("Ai_Air", "air")))
+  | #shifter => ("on", Some(("Sh_Mix", "mix")))
+  | #resonator => ("on", Some(("Rs_Mix", "mix")))
   }
 
 let summary = (model, e: FxRack.effect) => {
@@ -948,5 +1062,7 @@ let summary = (model, e: FxRack.effect) => {
   | #utility => `width ${s("Ut_Width")}, pan ${s("Ut_Pan")}\n${s("Ut_Gain")}`
   | #ambience => `${s("Am_Model")}, size ${s("Am_Size")}\ntime ${s("Am_Time")}`
   | #air => `air ${s("Ai_Air")}, body ${s("Ai_Body")}\ndarken ${s("Ai_Darken")}`
+  | #shifter => `${s("Sh_Ratio")} ${s("Sh_Mode")}\noffset ${s("Sh_Hz")}`
+  | #resonator => `${s("Rs_Model")}, ${s("Rs_Pitch")}\ndecay ${s("Rs_Decay")}`
   }
 }

@@ -6,6 +6,12 @@
 //
 // The rack is FX_Rack_1..8 together with FX_Order: slots holding one of Oatmeal's four take them
 // in FX_Order's order, as the DSP does, so writing the rack writes both.
+//
+// The voice lane (VL_1..4, PorridgeParams.laneSpecs) holds the same effects, in every voice
+// instead of on the whole sound: only the kinds a voice can run (laneKinds), and an effect is in
+// the rack or the lane, not both. The shifter and resonator are only for the lane. The lane is
+// kept without gaps; VL_FilterAt and VL_AmpAt say how many of it come before the filter and the
+// amp envelope.
 
 type kind = [
   | #chorus
@@ -23,6 +29,8 @@ type kind = [
   | #utility
   | #ambience
   | #air
+  | #shifter
+  | #resonator
 ]
 
 // copy 1 is Oatmeal's for its four, or the first of Porridge's own (the rack's distortions start
@@ -45,6 +53,8 @@ let kinds: array<kind> = [
   #utility,
   #ambience,
   #air,
+  #shifter,
+  #resonator,
 ]
 
 let key = (k: kind) =>
@@ -64,6 +74,8 @@ let key = (k: kind) =>
   | #utility => "utility"
   | #ambience => "ambience"
   | #air => "air"
+  | #shifter => "shifter"
+  | #resonator => "resonator"
   }
 
 let kindName = (k: kind) =>
@@ -72,6 +84,7 @@ let kindName = (k: kind) =>
   | #space => "algo reverb"
   | #bode => "freq shifter"
   | #convolve => "convolution"
+  | #shifter => "key shifter"
   | k => key(k)
   }
 
@@ -93,6 +106,8 @@ let about = (k: kind) =>
   | #utility => "gain, pan, width, phase and bass mono"
   | #ambience => "a very small space: a little stereo and tone"
   | #air => "air: lifts or tames the very top (Airwindows Air4)"
+  | #shifter => "a frequency shifter that follows the key: each note's partials move by a part of its own pitch"
+  | #resonator => "a resonator tuned to each note: strings, bars, bells and drums ringing at its pitch"
   }
 
 // The add menu's groups, in order.
@@ -101,6 +116,16 @@ let menuGroups: array<(string, array<kind>)> = [
   ("modulation", [#chorus, #flanger, #phaser, #bode]),
   ("echo & space", [#delay, #reverb, #space, #ambience, #convolve]),
   ("tone & dynamics", [#eq, #filter, #air, #compressor, #utility]),
+]
+
+// The kinds a voice can run, and the voice lane's add menu.
+let laneKinds: array<kind> = [#filter, #distortion, #eq, #phaser, #flanger, #utility, #shifter, #resonator]
+let laneOnly = (k: kind) => k == #shifter || k == #resonator
+let laneMenuGroups: array<(string, array<kind>)> = [
+  ("follows the key", [#resonator, #shifter]),
+  ("tone & drive", [#filter, #distortion, #eq]),
+  ("movement", [#phaser, #flanger]),
+  ("level & place", [#utility]),
 ]
 
 // Oatmeal's chorus, delay, reverb and EQ (and its distortion, before the rack)
@@ -153,6 +178,8 @@ let switchId = e =>
   | #utility => id(e, "Ut_On")
   | #ambience => id(e, "Am_On")
   | #air => id(e, "Ai_On")
+  | #shifter => id(e, "Sh_On")
+  | #resonator => id(e, "Rs_On")
   }
 
 let eqBandTypes = e => [1, 2, 3, 4, 5]->Array.map(b => id(e, `EQ_${Int.toString(b)}_Type`))
@@ -204,16 +231,57 @@ let holds = (rack: array<effect>, e) => rack->Array.some(x => x == e)
 
 let isFull = rack => Array.length(rack) >= PorridgeParams.rackSlots
 
-// The copy of this kind to use next: the lowest one out of the rack (Oatmeal's first).
-let free = (rack, kind) =>
-  isFull(rack) ? None : all->Array.find(e => e.kind == kind && !holds(rack, e))
+//==============================================================================
+// the voice lane
 
-// The kinds that can still be added.
-let addable = rack => kinds->Array.filter(k => free(rack, k) != None)
+// The lane's effects in order (the slots that hold one a voice runs).
+let readLane = (get: string => float): array<effect> =>
+  Array.fromInitializer(~length=PorridgeParams.laneSlots, k => Float.toInt(get(PorridgeParams.laneId(k + 1))))
+  ->Array.filterMap(ofValue)
+  ->Array.filter(e => laneKinds->Array.includes(e.kind))
 
-// Its name in the rack: the kind, numbered by its place among those of its kind when there are
-// several ("delay 2" is the second delay in the rack, whichever copy it is). The rack's
-// distortions count from 2: Oatmeal's distortion, before the rack, is the first.
+// Where the filter and the amp sit in it: how many of its effects come before each (the amp
+// never before the filter).
+type places = {filterAt: int, ampAt: int}
+
+let readPlaces = (get: string => float, lane): places => {
+  let n = Array.length(lane)
+  let filterAt = Math.Int.min(n, Float.toInt(get("VL_FilterAt")))
+  {filterAt, ampAt: Math.Int.max(filterAt, Math.Int.min(n, Float.toInt(get("VL_AmpAt"))))}
+}
+
+// The parameter values for this lane and these places.
+let laneValues = (lane: array<effect>, places: places): array<(string, float)> => {
+  let n = Array.length(lane)
+  let filterAt = Math.Int.min(places.filterAt, n)
+  Array.fromInitializer(~length=PorridgeParams.laneSlots, k => (
+    PorridgeParams.laneId(k + 1),
+    lane[k]->Option.mapOr(0., e => Int.toFloat(value(e))),
+  ))->Array.concat([
+    ("VL_FilterAt", Int.toFloat(filterAt)),
+    ("VL_AmpAt", Int.toFloat(Math.Int.max(filterAt, Math.Int.min(places.ampAt, n)))),
+  ])
+}
+
+let laneFull = lane => Array.length(lane) >= PorridgeParams.laneSlots
+
+// The copy of this kind to use next, for the rack (~lane=false) or the lane: the lowest one in
+// neither (the lane takes Porridge's own kinds' and the rack's copies, not Oatmeal's firsts).
+let free = (rack, ~lane=[], ~forLane=false, kind) =>
+  (forLane ? laneFull(lane) || !(laneKinds->Array.includes(kind)) : isFull(rack) || laneOnly(kind))
+    ? None
+    : all->Array.find(e => e.kind == kind && !holds(rack, e) && !holds(lane, e) && !(forLane && isFirst(e)))
+
+// The kinds that can still be added to the rack (or the lane).
+let addable = (rack, ~lane=[], ~forLane=false) =>
+  (forLane ? laneKinds : kinds)->Array.filter(k => free(rack, ~lane, ~forLane, k) != None)
+
+// Whether it can go in the lane at all.
+let canBeInLane = e => laneKinds->Array.includes(e.kind) && !isFirst(e)
+
+// Its name in the rack (or the lane): the kind, numbered by its place among those of its kind
+// when there are several ("delay 2" is the second delay in the rack, whichever copy it is). The
+// rack's distortions count from 2: Oatmeal's distortion, before the rack, is the first.
 let label = (rack, e) => {
   let same = rack->Array.filter(x => x.kind == e.kind)
   let i = Math.Int.max(0, same->Array.findIndex(x => x == e))

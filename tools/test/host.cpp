@@ -4,7 +4,7 @@
 //
 //   host --program prog.bin --events events.txt --frames 88200 --rate 44100 --out out.f32
 //        [--tempo 120] [--set Endpoint=value ...] [--input in.f32] [--preroll n] [--latency n]
-//        [--voices voices.txt]
+//        [--voices voices.txt] [--time]
 //
 // --input feeds a recorded signal to the effects instead of the voices. --preroll renders n
 // frames before frame 0 and drops them (the DLL harness renders 128 after loading a program).
@@ -13,6 +13,9 @@
 // frame 0's MIDI. (Cmajor's C++ generator reports a latency of 0 whatever the patch declares.)
 // --voices asks for the view's reports of the sounding notes (VoiceView) and writes one line per
 // report: the frame, then the struct's 450 words as it's laid out (ints, bools as ints, floats).
+// --time prints how long the render loop took ("render_seconds 0.123"), for CPU measurements: on
+// Windows the time the thread itself ran (its cycles over the TSC's rate), which other busy
+// processes don't add to; elsewhere, wall time.
 //
 // events.txt: one event per line: "frame status data1 data2" (decimal).
 // Output format (same as tools/re/vsthost.py write_f32): int32 channels, int32 frames,
@@ -30,6 +33,33 @@
 #include <sstream>
 #include <algorithm>
 #include <memory>
+#include <chrono>
+#ifdef _WIN32
+ #define NOMINMAX
+ #include <windows.h>
+ #include <intrin.h>
+#endif
+
+// the seconds this thread has run (Windows), or wall seconds
+struct ThreadClock
+{
+#ifdef _WIN32
+    ULONG64 cycles0 = 0; unsigned long long tsc0 = 0; LARGE_INTEGER qpc0 {};
+    void start() { QueryThreadCycleTime (GetCurrentThread(), &cycles0); tsc0 = __rdtsc(); QueryPerformanceCounter (&qpc0); }
+    double seconds()
+    {
+        ULONG64 cycles; QueryThreadCycleTime (GetCurrentThread(), &cycles);
+        LARGE_INTEGER qpc, f; QueryPerformanceCounter (&qpc); QueryPerformanceFrequency (&f);
+        const double wall = double (qpc.QuadPart - qpc0.QuadPart) / double (f.QuadPart);
+        const double tscHz = double (__rdtsc() - tsc0) / wall;
+        return double (cycles - cycles0) / tscHz;
+    }
+#else
+    std::chrono::steady_clock::time_point t0;
+    void start() { t0 = std::chrono::steady_clock::now(); }
+    double seconds() { return std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count(); }
+#endif
+};
 
 using Patch = PorridgeTest;
 
@@ -65,6 +95,7 @@ static void sendShape (Patch& p, const char* endpoint, int which, const float* d
 int main (int argc, char** argv)
 {
     std::string programPath, eventsPath, inputPath, tuningPath, voicesPath, outPath = "out.f32";
+    bool timing = false;
     long frames = 44100, preroll = 0, latency = 64;
     double rate = 44100.0, tempo = 120.0;
     std::vector<std::pair<std::string, std::string>> overrides;
@@ -81,6 +112,7 @@ int main (int argc, char** argv)
         else if (a == "--tempo") tempo = atof (next().c_str());
         else if (a == "--input") inputPath = next();
         else if (a == "--voices") voicesPath = next();
+        else if (a == "--time") timing = true;
         else if (a == "--preroll") preroll = atol (next().c_str());
         else if (a == "--latency") latency = atol (next().c_str());
         else if (a == "--tuning") tuningPath = next();
@@ -194,6 +226,8 @@ int main (int argc, char** argv)
 
     long pos = 0;
     size_t ei = 0;
+    ThreadClock clock;
+    clock.start();
     while (pos < totalFrames)
     {
         while (ei < events.size() && events[ei].frame <= pos)
@@ -240,6 +274,9 @@ int main (int argc, char** argv)
         for (long k = 0; k < n; ++k) { L[pos + k] = block[2 * k]; R[pos + k] = block[2 * k + 1]; }
         pos += n;
     }
+
+    if (timing)
+        printf ("render_seconds %.6f%c", clock.seconds(), 10);
 
     FILE* o = fopen (outPath.c_str(), "wb");
     int32_t hdr[2] = { 2, (int32_t) frames };

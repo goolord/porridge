@@ -1038,7 +1038,8 @@ let effectSettings = (r, w, m, e: FxRack.effect) => {
     s("Ut_Width", within(r, w, (1.1, 1.35), (0.8, 1.6)))
     s("Ut_BassMono", PorridgeParams.bassMonoValue(between(r, 80., 160.)))
   | #distortion => distortion(r, w, m, first => FxRack.id(e, first))
-  | #eq => ()
+  // (only in the voice lane, which random patches leave alone)
+  | #eq | #shifter | #resonator => ()
   }
 }
 
@@ -1079,6 +1080,7 @@ let rank = (kind: FxRack.kind) =>
   | #delay => 6
   | #convolve => 7
   | #space | #reverb | #ambience => 8
+  | #shifter | #resonator => 1
   }
 
 let rackOf = m => FxRack.read(get(m, ...))

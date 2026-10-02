@@ -141,6 +141,153 @@ let lfo3 = (ctx: Ctx.t, body, box: box) => {
   dim()
 }
 
+// The voice lane (VoiceLane): the effects every voice runs its own copy of, in order with the
+// filter and the amp envelope, a row each. Drag a row by its name to move it; each effect's row
+// has its switch, its level, a button to open its tab and ×.
+let voiceFx = (ctx: Ctx.t, body) => {
+  let model = ctx.model
+  let get = id => model->ParamModel.get(id)
+  let hover = (e, text) => ctx.status->Status.hover(e, text)
+  let cw = Grid.fitColumns(columnWidth, 4)
+  let rowW = 4. * cw - Grid.columnGap
+  let row = (~cls="") => {
+    let r = el("div", ~cls="vrow " ++ cls, ~parent=body)->place(Grid.padX, 0., ~w=rowW, ~h=Style.controlHeight)
+    r
+  }
+  // the filter and the amp: fixed rows
+  let filterRow = row(~cls="node")
+  let filterText = el("span", ~cls="vname", ~parent=filterRow)
+  let ampRow = row(~cls="node")
+  el("span", ~cls="vname", ~text="amp envelope", ~parent=ampRow)->ignore
+  hover(filterRow, () => "The filter (and the distortion's places either side): drag it up or down among the voice's effects")
+  hover(ampRow, () =>
+    "The amp envelope: effects below it react to how each note swells and fades and ring on after it ends; those above it are shaped by it. Drag it up or down."
+  )
+
+  // an effect's row, made when it first comes into the lane
+  let rows = Map.make()
+  let rowOf = (e: FxRack.effect) =>
+    switch rows->Map.get(FxRack.value(e)) {
+    | Some(r) => r
+    | None =>
+      let r = row(~cls="fx")
+      let led = el("i", ~cls="led", ~parent=r)
+      led->onPointer(#pointerdown, ev =>
+        if ev->button == 0 {
+          ev->stopPropagation
+          ev->preventDefault
+          let id = FxRack.switchId(e)
+          model->ParamModel.gestureSet(id, get(id) != 0. ? 0. : FxRack.onValue(e))
+        }
+      )
+      let name = el("span", ~cls="vname", ~parent=r)
+      let (_, level) = FxPanels.cardControls(e.kind)
+      level->Option.forEach(((id, label)) =>
+        Controls.param(ctx, r, FxRack.id(e, id), ~x=1.5 * cw, ~y=0., ~w=1.5 * cw - Grid.columnGap, ~label)
+      )
+      let opener = Controls.button(ctx, r, "open", ~x=3. * cw, ~y=0., ~w=cw * 0.62, ~h=Style.controlHeight, ~cls="gc", ~status="Open its tab on the FX page", () => ctx.openEffect(e))
+      opener->ignore
+      let x = el("b", ~cls="vx", ~text="×", ~parent=r)
+      x->onPointer(#pointerdown, ev => {
+        ev->stopPropagation
+        ev->preventDefault
+        VoiceLane.remove(model, e)
+      })
+      hover(x, () => "Take it out of the voices (its settings stay)")
+      hover(name, () =>
+        `${VoiceLane.label(model, e)}: each note runs its own (${FxPanels.summary(model, e)->String.replaceAll("\n", ", ")}). Drag to move it, right-click to duplicate it or move it to the whole sound`
+      )
+      let made = (r, name, led)
+      rows->Map.set(FxRack.value(e), made)
+      made
+    }
+  let itemEl = (item: VoiceLane.item) =>
+    switch item {
+    | Fx(e) =>
+      let (r, _, _) = rowOf(e)
+      r
+    | FilterNode => filterRow
+    | AmpNode => ampRow
+    }
+  let press = (item: VoiceLane.item, ev) =>
+    switch ev->button {
+    | 0 =>
+      ev->preventDefault
+      let others = VoiceLane.items(get)->Array.filter(o => o != item)->Array.map(itemEl)
+      Reorder.start(ev, itemEl(item), ~vertical=true, ~others, ~onDrop=pos => VoiceLane.move(model, item, pos), ~onClick=() => ())
+    | 2 =>
+      switch item {
+      | Fx(e) =>
+        ev->preventDefault
+        VoiceLane.menu(ctx, e, itemEl(item))
+      | _ => ()
+      }
+    | _ => ()
+    }
+  filterText->onPointer(#pointerdown, ev => press(FilterNode, ev))
+  ampRow->onPointer(#pointerdown, ev => press(AmpNode, ev))
+  filterRow->suppressContextMenu
+  ampRow->suppressContextMenu
+  let hooked = Set.make()
+
+  let add = el("div", ~cls="addrow vadd", ~parent=body)
+  el("b", ~text="+", ~parent=add)->ignore
+  el("span", ~text="add an effect to every voice", ~parent=add)->ignore
+  add->onPointer(#pointerdown, ev => {
+    ev->preventDefault
+    if ev->button == 0 {
+      VoiceLane.addMenu(ctx, add, ~onAdded=_ => ())
+    }
+  })
+  hover(add, () => "Up to four: each note runs its own copy, which its LFOs, envelopes and key move for that note alone")
+  let note = el(
+    "div",
+    ~cls="note wrap",
+    ~text="Each note runs its own copy of these. The resonator and key shifter follow each note's pitch.",
+    ~parent=body,
+  )
+
+  let layout = () => {
+    rows->Map.forEach(((r, _, _)) => r->setStyle("display", "none"))
+    let lane = FxRack.readLane(get)
+    let items = VoiceLane.items(get)
+    items->Array.forEachWithIndex((item, i) => {
+      let y = Grid.padTop + Int.toFloat(i) * Grid.rowHeight
+      switch item {
+      | Fx(e) =>
+        let (r, name, led) = rowOf(e)
+        if !(hooked->Set.has(FxRack.value(e))) {
+          hooked->Set.add(FxRack.value(e))
+          name->onPointer(#pointerdown, ev => press(Fx(e), ev))
+          r->suppressContextMenu
+          r->onMouse(#contextmenu, ev => ev->preventDefault)
+        }
+        r->setStyle("display", "")
+        r->place(Grid.padX, y)->ignore
+        name->setTextContent(FxRack.label(lane, e))
+        let on = FxRack.isOn(e, get)
+        led->toggleClass("lit", on)
+        r->toggleClass("off", !on)
+      | FilterNode =>
+        filterRow->place(Grid.padX, y)->ignore
+        filterText->setTextContent(`filter: ${model->ParamModel.shortText("Filter")}`)
+      | AmpNode => ampRow->place(Grid.padX, y)->ignore
+      }
+    })
+    let y = Grid.padTop + Int.toFloat(Array.length(items)) * Grid.rowHeight
+    let full = FxRack.laneFull(lane)
+    add->setStyle("display", full ? "none" : "flex")
+    add->place(Grid.padX, y, ~w=rowW, ~h=Style.controlHeight)->ignore
+    note->place(Grid.padX + 2., y + (full ? 0. : Grid.rowHeight) + 4., ~w=rowW - 4.)->ignore
+  }
+  let soon = perFrame(layout)
+  model->ParamModel.listenEach(
+    [...VoiceLane.ids, "Filter", ...FxRack.all->Array.map(FxRack.switchId)],
+    soon,
+  )
+  layout()
+}
+
 // Microtuning: a Scala scale (and keyboard mapping) instead of the 12 notes above it.
 let scale = (ctx: Ctx.t, body, g: Grid.t) => {
   el("div", ~cls="sep", ~parent=body)->place(g->Grid.cx(0) + 3., g->Grid.cy(4) - 1., ~w=4. * g.cw - 8.)->ignore
@@ -262,10 +409,10 @@ let build = (ctx: Ctx.t, page) => {
   let filterEl = ref(None)
   let filter = Panel.make(
     page,
-    ~tabs=["filter", "response", "dual filter", "key EQ"],
+    ~tabs=["filter", "response", "dual filter", "key EQ", "voice fx"],
     ~onSelect=i => {
-      // the response covers the filter envelope
-      filterEl.contents->Option.forEach(e => e->Web.toggleClass("responding", i == 1))
+      // the response and the voice's effects cover the filter envelope
+      filterEl.contents->Option.forEach(e => e->Web.toggleClass("responding", i == 1 || i == 4))
       switch i {
       | 0 => refreshPreview.contents()
       | 1 => refreshResponse.contents()
@@ -365,6 +512,7 @@ let build = (ctx: Ctx.t, page) => {
   dual->Grid.param("F_Mix", 0, 1, "mix")
   dual->Grid.param("F_Speed", 1, 1, "speed ratio")
   // the key EQ: a band on each of the note's harmonics 1, 2, 4 ... 128
+  voiceFx(ctx, filter->Panel.body(4))
   let keyEq = Grid.make(ctx, filter->Panel.body(3))
   keyEq->Grid.toggle("KEQ_On", 0, 0, "key EQ")
   keyEq

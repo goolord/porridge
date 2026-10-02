@@ -20,6 +20,8 @@ let voiceGroups = ["voice", "osc", "filter", "lfo"]
 let targetScope = (get: string => float, t): ModMatrix.scope =>
   switch ModMatrix.targets[t] {
   | Some(target) if voiceGroups->Array.includes(target.group) => EachNote
+  // an effect in the voice lane: each voice runs its own
+  | Some(_) if effectOf(t)->Option.mapOr(false, e => FxRack.holds(FxRack.readLane(get), e)) => EachNote
   // Oatmeal's distortion: in the voices unless it's on the whole sound alone
   | Some({group: "distortion"}) if effectOf(t) == None => get("Sat_Mode") == 0. ? Shared : EachNote
   | _ => Shared

@@ -381,11 +381,12 @@ let build = (ctx: Ctx.t, page) => {
   let layoutPicker = () => {
     let words = search->value->String.toLowerCase->String.split(" ")->Array.filter(w => w != "")
     let rack = FxRack.read(get)
+    let lane = FxRack.readLane(get)
     let shows = (title, t) =>
       if words == [] {
         allEffects.contents ||
         reaches(t) ||
-        effectOf(t)->Option.mapOr(true, e => FxRack.holds(rack, e))
+        effectOf(t)->Option.mapOr(true, e => FxRack.holds(rack, e) || FxRack.holds(lane, e))
       } else {
         let text = String.toLowerCase(`${title} ${targetLabel(t)}`)
         words->Array.every(w => text->String.includes(w))
@@ -881,7 +882,7 @@ let build = (ctx: Ctx.t, page) => {
 
   slotNumbers->Array.forEach(k => model->ParamModel.listenEach(ModMatrix.slotIds(k), () => redraw.contents()))
   // what a target's scope depends on: the distortion's place, the rack, and what follows
-  model->ParamModel.listenEach(["MM_Follow", "Sat_Mode"], () => redraw.contents())
+  model->ParamModel.listenEach(["MM_Follow", "Sat_Mode", ...VoiceLane.ids], () => redraw.contents())
   ctx.programs->ProgramStore.onChanged(() => redraw.contents())
   draw()
 }
