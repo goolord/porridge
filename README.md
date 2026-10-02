@@ -55,6 +55,9 @@ ui/                     patch view (ReScript)
                           pitch); ModScope.res says
                           which sources each note has its own of and which targets are in the
                           voice or on the whole sound, for PageMod.res (the Mod page);
+                          Modulators.res says what moves each parameter (connections and
+                          Oatmeal's own routings), which the parameter rows and the graphs'
+                          points show in the sources' colours;
                           ModEdit.res connects a source to a control, and ModTray.res is the
                           source tray (from the status line) whose chips drop onto any control
   PresetBrowser.res       the preset browser; Library.res searches and filters for it, and

@@ -145,7 +145,8 @@ let make = (ctx: Ctx.t, parent, box: box, ~id=x => x) => {
 
   let statusFor = b => {
     let (kind, freq, amp, slope) = ids(b)
-    bandOn(b) ? model->ParamModel.statusText([kind, freq, amp, slope]) : model->ParamModel.longText(kind)
+    let all = [kind, freq, amp, slope]
+    (bandOn(b) ? model->ParamModel.statusText(all) : model->ParamModel.longText(kind)) ++ Modulators.statusText(model, all)
   }
 
   let readoutFor = b => {
@@ -213,7 +214,7 @@ let make = (ctx: Ctx.t, parent, box: box, ~id=x => x) => {
 
   // a point per band, numbered; scroll over it for the slope, right-click for the type
   let nodes = Array.fromInitializer(~length=5, b => {
-    let (_, _, _, slope) = ids(b)
+    let (typ, freq, amp, slope) = ids(b)
     let node = ed->NodeEditor.node(
       b,
       ~dot=[("r", Num(7.))],
@@ -222,6 +223,8 @@ let make = (ctx: Ctx.t, parent, box: box, ~id=x => x) => {
       ~onDrag=startDrag(b, ...),
       ~onRightClick=() => typeMenu(b),
       ~wheel=() => Some(slope),
+      ~ids=() => [typ, freq, amp, slope],
+      ~r=7.,
     )
     let label = Web.svgEl(ed.g.layer, "text", [("class", Str("nodelabel"))])
     label->setTextContent(Int.toString(b + 1))

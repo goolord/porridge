@@ -53,6 +53,9 @@ let def = (t, id) =>
 
 let get = (t, id) => t.values->Map.get(id)->Option.getOr(0.)
 
+// Whether there is such a parameter.
+let has = (t, id) => t.defs->Map.has(id)
+
 // The parameter's value as the status line and the readouts show it.
 let longText = (t, id) => def(t, id).longText(get(t, id))
 let shortText = (t, id) => def(t, id).shortText(get(t, id))

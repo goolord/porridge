@@ -533,7 +533,7 @@ let make = (
   let frame = ref(shape.fit())
   let handles = ref([])
 
-  let statusFor = h => model->ParamModel.statusText(handleIds(h))
+  let statusFor = h => model->ParamModel.statusText(handleIds(h)) ++ Modulators.statusText(model, handleIds(h))
   let readoutFor = h => h->handleIds->Array.map(id => model->ParamModel.shortText(id))->Array.join("  ·  ")
 
   // a faint line and a label at each tick time that has room, the release's counted from
@@ -600,6 +600,8 @@ let make = (
           h->handleIds->Array.forEach(id => model->ParamModel.gestureSet(id, (model->ParamModel.def(id)).init))
         ),
       ~wheel=() => handles.contents[i]->Option.flatMap(h => h.time->Option.orElse(h.level)->Option.orElse(h.curve)),
+      ~ids=() => handles.contents[i]->Option.mapOr([], handleIds),
+      ~r=5.5,
     )
   )
 
@@ -662,8 +664,7 @@ let make = (
 
     nodes->Array.forEachWithIndex((node, i) =>
       hs[i]->Option.forEach(h => {
-        node->NodeEditor.place(h.x, h.y)
-        [node.dot, node.hit]->Array.forEach(e => e->setAttribute("display", Str(h.hidden ? "none" : "inline")))
+        node->NodeEditor.place(h.x, h.y, ~shown=!h.hidden)
         let hot = ed.hover == Some(i) || ed.dragging == Some(i)
         let isBend = h.curve != None
         node.dot->setAttribute(
