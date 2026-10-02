@@ -370,6 +370,10 @@ namespace porridge::mods
     let volume = 3;
     let pan = 4;
 
+    /// each connection's parameters' slots (the later slots' come after the first ones' apart)
+${[["Source", "sourceId"], ["Target", "targetId"], ["Amount", "amountId"], ["Via", "viaId"], ["Hold", "holdId"], ["Slew", "slewId"], ["Curve", "curveId"]].map (([name, fn]) =>
+    `    let conn${name} = int[numSlots] (${Array.from ({ length: ModMatrix.slots }, (_, k) => slotById (ModMatrix[fn] (k + 1))).join (", ")});`).join ("\n")}
+
     let targetKind  = int[${targetKind.length}] (${targetKind.join (", ")});
     let targetSlot  = int[${targetSlot.length}] (${targetSlot.join (", ")});
     let targetRow   = int[${targetRow.length}] (${targetRow.join (", ")});

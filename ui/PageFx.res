@@ -4,9 +4,13 @@
 //
 // The tabs after Oatmeal's distortion are the rack (FxRack): up to eight effects, each kind up to
 // four times. Drag a tab sideways to move that effect, × takes it out, right-click duplicates it,
-// + adds one.
+// + adds one. Before them, under "each note", the voice lane's (VoiceLane): the effects every
+// voice runs its own copy of; right-click moves one between the lane and the rack.
 
 open! Web
+
+// Opens an effect's tab (the synth page's voice FX tab asks), once the page is built.
+let openEffect = ref((_: FxRack.effect) => ())
 
 let hint = "Drag a rack tab sideways to move that effect, × takes it out, right-click duplicates it, + adds one. On a graph, drag the points; shift for fine steps, right-click to reset."
 
@@ -119,11 +123,11 @@ let build = (ctx: Ctx.t, page) => {
     }
   }
 
-  let add = (kind, ~show) => FxRack.free(rack(), kind)->Option.forEach(insert(_, ~show))
+  let add = (kind, ~show) => FxRack.free(rack(), ~lane=VoiceLane.lane(model), kind)->Option.forEach(insert(_, ~show))
 
   // a copy with the same settings, right after it
   let duplicate = (e: FxRack.effect, ~show) =>
-    FxRack.free(rack(), e.kind)->Option.forEach(copy => {
+    FxRack.free(rack(), ~lane=VoiceLane.lane(model), e.kind)->Option.forEach(copy => {
       FxRack.params(e)->Array.forEachWithIndex((id, i) =>
         FxRack.params(copy)[i]->Option.forEach(to => model->ParamModel.gestureSet(to, get(id)))
       )
@@ -139,7 +143,7 @@ let build = (ctx: Ctx.t, page) => {
 
   // the kinds that can still be added, in their groups, each with its icon
   let addMenu = (anchor, ~show) => {
-    let addable = FxRack.addable(rack())
+    let addable = FxRack.addable(rack(), ~lane=VoiceLane.lane(model))
     let kinds = FxRack.menuGroups->Array.flatMap(((title, kinds)) =>
       kinds
       ->Array.filter(k => addable->Array.includes(k))
@@ -164,16 +168,27 @@ let build = (ctx: Ctx.t, page) => {
   }
 
   let effectMenu = (e: FxRack.effect, anchor, ~show) => {
-    let canCopy = FxRack.free(rack(), e.kind) != None
-    ctx.menu->Menu.show(
-      anchor,
-      [
-        ...canCopy ? [{Menu.label: "duplicate", value: 0}] : [],
-        {Menu.label: "remove from the rack", value: 1},
-      ],
-      -1,
-      v => v == 0 ? duplicate(e, ~show) : remove(e),
-    )
+    if VoiceLane.holds(model, e) {
+      VoiceLane.menu(ctx, e, anchor)
+    } else {
+      let canCopy = FxRack.free(rack(), ~lane=VoiceLane.lane(model), e.kind) != None
+      let canMove = FxRack.canBeInLane(e) && !FxRack.laneFull(VoiceLane.lane(model))
+      ctx.menu->Menu.show(
+        anchor,
+        [
+          ...canCopy ? [{Menu.label: "duplicate", value: 0}] : [],
+          ...canMove ? [{Menu.label: "move into every voice", value: 2}] : [],
+          {Menu.label: "remove from the rack", value: 1},
+        ],
+        -1,
+        v =>
+          switch v {
+          | 0 => duplicate(e, ~show)
+          | 2 => VoiceLane.fromRack(model, e)->ignore
+          | _ => remove(e)
+          },
+      )
+    }
   }
 
   // Switching an effect on and off by its light. A chorus or distortion is off at its list's
@@ -277,6 +292,60 @@ let build = (ctx: Ctx.t, page) => {
       made
     }
 
+  // the voice lane's tabs: drag sideways among themselves, × takes one out of the voices
+  let laneTabs = Map.make()
+  let laneTab = (e: FxRack.effect) =>
+    switch laneTabs->Map.get(FxRack.value(e)) {
+    | Some(t) => t
+    | None =>
+      let made = tab(
+        Rack(e),
+        ~onToggle=() => toggle(e),
+        ~onRemove=() => VoiceLane.remove(model, e),
+        ~title=() =>
+          `${VoiceLane.label(model, e)} in every voice (${FxRack.hostName(e)}'s parameters): each note runs its own. Click to open, drag sideways to move it, right-click to duplicate it or move it to the whole sound, × takes it out`,
+        (ev, t) =>
+          switch ev->button {
+          | 0 =>
+            ev->preventDefault
+            let lane = VoiceLane.lane(model)
+            let others =
+              lane
+              ->Array.filter(o => o != e)
+              ->Array.filterMap(o => laneTabs->Map.get(FxRack.value(o))->Option.map(Pair.first))
+            Reorder.start(ev, t, ~others, ~onClick=() => select(Rack(e)), ~onDrop=pos => {
+              // (among the lane's effects; the filter and amp keep their places by count)
+              let list = lane->Array.filter(o => o != e)
+              list->Array.splice(~start=pos, ~remove=0, ~insert=[e])
+              VoiceLane.setAll(model, FxRack.laneValues(list, FxRack.readPlaces(get, lane)))
+            })
+          | 2 =>
+            ev->preventDefault
+            effectMenu(e, t, ~show=true)
+          | _ => ()
+          },
+      )
+      laneTabs->Map.set(FxRack.value(e), made)
+      made
+    }
+  let laneAdd = el("div", ~cls="fxtab add", ~text="+")
+  ctx.status->Status.hover(laneAdd, () =>
+    "Add an effect to every voice: each note runs its own copy, which its LFOs, envelopes and key move for that note alone"
+  )
+  laneAdd->onPointer(#pointerdown, ev => {
+    ev->preventDefault
+    if ev->button == 0 {
+      VoiceLane.addMenu(ctx, laneAdd, ~onAdded=e => select(Rack(e)))
+    }
+  })
+  let groupLabel = (text, help) => {
+    let e = el("span", ~cls="fxgrp", ~text)
+    ctx.status->Status.hover(e, () => help)
+    e
+  }
+  let eachLabel = groupLabel("each note", "The voice lane: effects in every voice, which each note runs its own copy of")
+  let wholeLabel = groupLabel("whole sound", "Oatmeal's distortion and the rack: effects on the sound of every voice together")
+
   let addTab = el("div", ~cls="fxtab add", ~text="+")
   ctx.status->Status.hover(addTab, () =>
     "Add an effect to the end of the rack: up to eight, each kind up to four times (convolve twice)"
@@ -294,6 +363,18 @@ let build = (ctx: Ctx.t, page) => {
     strip->setTextContent("")
     strip->appendChild(routingTab)
     strip->appendChild(el("span", ~cls="fxgap"))
+    strip->appendChild(eachLabel)
+    let lane = VoiceLane.lane(model)
+    lane->Array.forEach(e => {
+      let (t, label) = laneTab(e)
+      label->setTextContent(FxRack.label(lane, e))
+      strip->appendChild(t)
+    })
+    if !FxRack.laneFull(lane) {
+      strip->appendChild(laneAdd)
+    }
+    strip->appendChild(el("span", ~cls="fxgap"))
+    strip->appendChild(wholeLabel)
     strip->appendChild(distTab)
     list->Array.forEach(e => {
       strip->appendChild(arrow())
@@ -301,7 +382,7 @@ let build = (ctx: Ctx.t, page) => {
       label->setTextContent(FxRack.label(list, e))
       strip->appendChild(t)
     })
-    if FxRack.addable(list) != [] {
+    if FxRack.addable(list, ~lane=VoiceLane.lane(model)) != [] {
       strip->appendChild(addTab)
     }
     // (a tab made now for the current effect)
@@ -352,17 +433,18 @@ let build = (ctx: Ctx.t, page) => {
     lights()
     // a tab whose effect left the rack (a program change, the host) gives way to routing
     switch current.contents {
-    | Rack(e) if !FxRack.holds(rack(), e) => select(Routing)
+    | Rack(e) if !FxRack.holds(rack(), e) && !VoiceLane.holds(model, e) => select(Routing)
     | _ => ()
     }
   })
   let rackIds = Array.fromInitializer(~length=PorridgeParams.rackSlots, k => PorridgeParams.rackId(k + 1))
-  model->ParamModel.listenEach([...rackIds, "FX_Order"], rackChanged)
+  model->ParamModel.listenEach([...rackIds, "FX_Order", ...VoiceLane.ids], rackChanged)
   model->ParamModel.listenEach(["Sat_Type", ...FxRack.all->Array.map(FxRack.switchId)], perFrame(lights))
 
   layoutStrip()
   lights()
   select(Routing)
+  openEffect := (e => select(Rack(e)))
 
   // the tabs skip redrawing while the page is hidden: catch up when it shows
   let wasShown = ref(false)

@@ -22,12 +22,18 @@ dsp/                    Cmajor DSP
   Slots.cmajor            parameter -> program-struct slot constants (generated)
   ModTables.cmajor        modulation sources, targets and knob laws (generated)
   Synth.cmajor            MIDI, voice manager, arpeggiator, per-voice rendering, effects chain,
-                          and a K-weighted level meter the view asks for (levelRequest/levelOut)
+                          a K-weighted level meter the view asks for (levelRequest/levelOut),
+                          and reports of the sounding notes for the view (voiceView/voiceViewOut)
   Oscillator, Filter, Modulation, Effects, Tables, Voice, Types
                           (Voice.cmajor also has the key EQ: a low shelf under each voice's
                           note and bands on its harmonics; Oscillator.cmajor each oscillator's
                           roughness, noise in its phase)
   FxExtra.cmajor          Porridge's flanger, phaser, compressor, bode, rack filter and utility
+  VoiceFx.cmajor          the voice lane: up to four effects in every voice, around the filter
+                          and the amp envelope (the rack's filter, distortion, EQ, phaser,
+                          flanger and utility, and a key-tracked frequency shifter and a
+                          resonator tuned to each note); voices ring on past the amp while
+                          effects after it still sound
   Space.cmajor            the algo reverb (hall, plate, nitrous, basin, vintage)
   Ambience.cmajor         the ambience: very small spaces (room, and Airwindows' ClearCoat
                           and VerbTiny), for a little stereo and tone
@@ -37,8 +43,15 @@ dsp/                    Cmajor DSP
   Convolve.cmajor         the convolver: zero-latency partitioned convolution, built-in impulses
 ui/                     patch view (ReScript)
   Index.res               entry point; View.res builds the pages
+  VoiceView.res           the sounding notes as the DSP reports them: a mark per note on the
+                          envelopes, LFOs, the filter graph and the modulated controls
   Preset.res              Porridge's preset format; PorridgeParams.res and ModMatrix.res
                           list the parameters and modulation sources/targets Oatmeal doesn't have
+                          (32 connections, each with hold, slew and curve); ModScope.res says
+                          which sources each note has its own of and which targets are in the
+                          voice or on the whole sound, for PageMod.res (the Mod page);
+                          ModEdit.res connects a source to a control, and ModTray.res is the
+                          source tray (from the status line) whose chips drop onto any control
   PresetBrowser.res       the preset browser; Library.res searches and filters for it, and
                           BankLibrary.res asks the plugin for the banks it keeps
   random/                 random patches: RandomDrawer.res (the drawer: the wildness knobs,
@@ -49,6 +62,10 @@ ui/                     patch view (ReScript)
                           estimate of its level), LevelTables.res (what the estimate knows
                           of the synth's levels, measured by tools/random-levels.mjs)
   NewBankDialog.res       starts a new bank of Init programs, for someone writing one
+  VoiceLane.res           editing the voice lane (FxRack.res reads it beside the rack): its
+                          effects in order with the filter and the amp, moving an effect between
+                          the voices and the whole sound; the FX page's "each note" tabs, the
+                          routing tab's voice row and the synth page's voice fx tab use it
   FilterTypes.res         the filter types; FilterGraph.res their response pictures, with a
                           point to drag for cutoff and resonance
   FxPanels.res            the tabs of Porridge's own effects (CompEditor.res: the compressor's);
@@ -91,10 +108,16 @@ tools/
                           types too, and the distortion's mix lines up with oversampling; the
                           oscillator envelopes and the noise source; the key EQ's bands and
                           shelf; oscillator roughness; osc 2 heard in PM),
+                          host.cpp's --time prints the render's own CPU time, for benchmarks;
                           banklibrary.cpp (the plugin's bank library on real files), oneshot.mjs (one-shot LFOs hold their
                           end), levels.mjs (the Vanilla bank's gains, levels and motion),
                           random.mjs (random patches: sound values, the wildness knobs, the
-                          locks, varying the banks, and their levels); lib.mjs has what they
+                          locks, varying the banks, and their levels), modulation.mjs (the
+                          matrix's hold, slew, curve, later sources and slots, and what
+                          per-note sources follow on the whole sound, and the view's reports of
+                          the sounding notes, which the host writes with --voices), lane.mjs
+                          (the voice lane's effects, its key tracking, tails and amp place);
+                          lib.mjs has what they
                           share
   vanilla-bank.mjs        builds presets/vanilla.porridge
   re/                     comparisons against Oatmeal.dll (32-bit Python) and data checks

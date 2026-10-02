@@ -4,7 +4,8 @@
 //     "porridge": "preset", "version": 1,
 //     "name": "Warm pad", "author": "", "category": "pad", "tags": ["slow"], "description": "",
 //     "params": { "Cutoff": 0.42, "O1_Waveform": 1, ... },   // endpoint id -> internal value
-//     "modulations": [ { "source": "lfo1", "target": "Cutoff", "amount": 0.25, "via": "modWheel" } ],
+//     "modulations": [ { "source": "lfo1", "target": "Cutoff", "amount": 0.25, "via": "modWheel",
+//                        "hold": "latch", "slew": 0.3, "curve": -0.5 } ],   // (options only when set)
 //     "macros": ["brightness", "", "", ""],                    // macro knob names
 //     "tables": { "wave1": "<base64 float32 LE>", ... },      // only tables that differ from Init
 //     "tuning": { "scl": "<.scl text>", "kbm": "<.kbm text>" }, // microtuning, if any
@@ -164,7 +165,9 @@ let porridgeOnly = p => {
     )
   // (Oatmeal always plays like Oat mode)
   [
-    changed(Modulations) ? Some("modulations") : None,
+    changed(Modulations) || changed(MoreModulations) ? Some("modulations") : None,
+    changed(Lfo3) ? Some("LFO 3 and the wander rate") : None,
+    changed(VoiceLane) ? Some("the voices' own effects (and the FX filter's note tracking)") : None,
     changed(Macros) ? Some("macros") : None,
     changed(Mpe) ? Some("MPE settings") : None,
     changed(Drift) ? Some("the analog drift") : None,
@@ -282,6 +285,11 @@ let toJson = (p, ~header=true, ~sparse=false) => {
       | Some(via) if via.key != "none" => [("via", str(via.key))]
       | _ => []
       }
+      let options = [
+        ...(slot.hold ? [("hold", str("latch"))] : []),
+        ...(slot.slew != 0. ? [("slew", num(Math.fround(slot.slew)->shortFloat))] : []),
+        ...(slot.curve != 0. ? [("curve", num(Math.fround(slot.curve)->shortFloat))] : []),
+      ]
       Some(
         JSON.Object(
           Dict.fromArray([
@@ -289,6 +297,7 @@ let toJson = (p, ~header=true, ~sparse=false) => {
             ("target", str(target.key)),
             ("amount", num(Math.fround(slot.amount)->shortFloat)),
             ...via,
+            ...options,
           ]),
         ),
       )
@@ -369,10 +378,12 @@ let fromJsonObject = (d: dict<JSON.t>) => {
         let source = ModMatrix.sourceIndex(getString(m, "source"))
         let target = ModMatrix.targetIndex(getString(m, "target"))
         let via = ModMatrix.sourceIndex(getString(m, "via"))
-        let amount = switch m->Dict.get("amount") {
-        | Some(Number(x)) => x
-        | _ => 0.
-        }
+        let number = key =>
+          switch m->Dict.get(key) {
+          | Some(Number(x)) => x
+          | _ => 0.
+          }
+        let amount = number("amount")
         if source > 0 && target > 0 {
           let k = slot.contents
           let set = (id, x) => loadValue(id, x)->Option.forEach(x => values->Map.set(id, x))
@@ -380,6 +391,9 @@ let fromJsonObject = (d: dict<JSON.t>) => {
           set(ModMatrix.targetId(k), Int.toFloat(target))
           set(ModMatrix.amountId(k), amount)
           set(ModMatrix.viaId(k), Int.toFloat(Math.Int.max(via, 0)))
+          set(ModMatrix.holdId(k), getString(m, "hold") == "latch" ? 1. : 0.)
+          set(ModMatrix.slewId(k), number("slew"))
+          set(ModMatrix.curveId(k), number("curve"))
           slot := k + 1
         }
       | _ => ()

@@ -150,6 +150,10 @@ let make = (host, pc) => {
     programs,
     hostMenu,
     scale: () => scale.contents,
+    openEffect: e => {
+      showPage(#fx)
+      PageFx.openEffect.contents(e)
+    },
     openShape: table => {
       showPage(#shapes)
       shapesPage.contents->Option.forEach((s: PageShapes.t) => s.select(table))
@@ -158,6 +162,7 @@ let make = (host, pc) => {
   }
 
   pageEls->Array.forEach(((p, e)) => p.build(ctx, e))
+  ModTray.make(ctx, stage)
 
   //==============================================================================
   // header
@@ -407,6 +412,7 @@ let make = (host, pc) => {
       browser->PresetBrowser.dispose
       model->ParamModel.dispose
       programs->ProgramStore.dispose
+      VoiceView.stop(pc)
     },
   }
 }

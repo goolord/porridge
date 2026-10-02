@@ -126,9 +126,9 @@ let groups = [
   (22, "normal"),
   (28, "multi (morph)"),
   (32, "analog"),
-  (42, "comb, flange, phase"),
-  (50, "formant"),
-  (53, "misc"),
+  (42, "effects: comb, flanger, phaser"),
+  (50, "effects: vowels"),
+  (53, "effects: EQ, ring mod, S&H, space"),
 ]
 
 // Types that F_Drive / Ff_Drive drives: the analog ones.

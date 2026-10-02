@@ -327,17 +327,29 @@ type source = {
   alsoIds: array<string>,
 }
 
-let make = (ctx: Ctx.t, parent, box: box, src: source) => {
+// (voices: a mark at each sounding note's cutoff, for the voice filter)
+let make = (ctx: Ctx.t, parent, box: box, src: source, ~voices=false) => {
   let model = ctx.model
   let get = id => model->ParamModel.get(id)
   let g = FxGraph.make(ctx, parent, box)
   let layer = FxGraph.group(g.under)
+  let voiceLayer = FxGraph.group(g.under)
   let (left, right, top) = (34., g.w - 10., 8.)
   let bottom = g.h - 16.
   let p: FxGraph.plot = {layer, left, right, top, bottom}
   let (lo, hi) = (-36., 24.)
   let xOfHz = FxGraph.xOfHz(p, _)
   let hzAt = FxGraph.hzAt(p, _)
+  if voices {
+    let notes = VoiceView.marks(voiceLayer)
+    let ticks = VoiceView.marks(voiceLayer)
+    VoiceView.get(ctx.pc)->VoiceView.listen(() => {
+      let vs = parent->offsetParent->Option.isSome ? VoiceView.get(ctx.pc).voices : []
+      let at = vs->Array.filter(v => v.cutoff >= 20. && v.cutoff <= 20000.)->Array.map(v => (xOfHz(v.cutoff), v.released))
+      notes->VoiceView.show(at->Array.map(((x, released)) => (x, top + 4., released)))
+      ticks->VoiceView.show(at->Array.map(((x, released)) => (x, bottom - 3., released)))
+    })
+  }
   let yOfDb = v => FxGraph.yOf(p, v, lo, hi)
   let yOfRes = r => bottom - r * (bottom - top - 12.)
   let f1 = Float.toFixed(_, ~digits=1)

@@ -58,6 +58,26 @@ namespace porridge
         float[512] peaks;
     }
 
+    let viewVoices = 16;
+    let viewTargets = 16;
+
+    /// The sounding notes for the view (voiceViewIn asks for them), newest first: each one's key,
+    /// whether it's released, the time on each envelope's own clock (amp, filter, mod 1, mod 2;
+    /// ms since the note-on while held, since the note-off once released, sped up as the
+    /// envelope is), its amp envelope's level, its LFOs' phases (0..1), filter 1's cutoff (Hz),
+    /// and the knob positions (0..1, -1: not a knob) the modulation matrix moves its first live
+    /// targets to: targets[k] for voice v at positions[v * viewTargets + k].
+    struct VoiceView
+    {
+        int count;
+        int[viewVoices] key;
+        bool[viewVoices] released;
+        float[viewVoices] ampMs, filterMs, mod1Ms, mod2Ms, level, lfo1, lfo2, lfo3, cutoff;
+        int numTargets;
+        int[viewTargets] targets;
+        float[viewVoices * viewTargets] positions;
+    }
+
     /// Compressor `which`'s meters for the view: each band's level and gain change in dB.
     struct CompMeter
     {

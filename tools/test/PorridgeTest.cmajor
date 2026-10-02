@@ -13,8 +13,10 @@ graph PorridgeTest  [[ main ]]
     input event int panic;
     input event int testMode;
     input stream float<2> testIn;
+    input event int voiceView;
 
     output stream float<2> out;
+    output event porridge::VoiceView voiceViewOut;
 
     node params = ParamStore;
     node synth  = porridge::Synth;
@@ -30,6 +32,8 @@ graph PorridgeTest  [[ main ]]
         panic           -> synth.panicIn;
         testMode        -> synth.testModeIn;
         testIn          -> synth.testIn;
+        voiceView       -> synth.voiceViewIn;
         synth.out       -> out;
+        synth.voiceViewOut -> voiceViewOut;
     }
 }

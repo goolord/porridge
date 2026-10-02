@@ -14,7 +14,7 @@
         "pluginCode":        "Oatm"
     },
 
-    "source":           [ "dsp/Porridge.cmajor", "dsp/Types.cmajor", "dsp/Common.cmajor", "dsp/Slots.cmajor", "dsp/ModTables.cmajor", "dsp/ParamStore.cmajor", "dsp/Effects.cmajor", "dsp/Airwindows.cmajor", "dsp/Filter.cmajor", "dsp/FxExtra.cmajor", "dsp/Space.cmajor", "dsp/Ambience.cmajor", "dsp/Convolve.cmajor", "dsp/Tables.cmajor", "dsp/Modulation.cmajor", "dsp/Oscillator.cmajor", "dsp/Voice.cmajor", "dsp/Synth.cmajor" ],
+    "source":           [ "dsp/Porridge.cmajor", "dsp/Types.cmajor", "dsp/Common.cmajor", "dsp/Slots.cmajor", "dsp/ModTables.cmajor", "dsp/ParamStore.cmajor", "dsp/Effects.cmajor", "dsp/Airwindows.cmajor", "dsp/Filter.cmajor", "dsp/FxExtra.cmajor", "dsp/Space.cmajor", "dsp/Ambience.cmajor", "dsp/Convolve.cmajor", "dsp/Tables.cmajor", "dsp/Modulation.cmajor", "dsp/Oscillator.cmajor", "dsp/Voice.cmajor", "dsp/VoiceFx.cmajor", "dsp/Synth.cmajor" ],
     "worker":           "bundle/worker.js",
     "resources":        [ "presets/*", "bundle/factory-bank.json" ],
 

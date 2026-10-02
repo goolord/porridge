@@ -12,5 +12,7 @@ type t = {
   scale: unit => float,
   // switches to the shapes page and selects a shape
   openShape: OatmealFormat.table => unit,
+  // switches to the FX page and opens an effect's tab
+  openEffect: FxRack.effect => unit,
   toast: string => unit,
 }

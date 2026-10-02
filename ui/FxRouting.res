@@ -1,9 +1,11 @@
 // The FX page's routing tab: what isn't about one effect. The signal flow: in every voice, the
-// oscillators, the filter and the places the distortion can sit; then, on the whole sound, the
-// rack of effects in the order they run, each with its switch and level; and the output gain.
-// Click a distortion place to put it there; drag a rack card sideways to move the effect, ×
-// takes it out of the rack, right-click for more, and + adds one; click a card's name to open
-// its tab.
+// oscillators, the voice lane's effects (VoiceLane) around the filter (with the places
+// Oatmeal's distortion can sit) and the amp envelope; then, on the whole sound, the rack of
+// effects in the order they run, each with its switch and level; and the output gain. Click a
+// distortion place to put it there; drag a voice card, the filter or the amp sideways to move
+// it in the voice, or a rack card along the rack; × takes an effect out, right-click for more
+// (moving it between the voices and the whole sound), and + adds one; click a card's name to
+// open its tab.
 
 open! Web
 
@@ -24,7 +26,7 @@ type ops = {
   openDistortion: unit => unit,
 }
 
-let hint = "Click a dashed place to put the distortion there (right-click takes it out). Drag a rack card sideways to move that effect, × takes it out of the rack, right-click to duplicate it, + adds one; click a card's name to open it."
+let hint = "Click a dashed place to put the distortion there (right-click takes it out). Drag a card, the filter or the amp sideways to move it, × takes an effect out, right-click to duplicate it or move it between the voices and the whole sound, + adds one; click a card's name to open it."
 
 // the distortion's places: Sat_Mode's values
 type place = Pre | Post | Global
@@ -75,10 +77,17 @@ let make = (ctx: Ctx.t, body, ~w, ~h, ops) => {
   //==============================================================================
   // in every voice
 
-  label("in every voice", 12., row1 - 22.)
-  node("oscillators", 12., row1, 110.)->ignore
-  node("filter", 316., row1, 110.)->ignore
-  node("all voices", 620., row1, 110.)->ignore
+  label("in every voice: each note runs its own", 12., row1 - 22.)
+  node("oscillators", 12., row1, 86.)->ignore
+  let filterNode = node("filter", 0., row1, 72.)
+  let ampNode = node("amp", 0., row1, 60.)
+  let allNode = node("all voices", 0., row1, 86.)
+  filterNode->addClass("grab")
+  ampNode->addClass("grab")
+  hover(filterNode, () => "The filter, with the places the distortion can sit either side: drag it sideways among the voice's effects")
+  hover(ampNode, () =>
+    "The amp envelope: drag it sideways. The voice's effects after it react to how each note swells and fades, and ring on after the note ends; those before it are shaped by it"
+  )
 
   let typeId = "Sat_Type"
   let modeId = "Sat_Mode"
@@ -112,13 +121,134 @@ let make = (ctx: Ctx.t, body, ~w, ~h, ops) => {
     )
     e
   }
-  let pre = slot(Pre, 154., row1)
-  let post = slot(Post, 458., row1)
+  let pre = slot(Pre, 0., row1)
+  let post = slot(Post, 0., row1)
   let global = slot(Global, 12., row2)
+  [pre, post]->Array.forEach(e => e->setStyle("width", px(96.)))
 
-  let distortionControls = 762.
-  Controls.choice(ctx, root, typeId, ~x=distortionControls, ~y=row1 + 2., ~w=150., ~label="distortion")
-  Controls.choice(ctx, root, modeId, ~x=distortionControls + 156., ~y=row1 + 2., ~w=150., ~label="where")
+  Controls.choice(ctx, root, typeId, ~x=12., ~y=row3, ~w=150., ~label="distortion")
+  Controls.choice(ctx, root, modeId, ~x=168., ~y=row3, ~w=150., ~label="where")
+
+  //==============================================================================
+  // the voice lane's cards: a light, the name and ×, made when an effect first comes into it
+
+  let laneCards = Map.make()
+  let laneCard = (e: FxRack.effect) =>
+    switch laneCards->Map.get(FxRack.value(e)) {
+    | Some(c) => c
+    | None =>
+      let card = el("div", ~cls="lcard", ~parent=root)
+      let led = el("i", ~cls="led", ~parent=card)
+      led->onPointer(#pointerdown, ev =>
+        if ev->button == 0 {
+          ev->stopPropagation
+          ev->preventDefault
+          ops.toggle(e)
+        }
+      )
+      hover(led, () => "Click to switch it on or off")
+      let title = el("span", ~cls="ctitle", ~parent=card)
+      let x = el("b", ~cls="cx", ~text="×", ~parent=card)
+      x->onPointer(#pointerdown, ev => {
+        ev->stopPropagation
+        ev->preventDefault
+        VoiceLane.remove(model, e)
+      })
+      hover(x, () => "Take it out of the voices (its settings stay)")
+      hover(card, () =>
+        `${VoiceLane.label(model, e)} in every voice (${FxRack.hostName(e)}'s parameters): ${FxPanels.summary(model, e)->String.replaceAll("\n", ", ")}. Click to open it, drag sideways to move it, right-click to duplicate it or move it to the whole sound`
+      )
+      card->suppressContextMenu
+      let c = (card, title, led)
+      laneCards->Map.set(FxRack.value(e), c)
+      c
+    }
+
+  let laneAdd = el("div", ~cls="addcard", ~text="+", ~parent=root)
+  hover(laneAdd, () => "Add an effect to every voice (up to four): each note runs its own copy")
+  laneAdd->onPointer(#pointerdown, ev => {
+    ev->preventDefault
+    if ev->button == 0 {
+      VoiceLane.addMenu(ctx, laneAdd, ~onAdded=ops.openEffect)
+    }
+  })
+
+  // the element a lane item is dragged by
+  let itemEl = (item: VoiceLane.item) =>
+    switch item {
+    | Fx(e) =>
+      let (c, _, _) = laneCard(e)
+      c
+    | FilterNode => filterNode
+    | AmpNode => ampNode
+    }
+  let pressItem = (item: VoiceLane.item, ev) =>
+    switch ev->button {
+    | 0 =>
+      ev->preventDefault
+      let items = VoiceLane.items(get)
+      let others = items->Array.filter(o => o != item)->Array.map(itemEl)
+      Reorder.start(ev, itemEl(item), ~others, ~onDrop=pos => VoiceLane.move(model, item, pos), ~onClick=() =>
+        switch item {
+        | Fx(e) => ops.openEffect(e)
+        | _ => ()
+        }
+      )
+    | 2 =>
+      switch item {
+      | Fx(e) =>
+        ev->preventDefault
+        VoiceLane.menu(ctx, e, itemEl(item))
+      | _ => ()
+      }
+    | _ => ()
+    }
+  filterNode->onPointer(#pointerdown, ev => pressItem(FilterNode, ev))
+  ampNode->onPointer(#pointerdown, ev => pressItem(AmpNode, ev))
+  let laneHooked = Set.make()
+
+  // Lays out the voice row from the lane's items; returns where it ends (the "all voices" node).
+  let layoutVoices = () => {
+    let gap = 12.
+    let y = row1 + nodeH / 2.
+    let x = ref(12. + 86.)
+    let step = (e, w) => {
+      arrow([(x.contents, y), (x.contents + gap - 1., y)])
+      e->place(x.contents + gap, row1, ~w, ~h=nodeH)->ignore
+      x := x.contents + gap + w
+    }
+    laneCards->Map.forEach(((c, _, _)) => c->setStyle("display", "none"))
+    let lane = FxRack.readLane(get)
+    VoiceLane.items(get)->Array.forEach(item =>
+      switch item {
+      | Fx(e) =>
+        let (c, title, led) = laneCard(e)
+        if !(laneHooked->Set.has(FxRack.value(e))) {
+          laneHooked->Set.add(FxRack.value(e))
+          c->onPointer(#pointerdown, ev => pressItem(Fx(e), ev))
+        }
+        c->setStyle("display", "")
+        title->setTextContent(FxRack.label(lane, e))
+        let on = FxRack.isOn(e, get)
+        led->toggleClass("lit", on)
+        c->toggleClass("off", !on)
+        step(c, 100.)
+      | FilterNode =>
+        step(pre, 96.)
+        step(filterNode, 72.)
+        step(post, 96.)
+      | AmpNode => step(ampNode, 60.)
+      }
+    )
+    let full = FxRack.laneFull(lane)
+    laneAdd->setStyle("display", full ? "none" : "")
+    if !full {
+      laneAdd->place(x.contents + gap, row1, ~w=28., ~h=nodeH)->ignore
+      x := x.contents + gap + 28.
+    }
+    step(allNode, 86.)
+    x.contents - 43.
+  }
 
   let drawSlots = () => {
     let on = get(typeId) != 0.
@@ -247,13 +377,10 @@ let make = (ctx: Ctx.t, body, ~w, ~h, ops) => {
     let end = rackX + gap + Int.toFloat(n) * (cardW + gap)
     let addX = Math.min(end, rackEnd)
     addBox->place(addX, row2, ~w=addW, ~h=nodeH)->ignore
-    addBox->setStyle("display", FxRack.addable(rack) == [] ? "none" : "")
-    // into the rack, through it, and down to the output
-    arrow([(122., row1 + nodeH / 2.), (153., row1 + nodeH / 2.)])
-    arrow([(304., row1 + nodeH / 2.), (315., row1 + nodeH / 2.)])
-    arrow([(426., row1 + nodeH / 2.), (457., row1 + nodeH / 2.)])
-    arrow([(608., row1 + nodeH / 2.), (619., row1 + nodeH / 2.)])
-    arrow([(675., row1 + nodeH), (675., row1 + nodeH + 16.), (87., row1 + nodeH + 16.), (87., row2 - 1.)])
+    addBox->setStyle("display", FxRack.addable(rack, ~lane=FxRack.readLane(get)) == [] ? "none" : "")
+    // through the voice, into the rack, through it, and down to the output
+    let allX = layoutVoices()
+    arrow([(allX, row1 + nodeH), (allX, row1 + nodeH + 16.), (87., row1 + nodeH + 16.), (87., row2 - 1.)])
     if n == 0 {
       arrow([(162., arrowY), (addX - 1., arrowY)])
     } else {
@@ -269,9 +396,9 @@ let make = (ctx: Ctx.t, body, ~w, ~h, ops) => {
   el(
     "div",
     ~cls="note wrap",
-    ~text="The distortion above is Oatmeal's: in every voice (before or after the filter), on the whole sound before the rack, or both (\"double\"). The rack holds up to eight effects in any order, each kind up to four times: the first chorus, delay, reverb and EQ are Oatmeal's, and an Oatmeal export keeps those in Oatmeal's order and leaves the rest out.",
+    ~text="The distortion's places are Oatmeal's: in every voice (before or after the filter), on the whole sound before the rack, or both (\"double\"). Each voice can also run up to four effects of its own (the filter, distortion, EQ, phaser, flanger and utility, and the key shifter and resonator, which follow each note's pitch). The rack holds up to eight effects on the whole sound, each kind up to four times: the first chorus, delay, reverb and EQ are Oatmeal's, and an Oatmeal export keeps those in Oatmeal's order and leaves the rest out.",
     ~parent=root,
-  )->place(12., row3 + 4., ~w=w - 14. - 320. - 24.)->ignore
+  )->place(12., row3 + 34., ~w=w - 14. - 320. - 24.)->ignore
 
   hover(root, () => hint)
   let layoutSoon = perFrame(() => if root->offsetParent->Option.isSome {

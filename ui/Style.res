@@ -192,6 +192,47 @@ let css = `
 .card.off .csum { opacity: 0.55; }
 .card.compact .cctl { display: none; }
 .card.compact .csum { top: 34px; }
+/* a voice lane card: one line, a light, the name and × */
+.lcard {
+    position: absolute; box-sizing: border-box; border-radius: 3px; background: var(--tile);
+    box-shadow: inset 0 0 0 1px var(--signal); display: flex; align-items: center; gap: 6px; padding: 0 6px;
+    cursor: grab; font-size: 13px;
+}
+.lcard:hover { background: var(--panel-hi); }
+.lcard .ctitle { flex: 1; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lcard .led { flex: none; width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--ink-faint);
+    cursor: pointer; position: relative; }
+.lcard .led::after { content: ""; position: absolute; inset: -5px; }
+.lcard .led.lit { background: var(--signal); border-color: var(--signal); }
+.lcard .cx { font-weight: 400; font-size: 15px; color: var(--ink-faint); cursor: pointer; }
+.lcard .cx:hover { color: var(--ink); }
+.lcard.off .ctitle { opacity: 0.55; }
+.lcard.drag, .fnode.drag { z-index: 3; box-shadow: inset 0 0 0 1.5px var(--signal), 3px 3px 0 rgba(31,26,14,0.25); background: var(--panel-hi); }
+.lcard.drop-before, .fnode.drop-before { box-shadow: inset 0 0 0 1px var(--edge), -4px 0 0 var(--signal); }
+.lcard.drop-after, .fnode.drop-after { box-shadow: inset 0 0 0 1px var(--edge), 4px 0 0 var(--signal); }
+.fnode.grab { cursor: grab; }
+/* the synth page's voice fx tab: a row per effect, and the filter's and amp's */
+.vrow { position: absolute; box-sizing: border-box; height: ${px(controlHeight)}; border-radius: 2px; }
+.vrow .vname { position: absolute; left: 0; top: 0; bottom: 0; width: 40%; box-sizing: border-box; padding-left: 22px;
+    line-height: ${px(controlHeight)}; font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; cursor: grab; }
+.vrow.node { background: var(--paper); box-shadow: inset 0 0 0 1px var(--edge); }
+.vrow.node .vname { width: 100%; padding-left: 10px; font-weight: 400; }
+.vrow.fx { background: var(--tile); box-shadow: inset 0 0 0 1px var(--signal); }
+.vrow.fx .vname:hover, .vrow.node .vname:hover { background: var(--panel-hi); }
+.vrow .led { position: absolute; left: 8px; top: 9px; width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box;
+    border: 1.5px solid var(--ink-faint); cursor: pointer; z-index: 1; }
+.vrow .led.lit { background: var(--signal); border-color: var(--signal); }
+.vrow .vx { position: absolute; right: 6px; top: 0; line-height: ${px(controlHeight)}; font-weight: 400; font-size: 15px;
+    color: var(--ink-faint); cursor: pointer; }
+.vrow .vx:hover { color: var(--ink); }
+.vrow.off .vname { opacity: 0.55; }
+.vrow.drag { z-index: 3; box-shadow: inset 0 0 0 1.5px var(--signal), 3px 3px 0 rgba(31,26,14,0.25); }
+.vrow.drop-before { box-shadow: inset 0 0 0 1px var(--edge), 0 -3px 0 var(--signal); }
+.vrow.drop-after { box-shadow: inset 0 0 0 1px var(--edge), 0 3px 0 var(--signal); }
+.addrow.vadd { height: ${px(controlHeight)}; }
+/* the FX page's strip: which tabs are in each note, which on the whole sound */
+.fxgrp { font-size: 11px; font-weight: 700; color: var(--paper); opacity: 0.8; white-space: nowrap; padding: 0 2px; }
 .addcard {
     position: absolute; box-sizing: border-box; border: 1.5px dashed var(--edge); border-radius: 3px;
     display: flex; align-items: center; justify-content: center; font-size: 20px; color: var(--ink-soft); cursor: pointer;
@@ -269,7 +310,15 @@ let css = `
     position: absolute; top: 0; bottom: 0; background: var(--signal);
 }
 /* the range modulation sweeps */
-.p .t em { position: absolute; top: -1px; bottom: -1px; background: var(--mod); opacity: 0.6; display: none; }
+.p .t .mb em { position: absolute; height: 4px; background: var(--mod); opacity: 0.7; display: none; pointer-events: none; }
+/* a source from the tray over it */
+.p.dropping { background: var(--paper); box-shadow: inset 0 0 0 2px var(--signal); }
+/* where each sounding note has moved it (VoiceView) */
+.p .t .vt b { position: absolute; display: none; top: -4px; width: 2px; height: 6px; margin-left: -1px;
+    background: var(--ink); opacity: 0.75; pointer-events: none; }
+/* a sounding note on a graph: where it is on an envelope or LFO, or its cutoff */
+.plot circle.vdot { fill: var(--ink); fill-opacity: 0.8; stroke: var(--paper); stroke-width: 1; pointer-events: none; }
+.plot circle.vdot.rel { fill: var(--paper); fill-opacity: 0.9; stroke: var(--ink); stroke-width: 1.2; }
 .p.dim .v, .p.dim .l { opacity: 0.45; }
 
 /* choice: same footprint, click opens the menu, right click steps */
@@ -293,6 +342,17 @@ let css = `
 /* in a title row, a switch is as tall as the tabs */
 .hdr .tg { height: 18px; font-size: 11.5px; }
 .hdr .tg b { width: 9px; height: 9px; border-width: 1px; box-shadow: none; }
+
+/* two halves, one of them on (an LFO's mode: each note or shared), in a parameter's footprint */
+.seg {
+    position: absolute; box-sizing: border-box; height: ${px(controlHeight)}; display: flex; overflow: hidden;
+    border-radius: 2px; background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge); font-size: 12px;
+}
+.seg span { flex: 1 1 50%; display: flex; align-items: center; justify-content: center; cursor: pointer;
+    color: var(--ink-soft); white-space: nowrap; overflow: hidden; }
+.seg span:hover { background: var(--panel-hi); color: var(--ink); }
+.seg span.on { background: var(--signal); color: var(--paper); }
+.seg:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
 
 .btn {
     position: absolute; height: 20px; box-sizing: border-box; padding: 0 8px;
@@ -422,6 +482,26 @@ let css = `
     font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .pv-status.idle { color: var(--ink-faint); font-size: 12px; }
+.pv-status { padding-right: 120px; }
+
+/* the source tray: its switch at the end of the status line, and the chips over the page's bottom */
+.mtoggle { position: absolute; right: 6px; bottom: 3px; height: ${px(statusHeight - 6.)}; z-index: 41; box-sizing: border-box;
+    padding: 0 8px; border: 1px solid var(--edge); border-radius: 2px; background: var(--panel-hi);
+    font-size: 11.5px; line-height: ${px(statusHeight - 8.)}; cursor: pointer; white-space: nowrap; }
+.mtoggle:hover { background: var(--paper); }
+.mtoggle.on { background: var(--signal); color: var(--paper); border-color: var(--signal); }
+.mtray { position: absolute; left: 0; right: 0; bottom: ${px(statusHeight)}; z-index: 40; display: none;
+    flex-wrap: wrap; gap: 3px; padding: 5px 6px; box-sizing: border-box; background: var(--panel);
+    border-top: 1px solid var(--signal); box-shadow: 0 -2px 0 rgba(31,26,14,0.15); }
+.mtray.on { display: flex; }
+.mchip { position: relative; height: 20px; box-sizing: border-box; padding: 0 7px 0 12px; border-radius: 2px;
+    background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge); font-size: 11.5px; line-height: 20px;
+    white-space: nowrap; cursor: grab; max-width: 96px; overflow: hidden; text-overflow: ellipsis; }
+.mchip i { position: absolute; left: 4px; top: 4px; bottom: 4px; width: 3px; border-radius: 2px; }
+.mchip:hover { background: var(--panel-hi); box-shadow: inset 0 0 0 1px var(--edge); }
+.mchip.vary { font-weight: 700; padding-right: 9px; }
+.mghost { position: absolute; z-index: 80; height: 20px; padding: 0 8px; box-sizing: border-box; border: 2px solid;
+    border-radius: 2px; background: var(--paper); font-size: 11.5px; line-height: 16px; pointer-events: none; white-space: nowrap; }
 
 /* menus */
 .menu {
@@ -497,7 +577,7 @@ let css = `
 .drop.on { display: flex; }
 
 .toast {
-    position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); z-index: 90;
+    position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%); z-index: 90;
     background: var(--ink); color: var(--paper); padding: 5px 12px; font-size: 13px; border-radius: 2px;
     display: none; max-width: 80%;
 }
@@ -548,6 +628,28 @@ let css = `
 .wire { fill: none; stroke-width: 3.5; stroke-linecap: round; opacity: 0.9; }
 .wire.muted { stroke-dasharray: 5 4; opacity: 0.5; }
 .wire.drag { stroke-dasharray: 7 4; }
+/* the connections scroll between the title and the follow setting */
+.mrows { position: absolute; overflow-x: hidden; overflow-y: auto; }
+.mfoot { position: absolute; border-top: 1px solid var(--tile-edge); }
+.mfoot .note { position: absolute; font-size: 11.5px; line-height: 14px; white-space: normal; }
+/* what a per-note source on the whole sound follows, under its cable */
+.mfollow { position: absolute; height: 10px; font-size: 9.5px; line-height: 10px; text-align: center;
+    color: var(--ink-faint); white-space: nowrap; pointer-events: none; z-index: 2; }
+/* a connection's options button, and its box */
+.mopt { position: absolute; box-sizing: border-box; height: ${px(controlHeight)}; border-radius: 2px;
+    background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge); cursor: pointer;
+    font-size: 11.5px; line-height: ${px(controlHeight)}; text-align: center; color: var(--ink-faint);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 4px; }
+.mopt.set { color: var(--ink); font-weight: 700; }
+.mopt:hover, .mopt:focus-visible { background: var(--panel-hi); box-shadow: inset 0 0 0 1px var(--edge); }
+.mpop { position: absolute; display: none; z-index: 25; box-sizing: border-box; background: var(--panel);
+    border: 1px solid var(--signal); border-radius: 2px; box-shadow: 3px 3px 0 rgba(31,26,14,0.3); }
+.mpop.on { display: block; }
+.mpop > .ttl { position: absolute; left: 6px; right: 6px; top: 3px; font-size: 12px; font-weight: 700;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* the target picker's two sections: in each voice, on the whole sound */
+.psect { position: absolute; font-size: 12.5px; font-weight: 700; line-height: 20px; color: var(--ink);
+    white-space: nowrap; text-transform: uppercase; letter-spacing: 0.06em; }
 .conn { position: absolute; left: 0; display: none; }
 .conn.on { display: block; }
 .conn .btn.gc { font-size: 17px; line-height: 22px; color: var(--ink-soft); }

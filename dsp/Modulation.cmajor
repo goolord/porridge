@@ -564,6 +564,68 @@ namespace porridge
     }
 
     //==============================================================================
+    /// LFO 3 (LFO_3_*): a plain LFO only the modulation matrix reaches, run once per block.
+    /// phase 0..1; the random shapes' last and next values.
+    struct Lfo3
+    {
+        float64 phase;
+        float prevR, nextR;
+    }
+
+    /// LFO_3_Sync's lengths in beats (0: free, at LFO_3_Rate Hz).
+    let lfo3Beats = float64[13] (0.0, 16.0, 8.0, 4.0, 2.0, 4.0 / 3.0, 1.0, 2.0 / 3.0, 0.5, 1.0 / 3.0, 0.25, 1.0 / 6.0, 0.125);
+
+    /// From its start phase (LFO_3_Phase, plus up to LFO_3_PhaseRand of a cycle at random).
+    void resetLfo3 (Lfo3& this, Lcg& rng, const float[numSlots]& P)
+    {
+        let r = 0.5f + 0.5f * rng.nextSigned();
+        this.phase = float64 (P[slot::LFO_3_Phase] + r * P[slot::LFO_3_PhaseRand]);
+        this.phase -= floor (this.phase);
+        this.prevR = rng.nextSigned();
+        this.nextR = rng.nextSigned();
+    }
+
+    /// Advances n samples and returns the value, -1..1.
+    float stepLfo3 (Lfo3& this, Lcg& rng, const float[numSlots]& P, float64 sr, float64 samplesPerBeat, int n)
+    {
+        let sync = clamp (int (P[slot::LFO_3_Sync]), 0, 12);
+        let hz = 0.02 * pow (2500.0, float64 (clamp (P[slot::LFO_3_Rate], 0.0f, 1.0f)));
+        let period = sync == 0 ? sr / hz : lfo3Beats.at (sync) * samplesPerBeat;
+        this.phase += float64 (n) / max (period, 1.0);
+
+        if (this.phase >= 1.0)
+        {
+            this.phase -= floor (this.phase);
+            this.prevR = this.nextR;
+            this.nextR = rng.nextSigned();
+        }
+
+        let p = float (this.phase);
+        let shape = int (P[slot::LFO_3_Shape]);
+
+        if (shape == 0) return float (sin (twoPi * this.phase));
+        if (shape == 1) return p < 0.25f ? 4.0f * p : (p < 0.75f ? 2.0f - 4.0f * p : 4.0f * p - 4.0f);
+        if (shape == 2) return 2.0f * p - 1.0f;
+        if (shape == 3) return 1.0f - 2.0f * p;
+        if (shape == 4) return p < 0.5f ? 1.0f : -1.0f;
+        if (shape == 5) return this.prevR;
+
+        let t = p * p * (3.0f - 2.0f * p);
+        return this.prevR + (this.nextR - this.prevR) * t;
+    }
+
+    /// A connection's curve on its source's value: bent towards the ends (curve > 0) or towards 0
+    /// (curve < 0), both ways alike (ModMatrix.curved).
+    float modCurve (float x, float curve)
+    {
+        if (curve == 0)
+            return x;
+
+        let y = float (pow (float64 (abs (x)), pow (4.0, -float64 (curve))));
+        return x < 0 ? -y : y;
+    }
+
+    //==============================================================================
     /// Pitch envelope constants (per block): start ratio S, peak Pk, sustain Su, attack step,
     /// decay and release multipliers.
     struct PitchEnvCoefs

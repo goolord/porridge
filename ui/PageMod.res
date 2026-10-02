@@ -1,40 +1,43 @@
 // Mod page: the modulation matrix, led by the connections that exist.
 //
-// Left, the sources in groups (the macro knobs among them). Right, the connections, one row
-// each: source, cable, target, amount, "via" source, remove. Grabbing a source (or "add
-// connection") brings up the targets in their groups over the list: drop the cable on one, or
-// click it, or search for one. A row's source or target can be changed in place.
+// Left, the sources: those each note has its own of, then those every note shares (the macro
+// knobs and controllers among them); an LFO moves between the two with its mode. Right, the
+// connections, one row each: source, cable, target, amount, "via" source, options (hold, slew,
+// curve), remove. Grabbing a source (or "add connection") brings up the targets over the list,
+// those in each voice apart from those on the whole sound: drop the cable on one, or click it,
+// or search for one. A row's source or target can be changed in place. A per-note source on
+// the whole sound follows the newest note, or every note by its level (the setting below the
+// list); its cable says which.
 
 open! Web
 
-let hint = "Drag a source onto a target to connect them, or click a source and then a target. Click a connection's source or target to change it. Double-click a macro's name to rename it."
+let hint = "Drag a source onto a target to connect them, or click a source and then a target. Click a connection's source or target to change it, its options to hold, slew or bend it. Double-click a macro's name to rename it."
 
 let (margin, gap) = (6., Grid.gap)
-let sourcesWidth = 300.
+let sourcesWidth = 342.
+let sourceColumns = 3
 let defaultAmount = 0.25
 let headingHeight = 20.
+// below the connections: the follow setting
+let footerHeight = 36.
 
 // the target picker: its columns, its title row (the targets scroll under it), and the room
 // for its scrollbar
 let (pickerColumns, pickerTop, scrollbarWidth) = (5, 26., 9.)
 
-let sourceColor = s =>
-  switch ModMatrix.sources[s]->Option.mapOr("", s => s.key) {
-  | "lfo1" => "#1c3c73"
-  | "lfo2" => "#4a74b4"
-  | "modEnv1" => "#2e6b3a"
-  | "modEnv2" => "#5c8f3c"
-  | "ampEnv" | "filterEnv" => "#3d7a6d"
-  | "macro1" | "macro2" | "macro3" | "macro4" => "#6a2c70"
-  | "cc1" | "cc2" | "cc3" | "cc4" | "cc5" | "cc6" => "#7a5a1e"
-  | _ => "#a3501c"
-  }
+let sourceColor = ModEdit.sourceColor
 
 type point = {x: float, y: float}
 
 // a source's element on the left: the chip (or a macro's plug), its jack, and a chip's count of
-// connections and label
-type sourceChip = {chip: element, jack: element, count: option<element>, label: option<element>}
+// connections and label; a macro's knob
+type sourceChip = {
+  chip: element,
+  jack: element,
+  count: option<element>,
+  label: option<element>,
+  knob: option<element>,
+}
 
 // what the target picker is for: connecting a source, or moving connection k
 type mode = Closed | Connect(int) | Retarget(int)
@@ -46,33 +49,30 @@ let cablePath = (a, b, ~sag) => {
   `M${f(a.x)} ${f(a.y)} C${f(a.x + dx * 0.3)} ${f(a.y + sag)} ${f(b.x - dx * 0.3)} ${f(b.y + sag)} ${f(b.x)} ${f(b.y)}`
 }
 
-// The sources in their groups, by index; sources no group names go in a last group.
+// Every source but none, in the menus' order (ModMatrix.sourceGroups, then any it leaves out).
+let sourceOrder = {
+  let named = ModMatrix.sourceGroups->Array.flatMap(((_, keys)) => keys->Array.map(ModMatrix.sourceIndex))->Array.filter(i => i > 0)
+  let rest = ModMatrix.sources->Array.mapWithIndex((_, i) => i)->Array.filter(i => i > 0 && !(named->Array.includes(i)))
+  Array.concat(named, rest)
+}
+
+// The sources in their groups for menus, by index; sources no group names go in a last group.
 let sourceGroups = {
   let grouped = ModMatrix.sourceGroups->Array.map(((title, keys)) => (
     title,
     keys->Array.map(ModMatrix.sourceIndex)->Array.filter(i => i > 0),
   ))
   let named = grouped->Array.flatMap(Pair.second)
-  let rest =
-    ModMatrix.sources
-    ->Array.mapWithIndex((_, i) => i)
-    ->Array.filter(i => i > 0 && !(named->Array.includes(i)))
+  let rest = sourceOrder->Array.filter(i => !(named->Array.includes(i)))
   rest == [] ? grouped : [...grouped, ("other", rest)]
 }
 
-// The rack effect whose parameter a target moves, if any (not the voice's distortion: the
-// rack's distortions start at 2).
-let effectOf = {
-  let byParam = Map.fromArray(
-    FxRack.all->Array.flatMap(e => FxRack.params(e)->Array.map(id => (id, e))),
-  )
-  t =>
-    switch ModMatrix.targets[t] {
-    | Some({law: Knob(id)}) => byParam->Map.get(id)
-    | _ => None
-    }
-}
-let copyOf = t => effectOf(t)->Option.mapOr(0, e => e.copy)
+let keyOf = s => ModMatrix.sources[s]->Option.mapOr("", s => s.key)
+let isMacro = s => String.startsWith(keyOf(s), "macro")
+let isController = s => String.startsWith(keyOf(s), "cc")
+
+let effectOf = ModScope.effectOf
+let copyOf = ModScope.copyOf
 
 // The target groups, by index: an effect's own targets first, then each copy's.
 let targetGroups = ModMatrix.groups->Array.map(((key, title)) => (
@@ -83,6 +83,12 @@ let targetGroups = ModMatrix.groups->Array.map(((key, title)) => (
   ->Array.map(Pair.second)
   ->Array.toSorted((a, b) => Int.toFloat(copyOf(a) - copyOf(b))),
 ))
+
+// the picker's two sections
+let sections: array<(string, ModMatrix.scope, string)> = [
+  ("in each voice", EachNote, "Each note moves these its own way"),
+  ("on the whole sound", Shared, "These have one value: a per-note source gives them the newest note's, or every note's by level (below the connections)"),
+]
 
 let build = (ctx: Ctx.t, page) => {
   let model = ctx.model
@@ -98,11 +104,7 @@ let build = (ctx: Ctx.t, page) => {
     let name = (ctx.programs->ProgramStore.meta).macroNames[i]->Option.getOr("")
     name == "" ? `macro ${Int.toString(i + 1)}` : name
   }
-  let macroOf = s =>
-    switch ModMatrix.sources[s] {
-    | Some({key}) if String.startsWith(key, "macro") => Some(s - ModMatrix.sourceIndex("macro1"))
-    | _ => None
-    }
+  let macroOf = s => isMacro(s) ? Some(s - ModMatrix.sourceIndex("macro1")) : None
   let sourceLabel = s =>
     switch (macroOf(s), ModMatrix.sources[s]) {
     | (Some(i), _) => macroName(i)
@@ -134,7 +136,15 @@ let build = (ctx: Ctx.t, page) => {
     model->ParamModel.gestureSet(ModMatrix.targetId(k), target)
   }
 
-  let disconnect = k => setSlot(k, 0., 0., 0., 0.)
+  // (a removed connection's options go back to theirs, for the next one in its slot)
+  let disconnect = k => {
+    setSlot(k, 0., 0., 0., 0.)
+    [ModMatrix.holdId(k), ModMatrix.slewId(k), ModMatrix.curveId(k)]->Array.forEach(id =>
+      if get(id) != 0. {
+        model->ParamModel.gestureSet(id, 0.)
+      }
+    )
+  }
 
   let connect = (source, target) =>
     if slotNumbers->Array.some(k => sourceOf(k) == source && targetOf(k) == target) {
@@ -178,15 +188,16 @@ let build = (ctx: Ctx.t, page) => {
   )
   let listX = sources->Panel.right
   let listWidth = Style.designWidth - margin - listX
-  let list = Panel.make(
-    page,
-    ~title="connections",
-    ~x=listX,
-    ~y=margin,
-    ~w=listWidth,
-    ~h=Style.pageHeight - 2. * margin,
-  )
+  let listHeight = Style.pageHeight - 2. * margin
+  let list = Panel.make(page, ~title="connections", ~x=listX, ~y=margin, ~w=listWidth, ~h=listHeight)
   let count = el("div", ~cls="mcount", ~parent=list.el)
+  // the rows scroll between the title and the follow setting
+  let rowsBox = el("div", ~cls="mrows", ~parent=list.el)->place(
+    0.,
+    Grid.padTop - 4.,
+    ~w=listWidth - 2.,
+    ~h=listHeight - Grid.padTop + 4. - footerHeight,
+  )
 
   // the targets, over the list while a source is being connected: they scroll under the title
   // row when they don't all fit
@@ -210,69 +221,102 @@ let build = (ctx: Ctx.t, page) => {
   let startRef = ref((_: Dom.pointerEvent, _: int, _: element) => ())
   let pickRef = ref((_: int) => ())
 
-  let cg = Grid.fitColumns(sourcesWidth, 2)
-  let y = ref(Grid.padTop - 4.)
-  sourceGroups->Array.forEach(((title, members)) => {
-    el("div", ~cls="grp", ~text=title, ~parent=sources.el)->place(Grid.padX + 1., y.contents)->ignore
-    let g = Grid.make(ctx, sources.el, ~y=y.contents + headingHeight, ~cw=cg)
-    members->Array.forEachWithIndex((s, i) => {
-      let (c, r) = (mod(i, 2), i / 2)
-      g->Grid.claim(c, r, sourceLabel(s))
-      let b = g->Grid.cell(c, r)
-      let source = ModMatrix.sources->Array.getUnsafe(s)
-      switch macroOf(s) {
-      | Some(m) =>
-        // a macro: its knob, and a jack to take a cable from
-        let knob = Controls.paramControl(
-          ctx,
-          sources.el,
-          ModMatrix.macroId(m + 1),
-          ~x=b.x,
-          ~y=b.y,
-          ~w=b.w - 24.,
-          ~label=macroName(m),
-        )
-        knob
-        ->querySelector(".l")
-        ->Option.forEach(l => {
-          macroLabels->Array.push((m, l))
-          l->onMouse(#dblclick, ev => {
-            ev->preventDefault
-            ev->stopPropagation
-            Controls.editInPlace(knob, (ctx.programs->ProgramStore.meta).macroNames[m]->Option.getOr(""), ~commit=name =>
-              ctx.programs->ProgramStore.setMacroName(m, name)
-            )
-          })
+  let scopeOf = s => ModScope.sourceScopeOf(get, s)
+
+  sourceOrder->Array.forEach(s => {
+    let source = ModMatrix.sources->Array.getUnsafe(s)
+    switch macroOf(s) {
+    | Some(m) =>
+      // a macro: its knob, and a jack to take a cable from
+      let knob = Controls.paramControl(ctx, sources.el, ModMatrix.macroId(m + 1), ~x=0., ~y=0., ~w=60., ~label=macroName(m))
+      knob
+      ->querySelector(".l")
+      ->Option.forEach(l => {
+        macroLabels->Array.push((m, l))
+        l->onMouse(#dblclick, ev => {
+          ev->preventDefault
+          ev->stopPropagation
+          Controls.editInPlace(knob, (ctx.programs->ProgramStore.meta).macroNames[m]->Option.getOr(""), ~commit=name =>
+            ctx.programs->ProgramStore.setMacroName(m, name)
+          )
         })
-        let plug = el("div", ~cls="src plug", ~parent=sources.el)->place(
-          b.x + b.w - 22.,
-          b.y,
-          ~w=22.,
-          ~h=b.h,
-        )
-        plug->setTabIndex(0)
-        let jack = el("i", ~cls="jk", ~parent=plug)
-        plug->onPointer(#pointerdown, ev => startRef.contents(ev, s, plug))
-        plug->onActivate(() => pickRef.contents(s))
-        plug->hover(() => `${sourceLabel(s)}: drag to a target to connect it. Double-click the name to rename it.`)
-        sourceChips->Map.set(s, {chip: plug, jack, count: None, label: None})
-      | None =>
-        let chip = el("div", ~cls="src", ~parent=sources.el)->placeBox(b)
-        chip->setTabIndex(0)
-        el("i", ~cls="sw", ~parent=chip)->setStyle("background", sourceColor(s))
-        let label = el("span", ~cls="lbl", ~text=sourceLabel(s), ~parent=chip)
-        let count = el("b", ~cls="n", ~parent=chip)
-        let jack = el("i", ~cls="jk", ~parent=chip)
-        chip->onPointer(#pointerdown, ev => startRef.contents(ev, s, chip))
-        chip->onActivate(() => pickRef.contents(s))
-        chip->hover(() =>
-          `${sourceLabel(s)}: ${source.help}. Drag it to a target, or click it.`
-        )
-        sourceChips->Map.set(s, {chip, jack, count: Some(count), label: Some(label)})
+      })
+      let plug = el("div", ~cls="src plug", ~parent=sources.el)
+      plug->setTabIndex(0)
+      let jack = el("i", ~cls="jk", ~parent=plug)
+      plug->onPointer(#pointerdown, ev => startRef.contents(ev, s, plug))
+      plug->onActivate(() => pickRef.contents(s))
+      plug->hover(() => `${sourceLabel(s)}: drag to a target to connect it. Double-click the name to rename it.`)
+      sourceChips->Map.set(s, {chip: plug, jack, count: None, label: None, knob: Some(knob)})
+    | None =>
+      let chip = el("div", ~cls="src", ~parent=sources.el)
+      chip->setTabIndex(0)
+      el("i", ~cls="sw", ~parent=chip)->setStyle("background", sourceColor(s))
+      let label = el("span", ~cls="lbl", ~text=sourceLabel(s), ~parent=chip)
+      let count = el("b", ~cls="n", ~parent=chip)
+      let jack = el("i", ~cls="jk", ~parent=chip)
+      chip->onPointer(#pointerdown, ev => startRef.contents(ev, s, chip))
+      chip->onActivate(() => pickRef.contents(s))
+      chip->hover(() =>
+        `${sourceLabel(s)} (${ModScope.scopeHelp(scopeOf(s))}): ${source.help}. Drag it to a target, or click it.`
+      )
+      sourceChips->Map.set(s, {chip, jack, count: Some(count), label: Some(label), knob: None})
+    }
+  })
+
+  let heading = (title, help) => {
+    let e = el("div", ~cls="grp", ~text=title, ~parent=sources.el)
+    e->hover(() => help)
+    e
+  }
+  let eachHeading = heading("each note", "Sources each note has its own of: on something in the voice, every note moves it its own way")
+  let sharedHeading = heading("shared", "Sources every note shares (an LFO is here while its mode is shared)")
+  let macroHeading = heading("macros", "Knobs to turn, automate or map: shared by every note")
+  let ccHeading = heading("controllers", "The MIDI page's assignable controllers: shared by every note")
+
+  // the groups, laid out again when an LFO's mode, the touch mode or MPE moves a source between them
+  let c3 = Grid.fitColumns(sourcesWidth, sourceColumns)
+  let c2 = Grid.fitColumns(sourcesWidth, 2)
+  let layoutSources = () => {
+    let plain = sourceOrder->Array.filter(s => !isMacro(s) && !isController(s))
+    let groups = [
+      (eachHeading, plain->Array.filter(s => scopeOf(s) == EachNote), c3, sourceColumns),
+      (sharedHeading, plain->Array.filter(s => scopeOf(s) == Shared), c3, sourceColumns),
+      (macroHeading, sourceOrder->Array.filter(isMacro), c2, 2),
+      (ccHeading, sourceOrder->Array.filter(isController), c3, sourceColumns),
+    ]
+    let y = ref(Grid.padTop - 4.)
+    groups->Array.forEach(((head, members, cw, columns)) => {
+      head->setStyle("display", members == [] ? "none" : "")
+      if members != [] {
+        head->place(Grid.padX + 1., y.contents)->ignore
+        let g = Grid.make(ctx, sources.el, ~y=y.contents + headingHeight, ~cw)
+        members->Array.forEachWithIndex((s, i) => {
+          let b = g->Grid.cell(mod(i, columns), i / columns)
+          sourceChips
+          ->Map.get(s)
+          ->Option.forEach(c =>
+            switch c.knob {
+            | Some(knob) =>
+              knob->place(b.x, b.y, ~w=b.w - 24.)->ignore
+              c.chip->place(b.x + b.w - 22., b.y, ~w=22., ~h=b.h)->ignore
+            | None => c.chip->placeBox(b)->ignore
+            }
+          )
+        })
+        let rows = (Array.length(members) + columns - 1) / columns
+        y := y.contents + headingHeight + Int.toFloat(rows) * Grid.rowHeight + 4.
       }
     })
-    y := y.contents + headingHeight + Int.toFloat((Array.length(members) + 1) / 2) * Grid.rowHeight + 4.
-  })
+  }
+  layoutSources()
+  model->ParamModel.listenEach(
+    ["LFO_1_Sync", "LFO_2_Sync", "LFO_3_Mode", "AftertouchMode", "MPE_On"],
+    perFrame(() => {
+      layoutSources()
+      redraw.contents()
+    }),
+  )
 
   //==============================================================================
   // the target picker
@@ -292,8 +336,7 @@ let build = (ctx: Ctx.t, page) => {
     slotNumbers->Array.some(k => isUsed(k) && sourceOf(k) == s && targetOf(k) == t)
   }
 
-  // the groups' headings, by group
-  let headings = targetGroups->Array.map(((title, members)) => {
+  targetGroups->Array.forEach(((_, members)) =>
     members->Array.forEach(t => {
       let chip = el("div", ~cls="tgt", ~parent=picks)
       chip->setTabIndex(0)
@@ -309,8 +352,16 @@ let build = (ctx: Ctx.t, page) => {
       chip->hover(() => targetText(t))
       targetChips->Map.set(t, chip)
     })
-    el("div", ~cls="grp", ~text=title, ~parent=picks)
+  )
+  // the sections' headings, and each group's in each section, by section and group
+  let sectionHeads = sections->Array.map(((title, _, help)) => {
+    let e = el("div", ~cls="psect", ~text=title, ~parent=picks)
+    e->hover(() => help)
+    e
   })
+  let groupHeads = sections->Array.map(_ =>
+    targetGroups->Array.map(((title, _)) => el("div", ~cls="grp", ~text=title, ~parent=picks))
+  )
   // what the targets scroll over, and what's said when a search finds none
   let picksEnd = el("div", ~parent=picks)
   let nothing = el("div", ~cls="note", ~parent=picks)->place(Grid.padX + 1., 4.)
@@ -324,16 +375,18 @@ let build = (ctx: Ctx.t, page) => {
   let found = ref(None)
 
   // Shows the targets a search finds, or else those of the voice and of the effects in the
-  // rack, in their groups: rows of up to pickerColumns, a copy's on rows of their own.
+  // rack: those in each voice, then those on the whole sound, each in their groups, in rows of
+  // up to pickerColumns, a copy's on rows of their own.
   let pg = Grid.fitColumns(listWidth - scrollbarWidth, pickerColumns)
   let layoutPicker = () => {
     let words = search->value->String.toLowerCase->String.split(" ")->Array.filter(w => w != "")
     let rack = FxRack.read(get)
+    let lane = FxRack.readLane(get)
     let shows = (title, t) =>
       if words == [] {
         allEffects.contents ||
         reaches(t) ||
-        effectOf(t)->Option.mapOr(true, e => FxRack.holds(rack, e))
+        effectOf(t)->Option.mapOr(true, e => FxRack.holds(rack, e) || FxRack.holds(lane, e))
       } else {
         let text = String.toLowerCase(`${title} ${targetLabel(t)}`)
         words->Array.every(w => text->String.includes(w))
@@ -342,30 +395,44 @@ let build = (ctx: Ctx.t, page) => {
     found := None
     targetChips->Map.forEach(c => c->setStyle("display", "none"))
     let y = ref(0.)
-    targetGroups->Array.forEachWithIndex(((title, members), i) => {
-      let heading = headings->Array.getUnsafe(i)
-      switch members->Array.filter(t => shows(title, t)) {
-      | [] => heading->setStyle("display", "none")
-      | shown =>
-        heading->setStyle("display", "")
-        heading->place(Grid.padX + 1., y.contents)->ignore
-        let g = Grid.make(ctx, picks, ~y=y.contents + headingHeight, ~cw=pg)
-        let (c, r) = (ref(0), ref(0))
-        shown->Array.forEachWithIndex((t, k) => {
-          if k > 0 && (c.contents == pickerColumns || copyOf(t) != copyOf(shown->Array.getUnsafe(k - 1))) {
-            c := 0
-            r := r.contents + 1
+    sections->Array.forEachWithIndex(((_, scope, _), si) => {
+      let sectionHead = sectionHeads->Array.getUnsafe(si)
+      let heads = groupHeads->Array.getUnsafe(si)
+      let shownGroups = targetGroups->Array.map(((title, members)) =>
+        members->Array.filter(t => ModScope.targetScope(get, t) == scope && shows(title, t))
+      )
+      heads->Array.forEach(h => h->setStyle("display", "none"))
+      if shownGroups->Array.every(g => g == []) {
+        sectionHead->setStyle("display", "none")
+      } else {
+        sectionHead->setStyle("display", "")
+        sectionHead->place(Grid.padX + 1., y.contents)->ignore
+        y := y.contents + headingHeight + 2.
+        shownGroups->Array.forEachWithIndex((shown, i) =>
+          if shown != [] {
+            let head = heads->Array.getUnsafe(i)
+            head->setStyle("display", "")
+            head->place(Grid.padX + 1., y.contents)->ignore
+            let g = Grid.make(ctx, picks, ~y=y.contents + headingHeight, ~cw=pg)
+            let (c, r) = (ref(0), ref(0))
+            shown->Array.forEachWithIndex((t, k) => {
+              if k > 0 && (c.contents == pickerColumns || copyOf(t) != copyOf(shown->Array.getUnsafe(k - 1))) {
+                c := 0
+                r := r.contents + 1
+              }
+              targetChips->Map.get(t)->Option.forEach(chip => {
+                chip->setStyle("display", "")
+                chip->placeBox(g->Grid.cell(c.contents, r.contents))->ignore
+              })
+              c := c.contents + 1
+            })
+            if words != [] && found.contents == None {
+              found := shown[0]
+            }
+            y := y.contents + headingHeight + Int.toFloat(r.contents + 1) * Grid.rowHeight + 6.
           }
-          targetChips->Map.get(t)->Option.forEach(chip => {
-            chip->setStyle("display", "")
-            chip->placeBox(g->Grid.cell(c.contents, r.contents))->ignore
-          })
-          c := c.contents + 1
-        })
-        if words != [] && found.contents == None {
-          found := shown[0]
-        }
-        y := y.contents + headingHeight + Int.toFloat(r.contents + 1) * Grid.rowHeight + 6.
+        )
+        y := y.contents + 4.
       }
     })
     found.contents->Option.flatMap(t => targetChips->Map.get(t))->Option.forEach(c => c->addClass("first"))
@@ -557,19 +624,95 @@ let build = (ctx: Ctx.t, page) => {
       }
 
   //==============================================================================
+  // a connection's options: hold, slew and curve, in a box under its button, made the first
+  // time it opens
+
+  let optionBoxes: Map.t<int, (element, unit => unit)> = Map.make()
+  let openOptions = ref(None)
+  let optionsCloser = ref(None)
+  let closeOptions = () => {
+    openOptions.contents->Option.forEach(k =>
+      optionBoxes->Map.get(k)->Option.forEach(((box, _)) => box->removeClass("on"))
+    )
+    openOptions := None
+    optionsCloser.contents->Option.forEach(stop => stop())
+    optionsCloser := None
+  }
+  let optionsWidth = 2. * Grid.columnWidth + 2. * Grid.padX + 2.
+  let optionsBox = k => {
+    switch optionBoxes->Map.get(k) {
+    | Some(b) => b
+    | None =>
+      let box = el("div", ~cls="mpop", ~parent=page)
+      let title = el("div", ~cls="ttl", ~parent=box)
+      let g = Grid.make(ctx, box)
+      g->Grid.choice(ModMatrix.holdId(k), 0, 0, "hold", ~span=2)
+      g->Grid.param(ModMatrix.slewId(k), 0, 1, "slew")
+      g->Grid.param(ModMatrix.curveId(k), 1, 1, "curve")
+      // the curve: what the source's value becomes (the line through the middle is straight)
+      let plotBox = g->Grid.cell(0, 2, ~span=2, ~rows=2)
+      let s = Plots.svg(box, plotBox)
+      Plots.background(s, plotBox)
+      let straight = s->svgEl("path", [("class", Str("axis"))])
+      let curve = s->svgEl("path", [("class", Str("curve"))])
+      let note = g->Grid.note("", 0, 4, ~span=2, ~rows=2)
+      let draw = () => {
+        let {source, target, hold, slew, curve: c} = slot(k)
+        let bipolar = ModMatrix.sources[source]->Option.mapOr(false, s => s.bipolar)
+        title->setTextContent(`${sourceLabel(source)} → ${targetLabel(target)}`)
+        let (w, h) = (plotBox.w - 6., plotBox.h - 7.)
+        let at = (x, y) => (3. + w * (bipolar ? (x + 1.) / 2. : x), 3. + h * (bipolar ? (1. - y) / 2. : 1. - y))
+        let points = Array.fromInitializer(~length=65, i => {
+          let x = bipolar ? Int.toFloat(i) / 32. - 1. : Int.toFloat(i) / 64.
+          at(x, ModMatrix.curved(x, c))
+        })
+        curve->setAttribute("d", Str(Plots.pathFrom(points)))
+        straight->setAttribute("d", Str(Plots.pathFrom([at(bipolar ? -1. : 0., bipolar ? -1. : 0.), at(1., 1.)])))
+        note->setTextContent(
+          (hold ? "Each note keeps the value it starts with. " : "") ++
+          (slew > 0. ? `Changes take about ${PorridgeParams.slewText(slew)} to arrive. ` : "") ++
+          (c == 0. ? "" : c > 0. ? "Small values count for more. " : "Small values count for less. ") ++
+          (hold || slew > 0. || c != 0. ? "" : "Hold latches the value at note-on; slew smooths it; curve bends it."),
+        )
+      }
+      model->ParamModel.listenEach(ModMatrix.slotIds(k), perFrame(draw))
+      draw()
+      let b = (box, draw)
+      optionBoxes->Map.set(k, b)
+      b
+    }
+  }
+  let showOptions = (k, anchor) =>
+    if openOptions.contents == Some(k) {
+      closeOptions()
+    } else {
+      closeOptions()
+      let (box, draw) = optionsBox(k)
+      draw()
+      let r = anchor->getBoundingClientRect
+      let p = toLocal(r.left + r.width, r.top + r.height)
+      let h = Grid.padTop + 6. * Grid.rowHeight + Grid.padBottom
+      let y = p.y + 2. + h > Style.pageHeight ? p.y - r.height / ctx.scale() - h - 2. : p.y + 2.
+      box->place(p.x - optionsWidth, y, ~w=optionsWidth, ~h)->ignore
+      box->addClass("on")
+      openOptions := Some(k)
+      optionsCloser := Some(onPressOutside([box, anchor], closeOptions))
+    }
+
+  //==============================================================================
   // the connections
 
   let rg = Grid.fitColumns(listWidth, 16)
   let rows = slotNumbers->Array.map(k => {
-    let row = el("div", ~cls="conn", ~parent=list.el)->place(0., 0., ~w=listWidth - 2., ~h=Grid.rowHeight)
+    let row = el("div", ~cls="conn", ~parent=rowsBox)->place(0., 0., ~w=listWidth - 2., ~h=Grid.rowHeight)
     let g = Grid.make(ctx, row, ~y=0., ~cw=rg)
 
-    let source = el("div", ~cls="src", ~parent=row)->placeBox(g->Grid.cell(0, 0, ~span=4))
+    let source = el("div", ~cls="src", ~parent=row)->placeBox(g->Grid.cell(0, 0, ~span=3))
     source->setTabIndex(0)
     let sw = el("i", ~cls="sw", ~parent=source)
     let sourceName = el("span", ~cls="lbl", ~parent=source)
     el("i", ~cls="jk on", ~parent=source)->ignore
-    g->Grid.claim(0, 0, ~span=4, "source")
+    g->Grid.claim(0, 0, ~span=3, "source")
     source->onPointer(#pointerdown, ev => {
       ev->preventDefault
       if ev->button == 0 {
@@ -578,16 +721,19 @@ let build = (ctx: Ctx.t, page) => {
     })
     source->hover(() => connectionText(k) ++ ". Click to change the source.")
 
-    let cable = Plots.svg(row, g->Grid.cell(4, 0))
+    let cableBox = g->Grid.cell(3, 0)
+    let cable = Plots.svg(row, cableBox)
     cable->setAttribute("class", Str("wirecell"))
     let wire = cable->svgEl("path", [("class", Str("wire"))])
-    g->Grid.claim(4, 0, "cable")
+    // what a per-note source on the whole sound follows
+    let follows = el("div", ~cls="mfollow", ~parent=row)->place(cableBox.x - 6., 16., ~w=cableBox.w + 12.)
+    g->Grid.claim(3, 0, "cable")
 
-    let target = el("div", ~cls="tgt", ~parent=row)->placeBox(g->Grid.cell(5, 0, ~span=4))
+    let target = el("div", ~cls="tgt", ~parent=row)->placeBox(g->Grid.cell(4, 0, ~span=4))
     target->setTabIndex(0)
     el("i", ~cls="jk on", ~parent=target)->ignore
     let targetName = el("span", ~cls="lbl", ~parent=target)
-    g->Grid.claim(5, 0, ~span=4, "target")
+    g->Grid.claim(4, 0, ~span=4, "target")
     target->onPointer(#pointerdown, ev => {
       ev->preventDefault
       if ev->button == 0 {
@@ -595,21 +741,43 @@ let build = (ctx: Ctx.t, page) => {
       }
     })
     target->onActivate(() => openPicker(Retarget(k)))
-    target->hover(() => targetText(targetOf(k)) ++ ". Click to change the target.")
+    target->hover(() => {
+      let s = slot(k)
+      targetText(targetOf(k)) ++
+      (ModScope.followsNotes(get, s)
+        ? `. On the whole sound, it follows ${get("MM_Follow") == 0. ? "the newest note" : "every note, by its level"} (see below)`
+        : "") ++ ". Click to change the target."
+    })
 
-    g->Grid.param(ModMatrix.amountId(k), 9, 0, "amount", ~span=4)
-    g->Grid.choice(ModMatrix.viaId(k), 13, 0, "via (scaled by)", ~span=2)
-    g->Grid.button("×", 15, 0, ~status="Remove this connection", () => disconnect(k))
+    g->Grid.param(ModMatrix.amountId(k), 8, 0, "amount", ~span=3)
+    g->Grid.choice(ModMatrix.viaId(k), 11, 0, "via (scaled by)", ~span=2)
+    let options = el("div", ~cls="mopt", ~parent=row)->placeBox(g->Grid.cell(13, 0, ~span=2))
+    options->setTabIndex(0)
+    g->Grid.claim(13, 0, ~span=2, "options")
+    options->onPointer(#pointerdown, ev => {
+      ev->preventDefault
+      if ev->button == 0 {
+        showOptions(k, options)
+      }
+    })
+    options->onActivate(() => showOptions(k, options))
+    options->hover(() => "Hold (latch the value as each note starts), slew and curve")
+    g->Grid.button("×", 15, 0, ~status="Remove this connection", () => {
+      if openOptions.contents == Some(k) {
+        closeOptions()
+      }
+      disconnect(k)
+    })
 
     row->onMouse(#mouseenter, _ =>
       sourceChips->Map.get(sourceOf(k))->Option.forEach(c => c.chip->addClass("lit"))
     )
     row->onMouse(#mouseleave, _ => sourceChips->Map.forEach(c => c.chip->removeClass("lit")))
-    (k, row, sw, sourceName, targetName, wire)
+    (k, row, sw, sourceName, targetName, wire, follows, options)
   })
 
   // the last row: add a connection
-  let add = el("div", ~cls="addrow", ~parent=list.el)
+  let add = el("div", ~cls="addrow", ~parent=rowsBox)
   add->setTabIndex(0)
   el("b", ~text="+", ~parent=add)->ignore
   el("span", ~text="add connection", ~parent=add)->ignore
@@ -626,9 +794,19 @@ let build = (ctx: Ctx.t, page) => {
   el("div", ~cls="big", ~text="Nothing modulates anything yet.", ~parent=empty)->ignore
   el(
     "div",
-    ~text="Drag a source from the left onto a target, or click a source and then a target. Each connection gets an amount, and an optional second source that scales it.",
+    ~text="Drag a source from the left onto a target, or click a source and then a target. Each connection gets an amount, an optional second source that scales it, and options to hold, slew or bend it.",
     ~parent=empty,
   )->ignore
+
+  // below the list: what per-note sources follow on the whole sound
+  let footer = el("div", ~cls="mfoot", ~parent=list.el)->place(0., listHeight - footerHeight, ~w=listWidth - 2., ~h=footerHeight - 2.)
+  Controls.choice(ctx, footer, "MM_Follow", ~x=Grid.padX, ~y=4., ~w=280., ~label="per-note sources on the whole sound follow")
+  el(
+    "div",
+    ~cls="note",
+    ~text="Each note has its own LFOs, envelopes and velocity; an effect on the whole sound has one setting, so it takes theirs from the newest note, or from all of them by how loud each is.",
+    ~parent=footer,
+  )->place(Grid.padX + 290., 2., ~w=listWidth - 2. - 300. - Grid.padX)->ignore
 
   //==============================================================================
   // drawing
@@ -639,25 +817,31 @@ let build = (ctx: Ctx.t, page) => {
     used->Array.forEach(k =>
       counts->Map.set(sourceOf(k), counts->Map.get(sourceOf(k))->Option.getOr(0) + 1)
     )
+    let followText = ModScope.followText(get)
 
     // the list, in slot order
-    rows->Array.forEach(((k, row, sw, sourceName, targetName, wire)) =>
+    rows->Array.forEach(((k, row, sw, sourceName, targetName, wire, follows, options)) =>
       if isUsed(k) {
         let shown = used->Array.indexOf(k)
-        let (s, t) = (sourceOf(k), targetOf(k))
+        let s = slot(k)
         row->addClass("on")
-        row->setStyle("top", px(Grid.padTop + Int.toFloat(shown) * Grid.rowHeight))
-        sw->setStyle("background", sourceColor(s))
-        sourceName->setTextContent(sourceLabel(s))
-        targetName->setTextContent(targetLabel(t))
+        row->setStyle("top", px(4. + Int.toFloat(shown) * Grid.rowHeight))
+        sw->setStyle("background", sourceColor(s.source))
+        sourceName->setTextContent(sourceLabel(s.source))
+        targetName->setTextContent(targetLabel(s.target))
         // the cable spans the cell between the two jacks
         let w = rg - Grid.columnGap
-        wire->setAttribute(
-          "d",
-          Str(cablePath({x: -11., y: 13.}, {x: w + 11., y: 13.}, ~sag=7.)),
-        )
-        wire->setAttribute("stroke", Str(sourceColor(s)))
-        wire->setAttribute("class", Str(get(ModMatrix.amountId(k)) == 0. ? "wire muted" : "wire"))
+        wire->setAttribute("d", Str(cablePath({x: -11., y: 11.}, {x: w + 11., y: 11.}, ~sag=5.)))
+        wire->setAttribute("stroke", Str(sourceColor(s.source)))
+        wire->setAttribute("class", Str(s.amount == 0. ? "wire muted" : "wire"))
+        follows->setTextContent(ModScope.followsNotes(get, s) ? followText : "")
+        let parts = [
+          s.hold ? Some("latch") : None,
+          s.slew > 0. ? Some("slew") : None,
+          s.curve != 0. ? Some("curve") : None,
+        ]->Array.filterMap(x => x)
+        options->setTextContent(parts == [] ? "options" : parts->Array.join(" · "))
+        options->toggleClass("set", parts != [])
       } else {
         row->removeClass("on")
       }
@@ -666,7 +850,7 @@ let build = (ctx: Ctx.t, page) => {
     add->setStyle("display", n < ModMatrix.slots ? "flex" : "none")
     add->placeBox({
       x: Grid.padX,
-      y: Grid.padTop + Int.toFloat(n) * Grid.rowHeight,
+      y: 4. + Int.toFloat(n) * Grid.rowHeight,
       w: listWidth - 2. - 2. * Grid.padX,
       h: Style.controlHeight,
     })->ignore
@@ -697,6 +881,8 @@ let build = (ctx: Ctx.t, page) => {
   redraw := coalesce(run => setTimeout(run, 0)->ignore, draw)
 
   slotNumbers->Array.forEach(k => model->ParamModel.listenEach(ModMatrix.slotIds(k), () => redraw.contents()))
+  // what a target's scope depends on: the distortion's place, the rack, and what follows
+  model->ParamModel.listenEach(["MM_Follow", "Sat_Mode", ...VoiceLane.ids], () => redraw.contents())
   ctx.programs->ProgramStore.onChanged(() => redraw.contents())
   draw()
 }

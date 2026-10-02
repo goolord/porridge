@@ -22,6 +22,7 @@ namespace porridge
         input event int impulseViewIn;
         input event int panicIn;
         input event int levelRequestIn;
+        input event int voiceViewIn;
 
         // test-only: lets the offline test graph replace the voices with a recorded signal
         input stream float<2> testIn;
@@ -33,6 +34,7 @@ namespace porridge
         output event CompMeter compMeterOut;
         output event ImpulseView impulseViewOut;
         output event float levelOut;
+        output event VoiceView voiceViewOut;
 
         // MIDI is applied a block late (see the top of this file)
         processor.latency = blockSize;
@@ -98,6 +100,11 @@ namespace porridge
         // K-weighted power summed since the last one; the weighting's shelf and highpass, per
         // channel
         int levelReadings, levelFrames;
+
+        // the sounding notes for the view: whether it asked, samples until the next report, and
+        // whether the last one had any
+        bool voiceViewOn, voiceViewHad;
+        int voiceViewWait;
         float64 levelSum;
         KWeighting[2] kWeighting;
 
@@ -169,6 +176,26 @@ namespace porridge
 
         // Porridge's own randomness (drift, unison phases), apart from Oatmeal's rng
         Lcg driftRng;
+
+        // each live connection's slot, hold, slew (in seconds), curve; the shared slew state, by
+        // slot, and the connection it is for (source and target: a new one starts over)
+        int[mods::numSlots] liveSlot;
+        bool[mods::numSlots] liveHold;
+        float[mods::numSlots] liveSlew, liveCurve;
+        float[mods::numSlots] sharedSlew;
+        int[mods::numSlots] sharedSlewFor;
+
+        // the later sources: whether a connection uses them (LFO 3, voice level, wander), LFO 3
+        // shared and its value, its own random numbers (and wander's), the notes so far and the
+        // last one's frequency, and the held notes' value
+        bool lfo3Live, levelLive, wanderLive;
+        Lfo3 gLfo3;
+        float gLfo3Raw;
+        Lcg extraRng;
+        float[hilbertCoefs] hilbert;
+        int noteCount;
+        float lastNoteHz;
+        float heldNotes;
 
         // MPE: each member channel's note bend (semitones), pressure and slide (CC 74), and
         // the channel each key last came from
@@ -245,6 +272,9 @@ namespace porridge
             kWeighting[1] = makeKWeighting (sampleRate);
         }
 
+        /// The view asks for the sounding notes (VoiceView) about 25 times a second, or no more (0).
+        event voiceViewIn (int on)                      { voiceViewOn = on != 0; voiceViewWait = 0; }
+
         /// The view asks for the convolvers' impulses again (a tab opened).
         event impulseViewIn (int x)
         {
@@ -286,6 +316,7 @@ namespace porridge
 
             fxTables.build (sampleRate);
             distTables.build();
+            hilbert = hilbertDesign (sampleRate);
             tables.buildStatic();
 
             // defaults until the patch sends its shapes: sine waves, sine LFO shapes, linear curves
@@ -432,8 +463,9 @@ namespace porridge
         {
             let kind = fx > 0 && fx < rack::numEntries ? rack::kindOf.at (fx) : -1;
 
-            // (a distortion copy only runs while there is sound)
-            if (kind < 0 || (kind == rack::distortionKind && ! active))
+            // (a distortion copy only runs while there is sound; the shifter and resonator only
+            // in the voice lane)
+            if (kind < 0 || (kind == rack::distortionKind && ! active) || kind == rack::shifterKind || kind == rack::resonatorKind)
                 return active;
 
             let k = fx - rack::kindValue.at (kind);
@@ -461,7 +493,7 @@ namespace porridge
             if (kind == rack::phaserKind)   return phasers.at (k).process (mix, active, P, sampleRate, noteHz);
             if (kind == rack::spaceKind)    return spaces.at (k).process (mix, active, P, sampleRate);
             if (kind == rack::bodeKind)     return bodes.at (k).process (mix, active, P, sampleRate);
-            if (kind == rack::filterKind)   return filterFxs.at (k).process (fxTables, mix, active, P, sampleRate);
+            if (kind == rack::filterKind)   return filterFxs.at (k).process (fxTables, mix, active, P, sampleRate, noteHz);
             if (kind == rack::utilityKind)  return utilities.at (k).process (mix, active, P, sampleRate);
             if (kind == rack::ambienceKind) return ambiences.at (k).process (mix, active, P, sampleRate);
             if (kind == rack::airKind)      return airs.at (k).process (mix, active, P, sampleRate);
@@ -666,6 +698,7 @@ namespace porridge
         {
             for (wrap<4> k) v.filt[k].clearState();
             for (wrap<2> k) v.dist[k].clearModels();
+            restartLane (v);
             prepareVoice (v);
         }
 
@@ -841,7 +874,17 @@ namespace porridge
             v.relCount = -1;
             v.age = 0;
             v.vel = velc;
+            v.tailing = false;
             v.modRand = modRng.nextSigned();
+
+            // the interval from the note before, alternate and cycle, and the connections latched
+            // afresh
+            v.interval = lastNoteHz > 0 ? clamp (float (log (freq / float64 (lastNoteHz)) / log (2.0)) * 0.5f, -1.0f, 1.0f) : 0.0f;
+            lastNoteHz = float (freq);
+            v.alternate = (noteCount & 1) == 0 ? 1.0f : -1.0f;
+            v.cycle = float (noteCount & 3) * (1.0f / 3.0f);
+            noteCount = (noteCount + 1) & 0xffff;
+            v.latched = bool[mods::numSlots]();
             v.chan = noteChan.at (key & 0x7f);
             v.randAmp = float (pow (10.0, float64 (rng.bipolar() * P[slot::RandomAmp] * 0.05f)));
 
@@ -871,6 +914,15 @@ namespace porridge
                     randomUnisonPhases (v);
 
                 startDrift (v);
+                restartLane (v);
+                v.slewing = bool[mods::numSlots]();
+                v.lfo3.resetLfo3 (extraRng, P);
+                v.wander.a = extraRng.nextSigned();
+                v.wander.b = extraRng.nextSigned();
+                v.wander.phase = 0.5f + 0.5f * extraRng.nextSigned();
+                v.wander.rate = 1.0f + 0.3f * extraRng.nextSigned();
+                v.levelFollow = 0;
+                v.level = 0;
             }
             else
             {
@@ -886,7 +938,10 @@ namespace porridge
                     for (wrap<maxUnison> k) { v.osc1[k].setPwmPhase (rng, P); v.osc2[k].setPwmPhase (rng, P); }
 
                 if (P[slot::LFORetrig] != 0)
+                {
                     for (wrap<2> k) v.lfo[k].resetPhase (rng, P);
+                    v.lfo3.resetLfo3 (extraRng, P);
+                }
             }
 
             v.envSpeed = float (pow (float64 (octave), 2.0 * float64 (P[slot::FreqEnv])
@@ -908,8 +963,14 @@ namespace porridge
                 }
 
                 v.ampEnv.trigger (ampC, false);
+                v.envClock = float[4]();
+                v.clockReleased = false;
 
-                for (int k = 0; k < (voiceMode < 2 ? 4 : 2); ++k)
+                // (Oatmeal never triggers the right side's filter envelopes in legato, so that a
+                // stereo voice's right filter stays shut: Oat mode keeps that)
+                let filterEnvs = voiceMode < 2 || P[slot::Oat_Mode] == 0 ? 4 : 2;
+
+                for (int k = 0; k < filterEnvs; ++k)
                     v.fenv.at (k).trigger (fenvCoefs (k), true);
 
                 v.modEnv1.trigger (mod1C, true);
@@ -926,6 +987,13 @@ namespace porridge
                 retriggerEnded (v.ampEnv, ampC, false);
                 retriggerEnded (v.fenv[0], filtC, true);
                 retriggerEnded (v.fenv[1], filt2C, true);
+
+                if (P[slot::Oat_Mode] == 0)
+                {
+                    retriggerEnded (v.fenv[2], filtC, true);
+                    retriggerEnded (v.fenv[3], filt2C, true);
+                }
+
                 retriggerEnded (v.modEnv1, mod1C, true);
                 retriggerEnded (v.modEnv2, mod2C, true);
                 for (wrap<2> k) retriggerEnded (v.oscEnv[k], oscEnvC[k], false);
@@ -1011,6 +1079,7 @@ namespace porridge
 
             if (P[slot::LFO_1_Sync] < 2) gLfo1.resetPhase (rng, P);
             if (P[slot::LFO_2_Sync] < 2) gLfo2.resetPhase (rng, P);
+            if (P[slot::LFO_3_Mode] == 1) gLfo3.resetLfo3 (extraRng, P);
 
             let oldHead = numActive > 0 ? order.at (0) : -1;
 
@@ -1884,11 +1953,22 @@ namespace porridge
             if (noiseLive)
                 noiseGlobal = noiseRng.nextSigned();
 
+            var held = 0;
+
+            for (int i = 0; i < numActive; ++i)
+                if (voices.at (order.at (i)).relCount < 0)
+                    ++held;
+
+            heldNotes = clamp (float (held - 1) * (1.0f / 7.0f), 0.0f, 1.0f);
+
             if (numLive > 0)
             {
-                evalMods (-1);
+                evalMods (-1, 0);
                 applyMods();
             }
+
+            if (lfo3Live && P[slot::LFO_3_Mode] != 0)
+                gLfo3Raw = gLfo3.stepLfo3 (extraRng, P, sampleRate, samplesPerBeat, n);
 
             if (numActive == 0)
             {
@@ -1979,8 +2059,18 @@ namespace porridge
                     if (noiseLive)
                         voices.at (vi).modNoise = noiseRng.nextSigned();
 
-                    evalMods (vi);
+                    evalMods (vi, n);
                     applyMods();
+
+                    if (voiceViewOn)
+                    {
+                        for (int k = 0; k < viewTargets; ++k)
+                        {
+                            let t = k < numLiveTargets ? liveTargets.at (k) : 0;
+                            voices.at (vi).targetPos.at (k) = (t > 0 && mods::targetKind.at (t) == mods::knob)
+                                                                ? clamp (modBaseNorm.at (t) + modSum.at (t), 0.0f, 1.0f) : -1.0f;
+                        }
+                    }
                     semisArg += modPitch();
                 }
 
@@ -2010,22 +2100,34 @@ namespace porridge
             numLive = 0;
             numLiveTargets = 0;
             noiseLive = false;
+            lfo3Live = false;
+            levelLive = false;
+            wanderLive = false;
 
             for (int k = 0; k < mods::numSlots; ++k)
             {
-                let s = int (P.at (slot::Mod1_Source + 4 * k));
-                let t = int (P.at (slot::Mod1_Target + 4 * k));
-                let a = P.at (slot::Mod1_Amount + 4 * k);
-                let via = int (P.at (slot::Mod1_Via + 4 * k));
+                let s = int (P.at (mods::connSource.at (k)));
+                let t = int (P.at (mods::connTarget.at (k)));
+                let a = P.at (mods::connAmount.at (k));
+                let via = int (P.at (mods::connVia.at (k)));
 
                 if (s <= 0 || s >= mods::numSources || t <= 0 || t >= mods::numTargets || a == 0)
                     continue;
 
+                let v = (via > 0 && via < mods::numSources) ? via : 0;
                 liveSrc.at (numLive) = s;
                 liveTgt.at (numLive) = t;
                 liveAmt.at (numLive) = a;
-                liveVia.at (numLive) = (via > 0 && via < mods::numSources) ? via : 0;
-                noiseLive = noiseLive || s == mods::src::noise || via == mods::src::noise;
+                liveVia.at (numLive) = v;
+                liveSlot.at (numLive) = k;
+                liveHold.at (numLive) = P.at (mods::connHold.at (k)) != 0;
+                let slew = P.at (mods::connSlew.at (k));
+                liveSlew.at (numLive) = 2.0f * slew * slew;
+                liveCurve.at (numLive) = P.at (mods::connCurve.at (k));
+                noiseLive = noiseLive || s == mods::src::noise || v == mods::src::noise;
+                lfo3Live = lfo3Live || s == mods::src::lfo3 || v == mods::src::lfo3;
+                levelLive = levelLive || s == mods::src::voiceLevel || v == mods::src::voiceLevel;
+                wanderLive = wanderLive || s == mods::src::wander || v == mods::src::wander;
                 ++numLive;
 
                 if (! targetLive.at (t))
@@ -2052,12 +2154,14 @@ namespace porridge
             if (s == mods::src::modWheel)                         return wheel;
             if (s == mods::src::x)                                return curX;
             if (s == mods::src::y)                                return curY;
+            if (s == mods::src::heldNotes)                        return heldNotes;
 
             if (vi < 0)
             {
                 if (s == mods::src::noise)      return noiseGlobal;
                 if (s == mods::src::lfo1)       return gLfoRaw[0];
                 if (s == mods::src::lfo2)       return gLfoRaw[1];
+                if (s == mods::src::lfo3)       return gLfo3Raw;
                 if (s == mods::src::aftertouch) return pressureSmooth;
                 if (s == mods::src::bend)       return bendNorm;
                 return 0;
@@ -2080,6 +2184,13 @@ namespace porridge
             if (s == mods::src::random)    return voices.at (vi).modRand;
             if (s == mods::src::noise)     return voices.at (vi).modNoise;
             if (s == mods::src::key)       return clamp (float ((voices.at (vi).key & 0x7f) - 60) * (1.0f / 60.0f), -1.0f, 1.0f);
+            if (s == mods::src::lfo3)      return P[slot::LFO_3_Mode] == 0 ? voices.at (vi).lfo3Raw : gLfo3Raw;
+            if (s == mods::src::interval)  return voices.at (vi).interval;
+            if (s == mods::src::alternate) return voices.at (vi).alternate;
+            if (s == mods::src::cycle)     return voices.at (vi).cycle;
+            if (s == mods::src::voiceLevel) return voices.at (vi).level;
+            if (s == mods::src::wander)    return voices.at (vi).wanderValue;
+            if (s == mods::src::glide)     return voices.at (vi).glideProg < 1.0f ? 1.0f - voices.at (vi).glideProg : 0.0f;
 
             if (s == mods::src::aftertouch)
                 return int (P[slot::AftertouchMode]) == 2 ? perKeyAT.at (voices.at (vi).key & 0x7f) : pressureSmooth;
@@ -2087,20 +2198,120 @@ namespace porridge
             return 0;
         }
 
-        /// Sums the connections into each target, for one voice (or -1: the global targets).
-        void evalMods (int voiceIndex)
+        /// Live connection i's value for voice vi (-1: none): its source, curved, times its via
+        /// source and its amount, before its slew. A connection that holds latches its value once
+        /// the note has rendered a block (until then the sources are still the last note's), and
+        /// follows it live before that.
+        float connValue (int i, int vi)
         {
-            let vi = voiceIndex >= 0 ? voiceIndex : (numActive > 0 ? order.at (0) : -1);
+            let x = modCurve (modSource (liveSrc.at (i), vi), liveCurve.at (i));
 
-            for (int i = 0; i < numLiveTargets; ++i)
-                modSum.at (liveTargets.at (i)) = 0;
-
-            for (int i = 0; i < numLive; ++i)
+            if (! liveHold.at (i) || vi < 0)
             {
-                var m = modSource (liveSrc.at (i), vi) * liveAmt.at (i);
+                var m = x * liveAmt.at (i);
 
                 if (liveVia.at (i) > 0)
                     m *= modSource (liveVia.at (i), vi);
+
+                return m;
+            }
+
+            let k = liveSlot.at (i);
+            var held = x;
+
+            if (liveVia.at (i) > 0)
+                held *= modSource (liveVia.at (i), vi);
+
+            if (voices.at (vi).latched.at (k))
+            {
+                held = voices.at (vi).latchVal.at (k);
+            }
+            else if (voices.at (vi).age > 0)
+            {
+                voices.at (vi).latchVal.at (k) = held;
+                voices.at (vi).latched.at (k) = true;
+            }
+
+            return held * liveAmt.at (i);
+        }
+
+        /// How far a connection's slew moves towards its value over n samples.
+        float slewStep (int i, int n)
+        {
+            return float (1.0 - exp (-float64 (n) / (float64 (liveSlew.at (i)) * sampleRate)));
+        }
+
+        /// Sums the connections into each target for one voice, over its next n samples; or for
+        /// voiceIndex -1, into the targets on the whole sound, from the newest voice's sources
+        /// (or with MM_Follow, every voice's, weighted by its level), their slews moved on n
+        /// samples.
+        void evalMods (int voiceIndex, int n)
+        {
+            for (int i = 0; i < numLiveTargets; ++i)
+                modSum.at (liveTargets.at (i)) = 0;
+
+            if (voiceIndex >= 0)
+            {
+                for (int i = 0; i < numLive; ++i)
+                {
+                    var m = connValue (i, voiceIndex);
+
+                    if (liveSlew.at (i) > 0)
+                    {
+                        let k = liveSlot.at (i);
+
+                        if (voices.at (voiceIndex).slewing.at (k))
+                        {
+                            let y = voices.at (voiceIndex).slewVal.at (k);
+                            m = y + (m - y) * slewStep (i, n);
+                        }
+
+                        voices.at (voiceIndex).slewVal.at (k) = m;
+                        voices.at (voiceIndex).slewing.at (k) = true;
+                    }
+
+                    let t = liveTgt.at (i);
+                    modSum.at (t) = modSum.at (t) + m;
+                }
+
+                return;
+            }
+
+            let newest = numActive > 0 ? order.at (0) : -1;
+            let byLevel = P[slot::MM_Follow] != 0 && numActive > 1;
+
+            for (int i = 0; i < numLive; ++i)
+            {
+                var m = 0.0f;
+                var weights = 0.0f;
+
+                if (byLevel)
+                {
+                    for (int j = 0; j < numActive; ++j)
+                    {
+                        let vj = order.at (j);
+                        let w = voices.at (vj).ampLast * voices.at (vj).velGain;
+                        m += w * connValue (i, vj);
+                        weights += w;
+                    }
+                }
+
+                if (weights > 1e-9f)
+                    m /= weights;
+                else
+                    m = connValue (i, newest);
+
+                if (liveSlew.at (i) > 0)
+                {
+                    let k = liveSlot.at (i);
+                    let id = liveSrc.at (i) * 1024 + liveTgt.at (i);
+
+                    if (sharedSlewFor.at (k) == id)
+                        m = sharedSlew.at (k) + (m - sharedSlew.at (k)) * slewStep (i, n);
+
+                    sharedSlew.at (k) = m;
+                    sharedSlewFor.at (k) = id;
+                }
 
                 let t = liveTgt.at (i);
                 modSum.at (t) = modSum.at (t) + m;
@@ -2367,14 +2578,70 @@ namespace porridge
                 fadeLfo (v.age, P.at (lfoSlot::delay[k]), P.at (lfoSlot::fade[k]), lv[k], lfoPitch[k], lfoPan[k], v.lfoRaw[k]);
             }
 
+            if (lfo3Live)
+            {
+                let raw = P[slot::LFO_3_Mode] == 0 ? v.lfo3.stepLfo3 (extraRng, P, sampleRate, samplesPerBeat, n) : gLfo3Raw;
+                v.lfo3Raw = raw * lfoFade (v.age, P[slot::LFO_3_Delay], P[slot::LFO_3_Fade]);
+            }
+
+            if (wanderLive)
+            {
+                let hz = 0.02 * pow (500.0, float64 (clamp (P[slot::Wander_Rate], 0.0f, 1.0f)));
+                v.wander.phase += float (float64 (n) * hz / sampleRate) * v.wander.rate;
+
+                if (v.wander.phase >= 1.0f)
+                {
+                    v.wander.phase -= float (int (v.wander.phase));
+                    v.wander.a = v.wander.b;
+                    v.wander.b = extraRng.nextSigned();
+                }
+
+                let t = v.wander.phase * v.wander.phase * (3.0f - 2.0f * v.wander.phase);
+                v.wanderValue = v.wander.a + (v.wander.b - v.wander.a) * t;
+            }
+
+            if (voiceViewOn)
+            {
+                if (v.relCount >= 0 && ! v.clockReleased)
+                {
+                    v.envClock = float[4]();
+                    v.clockReleased = true;
+                }
+
+                let ms = float (float64 (n) * 1000.0 / sampleRate);
+                v.envClock[0] += ms * ampSpeed * v.envSpeed;
+                v.envClock[1] += ms * filterSpeed * v.envSpeed;
+                v.envClock[2] += ms * modSpeed;
+                v.envClock[3] += ms * modSpeed;
+            }
+
             v.age += n;
             v.lfo2Prev = lv[1];
+
+            // the voice lane: whether it holds anything, how many of its slots come before the
+            // filter and before the amp, and whether any come after the amp (they ring on)
+            let laneOn = laneHolds (0, laneSlots);
+            let fAt = laneOn ? clamp (int (P[slot::VL_FilterAt]), 0, laneSlots) : 0;
+            let aAt = laneOn ? max (fAt, clamp (int (P[slot::VL_AmpAt]), 0, laneSlots)) : 0;
+            let laneTail = laneOn && laneHolds (aAt, laneSlots);
 
             // amp envelope
             if (! v.ampEnv.renderAmp (ampC, ampSpeed * v.envSpeed, sustainDown, ampSmooth, bufE, n))
             {
-                v.active = false;
-                return false;
+                if (! laneTail)
+                {
+                    v.active = false;
+                    return false;
+                }
+
+                if (! v.tailing)
+                {
+                    v.tailing = true;
+                    v.tailSamples = 0;
+                }
+
+                for (int i = 0; i < n; ++i)
+                    bufE.at (i) = 0;
             }
 
             v.ampLast = bufE.at (n - 1);
@@ -2550,8 +2817,8 @@ namespace porridge
 
             for (int i = 0; i < n; ++i) { bufM.at (i) = 0; bufR.at (i) = 0; bufNZ.at (i) = 0; }
 
-            // noise
-            if (noiseOn)
+            // noise (none in the tail)
+            if (noiseOn && ! v.tailing)
             {
                 let ratioN = octPow (pitchN + P[slot::N_Transpose]);
                 let toHzN = float64 (srInt) / two32;
@@ -2585,7 +2852,11 @@ namespace porridge
             let detune = float64 (P[slot::Detune]);
             let toHz = float64 (srInt) / two32;
 
-            if (oscMix < oscMixMode::pm2to1)
+            if (v.tailing)
+            {
+                // the amp envelope has ended: only the lane's effects still sound
+            }
+            else if (oscMix < oscMixMode::pm2to1)
             {
                 for (int k = 1; k < U; ++k)
                     v.osc1.at (k).copyShared (v.osc1[0]);
@@ -2706,8 +2977,21 @@ namespace porridge
             let distMode = int (P[slot::Sat_Mode]);
             let distMod = xySum (xyTgt::distortion, Xv, Yv) + ccSum[ccTgt::distortion];
 
+            // the lane's slots before the filter; until something parts the sides, the right is
+            // the left's (a mono voice's, panned at the end)
+            var split = stereo;
+
+            if (laneOn)
+                runLane (v, 0, fAt, split, fG, n);
+
+            // the amp after some of the lane's slots, or (as Oatmeal has it) with the filter and
+            // the voice's distortion, which then gets the amp's level
+            let ampLate = laneOn && laneHolds (fAt, aAt);
+            let voiceDist = distOn && distMode != satMode::global;
+            let gainInDist = voiceDist && ! ampLate;
+
             if (distOn && (distMode == satMode::beforeFilter || distMode == satMode::both))
-                gainAndDistort (v, smoothGain, stereo, distMod, n);
+                gainAndDistort (v, smoothGain, split, distMod, n, gainInDist);
 
             // filter mix ramp, shared by both channels
             let mm = clamp (mixMod, -1.0f, 1.0f);
@@ -2724,19 +3008,28 @@ namespace porridge
             filterChannel (v, false, v.vel, at, fG, Rg, Xv, Yv, lv[0] * depthF[0], lv[1] * depthF[1],
                            cutSemis1, cutSemis2, resMod, filterSpeed * v.envSpeed, bufM, n);
 
-            if (stereo)
+            if (split)
                 filterChannel (v, true, v.vel, at, fG, Rg, Xv, Yv, lv[0] * depthF[0], lv[1] * depthF[1],
                                cutSemis1, cutSemis2, resMod, filterSpeed * v.envSpeed, bufR, n);
 
             if (distOn && distMode == satMode::afterFilter)
-                gainAndDistort (v, smoothGain, stereo, distMod, n);
+                gainAndDistort (v, smoothGain, split, distMod, n, gainInDist);
 
             // a per-voice distortion has had the gain already; with the envelope below 1/16 its
             // output is scaled by 16 * envelope, so that it still fades out
-            let voiceDist = distOn && distMode != satMode::global;
+            if (! voiceDist && ! ampLate)
+                applyVelocityGain (v, smoothGain, split, n);
 
-            if (! voiceDist)
-                applyVelocityGain (v, smoothGain, stereo, n);
+            // the lane's slots between the filter and the amp, the amp, and those after it
+            if (laneOn)
+            {
+                runLane (v, fAt, aAt, split, fG, n);
+
+                if (ampLate)
+                    applyVelocityGain (v, smoothGain, split, n);
+
+                runLane (v, aAt, laneSlots, split, fG, n);
+            }
 
             // the key EQ, on the note's harmonics
             if (P[slot::KEQ_On] != 0)
@@ -2745,12 +3038,12 @@ namespace porridge
                     v.keq.setKeyEqBand (k, P.at (slot::KEQ_1_Gain + k), fG * float (1 << k), float (sampleRate));
 
                 v.keq.processKeyEq (false, bufM, n);
-                if (stereo) v.keq.processKeyEq (true, bufR, n);
+                if (split) v.keq.processKeyEq (true, bufR, n);
             }
 
             for (int i = 0; i < n; ++i)
             {
-                if (voiceDist)
+                if (gainInDist)
                 {
                     let e = bufE.at (i);
 
@@ -2765,12 +3058,49 @@ namespace porridge
                 {
                     mix.at (pos + i) += widen ? stereoWidth (bufM.at (i), bufR.at (i), width) : float<2> (bufM.at (i), bufR.at (i));
                 }
+                else if (split)
+                {
+                    // a mono voice the lane made stereo: each side panned as the voice is
+                    v.panL += stepL;
+                    v.panR += stepR;
+                    mix.at (pos + i) += float<2> (bufM.at (i) * v.panL, bufR.at (i) * v.panR);
+                }
                 else
                 {
                     v.panL += stepL;
                     v.panR += stepR;
                     mix.at (pos + i) += float<2> (bufM.at (i) * v.panL, bufM.at (i) * v.panR);
                 }
+            }
+
+            // the tail ends once the lane has fallen quiet (below -100 dB), or after 8 s
+            if (v.tailing)
+            {
+                v.tailSamples += n;
+                var peak = 0.0f;
+
+                for (int i = 0; i < n; ++i)
+                    peak = max (peak, max (abs (bufM.at (i)), split ? abs (bufR.at (i)) : 0.0f));
+
+                if ((peak < 1e-5f && v.tailSamples > 4 * blockSize) || float (v.tailSamples) > 8.0f * float (sampleRate))
+                {
+                    v.active = false;
+                    return false;
+                }
+            }
+
+            if (levelLive)
+            {
+                var sum = 0.0f;
+
+                for (int i = 0; i < n; ++i)
+                    sum += abs (bufM.at (i)) + (stereo ? abs (bufR.at (i)) : 0.0f);
+
+                let size = sum / float (stereo ? 2 * n : n);
+                let tau = size > v.levelFollow ? 0.005 : 0.08;
+                v.levelFollow += (size - v.levelFollow) * float (1.0 - exp (-float64 (n) / (tau * sampleRate)));
+                let db = 20.0f * float (log10 (float64 (max (v.levelFollow * 1.41421356f, 1e-6f))));
+                v.level = clamp ((db + 60.0f) * (1.0f / 60.0f), 0.0f, 1.0f);
             }
 
             v.m1Last = me1;
@@ -2792,11 +3122,116 @@ namespace porridge
         }
 
         /// The velocity gain, then the voice's distortion (bufM, and bufR in stereo).
-        void gainAndDistort (Voice& v, bool smoothGain, bool stereo, float distMod, int n)
+        /// (without the gain: the amp comes later, after some of the voice lane)
+        void gainAndDistort (Voice& v, bool smoothGain, bool stereo, float distMod, int n, bool withGain)
         {
-            applyVelocityGain (v, smoothGain, stereo, n);
+            if (withGain)
+                applyVelocityGain (v, smoothGain, stereo, n);
+
             v.dist[0].processMono (distTables, shaperTables[0], P, distMod, sampleRate, bufM, n);
             if (stereo) v.dist[1].processMono (distTables, shaperTables[0], P, distMod, sampleRate, bufR, n);
+        }
+
+        //==============================================================================
+        // the voice lane (dsp/VoiceFx.cmajor)
+
+        /// The rack kind a lane slot's value runs, or -1 (empty, or a kind a voice can't run).
+        int laneKind (int fx)
+        {
+            if (fx <= 0 || fx >= rack::numEntries)
+                return -1;
+
+            let kind = rack::kindOf.at (fx);
+
+            if (kind == rack::filterKind || kind == rack::distortionKind || kind == rack::eqKind || kind == rack::phaserKind
+                 || kind == rack::flangerKind || kind == rack::utilityKind || kind == rack::shifterKind || kind == rack::resonatorKind)
+                return kind;
+
+            return -1;
+        }
+
+        /// Whether lane slots from .. to - 1 hold anything a voice runs.
+        bool laneHolds (int from, int to)
+        {
+            for (int s = from; s < to; ++s)
+                if (laneKind (int (P.at (slot::VL_1 + s))) >= 0)
+                    return true;
+
+            return false;
+        }
+
+        /// A new note (or a stolen voice) starts every lane slot's effect afresh.
+        void restartLane (Voice& v)
+        {
+            for (wrap<laneSlots> s)
+            {
+                let kind = laneKind (int (P.at (slot::VL_1 + int (s))));
+
+                if (kind >= 0)
+                {
+                    v.lane[s].startLane (kind);
+                    v.lane[s].fx = int (P.at (slot::VL_1 + int (s)));
+                }
+                else
+                {
+                    v.lane[s].fx = 0;
+                }
+            }
+        }
+
+        /// Runs lane slots from .. to - 1 on bufM (and bufR once split), each with its parameters
+        /// swapped into its kind's first's slots. noteHz: the voice's note.
+        void runLane (Voice& v, int from, int to, bool& split, float noteHz, int n)
+        {
+            for (int s = from; s < to; ++s)
+            {
+                let fx = int (P.at (slot::VL_1 + s));
+                let kind = laneKind (fx);
+
+                if (kind < 0)
+                    continue;
+
+                let k = fx - rack::kindValue.at (kind);
+                let copy = rack::kindOwn.at (kind) ? k - 1 : k;
+
+                if (copy >= 0) swapKind (kind, copy);
+
+                // every kind's first parameter is its switch (the distortion's, its type)
+                if (P.at (rack::allFirst.at (rack::firstOffset.at (kind))) != 0)
+                {
+                    if (v.lane.at (s).fx != fx)
+                    {
+                        v.lane.at (s).startLane (kind);
+                        v.lane.at (s).fx = fx;
+                    }
+
+                    if (! split && laneSplits (kind, P))
+                    {
+                        for (int i = 0; i < n; ++i)
+                            bufR.at (i) = bufM.at (i);
+
+                        split = true;
+                    }
+
+                    if (kind == rack::filterKind)          v.lane.at (s).laneFilter (fxTables, P, noteHz, sampleRate, bufM, bufR, split, n);
+                    else if (kind == rack::eqKind)         { if (P[slot::EQ_On] != 0) v.lane.at (s).laneEq (P, sampleRate, bufM, bufR, split, n); }
+                    else if (kind == rack::phaserKind)     v.lane.at (s).lanePhaser (P, noteHz, sampleRate, bufM, bufR, split, n);
+                    else if (kind == rack::flangerKind)    v.lane.at (s).laneFlanger (P, sampleRate, bufM, bufR, split, n);
+                    else if (kind == rack::utilityKind)    v.lane.at (s).laneUtility (P, sampleRate, bufM, bufR, split, n);
+                    else if (kind == rack::shifterKind)    v.lane.at (s).laneShifter (hilbert, P, noteHz, sampleRate, bufM, bufR, split, n);
+                    else if (kind == rack::resonatorKind)  v.lane.at (s).laneResonator (P, noteHz, sampleRate, bufM, bufR, split, n);
+                    else if (kind == rack::distortionKind)
+                    {
+                        useShaper (k + 1);
+                        v.lane.at (s).dist[0].processMono (distTables, shaperTables.at (k + 1), P, 0.0f, sampleRate, bufM, n);
+                        if (split) v.lane.at (s).dist[1].processMono (distTables, shaperTables.at (k + 1), P, 0.0f, sampleRate, bufR, n);
+                    }
+
+                    v.lane.at (s).fresh = false;
+                }
+
+                if (copy >= 0) swapKind (kind, copy);
+            }
         }
 
         float<2> stereoWidth (float l, float r, float w)
@@ -2998,6 +3433,7 @@ namespace porridge
             let f = (isF2 ? 1 : 0) + (right ? 2 : 0);
             let env = v.fenv.at (f).renderBlock (fenvCoefs (f), speed, sustainDown, n);
             let hz = cutoffHz (isF2, isZdfFilter (type), env, vel, at, keyFreq, Rg, X, Y, lfo1, lfo2, semisMod);
+            if (f == 0) v.viewCutoff = hz;
             let morph = clamp (P[slot::F_Morph] + (morphGlide - morphKnob), 0.0f, 1.0f);
             v.filt.at (f).process (fxTables, type, hz, res, morph, P[slot::F_Drive], sampleRate, buf, n);
         }
@@ -3120,7 +3556,7 @@ namespace porridge
             // global targets (effects, output) follow the newest voice's sources
             if (numLive > 0)
             {
-                evalMods (-1);
+                evalMods (-1, blockSize);
                 applyMods();
             }
 
@@ -3215,7 +3651,58 @@ namespace porridge
             for (wrap<blockSize> i)
                 mix[i] = outputOn ? mix[i] * gain : float<2>();
 
+            if (voiceViewOn)
+            {
+                voiceViewWait -= blockSize;
+
+                if (voiceViewWait <= 0)
+                {
+                    voiceViewWait = int (sampleRate / 25.0);
+
+                    if (numActive > 0 || voiceViewHad)
+                        sendVoiceView();
+
+                    voiceViewHad = numActive > 0;
+                }
+            }
+
             if (numLive > 0) restoreMods();
+        }
+
+        /// The sounding notes, newest first (VoiceView).
+        void sendVoiceView()
+        {
+            VoiceView view;
+            view.count = min (numActive, viewVoices);
+            view.numTargets = min (numLiveTargets, viewTargets);
+
+            for (int k = 0; k < view.numTargets; ++k)
+                view.targets.at (k) = liveTargets.at (k);
+
+            for (int i = 0; i < view.count; ++i)
+                viewVoice (view, i, voices.at (order.at (i)));
+
+            voiceViewOut <- view;
+        }
+
+        void viewVoice (VoiceView& view, int i, const Voice& v)
+        {
+            {
+                view.key.at (i) = v.key & 0x7f;
+                view.released.at (i) = v.relCount >= 0;
+                view.ampMs.at (i) = v.envClock[0];
+                view.filterMs.at (i) = v.envClock[1];
+                view.mod1Ms.at (i) = v.envClock[2];
+                view.mod2Ms.at (i) = v.envClock[3];
+                view.level.at (i) = v.ampLast;
+                view.lfo1.at (i) = float (float64 (P[slot::LFO_1_Sync] == 0 ? v.lfo[0].phase : gLfo1.phase) / two32);
+                view.lfo2.at (i) = float (float64 (P[slot::LFO_2_Sync] == 0 ? v.lfo[1].phase : gLfo2.phase) / two32);
+                view.lfo3.at (i) = float (P[slot::LFO_3_Mode] == 0 ? v.lfo3.phase : gLfo3.phase);
+                view.cutoff.at (i) = v.viewCutoff;
+
+                for (int k = 0; k < viewTargets; ++k)
+                    view.positions.at (i * viewTargets + k) = v.targetPos.at (k);
+            }
         }
 
         /// One piece of a block: controllers, then the voices over mix[pos .. pos + n).

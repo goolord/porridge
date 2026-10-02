@@ -216,4 +216,22 @@ sounds ("noise > cutoff", { Mod1_Source: noise, Mod1_Target: ModMatrix.targetInd
 for (let t = FilterTypes.firstPorridge; t < FilterTypes.all.length; ++t)
     sounds (`filter ${t} ${FilterTypes.all[t]}`.slice (0, 24), { Filter: t, Cutoff: 0.45, Resonance: 0.6, F_Morph: 0.3, F_Drive: 0.3 }, { tail: false });
 
+// mono legato with unison spread: the right side's filter envelopes start too (Oatmeal never
+// starts them, and Oat mode keeps that, the right filter staying shut)
+{
+    const one = join (dir, "legato_events.txt");
+    writeFileSync (one, "0 144 57 100\n22050 128 57 0\n");
+    const init = join (root, "tools", "re", "init_prog.bin");
+    const sides = oat =>
+    {
+        const [l, r] = render ({ program: init, events: one, frames: 22050, rate,
+                                 sets: { PolyMode: 2, U_Voices: 4, U_Spread: 1, Filter: 3, Cutoff: 0.05, F_EnvMod: 1, F_Sustain: 1, Oat_Mode: oat },
+                                 out: join (dir, `legato_${oat}.f32`) });
+        const rms = x => Math.sqrt (x.slice (4410, 22050).reduce ((s, v) => s + v * v, 0) / 17640);
+        return rms (r) / rms (l);
+    };
+    const fixed = sides (0), oat = sides (1);
+    check (fixed > 0.7 && fixed < 1.4 && oat < 0.3, `legato stereo filter envelopes  R/L ${fixed.toFixed (2)}, in Oat mode ${oat.toFixed (2)}`);
+}
+
 done ("all ok");
