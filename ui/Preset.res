@@ -95,14 +95,17 @@ let make = name => {
   impulses: Impulse.none(),
 }
 
-// A whole bank: presets, then Init programs.
-let fillBank = presets =>
+// A whole bank: presets, then Init programs. The Init programs share one set of values and
+// tables (a preset's are never changed in place), which spares making 64 of each at startup.
+let fillBank = presets => {
+  let init = Lazy.make(() => make("Init"))
   Array.fromInitializer(~length=bankPrograms, i =>
     switch presets[i] {
     | Some(p) => p
-    | None => make(`Init ${Int.toString(i)}`)
+    | None => {...Lazy.get(init), meta: emptyMeta(`Init ${Int.toString(i)}`)}
     }
   )
+}
 
 let name = p => p.meta.name
 
