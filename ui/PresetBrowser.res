@@ -124,7 +124,7 @@ let make = (ctx: Ctx.t, stage, settings) => {
     refresh: None,
     addFiles: None,
   }
-  t.library->BankLibrary.listen(() => syncLibrary(t))
+  t.library->BankLibrary.listen(() => syncLibrary(t))->ignore
   t
 }
 
@@ -195,7 +195,7 @@ let readFiles = async (t, files: array<file>) => {
 
 let previewSetting = "browserPreview"
 
-let previewOn = t => t.settings->Settings.bool(previewSetting, ~default=true)
+let previewOn = (settings: Settings.t) => settings->Settings.bool(previewSetting, ~default=true)
 
 // at most this many rows are built; the rest wait for a narrower search
 let maxRows = 400
@@ -253,7 +253,7 @@ let show = t => {
 
   let previewTimer = ref(None)
   let schedulePreview = (e: Library.entry) =>
-    if previewOn(t) {
+    if previewOn(t.settings) {
       previewTimer.contents->Option.forEach(clearTimeout)
       previewTimer :=
         Some(
@@ -647,9 +647,9 @@ let show = t => {
   //==============================================================================
   // events
 
-  let updatePreviewToggle = () => previewToggle->toggleClass("on", previewOn(t))
+  let updatePreviewToggle = () => previewToggle->toggleClass("on", previewOn(t.settings))
   previewToggle->onMouse(#click, _ => {
-    t.settings->Settings.save(previewSetting, Boolean(!previewOn(t)))
+    t.settings->Settings.save(previewSetting, Boolean(!previewOn(t.settings)))
     updatePreviewToggle()
   })
   updatePreviewToggle()

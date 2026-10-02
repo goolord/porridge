@@ -480,6 +480,7 @@ let css = `
 }
 .pv-head .prog .btn { width: 22px; padding: 0; }
 .pv-head .btn.icon { width: 26px; padding: 0; font-size: 15px; line-height: 19px; }
+.pv-head .btn.icon .ic { height: 15px; margin: auto; }
 
 /* status line: hover texts, or a hint for the page */
 .pv-status {
@@ -683,7 +684,11 @@ let css = `
 }
 .dlg .dttl { font-weight: 700; font-size: 15px; margin-bottom: 8px; }
 .dlg .drow { display: flex; align-items: flex-start; gap: 8px; margin: 5px 0; font-size: 12px; color: var(--ink-soft); }
-.dlg .drow span { width: 74px; padding-top: 3px; }
+.dlg .drow > span { width: 74px; padding-top: 3px; }
+.dlg .drow > .dlbl { flex: none; width: 92px; padding-top: 4px; }
+.dlg .drow .dcol { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+.dlg.wide { width: 560px; }
+.dlg .drow + .drow { margin-top: 12px; }
 .dlg input, .dlg textarea {
     flex: 1; font: inherit; font-size: 13px; color: var(--ink); background: var(--paper);
     border: 1px solid var(--edge); padding: 2px 5px; outline: none; box-sizing: border-box;
@@ -692,11 +697,26 @@ let css = `
 .dlg textarea { height: 84px; resize: none; }
 .dlg .dbtns { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
 .dlg .btn { position: static; min-width: 64px; }
-.dlg .seg { display: flex; flex-wrap: wrap; }
+.dlg .seg { position: static; height: auto; display: flex; flex-wrap: wrap; overflow: visible; background: none; box-shadow: none; padding-left: 1px; }
 .dlg .seg .btn { min-width: 0; padding: 0 6px; border-radius: 0; margin-left: -1px; }
-.dlg .seg .btn.off { opacity: 0.45; pointer-events: none; }
+.dlg .seg .btn:first-child { border-radius: 2px 0 0 2px; }
+.dlg .seg .btn:last-child { border-radius: 0 2px 2px 0; }
+.dlg .btn.off { opacity: 0.45; pointer-events: none; }
 .dlg .dnote { margin: 6px 0 6px 82px; font-size: 11.5px; line-height: 1.35; color: var(--ink-faint); }
 .dlg .dnote + .btn { margin-left: 82px; }
+.dlg .dcol .dnote { margin: 0; }
+.dlg .dcol .dnote + .btn { margin-left: 0; }
+.dlg .dcol .tg { position: static; height: 22px; padding: 0 8px 0 5px; }
+.dlg .dfolders { align-self: stretch; display: flex; flex-direction: column; gap: 3px; }
+.dlg .dfolders:empty { display: none; }
+.dlg .dfolder { display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 0 0 6px; border-radius: 2px;
+    background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge); color: var(--ink); }
+.dlg .dfolder b { flex: none; font-weight: 700; }
+.dlg .dfolder span { flex: 1; min-width: 0; width: auto; padding: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink-faint); font-size: 11px; }
+.dlg .dfolder .btn { min-width: 0; width: 22px; height: 22px; padding: 0; color: var(--ink-soft); }
+.dlg .daddrow { align-self: stretch; display: flex; gap: 6px; }
+.dlg .daddrow input { height: 22px; min-width: 0; }
+.dlg .daddrow .btn { height: 22px; min-width: 0; }
 
 /* the preset browser (PresetBrowser.res): sources and facets, the list, the details */
 .brw {

@@ -10,6 +10,8 @@ type t = {
   channel: HostChannel.t,
   // the saved settings, once the plugin has answered
   mutable saved: option<Dict.t<JSON.t>>,
+  // whether the plugin has answered (a setting saved where nothing answers is kept for the view)
+  mutable answered: bool,
   mutable zoom: float,
   mutable listeners: array<unit => unit>,
 }
@@ -19,6 +21,7 @@ let zoomSteps = [0.75, 1., 1.25, 1.5, 1.75, 2., 2.5, 3.]
 let request = (t, what) => t.channel->HostChannel.request(what)
 
 let onReply = (t, reply: dict<JSON.t>) => {
+  t.answered = true
   t.saved = switch reply->Dict.get("settings") {
   | Some(Object(saved)) => Some(saved)
   | _ => Some(Dict.make())
@@ -31,7 +34,7 @@ let onReply = (t, reply: dict<JSON.t>) => {
 }
 
 let make = pc => {
-  let t = {channel: HostChannel.make(pc, "settings"), saved: None, zoom: 1., listeners: []}
+  let t = {channel: HostChannel.make(pc, "settings"), saved: None, answered: false, zoom: 1., listeners: []}
   t.channel->HostChannel.listen(onReply(t, _))
   request(t, "get")
   t
@@ -40,7 +43,7 @@ let make = pc => {
 let dispose = t => t.channel->HostChannel.dispose
 
 // whether the plugin keeps the settings and sizes the window
-let available = t => t.saved != None
+let available = t => t.answered
 
 // Calls fn whenever the plugin answers; returns a function that stops it.
 let listen = (t, fn) => {

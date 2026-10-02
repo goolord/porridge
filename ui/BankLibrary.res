@@ -31,7 +31,7 @@ type t = {
   // whether the next list is this view's first: the folders are scanned then only if they
   // aren't the ones the plugin last scanned
   mutable verifying: bool,
-  listeners: array<unit => unit>,
+  mutable listeners: array<unit => unit>,
   // reads in progress, by id: the parts so far, and what gets the file
   reads: Map.t<string, (array<Uint8Array.t>, option<Uint8Array.t> => unit)>,
 }
@@ -155,7 +155,12 @@ let make = (pc, settings) => {
 
 let dispose = t => t.channel->HostChannel.dispose
 
-let listen = (t, fn) => t.listeners->Array.push(fn)
+// Calls fn whenever the banks or the scanning change; returns a function that stops it.
+let listen = (t, fn) => {
+  let wrapped = () => fn()
+  t.listeners->Array.push(wrapped)
+  () => t.listeners = t.listeners->Array.filter(f => f !== wrapped)
+}
 
 // The banks as the plugin last listed them. The first time the view asks, the folders are
 // scanned only if the plugin hasn't scanned these ones yet (see onReply); a scan is otherwise up

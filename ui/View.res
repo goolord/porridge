@@ -311,9 +311,11 @@ let make = (host, pc) => {
   button(head, "Panic", "Stop all notes and clear effect tails", () =>
     programs->ProgramStore.panic
   )->ignore
-  button(head, "⚙", "Settings: the size of the interface", () =>
-    SettingsDialog.show(settings, stage)
-  )->addClass("icon")
+  let gear = button(head, "", "Settings: interface size, preset browser, bank folders", () =>
+    SettingsDialog.show(settings, browser.library, stage)
+  )
+  gear->addClass("icon")
+  gear->appendChild(Icons.render(Icons.gear))
 
   stage->appendChild(toastEl)
 
