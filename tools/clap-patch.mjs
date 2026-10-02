@@ -26,6 +26,8 @@
 //    device pixel ratio); ?dismiss closes it, for a press or Escape in the view, which the
 //    menu never hears on Windows. The menu is shown from on_main_thread, once the view's
 //    message has been handled. See ui/HostMenu.res.
+//  - A CPU diagnostic, off unless PORRIDGE_PERF is set: the process calls of each instance are
+//    timed and summarised in porridge-perf.log in the temp folder (tools/clap/PorridgePerf.h).
 //  - The latency is the synth's 64 samples (dsp/Synth.cmajor applies MIDI a block late, on
 //    its own sample). Cmajor's C++ generator reports 0 whatever the patch declares.
 //
@@ -162,7 +164,7 @@ if (open(join(project, "include", "choc", "choc", "javascript", "choc_javascript
 
 if (!open(join(project, "helpers", "clap", "cmaj_CLAPPlugin.h"))) process.exit(0);
 
-for (const header of ["PorridgeBridge.h", "PorridgeLibrary.h"])
+for (const header of ["PorridgeBridge.h", "PorridgeLibrary.h", "PorridgePerf.h"])
   copyFileSync(join(root, "tools", "clap", header), join(project, "helpers", "clap", header));
 
 insertBefore(
@@ -181,6 +183,22 @@ insertAfter(
   `#include "choc/text/choc_Files.h"\n#include "choc/text/choc_JSON.h"\n#include "choc/memory/choc_Base64.h"\n`,
 );
 insertAfter(`#include <algorithm>\n`, `#include <cmath>\n#include <cstdlib>\n#include <fstream>\n`);
+
+// The CPU diagnostic (PORRIDGE_PERF, tools/clap/PorridgePerf.h); after the standard headers
+insertAfter(
+  `#include <vector>
+`,
+  `
+${marker} an optional CPU diagnostic (added by tools/clap-patch.mjs)
+#ifdef _WIN32
+ #ifndef NOMINMAX
+  #define NOMINMAX
+ #endif
+ #include <windows.h>
+#endif
+#include "PorridgePerf.h"
+`,
+);
 
 //==============================================================================
 insertAfter(
@@ -568,6 +586,19 @@ insertAfter(
             return patch.isPlayable();
         }
 
+`,
+);
+
+// With PORRIDGE_PERF set, the process calls are timed and logged (tools/clap/PorridgePerf.h)
+replace(
+  `        return unsafeCastToRef<Plugin> (plugin).impl->clapPlugin_process (process);
+`,
+  `        auto& impl = *unsafeCastToRef<Plugin> (plugin).impl;
+
+        if (! ::porridge::perf::enabled())
+            return impl.clapPlugin_process (process);
+
+        return ::porridge::perf::timerFor (std::addressof (impl)).run (process, [&] { return impl.clapPlugin_process (process); });
 `,
 );
 
