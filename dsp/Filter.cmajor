@@ -1655,6 +1655,8 @@ namespace porridge
         float driveS, toneS, characterS, driveTo, toneTo, characterTo;
         bool gliding;
         float64 modelRate;
+        // the note the lo-fi sampler's rates follow (Sat_Track), 0 for none
+        float trackHz;
     }
 
     void clearState (Distortion& this)
@@ -1695,9 +1697,10 @@ namespace porridge
     }
 
     /// Sets up the block's gain and mix ramps, and a model type's controls (at the rate it runs
-    /// at, os times sr). Returns false when the distortion is off.
+    /// at, os times sr). noteHz: a voice's note (0 on the whole sound), which the lo-fi
+    /// sampler's rates follow with Sat_Track. Returns false when the distortion is off.
     bool beginBlock (Distortion& this, const float[numSlots]& P, float modDb, bool isGlobal, float64 sr, int os,
-                     float& dpre, float& dpost, float& dmix, int n)
+                     float noteHz, float& dpre, float& dpost, float& dmix, int n)
     {
         let type = int (P[slot::Sat_Type]);
 
@@ -1743,12 +1746,17 @@ namespace porridge
 
             // (the controls are worked out again for a new type or rate, or while the knobs glide)
             let rate = sr * float64 (os);
-            let stale = type != this.coefs.type || rate != this.modelRate;
+            let hz = type == satType::lofi && P[slot::Sat_Track] != 0 ? noteHz : 0.0f;
+            let stale = type != this.coefs.type || rate != this.modelRate || hz != this.trackHz;
             this.modelRate = rate;
+            this.trackHz = hz;
             this.gliding = this.driveS != this.driveTo || this.toneS != this.toneTo || this.characterS != this.characterTo;
 
             if (stale && ! this.gliding)
+            {
                 this.coefs.setupModel (type, float64 (this.driveS), float64 (this.toneS), float64 (this.characterS), rate);
+                if (hz > 0) this.coefs.trackLofi (hz);
+            }
         }
 
         return true;
@@ -1765,6 +1773,9 @@ namespace porridge
         this.coefs.setupModel (this.modelType, float64 (this.driveS + (this.driveTo - this.driveS) * f),
                                float64 (this.toneS + (this.toneTo - this.toneS) * f),
                                float64 (this.characterS + (this.characterTo - this.characterS) * f), this.modelRate);
+
+        if (this.trackHz > 0)
+            this.coefs.trackLofi (this.trackHz);
     }
 
     void endModelGlide (Distortion& this)
@@ -1825,14 +1836,14 @@ namespace porridge
         return mixing ? y * mixS + dry.at ((dryIdx - latency) & 15) * (1.0f - mixS) : y;
     }
 
-    /// Per-voice (mono) distortion of one block.
+    /// Per-voice (mono) distortion of one block. noteHz: the voice's note.
     void processMono (Distortion& this, const DistTables& t, const float[1026]& custom, const float[numSlots]& P, float modDb, float64 sr,
-                      float[blockSize]& buf, int n)
+                      float noteHz, float[blockSize]& buf, int n)
     {
         let os = distOversampling (P);
         float dpre, dpost, dmix;
 
-        if (! this.beginBlock (P, modDb, false, sr, os, dpre, dpost, dmix, n))
+        if (! this.beginBlock (P, modDb, false, sr, os, noteHz, dpre, dpost, dmix, n))
             return;
 
         let type = int (P[slot::Sat_Type]);
@@ -1864,7 +1875,7 @@ namespace porridge
         let os = distOversampling (P);
         float dpre, dpost, dmix;
 
-        if (! this.beginBlock (P, modDb, true, sr, os, dpre, dpost, dmix, blockSize))
+        if (! this.beginBlock (P, modDb, true, sr, os, 0.0f, dpre, dpost, dmix, blockSize))
             return;
 
         let type = int (P[slot::Sat_Type]);

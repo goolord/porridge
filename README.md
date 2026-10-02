@@ -31,15 +31,18 @@ dsp/                    Cmajor DSP
   FxExtra.cmajor          Porridge's flanger, phaser, compressor, bode, rack filter and utility
   VoiceFx.cmajor          the voice lane: up to four effects in every voice, around the filter
                           and the amp envelope (the rack's filter, distortion, EQ, phaser,
-                          flanger and utility, and a key-tracked frequency shifter and a
-                          resonator tuned to each note); voices ring on past the amp while
-                          effects after it still sound
+                          flanger and utility, and a key-tracked frequency shifter, a
+                          resonator tuned to each note and an octaver); voices ring on past
+                          the amp while effects after it still sound. The phaser's and
+                          flanger's LFOs can start each note at a random point and follow its
+                          pitch, the flanger's delay its period
   Space.cmajor            the algo reverb (hall, plate, nitrous, basin, vintage)
   Ambience.cmajor         the ambience: very small spaces (room, and Airwindows' ClearCoat
                           and VerbTiny), for a little stereo and tone
   Airwindows.cmajor       ports of Airwindows plugins: the distortion's model types (Tube,
                           Tape, Density, Mackity, Edge, MultiBandDistortion, Fracture2,
-                          BassAmp, GrindAmp, Beam, BitGlitter) and the air rack effect (Air4)
+                          BassAmp, GrindAmp, Beam, BitGlitter, whose rates can land on
+                          multiples of a voice's note) and the air rack effect (Air4)
   Convolve.cmajor         the convolver: zero-latency partitioned convolution, built-in impulses
 ui/                     patch view (ReScript)
   Index.res               entry point; View.res builds the pages
@@ -47,7 +50,9 @@ ui/                     patch view (ReScript)
                           envelopes, LFOs, the filter graph and the modulated controls
   Preset.res              Porridge's preset format; PorridgeParams.res and ModMatrix.res
                           list the parameters and modulation sources/targets Oatmeal doesn't have
-                          (32 connections, each with hold, slew and curve); ModScope.res says
+                          (32 connections, each with hold, slew, curve and steps; per-note
+                          sources include chord position, gap, legato and the sounding
+                          pitch); ModScope.res says
                           which sources each note has its own of and which targets are in the
                           voice or on the whole sound, for PageMod.res (the Mod page);
                           ModEdit.res connects a source to a control, and ModTray.res is the
@@ -116,7 +121,9 @@ tools/
                           matrix's hold, slew, curve, later sources and slots, and what
                           per-note sources follow on the whole sound, and the view's reports of
                           the sounding notes, which the host writes with --voices), lane.mjs
-                          (the voice lane's effects, its key tracking, tails and amp place);
+                          (the voice lane's effects, its key tracking, tails and amp place),
+                          extras.mjs (chord position, gap, legato, pitch, steps, the random
+                          starts, rate and delay tracking, the lo-fi tracking, the octaver);
                           lib.mjs has what they
                           share
   vanilla-bank.mjs        builds presets/vanilla.porridge

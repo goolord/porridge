@@ -76,6 +76,10 @@ namespace porridge
         float lfo3Raw, interval, alternate, cycle, levelFollow, level, wanderValue;
         Drift wander;
 
+        // and later: its place in the chord (-1..1), the gap since the note before (0..1),
+        // whether another note was held as it started, and its pitch as it sounds (-1..1, as key)
+        float chord, gap, legato, pitchNow;
+
         // for the view (VoiceView): each envelope's clock (amp, filter, mod 1, mod 2: ms since the
         // note-on, or since the note-off once clockReleased), filter 1's last cutoff, and the
         // knob positions of the first live modulation targets

@@ -1023,7 +1023,7 @@ let effectSettings = (r, w, m, e: FxRack.effect) => {
     s("Ut_BassMono", PorridgeParams.bassMonoValue(between(r, 80., 160.)))
   | #distortion => distortion(r, w, m, first => FxRack.id(e, first))
   // (only in the voice lane, which random patches leave alone)
-  | #eq | #shifter | #resonator => ()
+  | #eq | #shifter | #resonator | #octaver => ()
   }
 }
 
@@ -1064,7 +1064,7 @@ let rank = (kind: FxRack.kind) =>
   | #delay => 6
   | #convolve => 7
   | #space | #reverb | #ambience => 8
-  | #shifter | #resonator => 1
+  | #shifter | #resonator | #octaver => 1
   }
 
 let rackOf = m => FxRack.read(get(m, ...))
@@ -1974,11 +1974,14 @@ let nudges = (a: area) =>
 // The rack's effects' settings that move: their continuous ones, but not their levels in and out
 // (which the output gain answers for) nor what restarts an effect.
 let fixedFx = ["Gain", "Pregain", "Postgain", "Limit", "Wet", "InGain", "OutGain", "Predelay", "Length", "Dry", "Phase", "Spread", "Width", "Pan", "Freq", "Inv", "Swap", "Thresh", "Ratio", "Split"]
+// (not the voices' extras, the phaser's and flanger's tracking among them, which random patches
+// leave alone as they leave the voice lane)
 let rackNudges = m =>
   rackOf(m)->Array.flatMap(e =>
-    FxRack.params(e)->Array.filterMap(id => {
+    FxRack.spec(e.kind).params->Array.filterMap(((first, _)) => {
+      let id = FxRack.id(e, first)
       let d = def(id)
-      let fixed = fixedFx->Array.some(word => String.includes(id, word))
+      let fixed = fixedFx->Array.some(word => String.includes(id, word)) || PorridgeParams.isLaterKindParam(first)
       d.names == None && !d.isInt && !fixed ? Some(nudge(id, Knob, ~scale=0.6)) : None
     })
   )

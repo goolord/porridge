@@ -3,7 +3,7 @@
 // Left, the sources: the per-voice ones (each voice its own), then those every voice shares (the macro
 // knobs and controllers among them); an LFO moves between the two with its mode. Right, the
 // connections, one row each: source, cable, target, amount, "via" source, options (hold, slew,
-// curve), remove. Grabbing a source (or "add connection") brings up the targets over the list,
+// curve, steps), remove. Grabbing a source (or "add connection") brings up the targets over the list,
 // the per-voice ones apart from those on the whole sound: drop the cable on one, or click it,
 // or search for one. A row's source or target can be changed in place. A per-note source on
 // the whole sound follows the newest note, or every note by its level (the setting below the
@@ -11,7 +11,7 @@
 
 open! Web
 
-let hint = "Drag a source onto a target to connect them, or click a source and then a target. Click a connection's source or target to change it, its options to hold, slew or bend it. Double-click a macro's name to rename it."
+let hint = "Drag a source onto a target to connect them, or click a source and then a target. Click a connection's source or target to change it, its options to hold, slew, bend or step it. Double-click a macro's name to rename it."
 
 let (margin, gap) = (6., Grid.gap)
 let sourcesWidth = 342.
@@ -129,7 +129,7 @@ let build = (ctx: Ctx.t, page) => {
   // (a removed connection's options go back to theirs, for the next one in its slot)
   let disconnect = k => {
     setSlot(k, 0., 0., 0., 0.)
-    [ModMatrix.holdId(k), ModMatrix.slewId(k), ModMatrix.curveId(k)]->Array.forEach(id =>
+    [ModMatrix.holdId(k), ModMatrix.slewId(k), ModMatrix.curveId(k), ModMatrix.stepsId(k)]->Array.forEach(id =>
       if get(id) != 0. {
         model->ParamModel.gestureSet(id, 0.)
       }
@@ -614,7 +614,7 @@ let build = (ctx: Ctx.t, page) => {
       }
 
   //==============================================================================
-  // a connection's options: hold, slew and curve, in a box under its button, made the first
+  // a connection's options: hold, slew, curve and steps, in a box under its button, made the first
   // time it opens
 
   let optionBoxes: Map.t<int, (element, unit => unit)> = Map.make()
@@ -639,22 +639,24 @@ let build = (ctx: Ctx.t, page) => {
       g->Grid.choice(ModMatrix.holdId(k), 0, 0, "hold", ~span=2)
       g->Grid.param(ModMatrix.slewId(k), 0, 1, "slew")
       g->Grid.param(ModMatrix.curveId(k), 1, 1, "curve")
+      g->Grid.param(ModMatrix.stepsId(k), 0, 2, "steps")
       // the curve: what the source's value becomes (the line through the middle is straight)
-      let plotBox = g->Grid.cell(0, 2, ~span=2, ~rows=2)
+      let plotBox = g->Grid.cell(0, 3, ~span=2, ~rows=2)
       let s = Plots.svg(box, plotBox)
       Plots.background(s, plotBox)
       let straight = s->svgEl("path", [("class", Str("axis"))])
       let curve = s->svgEl("path", [("class", Str("curve"))])
-      let note = g->Grid.note("", 0, 4, ~span=2, ~rows=2)
+      let note = g->Grid.note("", 0, 5, ~span=2, ~rows=2)
       let draw = () => {
-        let {source, target, hold, slew, curve: c} = slot(k)
+        let {source, target, hold, slew, curve: c, steps} = slot(k)
         let bipolar = ModMatrix.sources[source]->Option.mapOr(false, s => s.bipolar)
         title->setTextContent(`${sourceLabel(source)} → ${targetLabel(target)}`)
         let (w, h) = (plotBox.w - 6., plotBox.h - 7.)
         let at = (x, y) => (3. + w * (bipolar ? (x + 1.) / 2. : x), 3. + h * (bipolar ? (1. - y) / 2. : 1. - y))
-        let points = Array.fromInitializer(~length=65, i => {
-          let x = bipolar ? Int.toFloat(i) / 32. - 1. : Int.toFloat(i) / 64.
-          at(x, ModMatrix.curved(x, c))
+        // (finely enough that the steps' risers stand upright)
+        let points = Array.fromInitializer(~length=257, i => {
+          let x = bipolar ? Int.toFloat(i) / 128. - 1. : Int.toFloat(i) / 256.
+          at(x, ModMatrix.stepped(ModMatrix.curved(x, c), steps, ~bipolar))
         })
         curve->setAttribute("d", Str(Plots.pathFrom(points)))
         straight->setAttribute("d", Str(Plots.pathFrom([at(bipolar ? -1. : 0., bipolar ? -1. : 0.), at(1., 1.)])))
@@ -662,7 +664,10 @@ let build = (ctx: Ctx.t, page) => {
           (hold ? "Each note keeps the value it starts with. " : "") ++
           (slew > 0. ? `Changes take about ${PorridgeParams.slewText(slew)} to arrive. ` : "") ++
           (c == 0. ? "" : c > 0. ? "Small values count for more. " : "Small values count for less. ") ++
-          (hold || slew > 0. || c != 0. ? "" : "Hold latches the value at note-on; slew smooths it; curve bends it."),
+          (steps > 0 ? `It snaps to ${Int.toString(steps)} levels. ` : "") ++
+          (hold || slew > 0. || c != 0. || steps > 0
+            ? ""
+            : "Hold latches the value at note-on; slew smooths it; curve bends it; steps snap it to levels."),
         )
       }
       model->ParamModel.listenEach(ModMatrix.slotIds(k), perFrame(draw))
@@ -681,7 +686,7 @@ let build = (ctx: Ctx.t, page) => {
       draw()
       let r = anchor->getBoundingClientRect
       let p = toLocal(r.left + r.width, r.top + r.height)
-      let h = Grid.padTop + 6. * Grid.rowHeight + Grid.padBottom
+      let h = Grid.padTop + 7. * Grid.rowHeight + Grid.padBottom
       let y = p.y + 2. + h > Style.pageHeight ? p.y - r.height / ctx.scale() - h - 2. : p.y + 2.
       box->place(p.x - optionsWidth, y, ~w=optionsWidth, ~h)->ignore
       box->addClass("on")
@@ -784,7 +789,7 @@ let build = (ctx: Ctx.t, page) => {
   el("div", ~cls="big", ~text="Nothing modulates anything yet.", ~parent=empty)->ignore
   el(
     "div",
-    ~text="Drag a source from the left onto a target, or click a source and then a target. Each connection gets an amount, an optional second source that scales it, and options to hold, slew or bend it.",
+    ~text="Drag a source from the left onto a target, or click a source and then a target. Each connection gets an amount, an optional second source that scales it, and options to hold, slew, bend or step it.",
     ~parent=empty,
   )->ignore
 
@@ -829,6 +834,7 @@ let build = (ctx: Ctx.t, page) => {
           s.hold ? Some("latch") : None,
           s.slew > 0. ? Some("slew") : None,
           s.curve != 0. ? Some("curve") : None,
+          s.steps > 0 ? Some("steps") : None,
         ]->Array.filterMap(x => x)
         options->setTextContent(parts == [] ? "options" : parts->Array.join(" · "))
         options->toggleClass("set", parts != [])

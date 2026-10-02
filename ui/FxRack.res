@@ -9,7 +9,7 @@
 //
 // The voice lane (VL_1..4, PorridgeParams.laneSpecs) holds the same effects, in every voice
 // instead of on the whole sound: only the kinds a voice can run (laneKinds), and an effect is in
-// the rack or the lane, not both. The shifter and resonator are only for the lane. The lane is
+// the rack or the lane, not both. The shifter, resonator and octaver are only for the lane. The lane is
 // kept without gaps; VL_FilterAt and VL_AmpAt say how many of it come before the filter and the
 // amp envelope.
 
@@ -31,6 +31,7 @@ type kind = [
   | #air
   | #shifter
   | #resonator
+  | #octaver
 ]
 
 // copy 1 is Oatmeal's for its four, or the first of Porridge's own (the rack's distortions start
@@ -55,6 +56,7 @@ let kinds: array<kind> = [
   #air,
   #shifter,
   #resonator,
+  #octaver,
 ]
 
 let key = (k: kind) => (k :> string)
@@ -81,7 +83,7 @@ let menuGroups: array<(string, array<kind>)> = [
 let laneKinds = kinds->Array.filter(k => spec(k).runsIn != Rack)
 let laneOnly = (k: kind) => spec(k).runsIn == LaneOnly
 let laneMenuGroups: array<(string, array<kind>)> = [
-  ("follows the key", [#resonator, #shifter]),
+  ("follows the key", [#resonator, #shifter, #octaver]),
   ("tone & drive", [#filter, #distortion, #eq]),
   ("movement", [#phaser, #flanger]),
   ("level & place", [#utility]),

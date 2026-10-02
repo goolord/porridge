@@ -384,8 +384,11 @@ namespace porridge::mods
     let pan = 4;
 
     /// each connection's parameters' slots (the later slots' come after the first ones' apart)
-${[["Source", "sourceId"], ["Target", "targetId"], ["Amount", "amountId"], ["Via", "viaId"], ["Hold", "holdId"], ["Slew", "slewId"], ["Curve", "curveId"]].map (([name, fn]) =>
+${[["Source", "sourceId"], ["Target", "targetId"], ["Amount", "amountId"], ["Via", "viaId"], ["Hold", "holdId"], ["Slew", "slewId"], ["Curve", "curveId"], ["Steps", "stepsId"]].map (([name, fn]) =>
     `    let conn${name} = int[numSlots] (${Array.from ({ length: ModMatrix.slots }, (_, k) => slotById (ModMatrix[fn] (k + 1))).join (", ")});`).join ("\n")}
+
+    /// whether each source runs -1..1 (else 0..1), for a connection's steps
+    let sourceBipolar = bool[numSources] (${ModMatrix.sources.map (s => String (s.bipolar)).join (", ")});
 
     let targetKind  = int[${targetKind.length}] (${targetKind.join (", ")});
     let targetSlot  = int[${targetSlot.length}] (${targetSlot.join (", ")});

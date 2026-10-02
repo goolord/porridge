@@ -5,7 +5,7 @@
 //     "name": "Warm pad", "author": "", "category": "pad", "tags": ["slow"], "description": "",
 //     "params": { "Cutoff": 0.42, "O1_Waveform": 1, ... },   // endpoint id -> internal value
 //     "modulations": [ { "source": "lfo1", "target": "Cutoff", "amount": 0.25, "via": "modWheel",
-//                        "hold": "latch", "slew": 0.3, "curve": -0.5 } ],   // (options only when set)
+//                        "hold": "latch", "slew": 0.3, "curve": -0.5, "steps": 13 } ],   // (options only when set)
 //     "macros": ["brightness", "", "", ""],                    // macro knob names
 //     "tables": { "wave1": "<base64 float32 LE>", ... },      // only tables that differ from Init
 //     "tuning": { "scl": "<.scl text>", "kbm": "<.kbm text>" }, // microtuning, if any
@@ -160,6 +160,8 @@ let featureLoss = (feature: PorridgeParams.feature) =>
   | Modulations | MoreModulations => Some("modulations")
   | Lfo3 => Some("LFO 3 and the wander rate")
   | VoiceLane | ResonatorGain => Some("the voices' own effects (and the FX filter's note tracking)")
+  | VoiceExtras =>
+    Some("the phaser's, flanger's and lo-fi sampler's note tracking and random starts, the octaver and the modulation steps")
   | Macros => Some("macros")
   | Mpe => Some("MPE settings")
   | Drift => Some("the analog drift")
@@ -218,7 +220,7 @@ let porridgeOnly = p => {
   let rack = FxRack.read(valueOf(p, _))
 
   // in the warning's order
-  features([Modulations, MoreModulations, Lfo3, VoiceLane, ResonatorGain, Macros, Mpe, Drift])
+  features([Modulations, MoreModulations, Lfo3, VoiceLane, ResonatorGain, VoiceExtras, Macros, Mpe, Drift])
   // Oatmeal's chain is chorus, delay, reverb, EQ; effects left out of the rack are exported
   // switched off, so only their order is lost
   let firsts = rack->Array.filter(FxRack.isFirst)
@@ -343,6 +345,7 @@ let toJson = (p, ~header=true, ~sparse=false) => {
         ...(slot.hold ? [("hold", str("latch"))] : []),
         ...(slot.slew != 0. ? [("slew", num(Math.fround(slot.slew)->shortFloat))] : []),
         ...(slot.curve != 0. ? [("curve", num(Math.fround(slot.curve)->shortFloat))] : []),
+        ...(slot.steps > 0 ? [("steps", num(Int.toFloat(slot.steps)))] : []),
       ]
       Some(
         JSON.Object(
@@ -450,6 +453,7 @@ let fromJsonObject = (d: dict<JSON.t>) => {
           set(ModMatrix.holdId(k), getString(m, "hold") == "latch" ? 1. : 0.)
           set(ModMatrix.slewId(k), number("slew"))
           set(ModMatrix.curveId(k), number("curve"))
+          set(ModMatrix.stepsId(k), number("steps"))
           slot := k + 1
         }
       | _ => ()

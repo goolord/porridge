@@ -103,21 +103,39 @@ namespace porridge
 
     /// What the flanger's knobs ask for (the rack's and every voice's, VoiceFx.cmajor): the
     /// shortest delay (samples, at most longest / 16), depth, feedback, mix, the LFO's step per
-    /// sample and the right side's phase offset (cycles).
+    /// sample and the right side's phase offset (cycles). noteHz (0: none): the note the delay
+    /// and the LFO's rate follow, by Fl_Track and Fl_RateTrack, from middle C. A tracked delay
+    /// may reach as far as the sweep leaves room for (longest / 16 ^ depth), so that low notes'
+    /// periods fit.
     struct FlangerTargets
     {
         float delay, depth, fb, mix;
         float64 inc, offset;
     }
 
-    FlangerTargets flangerTargets (const float[numSlots]& P, float64 sr, float longest)
+    FlangerTargets flangerTargets (const float[numSlots]& P, float64 sr, float longest, float noteHz)
     {
         FlangerTargets t;
-        t.delay = min (expKnob (0.1f, 20.0f, P[slot::Fl_Delay]) * 0.001f * float (sr), longest / 16.0f);
         t.depth = clamp (P[slot::Fl_Depth], 0.0f, 1.0f);
+        var delay = expKnob (0.1f, 20.0f, P[slot::Fl_Delay]) * 0.001f * float (sr);
+        var inc = float64 (expKnob (0.02f, 20.0f, P[slot::Fl_Rate])) / sr;
+
+        if (noteHz > 0 && P[slot::Fl_Track] > 0)
+        {
+            delay *= float (pow (261.63 / float64 (noteHz), float64 (min (P[slot::Fl_Track], 1.0f))));
+            t.delay = min (delay, longest / float (pow (16.0, float64 (t.depth))));
+        }
+        else
+        {
+            t.delay = min (delay, longest / 16.0f);
+        }
+
+        if (noteHz > 0 && P[slot::Fl_RateTrack] > 0)
+            inc *= pow (float64 (noteHz) / 261.63, float64 (min (P[slot::Fl_RateTrack], 1.0f)));
+
         t.fb = clamp (P[slot::Fl_Feedback], -1.0f, 1.0f) * 0.97f;
         t.mix = clamp (P[slot::Fl_Mix], 0.0f, 1.0f);
-        t.inc = float64 (expKnob (0.02f, 20.0f, P[slot::Fl_Rate])) / sr;
+        t.inc = inc;
         t.offset = float64 (clamp (P[slot::Fl_Phase], 0.0f, 180.0f)) / 360.0;
         return t;
     }
@@ -192,13 +210,14 @@ namespace porridge
                         this.line.at ((p - 1) & m).at (ch), this.line.at ((p - 2) & m).at (ch), t);
     }
 
-    bool process (Flanger& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
+    /// noteHz: the newest note's frequency (0 when none), for the tracking.
+    bool process (Flanger& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr, float noteHz)
     {
         if (! active && this.idle)
             return false;
 
         let longest = float (flangerLineSize - 4);
-        let t = flangerTargets (P, sr, longest);
+        let t = flangerTargets (P, sr, longest, noteHz);
         let inc = t.inc, offset = t.offset;
         let k = extraSmoothing (sr, 20.0, 1);
 
@@ -292,7 +311,8 @@ namespace porridge
 
     /// What the phaser's knobs ask for (the rack's and every voice's, VoiceFx.cmajor): the
     /// number of stages, ln (centre Hz) (following noteHz by Ph_Track when `track`), depth,
-    /// spread, feedback, mix, the LFO's rate (Hz) and the right side's phase offset (cycles).
+    /// spread, feedback, mix, the LFO's rate (Hz, following noteHz by Ph_RateTrack when `track`)
+    /// and the right side's phase offset (cycles).
     struct PhaserTargets
     {
         int stages;
@@ -315,6 +335,10 @@ namespace porridge
         t.fb = clamp (P[slot::Ph_Feedback], -1.0f, 1.0f) * 0.95f;
         t.mix = clamp (P[slot::Ph_Mix], 0.0f, 1.0f);
         t.rate = expKnob (0.02f, 20.0f, P[slot::Ph_Rate]);
+
+        if (track && P[slot::Ph_RateTrack] > 0)
+            t.rate *= float (pow (float64 (noteHz) / 261.63, float64 (min (P[slot::Ph_RateTrack], 1.0f))));
+
         t.offset = float64 (clamp (P[slot::Ph_Phase], 0.0f, 180.0f)) / 360.0;
         return t;
     }

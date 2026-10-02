@@ -312,6 +312,46 @@ let sources = [
     kind: Plain,
     help: "how many notes are held: 0 with one, 1 with eight or more",
   },
+  {
+    key: "chord",
+    label: "chord place",
+    short: "chord",
+    colour: playColour,
+    bipolar: true,
+    scope: Fixed(EachNote),
+    kind: Plain,
+    help: "where the note sits among the held notes: -1 the lowest, 1 the highest, 0 a note alone (kept once released)",
+  },
+  {
+    key: "gap",
+    label: "gap",
+    short: "gap",
+    colour: playColour,
+    bipolar: false,
+    scope: Fixed(EachNote),
+    kind: Plain,
+    help: "how long after the note before this one started: 0 within 10 ms (a chord), 1 at 2 s or more",
+  },
+  {
+    key: "legato",
+    label: "legato",
+    short: "legato",
+    colour: playColour,
+    bipolar: false,
+    scope: Fixed(EachNote),
+    kind: Plain,
+    help: "1 when another note was still held as this one started, 0 when none was",
+  },
+  {
+    key: "pitch",
+    label: "pitch",
+    short: "pitch",
+    colour: playColour,
+    bipolar: true,
+    scope: Fixed(EachNote),
+    kind: Plain,
+    help: "the note's pitch as it sounds, with glide, bend and pitch modulation: -1 five octaves under middle C, 1 five over",
+  },
 ]
 
 // The sources, grouped for menus, by key (a source left out here is shown in a last group of
@@ -326,7 +366,11 @@ let sourceGroups = [
     [
       "velocity",
       "key",
+      "pitch",
+      "chord",
       "interval",
+      "gap",
+      "legato",
       "alternate",
       "cycle",
       "glide",
@@ -683,6 +727,9 @@ let targets = [
     [("Rs_Pitch", "pitch"), ("Rs_Decay", "decay"), ("Rs_Bright", "brightness"), ("Rs_Mix", "mix")],
   ),
   ...effectTargets("resonator", "resonator", [2], [("Rs_Gain", "gain")]),
+  ...effectTargets("phaser", "phaser", [2, 3, 4], [("Ph_RateTrack", "rate tracking")]),
+  ...effectTargets("flanger", "flanger", [2, 3, 4], [("Fl_RateTrack", "rate tracking"), ("Fl_Track", "delay tracking")]),
+  ...effectTargets("octaver", "octaver", [2], [("Oc_Sub", "down"), ("Oc_Up", "up"), ("Oc_Dry", "dry")]),
 ]
 
 // The target groups, by the key in each target's group, with their titles.
@@ -709,6 +756,7 @@ let groups = [
   ("air", "air"),
   ("shifter", "shifter"),
   ("resonator", "resonator"),
+  ("octaver", "octaver"),
 ]
 
 let sourceIndex = key => sources->Array.findIndex(s => s.key == key)
@@ -729,7 +777,9 @@ let viaId = k => `Mod${Int.toString(k)}_Via`
 let holdId = k => `Mod${Int.toString(k)}_Hold`
 let slewId = k => `Mod${Int.toString(k)}_Slew`
 let curveId = k => `Mod${Int.toString(k)}_Curve`
-let slotIds = k => [sourceId(k), targetId(k), amountId(k), viaId(k), holdId(k), slewId(k), curveId(k)]
+// (came later: PorridgeParams.stepSpecs)
+let stepsId = k => `Mod${Int.toString(k)}_Steps`
+let slotIds = k => [sourceId(k), targetId(k), amountId(k), viaId(k), holdId(k), slewId(k), curveId(k), stepsId(k)]
 
 // A connection's slew (Mod_Slew 0..1) in milliseconds: up to two seconds.
 let slewMs = x => 2000. * x * x
@@ -745,6 +795,22 @@ let curved = (x, curve) =>
         x < 0. ? -.y : y
       }
 
+// A connection's steps (Mod_Steps) as a count of levels, or 0 for none.
+let stepCount = x => {
+  let n = Float.toInt(Math.round(x))
+  n >= 2 ? n : 0
+}
+
+// The source's value (after the curve) snapped to n levels across its range (-1..1 for a
+// bipolar source, 0..1 for the rest), or as it is for n 0. The DSP's modSteps does the same.
+let stepped = (x, n, ~bipolar) =>
+  if n < 2 {
+    x
+  } else {
+    let m = Int.toFloat(n - 1)
+    bipolar ? Math.round((x + 1.) * 0.5 * m) / m * 2. - 1. : Math.round(x * m) / m
+  }
+
 // What slot k holds, by source and target index (0 is none), read with get.
 type slot = {
   source: int,
@@ -755,6 +821,8 @@ type slot = {
   hold: bool,
   slew: float,
   curve: float,
+  // levels (0: none)
+  steps: int,
 }
 
 let readSlot = (get: string => float, k) => {
@@ -765,6 +833,7 @@ let readSlot = (get: string => float, k) => {
   hold: get(holdId(k)) != 0.,
   slew: get(slewId(k)),
   curve: get(curveId(k)),
+  steps: stepCount(get(stepsId(k))),
 }
 
 let isSlotParam = id => String.startsWith(id, "Mod") && String.includes(id, "_")

@@ -61,7 +61,7 @@ let connect = (model, source, target, ~amount): result<int, string> => {
   } else {
     switch ModMatrix.slotNumbers->Array.find(k => !isUsed(get, k)) {
     | Some(k) =>
-      [ModMatrix.holdId(k), ModMatrix.slewId(k), ModMatrix.curveId(k), ModMatrix.viaId(k)]->Array.forEach(id =>
+      [ModMatrix.holdId(k), ModMatrix.slewId(k), ModMatrix.curveId(k), ModMatrix.stepsId(k), ModMatrix.viaId(k)]->Array.forEach(id =>
         if get(id) != 0. {
           model->ParamModel.gestureSet(id, 0.)
         }
