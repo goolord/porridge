@@ -14,6 +14,7 @@ namespace porridge
     struct Osc
     {
         int waveform;
+        bool oat;                       // Oat mode: Oatmeal's table choice (chooseTable)
         float ampTarget, amp;
         bool first;
         int64 phase, offset, base, glideTarget;
@@ -101,6 +102,7 @@ namespace porridge
     void copyShared (Osc& this, const Osc& src)
     {
         this.waveform = src.waveform;
+        this.oat = src.oat;
         this.ampTarget = src.ampTarget;
         this.base = src.base;
         this.glideTarget = src.glideTarget;
@@ -220,7 +222,7 @@ namespace porridge
         {
             let set = (this.waveform == waveType::saw || this.waveform == waveType::pulse) ? setSaw
                         : (this.waveform == waveType::triangle ? setTri : userSet);
-            let c = chooseTable (set, min (inc, 0x7fffffffffffi64));
+            let c = chooseTable (set, min (inc, 0x7fffffffffffi64), this.oat);
             b.tableOffset = c.offset;
             b.shift = c.shift;
         }

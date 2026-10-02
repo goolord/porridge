@@ -484,13 +484,16 @@ namespace porridge
     }
 
     /// Picks the table for a phase increment (uint32 in an int64). Returns the absolute offset
-    /// into 'sets' in .offset and the phase shift in .shift.
+    /// into 'sets' in .offset and the phase shift in .shift. Oatmeal (oat) plays every note
+    /// from SR/256 to SR/128 (e.g. 172 to 345 Hz at 44.1 kHz) from M256top, whose top harmonics
+    /// pass Nyquist there, up to an octave over it (aliases about 25 to 34 dB down on a saw);
+    /// otherwise those notes have the M256 table whose harmonics just fit, as the notes above.
     struct TableChoice
     {
         int offset, shift;
     }
 
-    TableChoice chooseTable (int set, int64 inc)
+    TableChoice chooseTable (int set, int64 inc, bool oat)
     {
         let base = set * setSize;
 
@@ -511,7 +514,7 @@ namespace porridge
             return TableChoice (base + tabM512 + (j - 1) * 513, 23);
         }
 
-        if (inc < (1i64 << 25))
+        if (oat && inc < (1i64 << 25))
             return TableChoice (base + tabM256Top, 24);
 
         let j = clamp (int (129.0 - 128.0 / (float64 (inc) * float64 (5.9604645e-08f))), 0, 127);

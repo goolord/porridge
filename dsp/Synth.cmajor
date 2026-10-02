@@ -3506,6 +3506,7 @@ namespace porridge
         void setOscParams (Osc& o, int waveform, float ampTarget, float pwFraction, int64 pwAdd, float depthSum, float rateMod, float baseRate)
         {
             o.waveform = waveform;
+            o.oat = P[slot::Oat_Mode] != 0;
             o.ampTarget = ampTarget;
 
             if (isPulse (waveform))

@@ -577,7 +577,7 @@ let build = (ctx: Ctx.t, page) => {
     Controls.toggle(ctx, v.el, "Oat_Mode", ~x=b.x, ~y=b.y, ~w=b.w - size - Grid.columnGap, ~label="Oat mode")
     Controls.help(
       v.el,
-      "Oat mode keeps Oatmeal's MIDI timing (notes, controllers and arpeggiator steps start on the next 64-sample block, not on their own sample) and its legato quirk: a stereo voice's right filter envelopes never start.",
+      "Oat mode keeps Oatmeal's MIDI timing (notes, controllers and arpeggiator steps start on the next 64-sample block, not on their own sample), its legato quirk (a stereo voice's right filter envelopes never start), its distortion oversampling filters (which change the level and dull the highs) and the aliasing of its plain saw and pulse around middle C.",
       ~x=b.x + b.w - size,
       ~y=b.y,
       ~size,
