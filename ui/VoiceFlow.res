@@ -5,7 +5,8 @@
 // the FX page's rack. The voice's part is tinted: each voice runs its own of all of it.
 //
 // Click a node to open it, drag a per-voice effect, the filter or the amp sideways to move it
-// among the voice's effects (right-click an effect for more), and + adds a per-voice effect.
+// among the voice's effects (right-click an effect for more), and + adds a per-voice effect. A
+// node lights while the selected modulation source moves something in it (ModFocus).
 
 open! Web
 
@@ -42,6 +43,16 @@ let make = (ctx: Ctx.t, parent, box: box, ~show: block => unit) => {
   let (distPre, distPost, distGlobal) = (distNode(), distNode(), distNode())
   let add = node(~cls="add", "+")
   let fx = node(~cls="fx", "")
+  // each block lights while the selected source moves something in it (ModFocus)
+  let lights = (e, ids) => model->ModFocus.register(e, ids)
+  lights(osc1, () => ["O1_Amp", "O1_PWM_W", "O1_PWM_R", "O1_PWM_D", Modulators.pitchKnob])
+  lights(osc2, () => ["O2_Amp", "O2_PWM_W", "O2_PWM_R", "O2_PWM_D", "Transpose", "Detune", Modulators.pitchKnob])
+  lights(noise, () => ["N_Amp", "N_Resonance", "N_Transpose"])
+  lights(unison, () => ["U_Detune", "U_Spread", "U_Width", "Drift_Pitch"])
+  lights(filterNode, () =>
+    ["Cutoff", "Resonance", "F_EnvMod", "F_Track", "F_Split", "F_Mix", "F_Morph", "F_Drive", Modulators.envMark("filterEnv")]
+  )
+  lights(ampNode, () => [Modulators.ampEnvMark, "Gain"])
   opener(osc1, Oscillators)
   opener(osc2, Oscillators)
   opener(noise, Noise)
@@ -57,6 +68,7 @@ let make = (ctx: Ctx.t, parent, box: box, ~show: block => unit) => {
     "The amp envelope: drag it sideways. The voice's effects after it react to how each note swells and fades and ring on after it ends; those before it are shaped by it"
   )
   [distPre, distPost, distGlobal]->Array.forEach(e => {
+    lights(e, () => FxRack.params(FxRack.oatmealDistortion))
     e->onPointer(#pointerdown, ev =>
       if ev->button == 0 {
         ev->preventDefault
@@ -79,6 +91,7 @@ let make = (ctx: Ctx.t, parent, box: box, ~show: block => unit) => {
   hover(add, () => "Add a per-voice effect (up to four): each voice runs its own copy, which its LFOs, envelopes and key move for that note alone")
   // the rack, by the effects that are on
   let rackOn = () => FxRack.read(get)->Array.filter(e => FxRack.isOn(e, get))
+  lights(fx, () => rackOn()->Array.flatMap(FxRack.params))
   fx->onPointer(#pointerdown, ev =>
     if ev->button == 0 {
       ev->preventDefault
@@ -98,6 +111,7 @@ let make = (ctx: Ctx.t, parent, box: box, ~show: block => unit) => {
     | Some(n) => n
     | None =>
       let n = node(~cls="lane grab", "")
+      lights(n, () => FxRack.params(e))
       let led = el("i", ~cls="led", ~parent=n)
       led->onPointer(#pointerdown, ev =>
         if ev->button == 0 {

@@ -179,6 +179,8 @@ let make = (host, pc) => {
     toast,
   }
 
+  // (the routes' texts name the macros as the program does)
+  model->Modulators.nameMacros(programs)
   pageEls->Array.forEach(((p, e)) => p.build(ctx, e))
   shapes := Some(ShapesOverlay.build(ctx, overlay, ~onClose=closeShapes))
   ModTray.make(ctx, stage)
@@ -205,6 +207,13 @@ let make = (host, pc) => {
     pageButtons->Array.push((page, button(pagesBar, label, title, () => showPage(page))))
   )
   pageButtons->Array.forEach(((page, b)) => b->toggleClass("on", page == #main))
+  // the selected modulation source dims the stage and is counted on the pages' tabs
+  model->ModFocus.attach(
+    ~stage,
+    ~pages=pageEls->Array.filterMap(((p, e)) =>
+      pageButtons->Array.find(((page, _)) => page == p.page)->Option.map(((_, b)) => (e, b))
+    ),
+  )
   el("div", ~cls="spacer", ~parent=head)->ignore
 
   let openProgramMenu = () =>
@@ -405,6 +414,8 @@ let make = (host, pc) => {
           lastEscape := 0.
         } else if menu.menu->Option.isSome {
           menu->Menu.close
+          lastEscape := 0.
+        } else if model->ModFocus.clear {
           lastEscape := 0.
         } else if now - lastEscape.contents < panicMs {
           panic()

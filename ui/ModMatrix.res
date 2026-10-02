@@ -19,12 +19,11 @@ type sourceScope = Fixed(scope) | Depends((string => float) => scope)
 // A macro knob (0 the first) or an assignable controller, or neither.
 type sourceKind = Plain | Macro(int) | Controller
 
-// short: a name short enough for a small chip; colour: its colour on the chips, the ranges it
-// sweeps and its cables; help: what the source is, for the mod page's status line
+// colour: its colour on the chips, the ranges it sweeps and its cables; help: what the source is,
+// for the status line
 type source = {
   key: string,
   label: string,
-  short: string,
   colour: string,
   bipolar: bool,
   scope: sourceScope,
@@ -52,7 +51,6 @@ let withMpe = (get: string => float) => get("MPE_On") != 0. ? EachNote : Shared
 let lfo = (n, colour, mode) => {
   key: `lfo${Int.toString(n)}`,
   label: `LFO ${Int.toString(n)}`,
-  short: `LFO ${Int.toString(n)}`,
   colour,
   bipolar: true,
   scope: Depends(get => perVoiceAt0(mode, get)),
@@ -63,7 +61,6 @@ let lfo = (n, colour, mode) => {
 let macro = n => {
   key: `macro${Int.toString(n)}`,
   label: `macro ${Int.toString(n)}`,
-  short: `macro ${Int.toString(n)}`,
   colour: macroColour,
   bipolar: false,
   scope: Fixed(Shared),
@@ -74,7 +71,6 @@ let macro = n => {
 let cc = n => {
   key: `cc${Int.toString(n)}`,
   label: `controller ${Int.toString(n)}`,
-  short: `cc ${Int.toString(n)}`,
   colour: ccColour,
   bipolar: false,
   scope: Fixed(Shared),
@@ -86,7 +82,6 @@ let sources = [
   {
     key: "none",
     label: "none",
-    short: "none",
     colour: playColour,
     bipolar: false,
     scope: Fixed(EachNote),
@@ -98,7 +93,6 @@ let sources = [
   {
     key: "modEnv1",
     label: "mod env 1",
-    short: "env 1",
     colour: "#2e6b3a",
     bipolar: false,
     scope: Fixed(EachNote),
@@ -108,7 +102,6 @@ let sources = [
   {
     key: "modEnv2",
     label: "mod env 2",
-    short: "env 2",
     colour: "#5c8f3c",
     bipolar: false,
     scope: Fixed(EachNote),
@@ -118,7 +111,6 @@ let sources = [
   {
     key: "ampEnv",
     label: "amp env",
-    short: "amp env",
     colour: envColour,
     bipolar: false,
     scope: Fixed(EachNote),
@@ -128,7 +120,6 @@ let sources = [
   {
     key: "filterEnv",
     label: "filter env",
-    short: "filter env",
     colour: envColour,
     bipolar: false,
     scope: Fixed(EachNote),
@@ -138,7 +129,6 @@ let sources = [
   {
     key: "velocity",
     label: "velocity",
-    short: "velocity",
     colour: playColour,
     bipolar: false,
     scope: Fixed(EachNote),
@@ -148,7 +138,6 @@ let sources = [
   {
     key: "key",
     label: "key",
-    short: "key",
     colour: playColour,
     bipolar: true,
     scope: Fixed(EachNote),
@@ -158,7 +147,6 @@ let sources = [
   {
     key: "aftertouch",
     label: "aftertouch",
-    short: "touch",
     colour: playColour,
     bipolar: false,
     // per-voice in poly touch mode
@@ -169,7 +157,6 @@ let sources = [
   {
     key: "modWheel",
     label: "mod wheel",
-    short: "wheel",
     colour: playColour,
     bipolar: false,
     scope: Fixed(Shared),
@@ -179,7 +166,6 @@ let sources = [
   {
     key: "bend",
     label: "pitch bend",
-    short: "bend",
     colour: playColour,
     bipolar: true,
     scope: Depends(withMpe),
@@ -189,7 +175,6 @@ let sources = [
   {
     key: "x",
     label: "X",
-    short: "X",
     colour: playColour,
     bipolar: true,
     scope: Fixed(Shared),
@@ -199,7 +184,6 @@ let sources = [
   {
     key: "y",
     label: "Y",
-    short: "Y",
     colour: playColour,
     bipolar: true,
     scope: Fixed(Shared),
@@ -209,7 +193,6 @@ let sources = [
   {
     key: "random",
     label: "random",
-    short: "random",
     colour: playColour,
     bipolar: true,
     scope: Fixed(EachNote),
@@ -221,7 +204,6 @@ let sources = [
   {
     key: "slide",
     label: "slide (CC 74)",
-    short: "slide",
     colour: playColour,
     bipolar: false,
     scope: Depends(withMpe),
@@ -231,7 +213,6 @@ let sources = [
   {
     key: "noise",
     label: "noise",
-    short: "noise",
     colour: playColour,
     bipolar: true,
     scope: Fixed(EachNote),
@@ -245,7 +226,6 @@ let sources = [
   {
     key: "interval",
     label: "interval",
-    short: "interval",
     colour: playColour,
     bipolar: true,
     scope: Fixed(EachNote),
@@ -255,7 +235,6 @@ let sources = [
   {
     key: "alternate",
     label: "alternate",
-    short: "alternate",
     colour: playColour,
     bipolar: true,
     scope: Fixed(EachNote),
@@ -265,7 +244,6 @@ let sources = [
   {
     key: "cycle",
     label: "cycle",
-    short: "cycle",
     colour: playColour,
     bipolar: false,
     scope: Fixed(EachNote),
@@ -275,7 +253,6 @@ let sources = [
   {
     key: "voiceLevel",
     label: "voice level",
-    short: "level",
     colour: envColour,
     bipolar: false,
     scope: Fixed(EachNote),
@@ -285,7 +262,6 @@ let sources = [
   {
     key: "wander",
     label: "wander",
-    short: "wander",
     colour: "#8a6d3b",
     bipolar: true,
     scope: Fixed(EachNote),
@@ -295,7 +271,6 @@ let sources = [
   {
     key: "glide",
     label: "glide",
-    short: "glide",
     colour: playColour,
     bipolar: false,
     scope: Fixed(EachNote),
@@ -305,7 +280,6 @@ let sources = [
   {
     key: "heldNotes",
     label: "held notes",
-    short: "held",
     colour: playColour,
     bipolar: false,
     scope: Fixed(Shared),
@@ -315,7 +289,6 @@ let sources = [
   {
     key: "chord",
     label: "chord place",
-    short: "chord",
     colour: playColour,
     bipolar: true,
     scope: Fixed(EachNote),
@@ -325,7 +298,6 @@ let sources = [
   {
     key: "gap",
     label: "gap",
-    short: "gap",
     colour: playColour,
     bipolar: false,
     scope: Fixed(EachNote),
@@ -335,7 +307,6 @@ let sources = [
   {
     key: "legato",
     label: "legato",
-    short: "legato",
     colour: playColour,
     bipolar: false,
     scope: Fixed(EachNote),
@@ -345,7 +316,6 @@ let sources = [
   {
     key: "pitch",
     label: "pitch",
-    short: "pitch",
     colour: playColour,
     bipolar: true,
     scope: Fixed(EachNote),

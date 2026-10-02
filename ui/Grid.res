@@ -94,6 +94,13 @@ let button = (g, text, c, r, ~span=1, ~icon=?, ~status=?, onClick) =>
     Controls.button(g.ctx, g.el, text, ~x=b.x, ~y=b.y, ~w=b.w, ~h=b.h, ~cls="gc", ~icon?, ~status?, onClick)->ignore
   )
 
+// A "?" filling a cell's height at its right end, with text in a tooltip tipW wide (from its
+// left, with ~left).
+let help = (g, c, r, text, ~tipW=260., ~left=?) => {
+  let size = Style.controlHeight
+  g->at(c, r, "a help button", b => Controls.help(g.el, text, ~x=b.x + b.w - size, ~y=b.y, ~size, ~tipW, ~left?))
+}
+
 // A note (wrapped, faint text) filling a span of cells.
 let note = (g, text, c, r, ~span=1, ~rows=1) =>
   g->at(c, r, ~span, ~rows, "a note", b =>

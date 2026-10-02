@@ -20,7 +20,7 @@ open! Web
 // (FxRack.oatmealDistortion) or any per-voice or whole sound effect.
 let openEffect = ref((_: FxRack.effect) => ())
 
-let hint = "A tab's light switches its effect. Drag a tab sideways to move it, × takes it out, right-click for more, + adds one. On a graph, drag the points; shift for fine steps, right-click to reset."
+let hint = "A tab's light switches its effect. Drag a tab sideways to move it, × takes it out, right-click for more, + adds one. On a graph, drag the points; shift for fine steps, right-click to reset. Ctrl+right-click a control for its menu."
 
 type dest = Distortion | Rack(FxRack.effect)
 

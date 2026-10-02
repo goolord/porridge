@@ -5,7 +5,7 @@
 
 open! Web
 
-let hint = "Drag the XY pad; right-drag keeps its distance from the centre. Click an arpeggiator step to pick it, right-click to step through them (shift goes back). Double-click a macro's name to rename it."
+let hint = "Drag the XY pad; right-drag keeps its distance from the centre. Click an arpeggiator step to pick it, right-click to step through them (shift goes back). Double-click a macro's name to rename it. Ctrl+right-click a control for its menu."
 
 let margin = 6.
 // the arpeggiator's steps and the length handle under them
