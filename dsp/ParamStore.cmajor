@@ -113,7 +113,7 @@ processor ParamStore
     input event int PolyMode [[ name: "Voice mode", min: 0, max: 2, init: 1, text: "Monophonic|Polyphonic|Monophonic, legato" ]];
     input event int Voices [[ name: "Max polyphony", automatable: false, min: 1, max: 32, init: 8, step: 1 ]];
     input event float Glide [[ name: "Glide", min: 0, max: 500, init: 0, unit: "ms" ]];
-    input event int GlideMode [[ name: "Glide mode", min: 0, max: 6, init: 1, text: "Param|P * octaves|P / octaves|P * (o + 1/o)|P * (1 + o)|P * (1 + 1/o)|P * (1 + o + 1/o)" ]];
+    input event int GlideMode [[ name: "Glide mode", min: 0, max: 6, init: 1, text: "constant time|by interval|by inverse interval|time × (o + 1/o)|time × (1 + o)|time × (1 + 1/o)|time × (1 + o + 1/o)" ]];
     input event float Gain [[ name: "Output gain", min: 0, max: 31.622777938842773, init: 0.10000000149011612 ]];
     input event float VeloSens [[ name: "Velocity sensitivity", min: -1, max: 1, init: 0.6499999761581421 ]];
     input event int AftertouchMode [[ name: "Aftertouch mode", automatable: false, min: 0, max: 2, init: 2, text: "ignore all|channel|polyphonic" ]];
@@ -1520,7 +1520,7 @@ processor ParamStore
     input event float Mod32_Slew [[ name: "Mod 32 slew", automatable: false, min: 0, max: 1, init: 0 ]];
     input event float Mod32_Curve [[ name: "Mod 32 curve", automatable: false, min: -1, max: 1, init: 0 ]];
     input event int MM_Follow [[ name: "Mod follows", automatable: false, min: 0, max: 1, init: 0, text: "the newest note|every note, by level" ]];
-    input event int LFO_3_Shape [[ name: "LFO 3 shape", min: 0, max: 6, init: 0, text: "sine|triangle|saw up|saw down|square|sample & hold|smooth random" ]];
+    input event int LFO_3_Shape [[ name: "LFO 3 shape", min: 0, max: 6, init: 0, text: "Sine|Triangle|Saw|Saw down|Square|Stepping random|Smooth random" ]];
     input event int LFO_3_Mode [[ name: "LFO 3 mode", min: 0, max: 2, init: 0, text: "per-voice|shared, reset on note|shared, free" ]];
     input event float LFO_3_Rate [[ name: "LFO 3 rate", min: 0, max: 1, init: 0.5885919332504272 ]];
     input event int LFO_3_Sync [[ name: "LFO 3 sync", min: 0, max: 12, init: 0, text: "free|4 bars|2 bars|1 bar|1/2|1/2 T|1/4|1/4 T|1/8|1/8 T|1/16|1/16 T|1/32" ]];

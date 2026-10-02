@@ -521,16 +521,13 @@ let namesOf = (def: ParamDefs.t) =>
   | None => JsError.panic(def.id ++ " has no value names")
   }
 
-// What the element of a list parameter does: a click opens the menu of items(), a right
-// click steps through the values (shift goes back), a middle or ctrl click picks the first.
-// Space and the arrow keys step (up goes back, unless upIsNext), Enter opens the menu.
-// Stepping and the first go by the menu's values, in its order: a list can leave a value out
-// (an effect's "off", which its light switches). Returns the step function.
-let listInput = (ctx: Ctx.t, e, id, ~items, ~upIsNext=false) => {
-  let model = ctx.model
-  let current = () => model->ParamModel.get(id)
-  let set = x => model->ParamModel.gestureSet(id, x)
-  let values = () => items()->Array.map((item: Menu.item) => Int.toFloat(item.value))
+// What the element of a list does: a click opens the menu of items(), a right click steps
+// through the values (shift goes back), a middle or ctrl click picks the first. Space and the
+// arrow keys step (up goes back, unless upIsNext), Enter opens the menu. Stepping and the first
+// go by stepping() (the menu's values, in its order, unless given): a list can leave a value
+// out (an effect's "off", which its light switches). Returns the step function.
+let listOf = (ctx: Ctx.t, e, ~items, ~current: unit => int, ~set: int => unit, ~stepping=?, ~upIsNext=false) => {
+  let values = () => stepping->Option.mapOr(Menu.values(items()), f => f())
   let step = d => {
     let values = values()
     let n = Array.length(values)
@@ -540,8 +537,7 @@ let listInput = (ctx: Ctx.t, e, id, ~items, ~upIsNext=false) => {
     values[next]->Option.forEach(set)
   }
   let first = () => values()[0]->Option.forEach(set)
-  let openMenu = () =>
-    ctx.menu->Menu.show(e, items(), Float.toInt(current()), i => set(Int.toFloat(i)))
+  let openMenu = () => ctx.menu->Menu.show(e, items(), current(), set)
 
   e->onPointer(#pointerdown, ev => {
     ev->preventDefault
@@ -573,6 +569,17 @@ let listInput = (ctx: Ctx.t, e, id, ~items, ~upIsNext=false) => {
   step
 }
 
+// A list parameter's element (see listOf).
+let listInput = (ctx: Ctx.t, e, id, ~items, ~upIsNext=false) =>
+  listOf(
+    ctx,
+    e,
+    ~items,
+    ~current=() => Float.toInt(ctx.model->ParamModel.get(id)),
+    ~set=i => ctx.model->ParamModel.gestureSet(id, Int.toFloat(i)),
+    ~upIsNext,
+  )
+
 // A choice: same footprint as a parameter row; click opens the menu, right click steps
 // through the values (shift goes back).
 let choice = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=76., ~label=?, ~names=?) => {
@@ -598,22 +605,65 @@ let choice = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=76., ~label=?, ~names=?) => {
     refreshStatus(c)
   }
 
-  // (the filter types' and distortion types' menus show their groups)
-  let order = ValueList.menu(c.def.list, Array.length(menuNames))
-  let step = listInput(ctx, e, id, ~items=() =>
-    order->Array.map(((value, heading)) => {
-      let label = menuNames[value]->Option.getOr("")
-      switch icon(value) {
-      | Some((icon, label)) => {Menu.label, value, icon, ?heading}
-      | None => {Menu.label, value, ?heading}
+  // the list's menu, given the value it is at (ValueList): a row's icon is its value's, or the
+  // one of its variants' or its family's that is set; its hover text says what the value is,
+  // where its name doesn't
+  let about = c.def.list->Option.flatMap(l => ValueList.info(l).about)
+  let hintOf = (value, ~label) =>
+    switch about {
+    | Some(about) => Some(about(value))
+    | None => menuNames[value]->Option.filter(name => name != label)
+    }
+  let items = () => {
+    let now = Float.toInt(current(c))
+    let rec item = (row: ValueList.entry): Menu.item => {
+      let label = row.label->Option.getOr(menuNames[row.value]->Option.getOr(""))
+      let shown = ValueList.offered([row])->Array.includes(now) ? now : row.value
+      {
+        label,
+        value: row.value,
+        icon: ?icon(shown)->Option.map(Pair.first),
+        heading: ?row.heading,
+        rule: ?row.rule,
+        badge: ?row.badge,
+        more: ?row.more,
+        // (a family's row goes by the hints of its own menu's)
+        hint: ?(row.sub == None ? hintOf(row.value, ~label) : None),
+        variants: ?row.variants->Option.map(chips =>
+          chips->Array.map(((chip, pick)) => {Menu.chip, pick, about: ?hintOf(pick, ~label=chip)})
+        ),
+        sub: ?row.sub->Option.map(sub => sub->Array.map(item)),
       }
-    })
-  )
+    }
+    ValueList.menu(c.def.list, Array.length(menuNames), ~current=now)->Array.map(item)
+  }
+  let step = listInput(ctx, e, id, ~items)
   e->onWheel(ev => {
     ev->preventDefault
     step(ev->deltaY < 0. ? -1. : 1.)
   })
   bind(c, update)
+}
+
+// A list for a choice that is more than one parameter's values (the space effects' models,
+// which can swap the effect for another kind): labelled and drawn like a choice, showing
+// text(), with the menu items() at current(); set picks a value, stepping() is what a right
+// click steps through. Returns the function that shows a change.
+let picker = (ctx: Ctx.t, parent, ~x, ~y, ~w, ~label, ~text, ~items, ~current, ~set, ~stepping, ~status) => {
+  let e = el("div", ~cls="p ch", ~parent)->place(x, y, ~w)
+  e->setTabIndex(0)
+  el("span", ~cls="l", ~text=label, ~parent=e)->ignore
+  let v = el("span", ~cls="v", ~parent=e)
+  let live = ctx.status->Status.live(e, status)
+  let step = listOf(ctx, e, ~items, ~current, ~set, ~stepping)
+  e->onWheel(ev => {
+    ev->preventDefault
+    step(ev->deltaY < 0. ? -1. : 1.)
+  })
+  () => {
+    v->setTextContent(text())
+    live.refresh()
+  }
 }
 
 // An on/off box with a label. With a width, it fills it (as in a grid cell); without, it
