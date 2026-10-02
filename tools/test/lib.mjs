@@ -1,8 +1,11 @@
 // Shared by the test scripts: paths, rendering through the test host (tools/test/build.sh
-// builds it), reading the bundled banks and counting failures.
+// builds it), one at a time or several at once, reading the bundled banks, counting failures
+// and measuring renders.
 
-import { readFileSync, mkdirSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { execFile, execFileSync } from "node:child_process";
+import { availableParallelism } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as Preset from "../../ui/Preset.res.mjs";
@@ -19,18 +22,64 @@ export const outDir = name =>
     return dir;
 };
 
-// Renders through the test host into `out` and returns the output's channels. sets: { endpoint:
-// value } for --set; args: any other host arguments.
-export function render ({ program, events, frames, rate = 44100, sets = {}, args = [], out })
+const hostArgs = ({ program, events, frames, rate = 44100, sets = {}, args = [], out }) =>
+    [...(program ? ["--program", program] : []), "--events", events, "--frames", String (frames), "--rate", String (rate), ...args,
+     ...Object.entries (sets).flatMap (([k, v]) => ["--set", `${k}=${v}`]), "--out", out];
+
+// the channels of a host output file's contents
+const channelsOf = b =>
 {
-    execFileSync (host, [...(program ? ["--program", program] : []), "--events", events,
-                         "--frames", String (frames), "--rate", String (rate), ...args,
-                         ...Object.entries (sets).flatMap (([k, v]) => ["--set", `${k}=${v}`]), "--out", out]);
-    const b = readFileSync (out);
     const channels = b.readInt32LE (0), n = b.readInt32LE (4);
     const data = new Float32Array (b.buffer.slice (b.byteOffset + 8, b.byteOffset + 8 + 4 * channels * n));
     return Array.from ({ length: channels }, (_, c) => data.subarray (c * n, (c + 1) * n));
+};
+
+// Renders through the test host into `out` and returns the output's channels. sets: { endpoint:
+// value } for --set; args: any other host arguments.
+export function render (job)
+{
+    execFileSync (host, hostArgs (job));
+    return channelsOf (readFileSync (job.out));
 }
+
+// render, without waiting: a promise of the channels (run many at once with `pool`)
+export const renderAsync = job => new Promise ((resolve, reject) =>
+    execFile (host, hostArgs (job), (error, stdout, stderr) =>
+    {
+        if (stderr) process.stderr.write (stderr);
+        if (error) reject (error); else resolve (readFile (job.out).then (channelsOf));
+    }));
+
+// runs the tasks (functions returning promises) `jobs` at a time; their results, in order
+export const pool = async (tasks, jobs = availableParallelism ()) =>
+{
+    const results = new Array (tasks.length);
+    let next = 0;
+    await Promise.all (Array.from ({ length: Math.min (jobs, tasks.length) }, async () =>
+    {
+        while (next < tasks.length)
+        {
+            const i = next++;
+            results[i] = await tasks[i] ();
+        }
+    }));
+    return results;
+};
+
+// A play (notes, sets, seconds) that renders notes ([at s, key, length s, velocity = 100]) for
+// `seconds` from `program` with base's settings and sets over them, numbering its files in `dir`.
+export const player = ({ dir, program, base, rate = 44100 }) =>
+{
+    let count = 0;
+    return (notes, sets, seconds) =>
+    {
+        const events = join (dir, `events${count}.txt`);
+        writeFileSync (events, notes.map (([at, key, length, vel = 100]) =>
+            `${Math.round (at * rate)} 144 ${key} ${vel}\n${Math.round ((at + length) * rate)} 128 ${key} 0\n`).join (""));
+        return render ({ program, events, frames: Math.round (seconds * rate), rate, sets: { ...base, ...sets },
+                         out: join (dir, `render${count++}.f32`) });
+    };
+};
 
 // the presets of a bank or preset file, by its path from the repository root
 export function readBank (path)
@@ -54,6 +103,30 @@ export function checker ({ verbose = false } = {})
     };
     return { check, fail, done };
 }
+
+// the RMS of a stereo signal at a rate from a to b seconds (both channels)
+export const rms = ([l, r], a, b, rate) =>
+{
+    let s = 0;
+    const i0 = Math.round (a * rate), i1 = Math.round (b * rate);
+    for (let i = i0; i < i1; ++i) s += l[i] * l[i] + r[i] * r[i];
+    return Math.sqrt (s / (2 * (i1 - i0)));
+};
+
+// the level of a channel at a rate at a frequency (Hann-windowed DFT bin) over 16384 samples
+// from `from` s, dB
+export const levelAt = (x, hz, from, rate) =>
+{
+    const size = 16384, i0 = Math.round (from * rate);
+    let re = 0, im = 0;
+    for (let i = 0; i < size; ++i)
+    {
+        const w = 0.5 - 0.5 * Math.cos (2 * Math.PI * i / size), a = 2 * Math.PI * hz * i / rate;
+        re += w * x[i0 + i] * Math.cos (a);
+        im += w * x[i0 + i] * Math.sin (a);
+    }
+    return 20 * Math.log10 (Math.hypot (re, im) + 1e-12);
+};
 
 // A biquad over a channel (a: [a1, a2], b: [b0, b1, b2]).
 export const biquad = (x, [b0, b1, b2], [a1, a2]) =>

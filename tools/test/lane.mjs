@@ -8,10 +8,9 @@
 //
 // Build the host first (tools/test/build.sh). Output goes to tools/test/build/lane/.
 
-import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { rackEntries } from "../../ui/PorridgeParams.res.mjs";
-import { root, outDir, render, checker } from "./lib.mjs";
+import { root, outDir, player, rms as rmsOf, levelAt, checker } from "./lib.mjs";
 
 const dir = outDir ("lane");
 const init = join (root, "tools", "re", "init_prog.bin");
@@ -24,37 +23,9 @@ const entry = (key, copy = 1) => rackEntries.findIndex (e => e && e[0] === key &
 const plain = { O1_Waveform: 1, O2_Amp: 0, N_Amp: 0, Filter: 0, Voices: 16, PolyMode: 1, Attack: 0, Sustain: 1, Release: 50,
                 VeloSens: 0, RandomAmp: 0, RandomPan: 0, RandomFreq: 0, FX_Rack_1: 0, FX_Rack_2: 0, FX_Rack_3: 0, FX_Rack_4: 0 };
 
-let count = 0;
-function play (notes, sets, seconds)
-{
-    const events = join (dir, `events${count}.txt`);
-    writeFileSync (events, notes.map (([at, key, length]) =>
-        `${Math.round (at * rate)} 144 ${key} 100\n${Math.round ((at + length) * rate)} 128 ${key} 0\n`).join (""));
-    return render ({ program: init, events, frames: Math.round (seconds * rate), rate, sets: { ...plain, ...sets },
-                     out: join (dir, `render${count++}.f32`) });
-}
-
-const rms = ([l, r], a, b) =>
-{
-    let s = 0;
-    const i0 = Math.round (a * rate), i1 = Math.round (b * rate);
-    for (let i = i0; i < i1; ++i) s += l[i] * l[i] + r[i] * r[i];
-    return Math.sqrt (s / (2 * (i1 - i0)));
-};
-
-// the level at a frequency (Hann-windowed DFT bin) over 16384 samples from `from` s
-const at = (x, hz, from) =>
-{
-    const size = 16384, i0 = Math.round (from * rate);
-    let re = 0, im = 0;
-    for (let i = 0; i < size; ++i)
-    {
-        const w = 0.5 - 0.5 * Math.cos (2 * Math.PI * i / size), a = 2 * Math.PI * hz * i / rate;
-        re += w * x[i0 + i] * Math.cos (a);
-        im += w * x[i0 + i] * Math.sin (a);
-    }
-    return 20 * Math.log10 (Math.hypot (re, im) + 1e-12);
-};
+const play = player ({ dir, program: init, base: plain, rate });
+const rms = (x, a, b) => rmsOf (x, a, b, rate);
+const at = (x, hz, from) => levelAt (x, hz, from, rate);
 
 // every kind, after the amp (the default places): it sounds, stays bounded, the voices end
 const chord = [[0, 48, 0.6], [0, 55, 0.6], [0, 64, 0.6]];

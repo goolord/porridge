@@ -93,12 +93,7 @@ let build = (ctx: Ctx.t, page) => {
   //==============================================================================
   // the rack
 
-  let setRack = list =>
-    FxRack.values(list)->Array.forEach(((id, v)) =>
-      if get(id) != v {
-        model->ParamModel.gestureSet(id, v)
-      }
-    )
+  let setRack = list => VoiceLane.setAll(model, FxRack.values(list))
 
   let move = (e, pos) => {
     let others = rack()->Array.filter(o => o != e)
@@ -114,10 +109,7 @@ let build = (ctx: Ctx.t, page) => {
     | _ => list->Array.push(e)
     }
     setRack(list)
-    let id = FxRack.switchId(e)
-    if get(id) == 0. {
-      model->ParamModel.gestureSet(id, FxRack.onValue(e))
-    }
+    VoiceLane.switchOn(model, e)
     if show {
       select(Rack(e))
     }
@@ -128,9 +120,7 @@ let build = (ctx: Ctx.t, page) => {
   // a copy with the same settings, right after it
   let duplicate = (e: FxRack.effect, ~show) =>
     FxRack.free(rack(), ~lane=VoiceLane.lane(model), e.kind)->Option.forEach(copy => {
-      FxRack.params(e)->Array.forEachWithIndex((id, i) =>
-        FxRack.params(copy)[i]->Option.forEach(to => model->ParamModel.gestureSet(to, get(id)))
-      )
+      VoiceLane.copySettings(model, ~from=e, ~to=copy)
       insert(copy, ~after=e, ~show)
     })
 
@@ -144,27 +134,8 @@ let build = (ctx: Ctx.t, page) => {
   // the kinds that can still be added, in their groups, each with its icon
   let addMenu = (anchor, ~show) => {
     let addable = FxRack.addable(rack(), ~lane=VoiceLane.lane(model))
-    let kinds = FxRack.menuGroups->Array.flatMap(((title, kinds)) =>
-      kinds
-      ->Array.filter(k => addable->Array.includes(k))
-      ->Array.mapWithIndex((k, i) => (k, i == 0 ? Some(title) : None))
-    )
-    ctx.menu->Menu.show(
-      anchor,
-      kinds->Array.mapWithIndex(((k, heading), i) => {
-        Menu.label: FxRack.kindName(k),
-        value: i,
-        icon: ?Icons.rackKind(FxRack.key(k))->Option.map(icon => {
-          let wrap = el("span", ~cls="icw")
-          wrap->appendChild(Icons.render(icon))
-          wrap
-        }),
-        ?heading,
-        hint: FxRack.about(k),
-      }),
-      -1,
-      i => kinds[i]->Option.forEach(((k, _)) => add(k, ~show)),
-    )
+    let (kinds, items) = VoiceLane.kindMenu(~groups=FxRack.menuGroups, ~addable)
+    ctx.menu->Menu.show(anchor, items, -1, i => kinds[i]->Option.forEach(add(_, ~show)))
   }
 
   let effectMenu = (e: FxRack.effect, anchor, ~show) => {

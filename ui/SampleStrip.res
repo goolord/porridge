@@ -120,10 +120,7 @@ let make = (ctx: Ctx.t, parent, box: box, ~onStart, ~onPick, ~onEnd) => {
 
   // dragging analyses at most once a frame
   let pending = ref(None)
-  let positionAt = ev => {
-    let r = overview->getBoundingClientRect
-    Math.max(0., Math.min(1., (ev->clientX - r.left) / r.width))
-  }
+  let positionAt = ev => Controls.clamp01(Pair.first(overview->pointerFraction(ev)))
   let flush = () =>
     pending.contents->Option.forEach(p => {
       pending := None

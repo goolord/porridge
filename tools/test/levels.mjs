@@ -17,7 +17,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as Preset from "../../ui/Preset.res.mjs";
 import * as Scala from "../../ui/Scala.res.mjs";
-import { outDir, render, readBank } from "./lib.mjs";
+import { outDir, renderAsync, pool, readBank } from "./lib.mjs";
 
 const dir = outDir ("levels");
 
@@ -53,7 +53,7 @@ const play = (p, name, notes, velocity) =>
             args.push ("--tuning", file);
         }
     }
-    return render ({ program: prog, events, frames: (hold + tail) * rate, rate, sets, args, out: join (dir, name + ".f32") });
+    return renderAsync ({ program: prog, events, frames: (hold + tail) * rate, rate, sets, args, out: join (dir, name + ".f32") });
 };
 
 const rms = ([l, r], from, to) =>
@@ -160,30 +160,36 @@ const writeWav = (file, [l, r], gain) =>
 };
 
 const fileName = s => s.replace (/[^A-Za-z0-9]+/g, "-");
-const gains = {};
-console.log ("program              gain     peak  tail  centroid   <120  -500   -2k   -6k  >6k (dB)   motion: timbre  pan");
-for (const p of bank)
+
+// renders and measures a program: its name, gain and line of the table
+const measure = async p =>
 {
     const name = p.meta.name;
-    if (only.length && ! only.some (o => name.toLowerCase().includes (o.toLowerCase()))) continue;
     const mono = p.values.get ("PolyMode") !== 1;
     const low = p.meta.category === "bass";
     const notes = mono ? [low ? 36 : 60] : [48, 55, 64, 71];
     const id = fileName (name);
-    const sound = play (p, id, notes, 100);
+    const [sound, loud] = await Promise.all ([play (p, id, notes, 100), play (p, id + "-loud", mono ? notes : [48, 55, 60, 64, 71], 127)]);
     // the loudest 300 ms while the keys are down, so that plucks and pads compare
     let level = 0;
     for (let t = 0; t + 0.3 <= hold; t += 0.05) level = Math.max (level, rms (sound, t, t + 0.3));
-    const loud = play (p, id + "-loud", mono ? notes : [48, 55, 60, 64, 71], 127);
     const gain = Math.min (Math.pow (10, target / 20) / Math.max (level, 1e-9), Math.pow (10, -1 / 20) / Math.max (peak (loud), 1e-9));
     const after = rms (sound, hold + 1, hold + 1.5) / Math.max (rms (sound, hold - 0.5, hold), 1e-9);
     const { centroid, band } = spectrum (sound, 0.25, hold);
     const moves = motion (sound);
-    gains[name] = Number (gain.toPrecision (3));
-    console.log (`${name.padEnd (18)} ${gain.toFixed (3).padStart (6)} ${db (peak (loud) * gain).toFixed (1).padStart (7)}`
+    if (wav) writeWav (join (dir, id + ".wav"), sound, gain);
+    return { name, gain, line: `${name.padEnd (18)} ${gain.toFixed (3).padStart (6)} ${db (peak (loud) * gain).toFixed (1).padStart (7)}`
         + ` ${db (after).toFixed (0).padStart (5)} ${centroid.toFixed (0).padStart (8)}  `
         + band.map (x => x.toFixed (0).padStart (5)).join (" ")
-        + `  ${moves.timbre.toFixed (1).padStart (13)} st ${moves.pan.toFixed (0).padStart (3)} %`);
-    if (wav) writeWav (join (dir, id + ".wav"), sound, gain);
+        + `  ${moves.timbre.toFixed (1).padStart (13)} st ${moves.pan.toFixed (0).padStart (3)} %` };
+};
+
+const programs = bank.filter (p => ! only.length || only.some (o => p.meta.name.toLowerCase().includes (o.toLowerCase())));
+const gains = {};
+console.log ("program              gain     peak  tail  centroid   <120  -500   -2k   -6k  >6k (dB)   motion: timbre  pan");
+for (const { name, gain, line } of await pool (programs.map (p => () => measure (p))))
+{
+    gains[name] = Number (gain.toPrecision (3));
+    console.log (line);
 }
 console.log (JSON.stringify (gains, null, 4));

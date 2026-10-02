@@ -48,10 +48,6 @@ type style
 let setStyle = (e, property, value) => e->style->setProperty(property, value)
 let px = x => Float.toString(x) ++ "px"
 
-type cssStyleDeclaration
-@val external getComputedStyle: element => cssStyleDeclaration = "getComputedStyle"
-@send external getPropertyValue: (cssStyleDeclaration, string) => string = "getPropertyValue"
-
 // Layout
 @get external offsetLeft: element => float = "offsetLeft"
 @get external offsetTop: element => float = "offsetTop"

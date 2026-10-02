@@ -57,26 +57,7 @@ let kinds: array<kind> = [
   #resonator,
 ]
 
-let key = (k: kind) =>
-  switch k {
-  | #chorus => "chorus"
-  | #delay => "delay"
-  | #reverb => "reverb"
-  | #eq => "eq"
-  | #distortion => "distortion"
-  | #flanger => "flanger"
-  | #phaser => "phaser"
-  | #compressor => "compressor"
-  | #space => "space"
-  | #convolve => "convolve"
-  | #bode => "bode"
-  | #filter => "filter"
-  | #utility => "utility"
-  | #ambience => "ambience"
-  | #air => "air"
-  | #shifter => "shifter"
-  | #resonator => "resonator"
-  }
+let key = (k: kind) => (k :> string)
 
 let kindName = (k: kind) =>
   switch k {
@@ -159,28 +140,9 @@ let id = (e, first) => e.copy == 1 ? first : PorridgeParams.copyId(first, e.copy
 // Every parameter of this effect.
 let params = e => spec(e.kind).params->Array.map(((first, _)) => id(e, first))
 
-// The parameter that switches it on: a switch, or for a chorus or distortion, a list whose first
-// value is off.
-let switchId = e =>
-  switch e.kind {
-  | #chorus => id(e, "C_Mode")
-  | #delay => id(e, "D_On")
-  | #reverb => id(e, "R_On")
-  | #distortion => id(e, "Sat_Type")
-  | #eq => id(e, "EQ_On")
-  | #flanger => id(e, "Fl_On")
-  | #phaser => id(e, "Ph_On")
-  | #compressor => id(e, "Cp_On")
-  | #space => id(e, "Rv_On")
-  | #convolve => id(e, "Cv_On")
-  | #bode => id(e, "Bd_On")
-  | #filter => id(e, "Ff_On")
-  | #utility => id(e, "Ut_On")
-  | #ambience => id(e, "Am_On")
-  | #air => id(e, "Ai_On")
-  | #shifter => id(e, "Sh_On")
-  | #resonator => id(e, "Rs_On")
-  }
+// The parameter that switches it on (every kind's first): a switch, or for a chorus or
+// distortion, a list whose first value is off.
+let switchId = e => id(e, spec(e.kind).params->Array.getUnsafe(0)->Pair.first)
 
 let eqBandTypes = e => [1, 2, 3, 4, 5]->Array.map(b => id(e, `EQ_${Int.toString(b)}_Type`))
 

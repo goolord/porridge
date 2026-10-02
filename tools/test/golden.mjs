@@ -13,7 +13,7 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { programSize, bankHeaderSize, bankPrograms } from "../../ui/oatmeal/OatmealFormat.res.mjs";
-import { root, outDir, render } from "./lib.mjs";
+import { root, outDir, renderAsync, pool } from "./lib.mjs";
 
 const mode = process.argv[2];
 
@@ -38,14 +38,14 @@ writeFileSync (eventsPath, events.map (e => e.join (" ")).join ("\n") + "\n");
 const bank = readFileSync (join (root, "presets", "oatmealprs.dat"));
 const hashes = {};
 
-for (let i = 0; i < bankPrograms; ++i)
+await pool (Array.from ({ length: bankPrograms }, (_, i) => async () =>
 {
     const prog = join (dir, `p${i}.bin`);
     writeFileSync (prog, bank.subarray (bankHeaderSize + i * programSize, bankHeaderSize + (i + 1) * programSize));
     const out = join (dir, `p${i}.f32`);
-    render ({ program: prog, events: eventsPath, frames: 100000, sets: { Oat_Mode: 1 }, out });
+    await renderAsync ({ program: prog, events: eventsPath, frames: 100000, sets: { Oat_Mode: 1 }, out });
     hashes[i] = createHash ("sha256").update (readFileSync (out)).digest ("hex");
-}
+}));
 
 const refPath = join (dir, "reference.json");
 

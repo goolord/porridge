@@ -3,8 +3,6 @@
 
 open! Web
 
-@get external dragX: Dom.dragEvent => float = "clientX"
-
 type page = [#main | #mod | #fx | #play | #shapes | #midi]
 
 // A page: its tab's label and status text, its hint for the status line, and what builds it.

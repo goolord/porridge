@@ -328,15 +328,63 @@ namespace porridge
     /// oscillator. With feedback the shifted signal also goes through a delay back into the
     /// shifter's input, so every echo is shifted further (a barber pole).
     let bodeLineSize = 192004;      // 1 s at 192 kHz and the interpolator's taps
-    let bodeCoefs = 16;             // even ones: path A, odd ones: path B (one sample later)
+    let hilbertCoefs = 16;          // even ones: path A, odd ones: path B (one sample later)
+
+    /// The Hilbert pair's coefficients for a transition band of `transition` (of sr) at both
+    /// ends: the polyphase half-band design (elliptic) from Laurent de Soras's HIIR, whose
+    /// allpasses in -z^-2 make a 90 degree phase splitter. Bode's, and every voice's shifter's
+    /// (VoiceFx.cmajor).
+    float[hilbertCoefs] hilbertDesign (float64 sr)
+    {
+        float[hilbertCoefs] c;
+        let transition = 20.0 / sr;
+        let order = float64 (hilbertCoefs * 2 + 1);
+        var kk = tan ((1.0 - transition * 2.0) * pi * 0.25);
+        kk *= kk;
+        let kksqrt = pow (1.0 - kk * kk, 0.25);
+        let e = 0.5 * (1.0 - kksqrt) / (1.0 + kksqrt);
+        let e4 = e * e * e * e;
+        let q = e * (1.0 + e4 * (2.0 + e4 * (15.0 + 150.0 * e4)));
+
+        for (wrap<hilbertCoefs> j)
+        {
+            let cj = float64 (j + 1);
+            float64 num = 0, den = 0, sign = 1;
+
+            for (int i = 0; i < 40; ++i)
+            {
+                let t = pow (q, float64 (i * (i + 1))) * sin (float64 (i * 2 + 1) * cj * pi / order) * sign;
+                num += t;
+                sign = -sign;
+                if (abs (t) < 1e-100) break;
+            }
+
+            sign = -1;
+
+            for (int i = 1; i < 40; ++i)
+            {
+                let t = pow (q, float64 (i * i)) * cos (float64 (i * 2) * cj * pi / order) * sign;
+                den += t;
+                sign = -sign;
+                if (abs (t) < 1e-100) break;
+            }
+
+            let ww = num * pow (q, 0.25) / (den + 0.5);
+            let wwsq = ww * ww;
+            let x = sqrt ((1.0 - wwsq * kk) * (1.0 - wwsq / kk)) / (1.0 + wwsq);
+            c[j] = float ((1.0 - x) / (1.0 + x));
+        }
+
+        return c;
+    }
 
     struct Bode
     {
         float<2>[bodeLineSize] line;
         int pos;
-        float[bodeCoefs] c;
+        float[hilbertCoefs] c;
         float64 designRate;                         // the rate c was designed for
-        float<2>[bodeCoefs] x1, x2, y1, y2;         // the allpasses' states (in z^-2)
+        float<2>[hilbertCoefs] x1, x2, y1, y2;      // the allpasses' states (in z^-2)
         float<2> prev;                              // path B's one-sample delay
         float<2> hpX, hpY;                          // the feedback's DC blocker
         float64 phase;                              // oscillator phase 0..1
@@ -351,7 +399,7 @@ namespace porridge
         for (int i = 0; i < bodeLineSize; ++i)
             this.line.at (i) = float<2> (0.0f, 0.0f);
 
-        for (wrap<bodeCoefs> j)
+        for (wrap<hilbertCoefs> j)
         {
             this.x1[j] = float<2> (0.0f, 0.0f); this.x2[j] = float<2> (0.0f, 0.0f);
             this.y1[j] = float<2> (0.0f, 0.0f); this.y2[j] = float<2> (0.0f, 0.0f);
@@ -367,54 +415,8 @@ namespace porridge
         this.silentCount = 0;
     }
 
-    /// The Hilbert pair's coefficients for a transition band of `transition` (of sr) at both
-    /// ends: the polyphase half-band design (elliptic) from Laurent de Soras's HIIR, whose
-    /// allpasses in -z^-2 make a 90 degree phase splitter.
-    void bodeDesign (Bode& this, float64 sr)
-    {
-        let transition = 20.0 / sr;
-        let order = float64 (bodeCoefs * 2 + 1);
-        var kk = tan ((1.0 - transition * 2.0) * pi * 0.25);
-        kk *= kk;
-        let kksqrt = pow (1.0 - kk * kk, 0.25);
-        let e = 0.5 * (1.0 - kksqrt) / (1.0 + kksqrt);
-        let e4 = e * e * e * e;
-        let q = e * (1.0 + e4 * (2.0 + e4 * (15.0 + 150.0 * e4)));
-
-        for (wrap<bodeCoefs> j)
-        {
-            let c = float64 (j + 1);
-            float64 num = 0, den = 0, sign = 1;
-
-            for (int i = 0; i < 40; ++i)
-            {
-                let t = pow (q, float64 (i * (i + 1))) * sin (float64 (i * 2 + 1) * c * pi / order) * sign;
-                num += t;
-                sign = -sign;
-                if (abs (t) < 1e-100) break;
-            }
-
-            sign = -1;
-
-            for (int i = 1; i < 40; ++i)
-            {
-                let t = pow (q, float64 (i * i)) * cos (float64 (i * 2) * c * pi / order) * sign;
-                den += t;
-                sign = -sign;
-                if (abs (t) < 1e-100) break;
-            }
-
-            let ww = num * pow (q, 0.25) / (den + 0.5);
-            let wwsq = ww * ww;
-            let x = sqrt ((1.0 - wwsq * kk) * (1.0 - wwsq / kk)) / (1.0 + wwsq);
-            this.c[j] = float ((1.0 - x) / (1.0 + x));
-        }
-
-        this.designRate = sr;
-    }
-
     /// One allpass section: y = c (x + y[n-2]) - x[n-2].
-    float<2> bodeSection (Bode& this, wrap<bodeCoefs> j, float<2> x)
+    float<2> bodeSection (Bode& this, wrap<hilbertCoefs> j, float<2> x)
     {
         let y = this.c[j] * (x + this.y2[j]) - this.x2[j];
         this.x2[j] = this.x1[j]; this.x1[j] = x;
@@ -444,7 +446,10 @@ namespace porridge
             return false;
 
         if (this.designRate != sr)
-            this.bodeDesign (sr);
+        {
+            this.c = hilbertDesign (sr);
+            this.designRate = sr;
+        }
 
         let v = clamp (P[slot::Bd_Shift], -1.0f, 1.0f);
         let tHz = 5000.0f * v * v * v;
@@ -495,10 +500,10 @@ namespace porridge
             var b = this.prev;
             this.prev = u;
 
-            for (wrap<bodeCoefs / 2> j)
+            for (wrap<hilbertCoefs / 2> j)
             {
-                a = this.bodeSection (wrap<bodeCoefs> (2 * j), a);
-                b = this.bodeSection (wrap<bodeCoefs> (2 * j + 1), b);
+                a = this.bodeSection (wrap<hilbertCoefs> (2 * j), a);
+                b = this.bodeSection (wrap<hilbertCoefs> (2 * j + 1), b);
             }
 
             let cs = float (cos (twoPi * this.phase));

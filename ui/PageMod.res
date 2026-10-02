@@ -16,7 +16,6 @@ let hint = "Drag a source onto a target to connect them, or click a source and t
 let (margin, gap) = (6., Grid.gap)
 let sourcesWidth = 342.
 let sourceColumns = 3
-let defaultAmount = 0.25
 let headingHeight = 20.
 // below the connections: the follow setting
 let footerHeight = 36.
@@ -49,12 +48,7 @@ let cablePath = (a, b, ~sag) => {
   `M${f(a.x)} ${f(a.y)} C${f(a.x + dx * 0.3)} ${f(a.y + sag)} ${f(b.x - dx * 0.3)} ${f(b.y + sag)} ${f(b.x)} ${f(b.y)}`
 }
 
-// Every source but none, in the menus' order (ModMatrix.sourceGroups, then any it leaves out).
-let sourceOrder = {
-  let named = ModMatrix.sourceGroups->Array.flatMap(((_, keys)) => keys->Array.map(ModMatrix.sourceIndex))->Array.filter(i => i > 0)
-  let rest = ModMatrix.sources->Array.mapWithIndex((_, i) => i)->Array.filter(i => i > 0 && !(named->Array.includes(i)))
-  Array.concat(named, rest)
-}
+let sourceOrder = ModEdit.sourceOrder
 
 // The sources in their groups for menus, by index; sources no group names go in a last group.
 let sourceGroups = {
@@ -97,13 +91,10 @@ let build = (ctx: Ctx.t, page) => {
   let slot = k => ModMatrix.readSlot(get, k)
   let sourceOf = k => slot(k).source
   let targetOf = k => slot(k).target
-  let isUsed = k => sourceOf(k) > 0 && targetOf(k) > 0
+  let isUsed = ModEdit.isUsed(get, _)
   let redraw = ref(() => ())
 
-  let macroName = i => {
-    let name = (ctx.programs->ProgramStore.meta).macroNames[i]->Option.getOr("")
-    name == "" ? `macro ${Int.toString(i + 1)}` : name
-  }
+  let macroName = ModEdit.macroName(ctx.programs, _)
   let macroOf = s => isMacro(s) ? Some(s - ModMatrix.sourceIndex("macro1")) : None
   let sourceLabel = s =>
     switch (macroOf(s), ModMatrix.sources[s]) {
@@ -151,7 +142,7 @@ let build = (ctx: Ctx.t, page) => {
       ctx.toast(`${sourceLabel(source)} already modulates ${targetLabel(target)}`)
     } else {
       switch slotNumbers->Array.find(k => !isUsed(k)) {
-      | Some(k) => setSlot(k, Int.toFloat(source), Int.toFloat(target), defaultAmount, 0.)
+      | Some(k) => setSlot(k, Int.toFloat(source), Int.toFloat(target), ModEdit.defaultAmount, 0.)
       | None => ctx.toast(`All ${Int.toString(ModMatrix.slots)} modulation slots are in use`)
       }
     }

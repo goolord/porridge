@@ -140,6 +140,10 @@ let editInPlace = (e, text, ~commit, ~maxLength=?, ~within=?) => {
 // slot changes: one listener per slot parameter rather than one per row.
 let modBars: WeakMap.t<ParamModel.t, array<unit => unit>> = WeakMap.make()
 
+// Each target's connections (ModEdit.connectionsTo), found for every target at once and kept
+// until a slot changes, rather than every row reading all the slots.
+let connectionsByTarget: WeakMap.t<ParamModel.t, Map.t<int, array<int>>> = WeakMap.make()
+
 let onSlotChange = (model, refresh) =>
   switch modBars->WeakMap.get(model) {
   | Some(refreshers) => refreshers->Array.push(refresh)
@@ -147,8 +151,33 @@ let onSlotChange = (model, refresh) =>
     let refreshers = [refresh]
     modBars->WeakMap.set(model, refreshers)->ignore
     let refreshAll = perFrame(() => refreshers->Array.forEach(f => f()))
-    ModMatrix.slotNumbers->Array.forEach(k => model->ParamModel.listenEach(ModMatrix.slotIds(k), refreshAll))
+    let changed = () => {
+      connectionsByTarget->WeakMap.delete(model)->ignore
+      refreshAll()
+    }
+    ModMatrix.slotNumbers->Array.forEach(k => model->ParamModel.listenEach(ModMatrix.slotIds(k), changed))
   }
+
+let connectionsTo = (model, target) => {
+  let byTarget = switch connectionsByTarget->WeakMap.get(model) {
+  | Some(m) => m
+  | None =>
+    let get = id => model->ParamModel.get(id)
+    let m = Map.make()
+    ModMatrix.slotNumbers->Array.forEach(k =>
+      if ModEdit.isUsed(get, k) {
+        let t = ModMatrix.readSlot(get, k).target
+        switch m->Map.get(t) {
+        | Some(ks) => ks->Array.push(k)
+        | None => m->Map.set(t, [k])
+        }
+      }
+    )
+    connectionsByTarget->WeakMap.set(model, m)->ignore
+    m
+  }
+  byTarget->Map.get(target)->Option.getOr([])
+}
 
 // What modulates a parameter's knob (target t), for its status text.
 let modulationText = (ctx: Ctx.t, t) => {
@@ -191,7 +220,7 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
 
   let updateModBar = () =>
     bands->Option.forEach(box => {
-      let ks = ModEdit.connectionsTo(get, target)->Array.filter(k => get(ModMatrix.amountId(k)) != 0.)
+      let ks = connectionsTo(ctx.model, target)->Array.filter(k => get(ModMatrix.amountId(k)) != 0.)
       let marks = box->querySelectorAll("em")->nodesToArray
       let n = clamp01(norm())
       ks->Array.forEachWithIndex((k, i) => {

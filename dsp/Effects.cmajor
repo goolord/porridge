@@ -342,6 +342,59 @@ namespace porridge
             this.bands[k] = EQBand();
     }
 
+    /// Band k's biquad (Oatmeal's EQ: type 1 peaking, 2 low shelf, 3 high shelf, from the band's
+    /// EQ_n_ parameters in P), for the transposed direct form II: y = B0 x + s1,
+    /// s1 = A1 y + B1 x + s2, s2 = A2 y + B2 x. Effects' EQ and every voice's (VoiceFx.cmajor).
+    struct EQCoefs
+    {
+        float B0, B1, B2, A1, A2;
+    }
+
+    EQCoefs eqBandCoefs (const float[numSlots]& P, wrap<5> k, int type, float64 sr)
+    {
+        let freq  = float64 (P.at (slot::EQ_1_Freq + k));
+        let amp   = P.at (slot::EQ_1_Amp + k);
+        let slope = float64 (P.at (slot::EQ_1_Slope + k));
+
+        let A = float (pow (10.0, float64 (amp * 0.025f)));
+        var w = float64 (piF) * freq * 2.0 / sr;
+        w = min (w, float64 (piF * 0.98f));
+        let sn = float (sin (w));
+        let cs = float (cos (w));
+        let alpha = float (sn / (2.0 * slope));
+        let beta = float (sqrt (float64 (A)) / slope * sn);
+        let Ad = float64 (A);
+
+        float64 b0, b1, b2, a0, a1, a2;
+
+        if (type == 1)
+        {
+            b0 = 1.0 + alpha * Ad;  b1 = -2.0 * cs;  b2 = 1.0 - alpha * Ad;
+            a0 = 1.0 + alpha / Ad;  a1 = -2.0 * cs;  a2 = 1.0 - alpha / Ad;
+        }
+        else if (type == 2)
+        {
+            b0 = Ad * ((Ad + 1) - (Ad - 1) * cs + beta);
+            b1 = 2.0 * Ad * ((Ad - 1) - (Ad + 1) * cs);
+            b2 = Ad * ((Ad + 1) - (Ad - 1) * cs - beta);
+            a0 = (Ad + 1) + (Ad - 1) * cs + beta;
+            a1 = -2.0 * ((Ad - 1) + (Ad + 1) * cs);
+            a2 = (Ad + 1) + (Ad - 1) * cs - beta;
+        }
+        else
+        {
+            b0 = Ad * ((Ad + 1) + (Ad - 1) * cs + beta);
+            b1 = -2.0 * Ad * ((Ad - 1) + (Ad + 1) * cs);
+            b2 = Ad * ((Ad + 1) + (Ad - 1) * cs - beta);
+            a0 = (Ad + 1) - (Ad - 1) * cs + beta;
+            a1 = 2.0 * ((Ad - 1) - (Ad + 1) * cs);
+            a2 = (Ad + 1) - (Ad - 1) * cs - beta;
+        }
+
+        let inv = 1.0 / a0;
+        return EQCoefs (float (b0 * inv), float (b1 * inv), float (b2 * inv), float (-a1 * inv), float (-a2 * inv));
+    }
+
     bool process (EQ& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
     {
         if (! active && this.tailCount < 0)
@@ -367,48 +420,7 @@ namespace porridge
             if (type == 0)
                 continue;
 
-            let freq  = float64 (P.at (slot::EQ_1_Freq + k));
-            let amp   = P.at (slot::EQ_1_Amp + k);
-            let slope = float64 (P.at (slot::EQ_1_Slope + k));
-
-            let A = float (pow (10.0, float64 (amp * 0.025f)));
-            var w = float64 (piF) * freq * 2.0 / sr;
-            w = min (w, float64 (piF * 0.98f));
-            let sn = float (sin (w));
-            let cs = float (cos (w));
-            let alpha = float (sn / (2.0 * slope));
-            let beta = float (sqrt (float64 (A)) / slope * sn);
-            let Ad = float64 (A);
-
-            float64 b0, b1, b2, a0, a1, a2;
-
-            if (type == 1)
-            {
-                b0 = 1.0 + alpha * Ad;  b1 = -2.0 * cs;  b2 = 1.0 - alpha * Ad;
-                a0 = 1.0 + alpha / Ad;  a1 = -2.0 * cs;  a2 = 1.0 - alpha / Ad;
-            }
-            else if (type == 2)
-            {
-                b0 = Ad * ((Ad + 1) - (Ad - 1) * cs + beta);
-                b1 = 2.0 * Ad * ((Ad - 1) - (Ad + 1) * cs);
-                b2 = Ad * ((Ad + 1) - (Ad - 1) * cs - beta);
-                a0 = (Ad + 1) + (Ad - 1) * cs + beta;
-                a1 = -2.0 * ((Ad - 1) + (Ad + 1) * cs);
-                a2 = (Ad + 1) + (Ad - 1) * cs - beta;
-            }
-            else
-            {
-                b0 = Ad * ((Ad + 1) + (Ad - 1) * cs + beta);
-                b1 = -2.0 * Ad * ((Ad - 1) + (Ad + 1) * cs);
-                b2 = Ad * ((Ad + 1) + (Ad - 1) * cs - beta);
-                a0 = (Ad + 1) - (Ad - 1) * cs + beta;
-                a1 = 2.0 * ((Ad - 1) - (Ad + 1) * cs);
-                a2 = (Ad + 1) - (Ad - 1) * cs - beta;
-            }
-
-            let inv = 1.0 / a0;
-            let B0 = float (b0 * inv), B1 = float (b1 * inv), B2 = float (b2 * inv);
-            let A1 = float (-a1 * inv), A2 = float (-a2 * inv);
+            let c = eqBandCoefs (P, k, type, sr);
 
             var s1 = this.bands[k].s1, s2 = this.bands[k].s2;
             let dc = float<2> (this.dc, -this.dc);
@@ -416,9 +428,9 @@ namespace porridge
             for (wrap<blockSize> i)
             {
                 let x = buf[i] + dc;
-                let y = B0 * x + s1;
-                s1 = A1 * y + B1 * x + s2;
-                s2 = A2 * y + B2 * x;
+                let y = c.B0 * x + s1;
+                s1 = c.A1 * y + c.B1 * x + s2;
+                s2 = c.A2 * y + c.B2 * x;
                 buf[i] = y;
             }
 

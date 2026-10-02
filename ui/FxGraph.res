@@ -307,7 +307,7 @@ let hzText = (hz: float) =>
 // A frequency axis tick: "500", "2k".
 let hzTick = (hz: float) => hz >= 1000. ? `${Float.toString(hz / 1000.)}k` : Float.toString(hz)
 
-let dbText = (db: float) => (db > 0. ? "+" : "") ++ Float.toFixed(db, ~digits=1) ++ " dB"
+let dbText = PorridgeParams.dbText
 
 let gainDb = (x: float) => x <= 0. ? -120. : 20. * Math.log10(x)
 

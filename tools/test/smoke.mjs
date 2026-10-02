@@ -14,7 +14,7 @@ import { rackEntries } from "../../ui/PorridgeParams.res.mjs";
 import * as FilterTypes from "../../ui/FilterTypes.res.mjs";
 import * as ModMatrix from "../../ui/ModMatrix.res.mjs";
 import * as DistTypes from "../../ui/DistTypes.res.mjs";
-import { root, outDir, render, checker } from "./lib.mjs";
+import { root, outDir, render, renderAsync, pool, levelAt, checker } from "./lib.mjs";
 
 const dir = outDir ("smoke");
 
@@ -27,9 +27,15 @@ writeFileSync (events, "0 144 48 100\n0 144 55 90\n0 144 64 110\n44100 128 48 0\
 const rate = 44100, frames = 44100 * 12;
 const { check, done } = checker ({ verbose: true });
 
-function sounds (name, sets, { tail })
+// sounds queues a render of the chord and its check; flush runs the queued renders several at a
+// time and makes their checks, in order
+const queued = [];
+const sounds = (name, sets, opts) => queued.push (async () =>
+    soundCheck (name, await renderAsync ({ program: prog, events, frames, rate, sets, out: join (dir, name.replace (/[^A-Za-z0-9]+/g, "_") + ".f32") }), opts));
+const flush = async () => { for (const [ok, msg] of await pool (queued.splice (0))) check (ok, msg); };
+
+function soundCheck (name, channels, { tail })
 {
-    const channels = render ({ program: prog, events, frames, rate, sets, out: join (dir, name.replace (/[^A-Za-z0-9]+/g, "_") + ".f32") });
     const n = channels[0].length;
     let peak = 0, finite = true, lastSound = 0;
     for (const ch of channels)
@@ -47,7 +53,7 @@ function sounds (name, sets, { tail })
     if (peak > 16) problems.push (`peak ${peak.toFixed (2)}`);
     if (tail && lastSound >= n - 1) problems.push ("never falls silent");
     const ends = lastSound >= n - 1 ? "still sounding" : `silent after ${(lastSound / rate).toFixed (2)} s`;
-    check (! problems.length, `${name.padEnd (24)} peak ${peak.toFixed (3).padStart (7)}  ${ends}${problems.length ? "  <- " + problems.join (", ") : ""}`);
+    return [! problems.length, `${name.padEnd (24)} peak ${peak.toFixed (3).padStart (7)}  ${ends}${problems.length ? "  <- " + problems.join (", ") : ""}`];
 }
 
 // every one of Porridge's own effects, in rack slot 5 after Oatmeal's chain
@@ -90,6 +96,7 @@ for (const t of [DistTypes.firstModel + 4, DistTypes.firstModel + 8])
                                                        Mod1_Target: ModMatrix.targetIndex ("Sat_Drive"), Mod1_Amount: 0.8 }, { tail: true });
 sounds ("air under an LFO", { FX_Rack_5: air, Ai_On: 1, Mod1_Source: ModMatrix.sourceIndex ("lfo1"),
                               Mod1_Target: ModMatrix.targetIndex ("Ai_Air"), Mod1_Amount: 0.5 }, { tail: true });
+await flush ();
 
 // the mix: the dry waits as long as the oversampling delays the distorted sound, so that the
 // two line up (hard clipping, below its limit, is the sound as it was)
@@ -175,6 +182,7 @@ for (const os of [0, 1, 2, 3])
     check (Math.abs (cut[4] - off[4] + 18) < 1.5 && Math.abs (cut[2] - off[2]) < 1.5,
            `key EQ band 5 (16x) -18 dB  16x ${(cut[4] - off[4]).toFixed (2)} dB, 4x ${(cut[2] - off[2]).toFixed (2)} dB`);
     sounds ("key EQ, unison spread", { KEQ_On: 1, KEQ_2_Gain: 18, KEQ_6_Gain: -24, KEQ_8_Gain: 24, U_Voices: 4, U_Spread: 1 }, { tail: false });
+    await flush ();
 
     // an oscillator's noise roughens it: what lies between its harmonics rises well over the
     // clean saw's, its level stays about as it was; with unison and hard sync it stays bounded
@@ -182,25 +190,15 @@ for (const os of [0, 1, 2, 3])
     {
         const [l] = render ({ program: init, events: one, frames: rate, rate, sets: { ...plain, ...sets }, out: join (dir, "osc_noise.f32") });
         const from = Math.floor (0.3 * rate), size = 16384;
-        const at = hz =>
-        {
-            let re = 0, im = 0;
-            for (let i = 0; i < size; ++i)
-            {
-                const w = 0.5 - 0.5 * Math.cos (2 * Math.PI * i / size), a = 2 * Math.PI * hz * i / rate;
-                re += w * l[from + i] * Math.cos (a);
-                im += w * l[from + i] * Math.sin (a);
-            }
-            return 20 * Math.log10 (Math.hypot (re, im) + 1e-12);
-        };
         let rms = 0;
         for (let i = from; i < from + size; ++i) rms += l[i] * l[i];
-        return { gap: [2.5, 4.5, 8.5].map (h => at (h * 220)).reduce ((a, b) => a + b) / 3, level: 10 * Math.log10 (rms / size) };
+        return { gap: [2.5, 4.5, 8.5].map (h => levelAt (l, h * 220, 0.3, rate)).reduce ((a, b) => a + b) / 3, level: 10 * Math.log10 (rms / size) };
     };
     const clean = between ({}), rough = between ({ O1_Noise: 0.5 });
     check (rough.gap - clean.gap > 15 && Math.abs (rough.level - clean.level) < 3,
            `osc noise fills the gaps  ${(rough.gap - clean.gap).toFixed (1)} dB between harmonics, level ${(rough.level - clean.level).toFixed (2)} dB`);
     sounds ("osc noise, unison, sync", { O1_Noise: 0.8, O2_Noise: 0.8, O2_NoiseColour: 1, U_Voices: 4, OscMix: 1 }, { tail: false });
+    await flush ();
     // osc 2 heard in PM 2 > 1 (a sine a twelfth up): the sound gets louder by osc 2's own
     const pm = between ({ OscMix: 3, O2_Amp: 0.5, Transpose: 19 / 12, O2_Waveform: 0 });
     const heardPm = between ({ OscMix: 3, O2_Amp: 0.5, Transpose: 19 / 12, O2_Waveform: 0, O2_PairMix: 1 });
@@ -215,6 +213,7 @@ sounds ("noise > cutoff", { Mod1_Source: noise, Mod1_Target: ModMatrix.targetInd
 // Porridge's filter types, at a mid cutoff with some resonance
 for (let t = FilterTypes.firstPorridge; t < FilterTypes.all.length; ++t)
     sounds (`filter ${t} ${FilterTypes.all[t]}`.slice (0, 24), { Filter: t, Cutoff: 0.45, Resonance: 0.6, F_Morph: 0.3, F_Drive: 0.3 }, { tail: false });
+await flush ();
 
 // mono legato with unison spread: the right side's filter envelopes start too (Oatmeal never
 // starts them, and Oat mode keeps that, the right filter staying shut)

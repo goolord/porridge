@@ -40,17 +40,8 @@ type t = {
 let parsed: Map.t<string, result<array<Preset.t>, string>> = Map.make()
 let versionKey = bank => bank.origin == Opened ? bank.id : `${bank.id}@${Float.toString(bank.modified)}`
 
-let str = (d, key) =>
-  switch d->Dict.get(key) {
-  | Some(JSON.String(s)) => s
-  | _ => ""
-  }
-
-let num = (d, key) =>
-  switch d->Dict.get(key) {
-  | Some(JSON.Number(x)) => x
-  | _ => 0.
-  }
+let str = Preset.getString
+let num = Preset.getNumber
 
 let bankOf = (json: JSON.t) =>
   switch json {

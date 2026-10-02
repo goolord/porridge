@@ -231,9 +231,12 @@ namespace porridge
         let kill = float (speed * float64 (c.killDec));
         let bp = max (c.bp, 1e-4f);
         let sus = max (c.sus, 1e-4f);
-        let d1 = float (pow (float64 (c.d1coef), speed));
-        let d2 = float (pow (float64 (c.d2coef), speed));
-        let rel = float (pow (float64 (c.relCoef), pedalDown ? speed * 0.0078125 : speed));
+        let relSpeed = pedalDown ? speed * 0.0078125 : speed;
+
+        // the per-sample factors at this speed (x^1 is x: no pow at the usual speed of 1)
+        let d1 = speed == 1.0 ? c.d1coef : float (pow (float64 (c.d1coef), speed));
+        let d2 = speed == 1.0 ? c.d2coef : float (pow (float64 (c.d2coef), speed));
+        let rel = relSpeed == 1.0 ? c.relCoef : float (pow (float64 (c.relCoef), relSpeed));
         let spanD1 = span (1.0f, bp);
         let spanD2 = span (bp, sus);
         let spanR = span (max (this.X, 0.001f), 0.001f);

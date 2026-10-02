@@ -1587,7 +1587,7 @@ namespace porridge
             if ((t & 31) == 0)
             {
                 s.bpLog[ch] += (s.bpTarget[ch] - s.bpLog[ch]) * 0.03f;
-                let g = float (tan (pi * min (float64 (exp (s.bpLog[ch])), 0.45 * sr) / sr));
+                let g = extraPrewarp (float64 (exp (s.bpLog[ch])), sr);
                 s.bpC[ch] = svfCoefs (g, s.bpK);
             }
 

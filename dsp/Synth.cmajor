@@ -438,7 +438,7 @@ namespace porridge
         /// a copy's are swapped there to run it) into shaperTables[k] if its points changed.
         void useShaper (int k)
         {
-            if (int (P[slot::Sat_Type]) != 5)
+            if (int (P[slot::Sat_Type]) != satType::custom)
                 return;
 
             var same = shaperValid.at (k);
@@ -3214,7 +3214,7 @@ namespace porridge
                     }
 
                     if (kind == rack::filterKind)          v.lane.at (s).laneFilter (fxTables, P, noteHz, sampleRate, bufM, bufR, split, n);
-                    else if (kind == rack::eqKind)         { if (P[slot::EQ_On] != 0) v.lane.at (s).laneEq (P, sampleRate, bufM, bufR, split, n); }
+                    else if (kind == rack::eqKind)         v.lane.at (s).laneEq (P, sampleRate, bufM, bufR, split, n);
                     else if (kind == rack::phaserKind)     v.lane.at (s).lanePhaser (P, noteHz, sampleRate, bufM, bufR, split, n);
                     else if (kind == rack::flangerKind)    v.lane.at (s).laneFlanger (P, sampleRate, bufM, bufR, split, n);
                     else if (kind == rack::utilityKind)    v.lane.at (s).laneUtility (P, sampleRate, bufM, bufR, split, n);

@@ -854,11 +854,10 @@ type feature =
 
 // The voice lane (dsp/VoiceFx.cmajor): up to laneSlots effects in every voice, which each note
 // runs its own copy of, holding the same values as the rack's slots (only the kinds that work in
-// a voice: voiceLaneKinds); how many of them come before the filter, and before the amp
+// a voice: FxRack.laneKinds); how many of them come before the filter, and before the amp
 // envelope (the rest come after it, and react to how each note swells and fades).
 let laneSlots = 4
 let laneId = k => `VL_${Int.toString(k)}`
-let voiceLaneKinds = ["filter", "distortion", "eq", "phaser", "flanger", "utility", "shifter", "resonator"]
 let lanePositions = ["0", "1", "2", "3", "4"]
 
 let laneSpecs = [

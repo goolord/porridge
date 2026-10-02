@@ -142,19 +142,12 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
   let load = () =>
     switch settings->Settings.savedValue(settingsKey) {
     | Some(Object(saved)) =>
-      let number = (key, default) =>
-        switch saved->Dict.get(key) {
-        | Some(Number(x)) if Float.isFinite(x) => Math.max(0., Math.min(1., x))
-        | _ => default
+      wild := PatchGen.areas->Array.reduce(PatchGen.defaultWildness, (w, a) =>
+        switch saved->Dict.get(PatchGen.areaShort(a)) {
+        | Some(Number(x)) if Float.isFinite(x) => PatchGen.withWild(w, a, Math.max(0., Math.min(1., x)))
+        | _ => w
         }
-      let d = PatchGen.defaultWildness
-      wild := {
-          osc: number("osc", d.osc),
-          filter: number("filter", d.filter),
-          env: number("env", d.env),
-          mod: number("mod", d.mod),
-          fx: number("fx", d.fx),
-        }
+      )
       kind :=
         switch saved->Dict.get("kind") {
         | Some(String(k)) => PatchGen.kinds->Array.find(x => PatchGen.kindName(x) == k)
@@ -175,11 +168,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
       settingsKey,
       Object(
         Dict.fromArray([
-          ("osc", JSON.Number(w.osc)),
-          ("filter", Number(w.filter)),
-          ("env", Number(w.env)),
-          ("mod", Number(w.mod)),
-          ("fx", Number(w.fx)),
+          ...PatchGen.areas->Array.map(a => (PatchGen.areaShort(a), JSON.Number(PatchGen.wildOf(w, a)))),
           ("kind", String(kind.contents->Option.mapOr("any", PatchGen.kindName))),
         ]),
       ),

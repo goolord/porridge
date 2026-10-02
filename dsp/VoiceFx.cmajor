@@ -57,58 +57,16 @@ namespace porridge
         float64 shPhase;
         float shHz, shMix;
 
-        // resonator: each mode's two outputs and inputs back, per side, and the gliding mix
+        // resonator: each mode's two outputs and inputs back, per side, and the gliding mix;
+        // each mode's gain, feedback and weight, the weights' sum, and what they were worked
+        // out from (rsDesigned: whether they have been since the note started)
         float[4] rY1L, rY2L, rX1L, rX2L, rY1R, rY2R, rX1R, rX2R;
         float rsMix, rsGain;
-    }
-
-    //==============================================================================
-    // the Hilbert pair, shared by every voice's shifter: Bode's design (FxExtra.cmajor)
-
-    let hilbertCoefs = 16;
-
-    float[hilbertCoefs] hilbertDesign (float64 sr)
-    {
-        float[hilbertCoefs] c;
-        let transition = 20.0 / sr;
-        let order = float64 (hilbertCoefs * 2 + 1);
-        var kk = tan ((1.0 - transition * 2.0) * pi * 0.25);
-        kk *= kk;
-        let kksqrt = pow (1.0 - kk * kk, 0.25);
-        let e = 0.5 * (1.0 - kksqrt) / (1.0 + kksqrt);
-        let e4 = e * e * e * e;
-        let q = e * (1.0 + e4 * (2.0 + e4 * (15.0 + 150.0 * e4)));
-
-        for (wrap<hilbertCoefs> j)
-        {
-            let cj = float64 (j + 1);
-            float64 num = 0, den = 0, sign = 1;
-
-            for (int i = 0; i < 40; ++i)
-            {
-                let t = pow (q, float64 (i * (i + 1))) * sin (float64 (i * 2 + 1) * cj * pi / order) * sign;
-                num += t;
-                sign = -sign;
-                if (abs (t) < 1e-100) break;
-            }
-
-            sign = -1;
-
-            for (int i = 1; i < 40; ++i)
-            {
-                let t = pow (q, float64 (i * i)) * cos (float64 (i * 2) * cj * pi / order) * sign;
-                den += t;
-                sign = -sign;
-                if (abs (t) < 1e-100) break;
-            }
-
-            let ww = num * pow (q, 0.25) / (den + 0.5);
-            let wwsq = ww * ww;
-            let x = sqrt ((1.0 - wwsq * kk) * (1.0 - wwsq / kk)) / (1.0 + wwsq);
-            c[j] = float ((1.0 - x) / (1.0 + x));
-        }
-
-        return c;
+        float[4] rsG, rsA1, rsA2, rsWt;
+        float64 rsWeights, rsRate;
+        float rsNoteHz, rsPitch, rsDecay, rsBright;
+        int rsModel;
+        bool rsDesigned;
     }
 
     //==============================================================================
@@ -171,6 +129,7 @@ namespace porridge
         {
             this.rY1L = float[4](); this.rY2L = float[4](); this.rX1L = float[4](); this.rX2L = float[4]();
             this.rY1R = float[4](); this.rY2R = float[4](); this.rX1R = float[4](); this.rX2R = float[4]();
+            this.rsDesigned = false;
         }
     }
 
@@ -247,57 +206,16 @@ namespace porridge
             if (type == 0)
                 continue;
 
-            let freq  = float64 (P.at (slot::EQ_1_Freq + k));
-            let amp   = P.at (slot::EQ_1_Amp + k);
-            let slope = float64 (P.at (slot::EQ_1_Slope + k));
-
-            let A = float (pow (10.0, float64 (amp * 0.025f)));
-            var w = float64 (piF) * freq * 2.0 / sr;
-            w = min (w, float64 (piF * 0.98f));
-            let sn = float (sin (w));
-            let cs = float (cos (w));
-            let alpha = float (sn / (2.0 * slope));
-            let beta = float (sqrt (float64 (A)) / slope * sn);
-            let Ad = float64 (A);
-
-            float64 b0, b1, b2, a0, a1, a2;
-
-            if (type == 1)
-            {
-                b0 = 1.0 + alpha * Ad;  b1 = -2.0 * cs;  b2 = 1.0 - alpha * Ad;
-                a0 = 1.0 + alpha / Ad;  a1 = -2.0 * cs;  a2 = 1.0 - alpha / Ad;
-            }
-            else if (type == 2)
-            {
-                b0 = Ad * ((Ad + 1) - (Ad - 1) * cs + beta);
-                b1 = 2.0 * Ad * ((Ad - 1) - (Ad + 1) * cs);
-                b2 = Ad * ((Ad + 1) - (Ad - 1) * cs - beta);
-                a0 = (Ad + 1) + (Ad - 1) * cs + beta;
-                a1 = -2.0 * ((Ad - 1) + (Ad + 1) * cs);
-                a2 = (Ad + 1) + (Ad - 1) * cs - beta;
-            }
-            else
-            {
-                b0 = Ad * ((Ad + 1) + (Ad - 1) * cs + beta);
-                b1 = -2.0 * Ad * ((Ad - 1) + (Ad + 1) * cs);
-                b2 = Ad * ((Ad + 1) + (Ad - 1) * cs - beta);
-                a0 = (Ad + 1) - (Ad - 1) * cs + beta;
-                a1 = 2.0 * ((Ad - 1) - (Ad + 1) * cs);
-                a2 = (Ad + 1) - (Ad - 1) * cs - beta;
-            }
-
-            let inv = 1.0 / a0;
-            let B0 = float (b0 * inv), B1 = float (b1 * inv), B2 = float (b2 * inv);
-            let A1 = float (-a1 * inv), A2 = float (-a2 * inv);
+            let c = eqBandCoefs (P, k, type, sr);
 
             var s1 = this.eqL1[k], s2 = this.eqL2[k];
 
             for (int i = 0; i < n; ++i)
             {
                 let x = l.at (i) + 1e-18f;
-                let y = B0 * x + s1;
-                s1 = A1 * y + B1 * x + s2;
-                s2 = A2 * y + B2 * x;
+                let y = c.B0 * x + s1;
+                s1 = c.A1 * y + c.B1 * x + s2;
+                s2 = c.A2 * y + c.B2 * x;
                 l.at (i) = y;
             }
 
@@ -310,9 +228,9 @@ namespace porridge
                 for (int i = 0; i < n; ++i)
                 {
                     let x = r.at (i) + 1e-18f;
-                    let y = B0 * x + s1;
-                    s1 = A1 * y + B1 * x + s2;
-                    s2 = A2 * y + B2 * x;
+                    let y = c.B0 * x + s1;
+                    s1 = c.A1 * y + c.B1 * x + s2;
+                    s2 = c.A2 * y + c.B2 * x;
                     r.at (i) = y;
                 }
 
@@ -553,8 +471,8 @@ namespace porridge
     }
 
     //==============================================================================
-    // shifter: a frequency shift that follows the key. The Hilbert pair (shared coefficients)
-    // and a quadrature oscillator at Sh_Ratio of the note's frequency plus Sh_Hz, so that the
+    // shifter: a frequency shift that follows the key. The Hilbert pair (Bode's design in
+    // FxExtra.cmajor, its coefficients shared by every voice) and a quadrature oscillator at Sh_Ratio of the note's frequency plus Sh_Hz, so that the
     // shifted partials keep the same places relative to every note.
 
     /// Sh_Ratio's knob (-1..1) as a fraction of the note: cubed, times 2.
@@ -661,9 +579,7 @@ namespace porridge
                         float[blockSize]& l, float[blockSize]& r, bool both, int n)
     {
         let model = clamp (int (P[slot::Rs_Model]), 0, 5);
-        let base = float64 (noteHz) * pow (2.0, float64 (clamp (P[slot::Rs_Pitch], -48.0f, 48.0f)) / 12.0);
-        let decay = float64 (expKnob (10.0f, 10000.0f, P[slot::Rs_Decay])) * 0.001;
-        let bright = float64 (clamp (P[slot::Rs_Bright], 0.0f, 1.0f));
+        let pitch = P[slot::Rs_Pitch], decayKnob = P[slot::Rs_Decay], brightKnob = P[slot::Rs_Bright];
         let tMix = clamp (P[slot::Rs_Mix], 0.0f, 1.0f);
 
         let tGain = float (pow (10.0, float64 (clamp (P[slot::Rs_Gain], -24.0f, 24.0f)) * 0.05));
@@ -681,28 +597,44 @@ namespace porridge
         let dmix = (this.rsMix - mix0) / float (n);
         let dgain = (this.rsGain - gain0) / float (n);
 
-        // each mode's gain (b0, at its peak 1 before the weights), feedback, and weight
-        float[4] g, a1, a2, wt;
-        float64 weights = 0;
-
-        for (wrap<4> m)
+        // each mode's gain (b0, at its peak 1 before the weights), feedback, and weight, worked
+        // out again only when what they come from has changed
+        if (! (this.rsDesigned && model == this.rsModel && noteHz == this.rsNoteHz && pitch == this.rsPitch
+                 && decayKnob == this.rsDecay && brightKnob == this.rsBright && sr == this.rsRate))
         {
-            let ratio = float64 (resonatorRatios.at (model * 4 + m));
-            let hz = base * ratio;
+            this.rsDesigned = true;
+            this.rsModel = model; this.rsNoteHz = noteHz; this.rsPitch = pitch;
+            this.rsDecay = decayKnob; this.rsBright = brightKnob; this.rsRate = sr;
 
-            if (hz <= 10.0 || hz >= 0.45 * sr)
-                continue;
+            let base = float64 (noteHz) * pow (2.0, float64 (clamp (pitch, -48.0f, 48.0f)) / 12.0);
+            let decay = float64 (expKnob (10.0f, 10000.0f, decayKnob)) * 0.001;
+            let bright = float64 (clamp (brightKnob, 0.0f, 1.0f));
 
-            let t = decay / sqrt (ratio);
-            let rr = exp (-6.907755 / (t * sr));
-            let w = twoPi * hz / sr;
-            a1[m] = float (2.0 * rr * cos (w));
-            a2[m] = float (-rr * rr);
-            g[m] = float ((1.0 - rr * rr) * 0.5);
-            let weight = pow (ratio, 2.0 * bright - 1.5);
-            wt[m] = float (weight);
-            weights += weight;
+            this.rsG = float[4](); this.rsA1 = float[4](); this.rsA2 = float[4](); this.rsWt = float[4]();
+            this.rsWeights = 0;
+
+            for (wrap<4> m)
+            {
+                let ratio = float64 (resonatorRatios.at (model * 4 + m));
+                let hz = base * ratio;
+
+                if (hz <= 10.0 || hz >= 0.45 * sr)
+                    continue;
+
+                let t = decay / sqrt (ratio);
+                let rr = exp (-6.907755 / (t * sr));
+                let w = twoPi * hz / sr;
+                this.rsA1[m] = float (2.0 * rr * cos (w));
+                this.rsA2[m] = float (-rr * rr);
+                this.rsG[m] = float ((1.0 - rr * rr) * 0.5);
+                let weight = pow (ratio, 2.0 * bright - 1.5);
+                this.rsWt[m] = float (weight);
+                this.rsWeights += weight;
+            }
         }
+
+        let g = this.rsG, a1 = this.rsA1, a2 = this.rsA2, wt = this.rsWt;
+        let weights = this.rsWeights;
 
         if (weights <= 0)
             return;

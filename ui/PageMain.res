@@ -209,21 +209,7 @@ let voiceFx = (ctx: Ctx.t, body) => {
     | FilterNode => filterRow
     | AmpNode => ampRow
     }
-  let press = (item: VoiceLane.item, ev) =>
-    switch ev->button {
-    | 0 =>
-      ev->preventDefault
-      let others = VoiceLane.items(get)->Array.filter(o => o != item)->Array.map(itemEl)
-      Reorder.start(ev, itemEl(item), ~vertical=true, ~others, ~onDrop=pos => VoiceLane.move(model, item, pos), ~onClick=() => ())
-    | 2 =>
-      switch item {
-      | Fx(e) =>
-        ev->preventDefault
-        VoiceLane.menu(ctx, e, itemEl(item))
-      | _ => ()
-      }
-    | _ => ()
-    }
+  let press = (item, ev) => VoiceLane.press(ctx, item, ev, ~itemEl, ~vertical=true, ~onClick=() => ())
   filterText->onPointer(#pointerdown, ev => press(FilterNode, ev))
   ampRow->onPointer(#pointerdown, ev => press(AmpNode, ev))
   filterRow->suppressContextMenu

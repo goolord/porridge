@@ -5,6 +5,22 @@
 
 open! Web
 
+// how much a new connection modulates its target
+let defaultAmount = 0.25
+
+// Every source but none, in the menus' order (ModMatrix.sourceGroups, then any it leaves out).
+let sourceOrder = {
+  let named = ModMatrix.sourceGroups->Array.flatMap(((_, keys)) => keys->Array.map(ModMatrix.sourceIndex))->Array.filter(i => i > 0)
+  let rest = ModMatrix.sources->Array.mapWithIndex((_, i) => i)->Array.filter(i => i > 0 && !(named->Array.includes(i)))
+  Array.concat(named, rest)
+}
+
+// Macro i's name: the one the program gives it, or "macro n".
+let macroName = (programs, i) => {
+  let name = (programs->ProgramStore.meta).macroNames[i]->Option.getOr("")
+  name == "" ? `macro ${Int.toString(i + 1)}` : name
+}
+
 let sourceColor = s =>
   switch ModMatrix.sources[s]->Option.mapOr("", s => s.key) {
   | "lfo1" => "#1c3c73"

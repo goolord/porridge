@@ -80,12 +80,16 @@ let add = (model, kind) =>
 
 let remove = (model, e) => write(model, items(get(model, ...))->Array.filter(x => x != Fx(e)))
 
+// Gives effect `to` the settings of `from` (of the same kind).
+let copySettings = (model, ~from, ~to) =>
+  FxRack.params(from)->Array.forEachWithIndex((id, i) =>
+    FxRack.params(to)[i]->Option.forEach(t => model->ParamModel.gestureSet(t, get(model, id)))
+  )
+
 // A copy with the same settings, right after it.
 let duplicate = (model, e: FxRack.effect) =>
   FxRack.free(rack(model), ~lane=lane(model), ~forLane=true, e.kind)->Option.map(copy => {
-    FxRack.params(e)->Array.forEachWithIndex((id, i) =>
-      FxRack.params(copy)[i]->Option.forEach(to => model->ParamModel.gestureSet(to, get(model, id)))
-    )
+    copySettings(model, ~from=e, ~to=copy)
     let list = items(get(model, ...))
     let i = list->Array.findIndex(x => x == Fx(e))
     list->Array.splice(~start=i + 1, ~remove=0, ~insert=[Fx(copy)])
@@ -122,34 +126,36 @@ let move = (model, x, pos) => {
 
 let label = (model, e) => FxRack.label(lane(model), e)
 
-// The menu of kinds to add to the lane, below an element; onAdded gets the new effect.
-let addMenu = (ctx: Ctx.t, anchor, ~onAdded) => {
-  let model = ctx.model
-  let addable = FxRack.addable(rack(model), ~lane=lane(model), ~forLane=true)
-  let kinds = FxRack.laneMenuGroups->Array.flatMap(((title, kinds)) =>
+// The add menu's kinds that can be added, in these groups, and its items, each with its icon.
+let kindMenu = (~groups, ~addable) => {
+  let kinds = groups->Array.flatMap(((title, kinds)) =>
     kinds
     ->Array.filter(k => addable->Array.includes(k))
     ->Array.mapWithIndex((k, i) => (k, i == 0 ? Some(title) : None))
   )
+  let items = kinds->Array.mapWithIndex(((k, heading), i) => {
+    Menu.label: FxRack.kindName(k),
+    value: i,
+    icon: ?Icons.rackKind(FxRack.key(k))->Option.map(icon => {
+      let wrap = el("span", ~cls="icw")
+      wrap->appendChild(Icons.render(icon))
+      wrap
+    }),
+    ?heading,
+    hint: FxRack.about(k),
+  })
+  (kinds->Array.map(Pair.first), items)
+}
+
+// The menu of kinds to add to the lane, below an element; onAdded gets the new effect.
+let addMenu = (ctx: Ctx.t, anchor, ~onAdded) => {
+  let model = ctx.model
+  let addable = FxRack.addable(rack(model), ~lane=lane(model), ~forLane=true)
+  let (kinds, items) = kindMenu(~groups=FxRack.laneMenuGroups, ~addable)
   if kinds == [] {
     ctx.toast(`Every voice already has ${Int.toString(PorridgeParams.laneSlots)} effects`)
   } else {
-    ctx.menu->Menu.show(
-      anchor,
-      kinds->Array.mapWithIndex(((k, heading), i) => {
-        Menu.label: FxRack.kindName(k),
-        value: i,
-        icon: ?Icons.rackKind(FxRack.key(k))->Option.map(icon => {
-          let wrap = el("span", ~cls="icw")
-          wrap->appendChild(Icons.render(icon))
-          wrap
-        }),
-        ?heading,
-        hint: FxRack.about(k),
-      }),
-      -1,
-      i => kinds[i]->Option.forEach(((k, _)) => add(model, k)->Option.forEach(onAdded)),
-    )
+    ctx.menu->Menu.show(anchor, items, -1, i => kinds[i]->Option.forEach(k => add(model, k)->Option.forEach(onAdded)))
   }
 }
 
@@ -187,3 +193,21 @@ let ids = [
 ]
 
 let holds = (model, e) => FxRack.holds(lane(model), e)
+
+// A press on a lane item, shown by itemEl: the left button drags it among the others (or clicks
+// it), the right opens an effect's menu.
+let press = (ctx: Ctx.t, item, ev, ~itemEl, ~vertical=false, ~onClick) =>
+  switch ev->button {
+  | 0 =>
+    ev->preventDefault
+    let others = items(get(ctx.model, ...))->Array.filter(o => o != item)->Array.map(itemEl)
+    Reorder.start(ev, itemEl(item), ~vertical, ~others, ~onDrop=pos => move(ctx.model, item, pos), ~onClick)
+  | 2 =>
+    switch item {
+    | Fx(e) =>
+      ev->preventDefault
+      menu(ctx, e, itemEl(item))
+    | _ => ()
+    }
+  | _ => ()
+  }

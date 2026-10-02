@@ -12,7 +12,7 @@ import { join } from "node:path";
 import * as ModMatrix from "../../ui/ModMatrix.res.mjs";
 import * as PorridgeParams from "../../ui/PorridgeParams.res.mjs";
 import * as Preset from "../../ui/Preset.res.mjs";
-import { root, outDir, render, checker } from "./lib.mjs";
+import { root, outDir, render, player, rms as rmsOf, checker } from "./lib.mjs";
 
 const dir = outDir ("modulation");
 const init = join (root, "tools", "re", "init_prog.bin");
@@ -32,24 +32,10 @@ const conn = (k, source, target, amount, more = {}) => ({
     ...Object.fromEntries (Object.entries (more).map (([key, v]) => [`Mod${k}_${key}`, v])),
 });
 
-let count = 0;
-function play (notes, sets, seconds)
-{
-    const events = join (dir, `events${count}.txt`);
-    writeFileSync (events, notes.map (([at, key, length, vel = 100]) =>
-        `${Math.round (at * rate)} 144 ${key} ${vel}\n${Math.round ((at + length) * rate)} 128 ${key} 0\n`).join (""));
-    return render ({ program: init, events, frames: Math.round (seconds * rate), rate, sets: { ...plain, ...sets },
-                     out: join (dir, `render${count++}.f32`) });
-}
+const play = player ({ dir, program: init, base: plain, rate });
 
 // RMS from a to b seconds (both channels)
-const rms = ([l, r], a, b) =>
-{
-    let s = 0;
-    const i0 = Math.round (a * rate), i1 = Math.round (b * rate);
-    for (let i = i0; i < i1; ++i) s += l[i] * l[i] + r[i] * r[i];
-    return Math.sqrt (s / (2 * (i1 - i0)));
-};
+const rms = (x, a, b) => rmsOf (x, a, b, rate);
 // the RMS of each 20 ms from a to b
 const levels = (x, a, b) => Array.from ({ length: Math.floor ((b - a) / 0.02) }, (_, k) => rms (x, a + 0.02 * k, a + 0.02 * (k + 1)));
 const spread = xs => Math.max (...xs) / Math.min (...xs);

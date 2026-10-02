@@ -336,6 +336,12 @@ let getString = (d, key) =>
   | _ => ""
   }
 
+let getNumber = (d, key) =>
+  switch d->Dict.get(key) {
+  | Some(JSON.Number(x)) => x
+  | _ => 0.
+  }
+
 let fromJsonObject = (d: dict<JSON.t>) => {
   let values = defaultValues()
   let params = switch d->Dict.get("params") {
@@ -378,11 +384,7 @@ let fromJsonObject = (d: dict<JSON.t>) => {
         let source = ModMatrix.sourceIndex(getString(m, "source"))
         let target = ModMatrix.targetIndex(getString(m, "target"))
         let via = ModMatrix.sourceIndex(getString(m, "via"))
-        let number = key =>
-          switch m->Dict.get(key) {
-          | Some(Number(x)) => x
-          | _ => 0.
-          }
+        let number = getNumber(m, ...)
         let amount = number("amount")
         if source > 0 && target > 0 {
           let k = slot.contents

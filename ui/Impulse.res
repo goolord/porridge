@@ -88,15 +88,13 @@ type chunkPayload = {
   right: array<float>,
 }
 
-@val external arrayOfFloats: Float32Array.t => array<float> = "Array.from"
-
 let chunkOf = (d: Float32Array.t, offset) => {
   let part = Float32Array.fromLength(chunkFrames)
   let n = Math.Int.min(chunkFrames, TypedArray.length(d) - offset)
   for i in 0 to n - 1 {
     part->put(i, d->at(offset + i))
   }
-  arrayOfFloats(part)
+  Bank.arrayOfFloats(part)
 }
 
 // The impulse's chunks, sent a few at a time so that the patch's event queue keeps up. A newer
@@ -110,7 +108,7 @@ let send = (pc, which, imp: option<t>) =>
     switch imp {
     | None =>
       // an empty impulse: the file's slot plays silence until one is loaded
-      let silence = arrayOfFloats(Float32Array.fromLength(chunkFrames))
+      let silence = Bank.arrayOfFloats(Float32Array.fromLength(chunkFrames))
       PatchConnection.sendEventOrValueNow(
         pc,
         "impulseIn",

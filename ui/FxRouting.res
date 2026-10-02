@@ -183,26 +183,12 @@ let make = (ctx: Ctx.t, body, ~w, ~h, ops) => {
     | AmpNode => ampNode
     }
   let pressItem = (item: VoiceLane.item, ev) =>
-    switch ev->button {
-    | 0 =>
-      ev->preventDefault
-      let items = VoiceLane.items(get)
-      let others = items->Array.filter(o => o != item)->Array.map(itemEl)
-      Reorder.start(ev, itemEl(item), ~others, ~onDrop=pos => VoiceLane.move(model, item, pos), ~onClick=() =>
-        switch item {
-        | Fx(e) => ops.openEffect(e)
-        | _ => ()
-        }
-      )
-    | 2 =>
+    VoiceLane.press(ctx, item, ev, ~itemEl, ~onClick=() =>
       switch item {
-      | Fx(e) =>
-        ev->preventDefault
-        VoiceLane.menu(ctx, e, itemEl(item))
+      | Fx(e) => ops.openEffect(e)
       | _ => ()
       }
-    | _ => ()
-    }
+    )
   filterNode->onPointer(#pointerdown, ev => pressItem(FilterNode, ev))
   ampNode->onPointer(#pointerdown, ev => pressItem(AmpNode, ev))
   let laneHooked = Set.make()

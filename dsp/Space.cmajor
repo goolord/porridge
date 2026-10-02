@@ -889,7 +889,7 @@ namespace porridge
         }
         else if (model == reverbModel::nitrous)
         {
-            this.spaceNitrous (pre, wet, float (1.0 - exp (-2.0 * pi * 3000.0 / sr)));
+            this.spaceNitrous (pre, wet, onePoleCoef (3000.0, sr));
         }
         else if (model == reverbModel::basin)
         {
@@ -904,7 +904,7 @@ namespace porridge
 
         // low cut (12 dB/oct, TPT state variable), width, mix
         var gc0 = this.lcG;
-        this.lcG = float (tan (pi * min (exp (float64 (this.lcLog)), 0.45 * sr) / sr));
+        this.lcG = extraPrewarp (exp (float64 (this.lcLog)), sr);
 
         if (gc0 <= 0)
             gc0 = this.lcG;

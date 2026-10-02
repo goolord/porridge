@@ -41,14 +41,7 @@ let areaName = (a: area) =>
   | #fx => "effects"
   }
 
-let areaShort = (a: area) =>
-  switch a {
-  | #osc => "osc"
-  | #filter => "filter"
-  | #env => "env"
-  | #mod => "mod"
-  | #fx => "fx"
-  }
+let areaShort = (a: area) => (a :> string)
 
 // how wild each area may go, 0..1
 type wildness = {osc: float, filter: float, env: float, mod: float, fx: float}
@@ -77,16 +70,7 @@ type kind = [#bass | #lead | #pad | #keys | #pluck | #bell | #brass]
 
 let kinds: array<kind> = [#bass, #lead, #pad, #keys, #pluck, #bell, #brass]
 
-let kindName = (k: kind) =>
-  switch k {
-  | #bass => "bass"
-  | #lead => "lead"
-  | #pad => "pad"
-  | #keys => "keys"
-  | #pluck => "pluck"
-  | #bell => "bell"
-  | #brass => "brass"
-  }
+let kindName = (k: kind) => (k :> string)
 
 //==============================================================================
 // Chance
@@ -1824,7 +1808,7 @@ let simulatedLevel = (m, ~note, ~within=?) => {
 // osc 1 (at one, they add more than their powers), the modes, the rack's compressor, its spaces
 // and echoes, the chorus's voices, the flanger and phaser, the frequency shifter, the
 // distortion models' own drive, and the second filter.
-let loudnessFeatures = (m, ~note as _) => {
+let loudnessFeatures = m => {
   let mode = mixMode(m)
   let rack = rackOf(m)
   let has = kind => rack->Array.some(e => e.kind == kind) ? 1. : 0.
@@ -1852,7 +1836,7 @@ let loudnessBias = 1.628
 // About how loud a patch's note plays: dB over its loudest 300 ms, K-weighted (as a loudness
 // meter hears it), with the output gain at 1.
 let loudness = (m, ~note) =>
-  loudnessFeatures(m, ~note)->Array.reduceWithIndex(simulatedLevel(m, ~note) + loudnessBias, (s, x, i) =>
+  loudnessFeatures(m)->Array.reduceWithIndex(simulatedLevel(m, ~note) + loudnessBias, (s, x, i) =>
     s + x * loudnessWeights->Array.getUnsafe(i)
   )
 

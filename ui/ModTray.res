@@ -6,7 +6,6 @@
 
 open! Web
 
-let defaultAmount = 0.25
 let varyAmount = 0.1
 
 let make = (ctx: Ctx.t, stage) => {
@@ -24,13 +23,9 @@ let make = (ctx: Ctx.t, stage) => {
     }
   })
 
-  let macroName = i => {
-    let name = (ctx.programs->ProgramStore.meta).macroNames[i]->Option.getOr("")
-    name == "" ? `macro ${Int.toString(i + 1)}` : name
-  }
   let label = s =>
     switch ModMatrix.sources[s] {
-    | Some({key}) if String.startsWith(key, "macro") => macroName(s - ModMatrix.sourceIndex("macro1"))
+    | Some({key}) if String.startsWith(key, "macro") => ModEdit.macroName(ctx.programs, s - ModMatrix.sourceIndex("macro1"))
     | _ => ModEdit.shortLabel(s)
     }
   let longLabel = s => ModMatrix.sources[s]->Option.mapOr("", s => s.label)
@@ -103,13 +98,8 @@ let make = (ctx: Ctx.t, stage) => {
   chip(random, varyAmount, "vary per note", ~cls="vary", ~help=() =>
     "Drag onto a parameter to make each note get it a little differently (the random source, at 10 %)"
   )->ignore
-  let named = ModMatrix.sourceGroups->Array.flatMap(((_, keys)) => keys->Array.map(ModMatrix.sourceIndex))
-  let all = Array.concat(
-    named,
-    ModMatrix.sources->Array.mapWithIndex((_, i) => i)->Array.filter(i => i > 0 && !(named->Array.includes(i))),
-  )->Array.filter(i => i > 0)
-  let chips = all->Array.map(s => {
-    let (_, t) = chip(s, defaultAmount, label(s), ~help=() => {
+  let chips = ModEdit.sourceOrder->Array.map(s => {
+    let (_, t) = chip(s, ModEdit.defaultAmount, label(s), ~help=() => {
       let help = ModMatrix.sources[s]->Option.mapOr("", x => x.help)
       let scope = ModScope.scopeHelp(ModScope.sourceScopeOf(id => model->ParamModel.get(id), s))
       `${longLabel(s)} (${scope}): ${help}. Drag it onto a parameter.`

@@ -91,13 +91,26 @@ namespace porridge
         float[keyEqBands] b0, b1, b2, a1, a2;
         float[keyEqBands] l1, l2, r1, r2;
         bool[keyEqBands] live;
+
+        // what each band was last designed from (designed: whether it has been since KeyEq())
+        float[keyEqBands] designG, designHz, designRate;
+        bool[keyEqBands] designed;
     }
 
     /// Band k's coefficients for gain g dB at hz: an octave wide (RBJ peaking, Q = sqrt 2), or for
     /// the first, a low shelf (RBJ, slope 1) half an octave under the note, for what lies under
-    /// it. A band past 18 kHz sits there and fades out over the next octave.
+    /// it. A band past 18 kHz sits there and fades out over the next octave. Does nothing when
+    /// the band was last designed from the same g, hz and rate.
     void setKeyEqBand (KeyEq& this, int k, float g, float hz, float sampleRate)
     {
+        if (this.designed.at (k) && g == this.designG.at (k) && hz == this.designHz.at (k) && sampleRate == this.designRate.at (k))
+            return;
+
+        this.designed.at (k) = true;
+        this.designG.at (k) = g;
+        this.designHz.at (k) = hz;
+        this.designRate.at (k) = sampleRate;
+
         let over = hz > 18000.0f ? float (log (float64 (hz) / 18000.0) / log (2.0)) : 0.0f;
         let gain = g * max (0.0f, 1.0f - over);
         this.live.at (k) = abs (gain) > 0.01f;

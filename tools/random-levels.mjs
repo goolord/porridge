@@ -219,7 +219,7 @@ console.log (`peaks above the simulated loudest moment: median ${at (0.5)} dB, 9
 
 // least squares with a little ridge (not on the constant): (X'X + λI) w = X'y, the estimate's
 // simulated level taken as it is
-const features = heard.map (x => PatchGen.loudnessFeatures (x.values, x.note));
+const features = heard.map (x => PatchGen.loudnessFeatures (x.values));
 const base = heard.map (x => PatchGen.simulatedLevel (x.values, x.note));
 const k = features[0].length + 1;
 const rows = features.map (f => [...f, 1]);
