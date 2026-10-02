@@ -52,7 +52,17 @@ type t = {
   impulses: array<option<Impulse.t>>,
 }
 
-let defs = Lazy.make(() => ParamDefs.makeDefs())
+// The view's definitions when it has given them (useDefs), so that it doesn't make them twice:
+// what presets read of them (ids, defaults, ranges, loading) doesn't depend on the program its
+// status texts read from.
+let viewDefs = ref(None)
+let useDefs = defs => viewDefs := Some(defs)
+let defs = Lazy.make(() =>
+  switch viewDefs.contents {
+  | Some(defs) => defs
+  | None => ParamDefs.makeDefs()
+  }
+)
 let defsById = Lazy.make(() => Lazy.get(defs)->Array.map(d => (d.id, d))->Map.fromArray)
 
 let defaultValues = () => Lazy.get(defs)->Array.map(d => (d.ParamDefs.id, d.init))->Map.fromArray
