@@ -133,7 +133,10 @@ let positionsOf = (t, target) => t.positions->Map.get(target)->Option.getOr([])
 
 // A group of marks in an SVG layer, one per note, made as needed: show places each (x, y) and
 // hides the rest; released notes are drawn hollow.
-type marks = {layer: Dom.element, dots: array<Dom.element>}
+// (each mark with what it was last set to: only changes are written, since writing even the
+// same value has the browser restyle it)
+type dot = {el: Dom.element, mutable x: float, mutable y: float, mutable shown: bool}
+type marks = {layer: Dom.element, dots: array<dot>}
 
 let marks = layer => {layer, dots: []}
 
@@ -142,18 +145,29 @@ let show = (m, points: array<(float, float, bool)>) => {
     let dot = switch m.dots[i] {
     | Some(d) => d
     | None =>
-      let d = m.layer->svgEl("circle", [("class", Str("vdot")), ("r", Num(3.2))])
+      let el = m.layer->svgEl("circle", [("class", Str("vdot")), ("r", Num(3.2))])
+      let d = {el, x: Float.Constants.nan, y: Float.Constants.nan, shown: false}
       m.dots->Array.push(d)
       d
     }
-    dot->setAttribute("cx", Num(x))
-    dot->setAttribute("cy", Num(y))
-    dot->setAttribute("display", Str("inline"))
-    dot->toggleClass("rel", released)
+    if dot.x != x {
+      dot.el->setAttribute("cx", Num(x))
+      dot.x = x
+    }
+    if dot.y != y {
+      dot.el->setAttribute("cy", Num(y))
+      dot.y = y
+    }
+    if !dot.shown {
+      dot.el->setAttribute("display", Str("inline"))
+      dot.shown = true
+    }
+    dot.el->toggleClass("rel", released)
   })
   m.dots->Array.forEachWithIndex((d, i) =>
-    if i >= Array.length(points) {
-      d->setAttribute("display", Str("none"))
+    if i >= Array.length(points) && d.shown {
+      d.el->setAttribute("display", Str("none"))
+      d.shown = false
     }
   )
 }
