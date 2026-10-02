@@ -949,7 +949,7 @@ namespace porridge
 
             let voiceMode = int (P[slot::PolyMode]);
 
-            if (voiceMode < 2 || fresh)
+            if (voiceMode < polyMode::legato || fresh)
             {
                 if (fresh)
                 {
@@ -968,7 +968,7 @@ namespace porridge
 
                 // (Oatmeal never triggers the right side's filter envelopes in legato, so that a
                 // stereo voice's right filter stays shut: Oat mode keeps that)
-                let filterEnvs = voiceMode < 2 || P[slot::Oat_Mode] == 0 ? 4 : 2;
+                let filterEnvs = voiceMode < polyMode::legato || P[slot::Oat_Mode] == 0 ? 4 : 2;
 
                 for (int k = 0; k < filterEnvs; ++k)
                     v.fenv.at (k).trigger (fenvCoefs (k), true);
@@ -1071,15 +1071,15 @@ namespace porridge
             keyReleased.at (key & 0xff) = false;
             let voiceMode = int (P[slot::PolyMode]);
 
-            if (! (voiceMode == 2 && anyVoiceHeld()))
+            if (! (voiceMode == polyMode::legato && anyVoiceHeld()))
             {
                 phantom1.trigger (mod1C, true);
                 phantom2.trigger (mod2C, true);
             }
 
-            if (P[slot::LFO_1_Sync] < 2) gLfo1.resetPhase (rng, P);
-            if (P[slot::LFO_2_Sync] < 2) gLfo2.resetPhase (rng, P);
-            if (P[slot::LFO_3_Mode] == 1) gLfo3.resetLfo3 (extraRng, P);
+            if (P[slot::LFO_1_Sync] < lfoSync::globalFree) gLfo1.resetPhase (rng, P);
+            if (P[slot::LFO_2_Sync] < lfoSync::globalFree) gLfo2.resetPhase (rng, P);
+            if (P[slot::LFO_3_Mode] == lfo3Mode::sharedReset) gLfo3.resetLfo3 (extraRng, P);
 
             let oldHead = numActive > 0 ? order.at (0) : -1;
 
@@ -1095,7 +1095,7 @@ namespace porridge
             int ref = oldHead;
             let maxPoly = clamp (int (P[slot::Voices]), 1, maxVoices);
 
-            if (voiceMode == 2)
+            if (voiceMode == polyMode::legato)
             {
                 if (numActive == 0)
                 {
@@ -1138,7 +1138,7 @@ namespace porridge
 
             voiceStart (vi, ref, freq, key, velc);
 
-            if (voiceMode != 1)
+            if (voiceMode != polyMode::poly)
             {
                 for (int i = 1; i < numActive; ++i)
                 {
@@ -1290,7 +1290,7 @@ namespace porridge
                     }
                 }
 
-                if (int (P[slot::Arp_Mode]) == 0)
+                if (int (P[slot::Arp_Mode]) == arpMode::off)
                     returnToHeld (key);
             }
 
@@ -1311,7 +1311,7 @@ namespace porridge
             if (! hasActive && keyReleased.at (k))
                 return;
 
-            if (! (P[slot::Sustain] > 0.001f) && int (P[slot::PolyMode]) == 1)
+            if (! (P[slot::Sustain] > 0.001f) && int (P[slot::PolyMode]) == polyMode::poly)
                 return;
 
             var best = 0x7fffffff;
@@ -1372,7 +1372,7 @@ namespace porridge
 
             let mode = int (P[slot::Arp_Mode]);
 
-            if (mode == 0)
+            if (mode == arpMode::off)
             {
                 voiceNote (key, vel, 0.0f);
                 return;
@@ -1380,14 +1380,14 @@ namespace porridge
 
             if (vel == 0)
             {
-                if (mode >= 4) voiceNote (key, 0, 0);
+                if (mode >= arpMode::chord) voiceNote (key, 0, 0);
                 return;
             }
 
-            if (mode < 4 || prevCmd == 0)
+            if (mode < arpMode::chord || prevCmd == 0)
                 return;
 
-            if (mode == 4)
+            if (mode == arpMode::chord)
             {
                 voiceNote (key, vel, 0.0f);
 
@@ -1510,7 +1510,7 @@ namespace porridge
                 return;
             }
 
-            if (mode == 4)
+            if (mode == arpMode::chord)
             {
                 if (prevCmd == 0)
                 {
@@ -1555,7 +1555,7 @@ namespace porridge
             let c = int (P.at (slot::Arp_P0 + stepIdx));
             let mode = int (P[slot::Arp_Mode]);
 
-            if (mode >= 4)
+            if (mode >= arpMode::chord)
             {
                 arpChordStep (c, mode);
             }
@@ -1568,9 +1568,9 @@ namespace porridge
                 var key = heldCount > 0 ? arpCommand (c) : -1;
                 float shift = 0;
 
-                if (mode != 3 && arpPos >= 0 && arpPos < 128 && (arpNoteOn (1) || arpNoteOn (2) || arpNoteOn (3) || arpNoteOn (4)))
+                if (mode != arpMode::chordPattern && arpPos >= 0 && arpPos < 128 && (arpNoteOn (1) || arpNoteOn (2) || arpNoteOn (3) || arpNoteOn (4)))
                 {
-                    if (mode == 1)
+                    if (mode == arpMode::pattern)
                     {
                         if (c == 7)
                         {
@@ -1619,7 +1619,7 @@ namespace porridge
                     }
                 }
 
-                if (! (int (P[slot::PolyMode]) == 2 && key != -1))
+                if (! (int (P[slot::PolyMode]) == polyMode::legato && key != -1))
                     if (curKey != key && curKey >= 0)
                         voiceNote (curKey, 0, 0);
 
@@ -1627,7 +1627,7 @@ namespace porridge
                 {
                     let p = clamp (arpPos, 0, 127);
 
-                    if (mode == 3)
+                    if (mode == arpMode::chordPattern)
                     {
                         voiceNote (key, heldVel.at (p), 0.0f);
 
@@ -1651,7 +1651,7 @@ namespace porridge
         /// Oatmeal's arpeggiator clock, at the end of every block: steps fall on block starts.
         void arpTick()
         {
-            if (int (P[slot::Arp_Mode]) == 0)
+            if (int (P[slot::Arp_Mode]) == arpMode::off)
                 return;
 
             if (firstNote)
@@ -1685,7 +1685,7 @@ namespace porridge
         /// Samples until the arpeggiator's next step (at least 1), or blockSize when it's off.
         int arpSamplesToStep()
         {
-            if (int (P[slot::Arp_Mode]) == 0)
+            if (int (P[slot::Arp_Mode]) == arpMode::off)
                 return blockSize;
 
             return clamp (int (ceil (arpStepLength() - arpPhase)), 1, blockSize);
@@ -1967,7 +1967,7 @@ namespace porridge
                 applyMods();
             }
 
-            if (lfo3Live && P[slot::LFO_3_Mode] != 0)
+            if (lfo3Live && P[slot::LFO_3_Mode] != lfo3Mode::perVoice)
                 gLfo3Raw = gLfo3.stepLfo3 (extraRng, P, sampleRate, samplesPerBeat, n);
 
             if (numActive == 0)
@@ -2044,13 +2044,13 @@ namespace porridge
 
                 let vi = order.at (i);
                 let key = voices.at (vi).key;
-                var at = atMode == 0 ? 1.0f : (atMode == 1 ? pressureSmooth : perKeyAT.at (key & 0x7f));
+                var at = atMode == aftertouchMode::ignore ? 1.0f : (atMode == aftertouchMode::channel ? pressureSmooth : perKeyAT.at (key & 0x7f));
                 var semisArg = P.at (slot::Tune_C + ((key & 0xff) % 12)) * 0.01f + P[slot::GlobalTranspose] * 12.0f + globalPitch;
                 let chan = voices.at (vi).chan;
 
                 if (mpe && chan != 0)
                 {
-                    if (atMode != 0) at = chPressure.at (chan);
+                    if (atMode != aftertouchMode::ignore) at = chPressure.at (chan);
                     semisArg += chBend.at (chan);
                 }
 
@@ -2184,7 +2184,7 @@ namespace porridge
             if (s == mods::src::random)    return voices.at (vi).modRand;
             if (s == mods::src::noise)     return voices.at (vi).modNoise;
             if (s == mods::src::key)       return clamp (float ((voices.at (vi).key & 0x7f) - 60) * (1.0f / 60.0f), -1.0f, 1.0f);
-            if (s == mods::src::lfo3)      return P[slot::LFO_3_Mode] == 0 ? voices.at (vi).lfo3Raw : gLfo3Raw;
+            if (s == mods::src::lfo3)      return P[slot::LFO_3_Mode] == lfo3Mode::perVoice ? voices.at (vi).lfo3Raw : gLfo3Raw;
             if (s == mods::src::interval)  return voices.at (vi).interval;
             if (s == mods::src::alternate) return voices.at (vi).alternate;
             if (s == mods::src::cycle)     return voices.at (vi).cycle;
@@ -2193,7 +2193,7 @@ namespace porridge
             if (s == mods::src::glide)     return voices.at (vi).glideProg < 1.0f ? 1.0f - voices.at (vi).glideProg : 0.0f;
 
             if (s == mods::src::aftertouch)
-                return int (P[slot::AftertouchMode]) == 2 ? perKeyAT.at (voices.at (vi).key & 0x7f) : pressureSmooth;
+                return int (P[slot::AftertouchMode]) == aftertouchMode::poly ? perKeyAT.at (voices.at (vi).key & 0x7f) : pressureSmooth;
 
             return 0;
         }
@@ -2548,7 +2548,7 @@ namespace porridge
                 depthF[k] = abs (S) > 0.001f ? pow2 (3.0f * S) : 1.0f;
             }
 
-            let kPitch = (P[slot::LFO_1_Sync] == 0 && P[slot::LFO_2_Sync] == 0) ? 2.0 : 4.0;
+            let kPitch = (P[slot::LFO_1_Sync] == lfoSync::perNote && P[slot::LFO_2_Sync] == lfoSync::perNote) ? 2.0 : 4.0;
 
             // in turn: LFO 1 is sped up by LFO 2's last value, LFO 2 by LFO 1's (faded) one
             for (wrap<2> k)
@@ -2580,7 +2580,7 @@ namespace porridge
 
             if (lfo3Live)
             {
-                let raw = P[slot::LFO_3_Mode] == 0 ? v.lfo3.stepLfo3 (extraRng, P, sampleRate, samplesPerBeat, n) : gLfo3Raw;
+                let raw = P[slot::LFO_3_Mode] == lfo3Mode::perVoice ? v.lfo3.stepLfo3 (extraRng, P, sampleRate, samplesPerBeat, n) : gLfo3Raw;
                 v.lfo3Raw = raw * lfoFade (v.age, P[slot::LFO_3_Delay], P[slot::LFO_3_Fade]);
             }
 
@@ -2973,7 +2973,7 @@ namespace porridge
             let widen = stereo && width != 1.0f;
 
             // distortion / filter / output
-            let distOn = P[slot::Sat_Type] != 0;
+            let distOn = P[slot::Sat_Type] != satType::off;
             let distMode = int (P[slot::Sat_Mode]);
             let distMod = xySum (xyTgt::distortion, Xv, Yv) + ccSum[ccTgt::distortion];
 
@@ -3533,7 +3533,7 @@ namespace porridge
                     handleMidi (k);
                     due -= k;
 
-                    if (firstNote && int (P[slot::Arp_Mode]) != 0)
+                    if (firstNote && int (P[slot::Arp_Mode]) != arpMode::off)
                         arpStart();
 
                     var end = min (blockSize, pos + arpSamplesToStep());
@@ -3544,7 +3544,7 @@ namespace porridge
                     let n = end - pos;
                     active = renderPiece (pos, n) || active;
 
-                    if (int (P[slot::Arp_Mode]) != 0)
+                    if (int (P[slot::Arp_Mode]) != arpMode::off)
                         arpAdvance (n);
 
                     pos = end;
@@ -3566,7 +3566,7 @@ namespace porridge
                 active = anyAbove (mix, 0.0f);
             }
 
-            if (active && P[slot::Sat_Type] != 0)
+            if (active && P[slot::Sat_Type] != satType::off)
             {
                 useShaper (0);
                 let mode = int (P[slot::Sat_Mode]);
@@ -3695,9 +3695,9 @@ namespace porridge
                 view.mod1Ms.at (i) = v.envClock[2];
                 view.mod2Ms.at (i) = v.envClock[3];
                 view.level.at (i) = v.ampLast;
-                view.lfo1.at (i) = float (float64 (P[slot::LFO_1_Sync] == 0 ? v.lfo[0].phase : gLfo1.phase) / two32);
-                view.lfo2.at (i) = float (float64 (P[slot::LFO_2_Sync] == 0 ? v.lfo[1].phase : gLfo2.phase) / two32);
-                view.lfo3.at (i) = float (P[slot::LFO_3_Mode] == 0 ? v.lfo3.phase : gLfo3.phase);
+                view.lfo1.at (i) = float (float64 (P[slot::LFO_1_Sync] == lfoSync::perNote ? v.lfo[0].phase : gLfo1.phase) / two32);
+                view.lfo2.at (i) = float (float64 (P[slot::LFO_2_Sync] == lfoSync::perNote ? v.lfo[1].phase : gLfo2.phase) / two32);
+                view.lfo3.at (i) = float (P[slot::LFO_3_Mode] == lfo3Mode::perVoice ? v.lfo3.phase : gLfo3.phase);
                 view.cutoff.at (i) = v.viewCutoff;
 
                 for (int k = 0; k < viewTargets; ++k)

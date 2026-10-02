@@ -378,3 +378,15 @@ let makeDefs = (~context=() => None) => {
     }),
   )
 }
+
+// Every definition, made once without a context program (for names, ranges and laws).
+let all = Lazy.make(() => makeDefs())
+let byId = Lazy.make(() => Lazy.get(all)->Array.map(d => (d.id, d))->Map.fromArray)
+
+// A list parameter's value by its name, which it must have: choiceValue("Sat_Type", "soft clip")
+// is 2. The UI, the tools and the DSP's constants (tools/gen.mjs) all name values this way.
+let choiceValue = (id, label) =>
+  switch Lazy.get(byId)->Map.get(id)->Option.flatMap(d => d.names)->Option.map(Array.indexOf(_, label)) {
+  | Some(i) if i >= 0 => Int.toFloat(i)
+  | _ => JsError.panic(`${id} has no choice "${label}"`)
+  }

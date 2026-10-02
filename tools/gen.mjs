@@ -19,7 +19,7 @@ import { all as fields } from "../ui/oatmeal/Fields.res.mjs";
 import { xyTargets, modEnvTargets, ccTargets } from "../ui/oatmeal/OatmealParams.res.mjs";
 import { paramInfo } from "../ui/ParamInfo.res.mjs";
 import { all as porridgeParams, slotOf as porridgeSlot, fxOrder, rackId, rackSlots, rackKinds, rackEntries, copyId } from "../ui/PorridgeParams.res.mjs";
-import { makeDefs } from "../ui/ParamDefs.res.mjs";
+import { makeDefs, choiceValue } from "../ui/ParamDefs.res.mjs";
 import { programSize, tableOffset } from "../ui/oatmeal/OatmealFormat.res.mjs";
 import * as ModMatrix from "../ui/ModMatrix.res.mjs";
 
@@ -166,17 +166,25 @@ const choices = [
                 custom: "custom shape", tube: "tube", tape: "tape", saturate: "saturate", mixerDrive: "mixer drive",
                 sevenStage: "7-stage clip", multiband: "multiband", wavefold: "wavefold", bassAmp: "bass amp",
                 guitarAmp: "guitar amp", bitcrush: "bitcrush", lofi: "lo-fi sampler" } },
+    { ns: "polyMode", param: "PolyMode", doc: "The voice modes (PolyMode).",
+      values: { mono: "Monophonic", poly: "Polyphonic", legato: "Monophonic, legato" } },
+    { ns: "arpMode", param: "Arp_Mode", doc: "The arpeggiator's modes (Arp_Mode): the patterns, then the chords from chord on.",
+      values: { off: "off", pattern: "pattern", globalSubseq: "pattern (global subseq)", chordPattern: "chord pattern",
+                chord: "chord", transposedChords: "transposed chords" } },
+    { ns: "lfoShape", param: "LFO_1_Shape", doc: "LFO 1 and 2's shapes (LFO_1_Shape, LFO_2_Shape).",
+      values: { sine: "Sine", saw: "Saw", square: "Square", triangle: "Triangle", smoothRandom: "Smooth random",
+                steppingRandom: "Stepping random", user: "User" } },
+    { ns: "lfoSync", param: "LFO_1_Sync", doc: "Whether LFO 1 and 2 run per note or for every note (LFO_1_Sync, LFO_2_Sync).",
+      values: { perNote: "per note", globalReset: "global, reset on note", globalFree: "global, free" } },
+    { ns: "lfo3Mode", param: "LFO_3_Mode", doc: "Whether LFO 3 runs per voice or shared (LFO_3_Mode).",
+      values: { perVoice: "per-voice", sharedReset: "shared, reset on note", sharedFree: "shared, free" } },
+    { ns: "aftertouchMode", param: "AftertouchMode", doc: "Which pressure the voices read (AftertouchMode).",
+      values: { ignore: "ignore all", channel: "channel", poly: "polyphonic" } },
 ];
 
 function choiceConstants ({ ns: name, param, doc, values })
 {
-    const names = defs.get (param).names;
-    return ns (name, doc, Object.entries (values).map (([value, label]) =>
-    {
-        const i = names.indexOf (label);
-        if (i < 0) throw new Error (`${param} has no choice "${label}"`);
-        return `    let ${value} = ${i};`;
-    }));
+    return ns (name, doc, Object.entries (values).map (([value, label]) => `    let ${value} = ${choiceValue (param, label)};`));
 }
 
 const fxOrders = Array.from ({ length: 24 }, (_, k) => fxOrder (k));

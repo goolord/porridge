@@ -1917,3 +1917,58 @@ namespace porridge::satType
     let bitcrush = 15;
     let lofi = 16;
 }
+
+/// The voice modes (PolyMode).
+namespace porridge::polyMode
+{
+    let mono = 0;
+    let poly = 1;
+    let legato = 2;
+}
+
+/// The arpeggiator's modes (Arp_Mode): the patterns, then the chords from chord on.
+namespace porridge::arpMode
+{
+    let off = 0;
+    let pattern = 1;
+    let globalSubseq = 2;
+    let chordPattern = 3;
+    let chord = 4;
+    let transposedChords = 5;
+}
+
+/// LFO 1 and 2's shapes (LFO_1_Shape, LFO_2_Shape).
+namespace porridge::lfoShape
+{
+    let sine = 0;
+    let saw = 1;
+    let square = 2;
+    let triangle = 3;
+    let smoothRandom = 4;
+    let steppingRandom = 5;
+    let user = 6;
+}
+
+/// Whether LFO 1 and 2 run per note or for every note (LFO_1_Sync, LFO_2_Sync).
+namespace porridge::lfoSync
+{
+    let perNote = 0;
+    let globalReset = 1;
+    let globalFree = 2;
+}
+
+/// Whether LFO 3 runs per voice or shared (LFO_3_Mode).
+namespace porridge::lfo3Mode
+{
+    let perVoice = 0;
+    let sharedReset = 1;
+    let sharedFree = 2;
+}
+
+/// Which pressure the voices read (AftertouchMode).
+namespace porridge::aftertouchMode
+{
+    let ignore = 0;
+    let channel = 1;
+    let poly = 2;
+}
