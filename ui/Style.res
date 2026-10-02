@@ -26,6 +26,25 @@ let paperRgb = "236, 227, 196"
 let rgb = rgb => `rgb(${rgb})`
 let rgba = (rgb, alpha) => `rgba(${rgb}, ${Float.toString(alpha)})`
 
+// Bahnschrift's own metrics (ascent 0.794, descent 0.206) put its capitals about 0.065em above
+// the middle of any line box, so every button, tab and badge read slightly high. This face
+// moves the baseline down so the cap height (and ascenders) sit centred, keeping the line gap
+// so that "normal" line heights don't change. Blink rounds ascent and descent to whole pixels,
+// so the split is the one that lands closest across the sizes and line heights used here
+// (caps end up about 0.25px high on average). It goes in the document, not the view's shadow
+// root, because Chrome ignores @font-face rules inside a shadow tree.
+let fontFace = `
+@font-face {
+    font-family: "Porridge Bahnschrift";
+    src: local("Bahnschrift");
+    font-weight: 300 700;
+    font-stretch: 75% 100%;
+    ascent-override: 86.5%;
+    descent-override: 13.5%;
+    line-gap-override: 20%;
+}
+`
+
 let css = `
 :host, porridge-view {
     --ground: ${groundColour};
@@ -51,7 +70,7 @@ let css = `
     height: 100% !important;
     overflow: hidden;
     background: var(--ground);
-    font-family: Bahnschrift, "DIN Alternate", "DIN 2014", "Barlow", "Arial Narrow", sans-serif;
+    font-family: "Porridge Bahnschrift", Bahnschrift, "DIN Alternate", "DIN 2014", "Barlow", "Arial Narrow", sans-serif;
     font-stretch: semi-condensed;
     color: var(--ink);
     user-select: none;
@@ -221,7 +240,8 @@ let css = `
 .ed .node.faint { fill: var(--panel); stroke: var(--ink-faint); }
 .ed .node.faint.hot { fill: var(--ink-faint); }
 
-/* a parameter row: label left, value right, position track underneath, on a tile */
+/* a parameter row: label left, value right, position track underneath, on a tile
+   (the label and value tops allow for the font's lowered baseline, see fontFace) */
 .p {
     position: absolute;
     box-sizing: border-box;
@@ -234,11 +254,11 @@ let css = `
 }
 .p:hover, .p.drag { background: var(--panel-hi); box-shadow: inset 0 0 0 1px var(--edge); }
 .p .l {
-    position: absolute; left: 3px; top: 1px;
+    position: absolute; left: 3px; top: 0;
     font-size: 11px; color: var(--ink-soft); white-space: nowrap;
 }
 .p .v {
-    position: absolute; right: 3px; top: 10px;
+    position: absolute; right: 3px; top: 9px;
     font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap;
 }
 .p .t {
