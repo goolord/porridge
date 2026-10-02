@@ -145,8 +145,49 @@ let fromOatmeal = (bytes: Uint8Array.t) => {
 let valueOf = (p, id) =>
   p.values->Map.get(id)->Option.getOr(Lazy.get(defsById)->Map.get(id)->Option.mapOr(0., d => d.init))
 
-// What an Oatmeal export of this preset loses.
+// The note an Oatmeal export's warning gives for a value list's values that Oatmeal doesn't have.
+let listLoss = (list: ValueList.t) => ValueList.info(list).added->Option.map(a => a.exportNote)
+
+// What an Oatmeal export loses when one of Porridge's features has a parameter changed from its
+// default: a line of the export's warning, or None where that loses nothing, or where the warning
+// tells it otherwise. (A switch, so that a new feature has to say.)
+let featureLoss = (feature: PorridgeParams.feature) =>
+  switch feature {
+  | Modulations | MoreModulations => Some("modulations")
+  | Lfo3 => Some("LFO 3 and the wander rate")
+  | VoiceLane | ResonatorGain => Some("the voices' own effects (and the FX filter's note tracking)")
+  | Macros => Some("macros")
+  | Mpe => Some("MPE settings")
+  | Drift => Some("the analog drift")
+  | Curves | Decay1Curves => Some("the envelope curves")
+  | OscEnvs => Some("the oscillator envelopes")
+  | KeyEq => Some("the key EQ")
+  | OscNoise => Some("the oscillator noise")
+  | PairMix => Some("osc 2 heard in PM, ring and AM")
+  | LfoExtras => Some("the LFO delay, slew, steps and one-shot")
+  | UnisonExtras => Some("the unison extras")
+  | FilterDrive => Some("the filter drive")
+  // (for the osc mix modes and the filter types Porridge added)
+  | PmFeedback => listLoss(OscMix)
+  | FilterMorph => listLoss(FilterType)
+  // (Oatmeal always plays like Oat mode)
+  | OatMode => None
+  // the rack: what it holds says what's lost (the effects order, its extra effects)
+  | FxOrder | EffectsRack | EqSwitch | RackCopies | RackEffects | Ambience | AirEffect => None
+  // the custom shape and the models' knobs go with the distortion types they're for (the mix,
+  // which works on every type, is told apart)
+  | CustomShape | DistModels => None
+  }
+
+// What an Oatmeal export of this preset loses: the lines of its warning.
 let porridgeOnly = p => {
+  let lost = []
+  let add = line =>
+    line->Option.forEach(line =>
+      if !(lost->Array.includes(line)) {
+        lost->Array.push(line)
+      }
+    )
   // a feature's parameters are changed from their defaults
   let changed = feature =>
     PorridgeParams.groups->Array.some(((f, specs)) =>
@@ -158,54 +199,55 @@ let porridgeOnly = p => {
           }
         )
     )
-  // values Porridge added to Oatmeal's lists (HQ waveforms, osc mix modes, filter types)
-  let extended = ids =>
-    ids->Array.some(id =>
-      switch (p.values->Map.get(id), Lazy.get(defsById)->Map.get(id)) {
-      | (Some(x), Some(d)) => ParamDefs.oatmealValue(d, x) != x
-      | _ => false
+  let feature = f => changed(f) ? add(featureLoss(f)) : ()
+  let features = (fs: array<PorridgeParams.feature>) => fs->Array.forEach(feature)
+  // Oatmeal's list parameters (of a list, or any) holding a value Porridge added
+  let oatmealLists = (~list=?) =>
+    Lazy.get(defs)->Array.forEach(d =>
+      if d.index < OatmealParams.paramCount && (list == None || d.list == list) {
+        switch (p.values->Map.get(d.id), d.list) {
+        | (Some(x), Some(l)) if ParamDefs.oatmealValue(d, x) != x => add(listLoss(l))
+        | _ => ()
+        }
       }
     )
-  // (Oatmeal always plays like Oat mode)
-  [
-    changed(Modulations) || changed(MoreModulations) ? Some("modulations") : None,
-    changed(Lfo3) ? Some("LFO 3 and the wander rate") : None,
-    changed(VoiceLane) || changed(ResonatorGain) ? Some("the voices' own effects (and the FX filter's note tracking)") : None,
-    changed(Macros) ? Some("macros") : None,
-    changed(Mpe) ? Some("MPE settings") : None,
-    changed(Drift) ? Some("the analog drift") : None,
-    {
-      // Oatmeal's chain is chorus, delay, reverb, EQ; effects left out of the rack are exported
-      // switched off, so only their order is lost
-      let firsts = FxRack.read(valueOf(p, _))->Array.filter(FxRack.isFirst)
-      firsts != FxRack.firsts->Array.filter(e => FxRack.holds(firsts, e)) ? Some("the effects order") : None
-    },
-    switch FxRack.read(valueOf(p, _))->Array.filter(e => !FxRack.isFirst(e)) {
-    | [] => None
-    | copies =>
-      Some(`the rack's extra effects (${copies->Array.map(e => FxRack.kindName(e.kind))->Array.join(", ")})`)
-    },
-    changed(Curves) || changed(Decay1Curves) ? Some("the envelope curves") : None,
-    changed(OscEnvs) ? Some("the oscillator envelopes") : None,
-    changed(KeyEq) ? Some("the key EQ") : None,
-    changed(OscNoise) ? Some("the oscillator noise") : None,
-    changed(PairMix) ? Some("osc 2 heard in PM, ring and AM") : None,
-    changed(LfoExtras) ? Some("the LFO delay, slew, steps and one-shot") : None,
-    changed(UnisonExtras) ? Some("the unison extras") : None,
-    extended(["Sat_Type"]) ? Some("Porridge's distortion types (exported as soft clipping)") : None,
-    p.values->Map.get("Sat_Mix")->Option.mapOr(false, x => x != 1.) ? Some("the distortion mix") : None,
-    extended(["O1_Waveform", "O2_Waveform"]) ? Some("the HQ waveforms (exported as the plain ones)") : None,
-    extended(["OscMix"]) || changed(PmFeedback) ? Some("the PM, ring and AM osc mix (exported as normal)") : None,
-    extended(["Filter", "Filter2"]) || changed(FilterMorph)
-      ? Some("Porridge's filter types (exported as the nearest Oatmeal type)")
-      : None,
-    p.tuning != None ? Some("the microtuning") : None,
-    changed(FilterDrive) ? Some("the filter drive") : None,
-    // (24 bytes with a NUL, in Latin-1)
-    String.length(p.meta.name) > nameLength - 1 || /[^\x00-\xff]/->RegExp.test(p.meta.name)
-      ? Some("the full name")
-      : None,
-  ]->Array.filterMap(x => x)
+  let rack = FxRack.read(valueOf(p, _))
+
+  // in the warning's order
+  features([Modulations, MoreModulations, Lfo3, VoiceLane, ResonatorGain, Macros, Mpe, Drift])
+  // Oatmeal's chain is chorus, delay, reverb, EQ; effects left out of the rack are exported
+  // switched off, so only their order is lost
+  let firsts = rack->Array.filter(FxRack.isFirst)
+  if firsts != FxRack.firsts->Array.filter(e => FxRack.holds(firsts, e)) {
+    add(Some("the effects order"))
+  }
+  switch rack->Array.filter(e => !FxRack.isFirst(e)) {
+  | [] => ()
+  | copies => add(Some(`the rack's extra effects (${copies->Array.map(e => FxRack.kindName(e.kind))->Array.join(", ")})`))
+  }
+  features([Curves, Decay1Curves, OscEnvs, KeyEq, OscNoise, PairMix, LfoExtras, UnisonExtras])
+  oatmealLists(~list=DistType)
+  if p.values->Map.get("Sat_Mix")->Option.mapOr(false, x => x != 1.) {
+    add(Some("the distortion mix"))
+  }
+  oatmealLists(~list=Waveform)
+  oatmealLists(~list=OscMix)
+  feature(PmFeedback)
+  oatmealLists(~list=FilterType)
+  oatmealLists(~list=Filter2Type)
+  feature(FilterMorph)
+  if p.tuning != None {
+    add(Some("the microtuning"))
+  }
+  feature(FilterDrive)
+  // (24 bytes with a NUL, in Latin-1)
+  if String.length(p.meta.name) > nameLength - 1 || /[^\x00-\xff]/->RegExp.test(p.meta.name) {
+    add(Some("the full name"))
+  }
+  // then any not told above (a feature or a list added later)
+  PorridgeParams.groups->Array.forEach(((f, _)) => feature(f))
+  oatmealLists()
+  lost
 }
 
 // Parameters Oatmeal doesn't have are left out, and list values it doesn't have become the
