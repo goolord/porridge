@@ -243,7 +243,7 @@ let voiceFx = (ctx: Ctx.t, body) => {
   let note = el(
     "div",
     ~cls="note wrap",
-    ~text="Each note runs its own copy of these. The resonator and key shifter follow each note's pitch.",
+    ~text="Each note runs its own copy of these; the resonator and key shifter follow its pitch. The filter's comb, flanger, phaser, formant, ring mod, S&H, diffusor and reverb types are effects in each note too.",
     ~parent=body,
   )
 
