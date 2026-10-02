@@ -21,6 +21,10 @@
 //  factor 0.01 + 0.99 size^2 (fine steps at the small end), then int (x) + 1. Each pass through
 //  the matrix is 0.7 times the time knob (a loop gain of 0.99 at the top); a shelf at time t
 //  and high (low) time h makes its band's pass t + h (1 - t) for h > 0, t (1 + h) below.
+//  Where both shelves boost and their corners meet or cross, the two boosts multiply, so the
+//  pass is turned down there until the loop's peak is the larger band's again (below 1). The
+//  pass and the bands' passes glide (rather than the shelves' gains, which near time 0 are
+//  huge and would overshoot their product as the time falls).
 
 namespace porridge
 {
@@ -41,7 +45,7 @@ namespace porridge
         // the room's loops
         float[4] fb, hiLp, loLp;
         bool loopOn;
-        float dens, coef, gHi, gLo;             // smoothed: density, pass gain, shelf gains
+        float dens, coef, pHi, pLo;             // smoothed: density, pass gain, the shelves' bands' pass gains
         float kHi, kLo;                         // the shelves' one-pole gains (per block)
         // clear coat and verb tiny
         float[8] awFb;                          // the last stage's feedback (0..3 left, 4..7 right)
@@ -273,7 +277,7 @@ namespace porridge
     // room
 
     void ambRoom (Ambience& this, const float<2>[blockSize]& pre, float<2>[blockSize]& wet,
-                  float densT, float coefT, float gHiT, float gLoT)
+                  float densT, float coefT, float pHiT, float pLoT)
     {
         // the loops switch off while the time is at zero; their lines are cleared before they
         // come back, so that nothing old comes out of them
@@ -291,8 +295,8 @@ namespace porridge
         let inv = 1.0f / float (blockSize);
         let dDens = (densT - this.dens) * inv;
         let dCoef = (coefT - this.coef) * inv;
-        let dHi = (gHiT - this.gHi) * inv;
-        let dLo = (gLoT - this.gLo) * inv;
+        let dHi = (pHiT - this.pHi) * inv;
+        let dLo = (pLoT - this.pLo) * inv;
         let kHi = this.kHi, kLo = this.kLo;
         let lines = this.loopOn ? 26 : 14;
 
@@ -300,8 +304,8 @@ namespace porridge
         {
             this.dens += dDens;
             this.coef += dCoef;
-            this.gHi += dHi;
-            this.gLo += dLo;
+            this.pHi += dHi;
+            this.pLo += dLo;
             let dens = this.dens;
             float[4] y;
 
@@ -319,6 +323,11 @@ namespace porridge
             if (this.loopOn)
             {
                 float[4] s;
+                let c = this.coef;
+                // the shelves' gains (between their old and new ones while the passes glide)
+                let ic = c > 0 ? 1.0f / c : 0.0f;
+                let gHi = c > 0 ? this.pHi * ic : 1.0f;
+                let gLo = c > 0 ? this.pLo * ic : 1.0f;
 
                 for (wrap<4> k)
                 {
@@ -327,12 +336,11 @@ namespace porridge
                     v = this.ambAllpass (j + 1, v, ambLoopG[1] * dens);
                     v = this.ambAllpass (j + 2, v, ambLoopG[2] * dens);
                     let h = ambLowpass (this.hiLp[k], v, kHi);
-                    v = h + this.gHi * (v - h);
+                    v = h + gHi * (v - h);
                     let l = ambLowpass (this.loLp[k], v, kLo);
-                    s[k] = v + (this.gLo - 1.0f) * l;
+                    s[k] = v + (gLo - 1.0f) * l;
                 }
 
-                let c = this.coef;
                 this.fb[0] = c * (s[0] - s[2]);
                 this.fb[1] = c * (-s[1] - s[3]);
                 this.fb[2] = c * (s[1] - s[3]);
@@ -555,6 +563,40 @@ namespace porridge
         return h > 0 ? (t + h * (1.0f - t)) / t : 1.0f + h;
     }
 
+    /// The peak gain of the room's two shelves in series: the high shelf's gain gHi above its
+    /// corner, the low shelf's gLo below its own, kHi and kLo the corners' tan (pi f / sr).
+    /// It's the larger of the two unless both boost and the corners are close or crossed.
+    float ambShelfPeak (float64 kHi, float64 gHi, float64 kLo, float64 gLo)
+    {
+        // the squared gain over u = tan^2 (w / 2): (1 + a u / p) (b + u / q) / ((1 + u / p) (1 + u / q)),
+        // at u = 0 b, at the top a, and between at the roots of A u^2 + B u + C
+        let a = gHi * gHi, b = gLo * gLo, p = kHi * kHi, q = kLo * kLo;
+        var peak = max (a, b);
+        let qa = a * (1.0 - b) / p + (a - 1.0) / q;
+        let qb = 2.0 * (a - b);
+        let qc = (1.0 - b) * p + b * (a - 1.0) * q;
+        float64[2] u;
+
+        if (abs (qa) < 1e-12 * (abs (qb) + abs (qc)))
+        {
+            u[0] = qb != 0 ? -qc / qb : -1.0;
+            u[1] = -1.0;
+        }
+        else
+        {
+            let disc = qb * qb - 4.0 * qa * qc;
+            let sq = sqrt (max (disc, 0.0));
+            u[0] = disc >= 0 ? (-qb + sq) / (2.0 * qa) : -1.0;
+            u[1] = disc >= 0 ? (-qb - sq) / (2.0 * qa) : -1.0;
+        }
+
+        for (wrap<2> k)
+            if (u[k] > 0)
+                peak = max (peak, (1.0 + a * u[k] / p) * (b + u[k] / q) / ((1.0 + u[k] / p) * (1.0 + u[k] / q)));
+
+        return float (sqrt (peak));
+    }
+
     /// The room's size factor.
     float64 ambScale (float size)
     {
@@ -590,11 +632,11 @@ namespace porridge
         let widthT = clamp (P[slot::Am_Width], -1.0f, 1.0f);
         let mixT = clamp (P[slot::Am_Mix], 0.0f, 1.0f);
 
-        if (this.mix < 0.0f)
+        let first = this.mix < 0.0f;
+
+        if (first)
         {
             this.width = widthT; this.mix = mixT;
-            this.dens = densT; this.coef = 0.7f * timeT;
-            this.gHi = ambShelfGain (timeT, hiTime); this.gLo = ambShelfGain (timeT, loTime);
         }
 
         let width0 = this.width, mix0 = this.mix;
@@ -604,6 +646,7 @@ namespace porridge
         // predelay: glides at up to 25 % pitch
         let pdT = max (1.0, float64 (predelay) * sr * 0.001);
         this.dInc[0] = clamp ((pdT - this.d[0]) * float64 (a50), -0.25 * nf, 0.25 * nf) / nf;
+        float coefT, pHiT, pLoT;
 
         if (model == ambienceModel::room)
         {
@@ -622,6 +665,20 @@ namespace porridge
 
             this.kHi = ambOnePoleGain (float64 (expKnob (20.0f, 20000.0f, P[slot::Am_HighFreq])), sr);
             this.kLo = ambOnePoleGain (float64 (expKnob (20.0f, 20000.0f, P[slot::Am_LowFreq])), sr);
+
+            // the passes, turned down where the shelves' boosts overlap
+            let gHi = ambShelfGain (timeT, hiTime), gLo = ambShelfGain (timeT, loTime);
+            let peak = ambShelfPeak (float64 (this.kHi / (1.0f - this.kHi)), float64 (gHi),
+                                     float64 (this.kLo / (1.0f - this.kLo)), float64 (gLo));
+            coefT = 0.7f * timeT * min (1.0f, max (1.0f, max (gHi, gLo)) / peak);
+            pHiT = coefT * gHi;
+            pLoT = coefT * gLo;
+
+            if (first)
+            {
+                this.dens = densT; this.coef = coefT;
+                this.pHi = pHiT; this.pLo = pLoT;
+            }
         }
 
         // the input through the predelay
@@ -642,12 +699,26 @@ namespace porridge
         }
 
         if (model == ambienceModel::room)
-            this.ambRoom (pre, wet, densT, 0.7f * timeT, ambShelfGain (timeT, hiTime), ambShelfGain (timeT, loTime));
+            this.ambRoom (pre, wet, densT, coefT, pHiT, pLoT);
         else if (model == ambienceModel::clearCoat)
             this.ambClearCoat (pre, wet, 0.0625f * 0.999f * timeT,      // (ClearCoat's own is at time 2/3)
                                max (P[slot::Gain], 0.001f));
         else
             this.ambVerbTiny (pre, wet, timeT, size);
+
+        // a runaway (or a NaN) starts the model over, silent, rather than staying in the pool
+        float level;
+
+        for (wrap<blockSize> i)
+            level += abs (wet[i][0]) + abs (wet[i][1]);
+
+        if (! (level < 1.0e5f))
+        {
+            this.ambSetup (model, this.room, sr, size, predelay);
+
+            for (wrap<blockSize> i)
+                wet[i] = float<2> (0);
+        }
 
         // high cut, width, mix
         var g0 = this.hcG;
