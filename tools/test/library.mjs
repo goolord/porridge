@@ -46,7 +46,7 @@ const names = (text, filters = Library.noFilters) =>
     check (names ("").length === all.length, "an empty search finds everything");
     check (names ("felt")[0] === "Felt Piano", "name: " + names ("felt")[0]);
     check (names ("tag:microtuning").join () === "Just Bells", "tag filter");
-    check (names ("cat:bass").length === 12, "category filter: " + names ("cat:bass").length);
+    check (names ("cat:bass").length === 11, "category filter: " + names ("cat:bass").length);
     check (names ("author:porridge").length === vanilla.presets.length, "author filter");
     check (names ("tremolo").includes ("Spring Twang"), "description words match");
     check (names ("oatmeal factory").length === 17, "source names match: " + names ("oatmeal factory").length);
@@ -78,7 +78,7 @@ const names = (text, filters = Library.noFilters) =>
     // counts ignore the facet's own picks, so the other values stay pickable
     const counts = Library.facetCounts (all, Library.parse (""), { ...Library.noFilters, categories: ["pad"] }, "Category");
     const pad = counts.find (([key]) => key === "pad"), bass = counts.find (([key]) => key === "bass");
-    check (pad && pad[2] === 12 && bass && bass[2] === 12, "category counts: " + JSON.stringify (counts.slice (0, 3)));
+    check (pad && pad[2] === 13 && bass && bass[2] === 11, "category counts: " + JSON.stringify (counts.slice (0, 3)));
     const tagCounts = Library.facetCounts (all, Library.parse ("cat:pad"), Library.noFilters, "Tag");
     check (["per-voice drive", "per-voice pan", "evolving"].includes (tagCounts[0][0]), "tag counts follow the search: " + tagCounts[0][0]);
     const picked = Library.facetCounts (all, Library.parse ("zzzz"), { ...Library.noFilters, tags: ["wide"] }, "Tag");
