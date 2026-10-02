@@ -116,6 +116,26 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
   }
   g.redraw = draw
 
+  // each side's dots, the dry sound's then the voices': made again only when the number of
+  // sides or voices changes, and moved each frame
+  let made = ref((0, 0, []))
+  let dotsFor = (sides, count) =>
+    switch made.contents {
+    | (s, c, els) if s == sides && c == count => els
+    | _ =>
+      dots->setTextContent("")
+      let els = Array.fromInitializer(~length=sides * (count + 1), i =>
+        svgEl(dots, "circle", [("class", Str(mod(i, count + 1) == 0 ? "dry" : "voice"))])
+      )
+      made := (sides, count, els)
+      els
+    }
+  let place = (dot, x, y, r) => {
+    dot->setAttribute("cx", Num(x))
+    dot->setAttribute("cy", Num(y))
+    dot->setAttribute("r", Num(r))
+  }
+
   // the voices at the moment `t` (seconds)
   let drawVoices = t => {
     let mode = Float.toInt(get("C_Mode"))
@@ -123,26 +143,25 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
     let voices = Math.Int.max(1, Float.toInt(get("C_Voices")))
     let mix = get("C_Mix")
     let (lo, hi) = (minimum(), minimum() + range())
-    dots->setTextContent("")
     let offsets = FxDsp.chorusOffsets(~stereo, ~voices)
     let rate = get("C_Rate")
     let at = (seed, off) =>
       mode == 4 ? FxDsp.chorusWalk(seed, t * rate) : FxDsp.chorusLfo(mode, Float.mod(t * rate + off, 1.))
     let size = 3. + 5. * Math.sqrt(mix / Int.toFloat(voices))
-    lanes()->Array.forEachWithIndex(((_, y, height), side) => {
+    let sides = lanes()
+    let count = Array.length(offsets)
+    let els = dotsFor(Array.length(sides), count)
+    sides->Array.forEachWithIndex(((_, y, height), side) => {
       let yc = stereo == 0 ? y : y + height / 2.
+      let first = side * (count + 1)
       // the dry sound, at 0
-      svgEl(
-        dots,
-        "circle",
-        [("class", Str("dry")), ("cx", Num(xOf(0.))), ("cy", Num(yc)), ("r", Num(4. + 6. * (1. -. mix)))],
-      )->ignore
+      place(els->Array.getUnsafe(first), xOf(0.), yc, 4. + 6. * (1. -. mix))
       offsets->Array.forEachWithIndex(((offL, offR), v) => {
         let spread = (Int.toFloat(v) - (Int.toFloat(voices) - 1.) / 2.) * Math.min(14., (height - 20.) / Int.toFloat(voices))
         let seed = Int.toFloat(v) + (side == 1 ? 0.5 : 0.)
         let amount = at(seed, side == 1 ? offR : offL)
         let x = xOf(lo + amount * (hi - lo))
-        svgEl(dots, "circle", [("class", Str("voice")), ("cx", Num(x)), ("cy", Num(yc + spread)), ("r", Num(size))])->ignore
+        place(els->Array.getUnsafe(first + 1 + v), x, yc + spread, size)
       })
     })
   }
