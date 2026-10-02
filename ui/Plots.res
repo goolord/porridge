@@ -172,6 +172,8 @@ let lfo3 = (ctx: Ctx.t, parent, box) => {
   let mid = s->svgEl("path", [("class", Str("axis"))])
   let curve = s->svgEl("path", [("class", Str("curve"))])
   let get = id => ctx.model->ParamModel.get(id)
+  let notes = VoiceView.marks(s->svgEl("g", []))
+  let lastPoints = ref([])
   let draw = () => {
     let shape = Float.toInt(get("LFO_3_Shape"))
     let start = get("LFO_3_Phase")
@@ -183,9 +185,23 @@ let lfo3 = (ctx: Ctx.t, parent, box) => {
       let v = lfo3At(shape, Float.mod(p, 1.), Math.floor(p), random)
       (3. + Int.toFloat(i) / Int.toFloat(n) * w, 3. + (0.5 - 0.5 * Float.clamp(v, ~min=-1., ~max=1.)) * h)
     })
+    lastPoints := points
     curve->setAttribute("d", Str(pathFrom(points)))
     mid->setAttribute("d", Str(pathFrom([(3., 3. + h / 2.), (3. + w, 3. + h / 2.)])))
   }
+  // a mark per sounding note, where its LFO 3 is in its first cycle (the plot starts at the
+  // start phase)
+  VoiceView.get(ctx.pc)->VoiceView.listen(() => {
+    let voices = parent->offsetParent->Option.isSome ? VoiceView.get(ctx.pc).voices : []
+    let start = get("LFO_3_Phase")
+    notes->VoiceView.show(
+      voices->Array.map(v => {
+        let i = Float.toInt(Math.round(Float.mod(v.lfo3 - start + 1., 1.) * 64.))
+        let (x, y) = lastPoints.contents[i]->Option.getOr((0., 0.))
+        (x, y, v.released)
+      }),
+    )
+  })
   ctx.model->ParamModel.listenEach(["LFO_3_Shape", "LFO_3_Phase"], draw)
   draw()
 }
@@ -196,6 +212,8 @@ let lfo = (ctx: Ctx.t, parent, lfo, box) => {
   background(s, box)
   let curve = s->svgEl("path", [("class", Str("curve"))])
   let shapeId = `LFO_${Int.toString(lfo + 1)}_Shape`
+  let notes = VoiceView.marks(s->svgEl("g", []))
+  let lastPoints = ref([])
 
   let draw = () => {
     let shape = Float.toInt(ctx.model->ParamModel.get(shapeId))
@@ -221,8 +239,21 @@ let lfo = (ctx: Ctx.t, parent, lfo, box) => {
       }
       (3. + f * w, 3. + (1. - Float.clamp(v, ~min=0., ~max=1.)) * h)
     })
+    lastPoints := points
     curve->setAttribute("d", Str(pathFrom(points)))
   }
+
+  // a mark per sounding note, where its LFO is in the first cycle
+  VoiceView.get(ctx.pc)->VoiceView.listen(() => {
+    let voices = parent->offsetParent->Option.isSome ? VoiceView.get(ctx.pc).voices : []
+    notes->VoiceView.show(
+      voices->Array.map(v => {
+        let phase = lfo == 0 ? v.lfo1 : v.lfo2
+        let (x, y) = lastPoints.contents[Float.toInt(Math.round(phase * 64.))]->Option.getOr((0., 0.))
+        (x, y, v.released)
+      }),
+    )
+  })
 
   ctx.model->ParamModel.listen(shapeId, draw)
   ctx.programs->ProgramStore.onShapes(draw)

@@ -152,6 +152,42 @@ const lfo3 = { LFO_3_Mode: 2, LFO_3_Rate: hz (2) };
     check (newest > first * 1.5 && byLevel < newest * 0.8, `follow: loud note alone ${f (first)}, then with a soft one: newest ${f (newest)}, by level ${f (byLevel)}`);
 }
 
+// the view's reports of the sounding notes: three notes, each with its own LFO 3 (random start)
+// on the cutoff; the reports come about 25 times a second, newest note first, with clocks that
+// follow the time since note-on and then note-off, and the cutoff's knob position in each note
+{
+    const path = join (dir, "voices.txt");
+    const events = join (dir, "voices-events.txt");
+    writeFileSync (events, "0 144 60 100\n4410 144 64 100\n8820 144 67 100\n22050 128 60 0\n");
+    render ({ program: init, events, frames: rate, rate, args: ["--voices", path],
+              sets: { ...plain, Release: 2000, Filter: 3, LFO_3_Mode: 0, LFO_3_PhaseRand: 1, ...conn (1, "lfo3", "Cutoff", 0.3) },
+              out: join (dir, "voices.f32") });
+    const reports = (await import ("node:fs")).readFileSync (path, "utf8").trim ().split ("\n").map (l => l.split (" ").map (Number));
+    const field = (r, offset, i) => r[1 + offset + i];
+    const at = seconds => reports.find (r => r[0] >= seconds * rate);
+    const late = at (0.7);
+    const count = field (late, 0, 0);
+    const keys = [0, 1, 2].map (i => field (late, 1, i));
+    const released = [0, 1, 2].map (i => field (late, 17, i));
+    const ampMs = [0, 1, 2].map (i => field (late, 33, i));
+    const cutoffs = [0, 1, 2].map (i => field (late, 161, i));
+    const target = field (late, 178, 0);
+    const positions = [0, 1, 2].map (i => field (late, 194, i * 16));
+    const later = at (0.75);
+    const moved = positions.some ((p, i) => Math.abs (p - field (later, 194, i * 16)) > 1e-4);
+    check (reports.length > 20 && reports.length < 30, `the view gets ${reports.length} reports a second`);
+    check (count === 3 && keys.join () === "67,64,60" && released.join () === "0,0,1",
+           `newest first: keys ${keys}, released ${released}`);
+    // (notes on at 0.2, 0.1 and 0 s; the last released at 0.5 s)
+    const now = late[0] / rate;
+    const want = [now - 0.2, now - 0.1, now - 0.5].map (s => s * 1000);
+    check (ampMs.every ((ms, i) => Math.abs (ms - want[i]) < 20),
+           `amp clocks ${ampMs.map (x => x.toFixed (0))} ms (${want.map (x => x.toFixed (0))})`);
+    check (target === tgt ("Cutoff") && new Set (positions.map (p => p.toFixed (3))).size === 3 && moved,
+           `each note's own cutoff position: ${positions.map (p => p.toFixed (3))}, and moving`);
+    check (cutoffs.every (c => c > 20 && c < 20000), `each note's cutoff in Hz: ${cutoffs.map (c => c.toFixed (0))}`);
+}
+
 // a preset keeps a connection's options, in a later slot too
 {
     const p = Preset.make ("options");

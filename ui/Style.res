@@ -270,6 +270,12 @@ let css = `
 }
 /* the range modulation sweeps */
 .p .t em { position: absolute; top: -1px; bottom: -1px; background: var(--mod); opacity: 0.6; display: none; }
+/* where each sounding note has moved it (VoiceView) */
+.p .t .vt b { position: absolute; display: none; top: -4px; width: 2px; height: 6px; margin-left: -1px;
+    background: var(--ink); opacity: 0.75; pointer-events: none; }
+/* a sounding note on a graph: where it is on an envelope or LFO, or its cutoff */
+.plot circle.vdot { fill: var(--ink); fill-opacity: 0.8; stroke: var(--paper); stroke-width: 1; pointer-events: none; }
+.plot circle.vdot.rel { fill: var(--paper); fill-opacity: 0.9; stroke: var(--ink); stroke-width: 1.2; }
 .p.dim .v, .p.dim .l { opacity: 0.45; }
 
 /* choice: same footprint, click opens the menu, right click steps */

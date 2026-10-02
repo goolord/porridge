@@ -67,6 +67,14 @@ namespace porridge
         Lfo3 lfo3;
         float lfo3Raw, interval, alternate, cycle, levelFollow, level, wanderValue;
         Drift wander;
+
+        // for the view (VoiceView): each envelope's clock (amp, filter, mod 1, mod 2: ms since the
+        // note-on, or since the note-off once clockReleased), filter 1's last cutoff, and the
+        // knob positions of the first live modulation targets
+        float[4] envClock;
+        bool clockReleased;
+        float viewCutoff;
+        float[viewTargets] targetPos;
     }
 
     let keyEqBands = 8;

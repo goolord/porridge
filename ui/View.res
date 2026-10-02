@@ -407,6 +407,7 @@ let make = (host, pc) => {
       browser->PresetBrowser.dispose
       model->ParamModel.dispose
       programs->ProgramStore.dispose
+      VoiceView.stop(pc)
     },
   }
 }

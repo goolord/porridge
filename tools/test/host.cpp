@@ -4,12 +4,15 @@
 //
 //   host --program prog.bin --events events.txt --frames 88200 --rate 44100 --out out.f32
 //        [--tempo 120] [--set Endpoint=value ...] [--input in.f32] [--preroll n] [--latency n]
+//        [--voices voices.txt]
 //
 // --input feeds a recorded signal to the effects instead of the voices. --preroll renders n
 // frames before frame 0 and drops them (the DLL harness renders 128 after loading a program).
 // --latency (default 64, the synth's) drops that many frames from the start of the output, as
 // a host compensating for the plugin's latency would, so frame 0 is the first one that hears
 // frame 0's MIDI. (Cmajor's C++ generator reports a latency of 0 whatever the patch declares.)
+// --voices asks for the view's reports of the sounding notes (VoiceView) and writes one line per
+// report: the frame, then the struct's 450 words as it's laid out (ints, bools as ints, floats).
 //
 // events.txt: one event per line: "frame status data1 data2" (decimal).
 // Output format (same as tools/re/vsthost.py write_f32): int32 channels, int32 frames,
@@ -61,7 +64,7 @@ static void sendShape (Patch& p, const char* endpoint, int which, const float* d
 
 int main (int argc, char** argv)
 {
-    std::string programPath, eventsPath, inputPath, tuningPath, outPath = "out.f32";
+    std::string programPath, eventsPath, inputPath, tuningPath, voicesPath, outPath = "out.f32";
     long frames = 44100, preroll = 0, latency = 64;
     double rate = 44100.0, tempo = 120.0;
     std::vector<std::pair<std::string, std::string>> overrides;
@@ -77,6 +80,7 @@ int main (int argc, char** argv)
         else if (a == "--rate") rate = atof (next().c_str());
         else if (a == "--tempo") tempo = atof (next().c_str());
         else if (a == "--input") inputPath = next();
+        else if (a == "--voices") voicesPath = next();
         else if (a == "--preroll") preroll = atol (next().c_str());
         else if (a == "--latency") latency = atol (next().c_str());
         else if (a == "--tuning") tuningPath = next();
@@ -182,6 +186,9 @@ int main (int argc, char** argv)
 
     const auto outHandle = Patch::getEndpointHandleForName ("out");
     const auto midiHandle = Patch::getEndpointHandleForName ("midiIn");
+    const auto voicesHandle = Patch::getEndpointHandleForName ("voiceViewOut");
+    FILE* voices = voicesPath.empty() ? nullptr : fopen (voicesPath.c_str(), "w");
+    if (voices) send (*patch, "voiceView", (int32_t) 1);
     const long totalFrames = frames + preroll + latency;
     std::vector<float> L (totalFrames), R (totalFrames), block (2 * Patch::maxFramesPerBlock);
 
@@ -211,6 +218,25 @@ int main (int argc, char** argv)
         }
         patch->advance ((int32_t) n);
         patch->copyOutputFrames (outHandle, block.data(), (uint32_t) n);
+
+        if (voices)
+        {
+            for (uint32_t e = 0; e < patch->getNumOutputEvents (voicesHandle); ++e)
+            {
+                unsigned char data[1800];
+                patch->readOutputEvent (voicesHandle, e, data);
+                fprintf (voices, "%ld", pos + n);
+                for (int w = 0; w < 450; ++w)
+                {
+                    int32_t i; float f;
+                    memcpy (&i, data + 4 * w, 4); memcpy (&f, data + 4 * w, 4);
+                    bool isInt = w < 33 || (w >= 177 && w < 194);
+                    if (isInt) fprintf (voices, " %d", i); else fprintf (voices, " %g", f);
+                }
+                fputc (10, voices);
+            }
+            patch->resetOutputEventCount (voicesHandle);
+        }
         for (long k = 0; k < n; ++k) { L[pos + k] = block[2 * k]; R[pos + k] = block[2 * k + 1]; }
         pos += n;
     }
@@ -221,5 +247,6 @@ int main (int argc, char** argv)
     fwrite (L.data() + preroll + latency, 4, frames, o);
     fwrite (R.data() + preroll + latency, 4, frames, o);
     fclose (o);
+    if (voices) fclose (voices);
     return 0;
 }

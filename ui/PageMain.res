@@ -24,6 +24,7 @@ let envelopeFields = prefix => [
   )),
 ]
 
+// (each sounding note is marked where it is on the amp, filter and mod envelopes)
 let envelope = (ctx, parent, prefix, box: box, ~name) =>
   EnvEditor.make(
     ctx,
@@ -32,6 +33,13 @@ let envelope = (ctx, parent, prefix, box: box, ~name) =>
     EnvEditor.adsr(ctx, prefix, ~w=box.w, ~h=box.h),
     ~fields=envelopeFields(prefix),
     ~name,
+    ~clock=?switch prefix {
+    | "" => Some((v: VoiceView.voice) => v.ampMs)
+    | "F_" => Some(v => v.filterMs)
+    | "M1_" => Some(v => v.mod1Ms)
+    | "M2_" => Some(v => v.mod2Ms)
+    | _ => None
+    },
   )
 
 // The button in the corner of a plot that opens its table on the Shapes page.
@@ -331,6 +339,7 @@ let build = (ctx: Ctx.t, page) => {
       response,
       {x: 8., y: graphTop, w: columnWidth - 18., h: rowHeight - graphTop - 10.},
       source,
+      ~voices=true,
     )
   refreshPreview :=
     main->Grid.at(2, 2, ~span=2, "the filter preview", box =>

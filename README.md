@@ -22,7 +22,8 @@ dsp/                    Cmajor DSP
   Slots.cmajor            parameter -> program-struct slot constants (generated)
   ModTables.cmajor        modulation sources, targets and knob laws (generated)
   Synth.cmajor            MIDI, voice manager, arpeggiator, per-voice rendering, effects chain,
-                          and a K-weighted level meter the view asks for (levelRequest/levelOut)
+                          a K-weighted level meter the view asks for (levelRequest/levelOut),
+                          and reports of the sounding notes for the view (voiceView/voiceViewOut)
   Oscillator, Filter, Modulation, Effects, Tables, Voice, Types
                           (Voice.cmajor also has the key EQ: a low shelf under each voice's
                           note and bands on its harmonics; Oscillator.cmajor each oscillator's
@@ -37,6 +38,8 @@ dsp/                    Cmajor DSP
   Convolve.cmajor         the convolver: zero-latency partitioned convolution, built-in impulses
 ui/                     patch view (ReScript)
   Index.res               entry point; View.res builds the pages
+  VoiceView.res           the sounding notes as the DSP reports them: a mark per note on the
+                          envelopes, LFOs, the filter graph and the modulated controls
   Preset.res              Porridge's preset format; PorridgeParams.res and ModMatrix.res
                           list the parameters and modulation sources/targets Oatmeal doesn't have
                           (32 connections, each with hold, slew and curve); ModScope.res says
@@ -99,7 +102,8 @@ tools/
                           random.mjs (random patches: sound values, the wildness knobs, the
                           locks, varying the banks, and their levels), modulation.mjs (the
                           matrix's hold, slew, curve, later sources and slots, and what
-                          per-note sources follow on the whole sound); lib.mjs has what they
+                          per-note sources follow on the whole sound, and the view's reports of
+                          the sounding notes, which the host writes with --voices); lib.mjs has what they
                           share
   vanilla-bank.mjs        builds presets/vanilla.porridge
   re/                     comparisons against Oatmeal.dll (32-bit Python) and data checks

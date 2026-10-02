@@ -452,8 +452,32 @@ let pitch = (ctx: Ctx.t, ~w, ~h): shape => {
 //==============================================================================
 // The editor
 
-// fields: the raw parameters shown by the "values" switch, four to a row
-let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, string)>, ~name) => {
+// Where a note is on the time axis: ms since its note-on while held (up to the sustain point,
+// where held notes wait), since its note-off once released.
+let xOfClock = (times: array<stretch>, ms, ~released) => {
+  let ts = times->Array.filter(t => t.release == released)
+  switch ts->Array.find(t => ms >= t.msFrom && ms <= t.msTo) {
+  | Some(t) => Some(t.xFrom + (t.xTo - t.xFrom) * (ms - t.msFrom) / Math.max(t.msTo - t.msFrom, 1e-9))
+  | None =>
+    switch (ts[0], ts[Array.length(ts) - 1]) {
+    | (Some(first), _) if ms < first.msFrom => Some(first.xFrom)
+    | (_, Some(last)) => Some(last.xTo)
+    | _ => None
+    }
+  }
+}
+
+// fields: the raw parameters shown by the "values" switch, four to a row; clock: where each
+// sounding note is on this envelope (VoiceView), for a mark per note
+let make = (
+  ctx: Ctx.t,
+  parent,
+  box: box,
+  shape: shape,
+  ~fields: array<(string, string)>,
+  ~name,
+  ~clock: option<VoiceView.voice => float>=?,
+) => {
   let model = ctx.model
   let ed = NodeEditor.make(ctx, parent, box, ~hint=hintFor(name), ~columns=4)
   let zero = ed.g.under->Plots.line(2., 0., box.w - 2., 0.)
@@ -538,9 +562,27 @@ let make = (ctx: Ctx.t, parent, box: box, shape: shape, ~fields: array<(string, 
     )
   )
 
+  // a mark per sounding note, on the curve where its envelope is
+  let notes = VoiceView.marks(FxGraph.group(ed.g.under))
+  let lastLayout = ref(([], []))
+  let drawNotes = () =>
+    clock->Option.forEach(clock => {
+      let (points, times) = lastLayout.contents
+      let voices = parent->offsetParent->Option.isSome ? VoiceView.get(ctx.pc).voices : []
+      notes->VoiceView.show(
+        voices->Array.filterMap(v =>
+          xOfClock(times, clock(v), ~released=v.released)->Option.map(x => (x, VoiceView.yAt(points, x), v.released))
+        ),
+      )
+    })
+  if clock != None {
+    VoiceView.get(ctx.pc)->VoiceView.listen(drawNotes)
+  }
+
   let draw = () => {
     let (points, hs, times) = shape.layout(frame.contents)
     handles := hs
+    lastLayout := (points, times)
     drawTicks(times)
     let d = Plots.pathFrom(points)
     curve->setAttribute("d", Str(d))

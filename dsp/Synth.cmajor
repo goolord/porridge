@@ -22,6 +22,7 @@ namespace porridge
         input event int impulseViewIn;
         input event int panicIn;
         input event int levelRequestIn;
+        input event int voiceViewIn;
 
         // test-only: lets the offline test graph replace the voices with a recorded signal
         input stream float<2> testIn;
@@ -33,6 +34,7 @@ namespace porridge
         output event CompMeter compMeterOut;
         output event ImpulseView impulseViewOut;
         output event float levelOut;
+        output event VoiceView voiceViewOut;
 
         // MIDI is applied a block late (see the top of this file)
         processor.latency = blockSize;
@@ -98,6 +100,11 @@ namespace porridge
         // K-weighted power summed since the last one; the weighting's shelf and highpass, per
         // channel
         int levelReadings, levelFrames;
+
+        // the sounding notes for the view: whether it asked, samples until the next report, and
+        // whether the last one had any
+        bool voiceViewOn, voiceViewHad;
+        int voiceViewWait;
         float64 levelSum;
         KWeighting[2] kWeighting;
 
@@ -263,6 +270,9 @@ namespace porridge
             kWeighting[0] = makeKWeighting (sampleRate);
             kWeighting[1] = makeKWeighting (sampleRate);
         }
+
+        /// The view asks for the sounding notes (VoiceView) about 25 times a second, or no more (0).
+        event voiceViewIn (int on)                      { voiceViewOn = on != 0; voiceViewWait = 0; }
 
         /// The view asks for the convolvers' impulses again (a tab opened).
         event impulseViewIn (int x)
@@ -947,6 +957,8 @@ namespace porridge
                 }
 
                 v.ampEnv.trigger (ampC, false);
+                v.envClock = float[4]();
+                v.clockReleased = false;
 
                 for (int k = 0; k < (voiceMode < 2 ? 4 : 2); ++k)
                     v.fenv.at (k).trigger (fenvCoefs (k), true);
@@ -2032,6 +2044,16 @@ namespace porridge
 
                     evalMods (vi, n);
                     applyMods();
+
+                    if (voiceViewOn)
+                    {
+                        for (int k = 0; k < viewTargets; ++k)
+                        {
+                            let t = k < numLiveTargets ? liveTargets.at (k) : 0;
+                            voices.at (vi).targetPos.at (k) = (t > 0 && mods::targetKind.at (t) == mods::knob)
+                                                                ? clamp (modBaseNorm.at (t) + modSum.at (t), 0.0f, 1.0f) : -1.0f;
+                        }
+                    }
                     semisArg += modPitch();
                 }
 
@@ -2559,6 +2581,21 @@ namespace porridge
 
                 let t = v.wander.phase * v.wander.phase * (3.0f - 2.0f * v.wander.phase);
                 v.wanderValue = v.wander.a + (v.wander.b - v.wander.a) * t;
+            }
+
+            if (voiceViewOn)
+            {
+                if (v.relCount >= 0 && ! v.clockReleased)
+                {
+                    v.envClock = float[4]();
+                    v.clockReleased = true;
+                }
+
+                let ms = float (float64 (n) * 1000.0 / sampleRate);
+                v.envClock[0] += ms * ampSpeed * v.envSpeed;
+                v.envClock[1] += ms * filterSpeed * v.envSpeed;
+                v.envClock[2] += ms * modSpeed;
+                v.envClock[3] += ms * modSpeed;
             }
 
             v.age += n;
@@ -3206,6 +3243,7 @@ namespace porridge
             let f = (isF2 ? 1 : 0) + (right ? 2 : 0);
             let env = v.fenv.at (f).renderBlock (fenvCoefs (f), speed, sustainDown, n);
             let hz = cutoffHz (isF2, isZdfFilter (type), env, vel, at, keyFreq, Rg, X, Y, lfo1, lfo2, semisMod);
+            if (f == 0) v.viewCutoff = hz;
             let morph = clamp (P[slot::F_Morph] + (morphGlide - morphKnob), 0.0f, 1.0f);
             v.filt.at (f).process (fxTables, type, hz, res, morph, P[slot::F_Drive], sampleRate, buf, n);
         }
@@ -3423,7 +3461,58 @@ namespace porridge
             for (wrap<blockSize> i)
                 mix[i] = outputOn ? mix[i] * gain : float<2>();
 
+            if (voiceViewOn)
+            {
+                voiceViewWait -= blockSize;
+
+                if (voiceViewWait <= 0)
+                {
+                    voiceViewWait = int (sampleRate / 25.0);
+
+                    if (numActive > 0 || voiceViewHad)
+                        sendVoiceView();
+
+                    voiceViewHad = numActive > 0;
+                }
+            }
+
             if (numLive > 0) restoreMods();
+        }
+
+        /// The sounding notes, newest first (VoiceView).
+        void sendVoiceView()
+        {
+            VoiceView view;
+            view.count = min (numActive, viewVoices);
+            view.numTargets = min (numLiveTargets, viewTargets);
+
+            for (int k = 0; k < view.numTargets; ++k)
+                view.targets.at (k) = liveTargets.at (k);
+
+            for (int i = 0; i < view.count; ++i)
+                viewVoice (view, i, voices.at (order.at (i)));
+
+            voiceViewOut <- view;
+        }
+
+        void viewVoice (VoiceView& view, int i, const Voice& v)
+        {
+            {
+                view.key.at (i) = v.key & 0x7f;
+                view.released.at (i) = v.relCount >= 0;
+                view.ampMs.at (i) = v.envClock[0];
+                view.filterMs.at (i) = v.envClock[1];
+                view.mod1Ms.at (i) = v.envClock[2];
+                view.mod2Ms.at (i) = v.envClock[3];
+                view.level.at (i) = v.ampLast;
+                view.lfo1.at (i) = float (float64 (P[slot::LFO_1_Sync] == 0 ? v.lfo[0].phase : gLfo1.phase) / two32);
+                view.lfo2.at (i) = float (float64 (P[slot::LFO_2_Sync] == 0 ? v.lfo[1].phase : gLfo2.phase) / two32);
+                view.lfo3.at (i) = float (P[slot::LFO_3_Mode] == 0 ? v.lfo3.phase : gLfo3.phase);
+                view.cutoff.at (i) = v.viewCutoff;
+
+                for (int k = 0; k < viewTargets; ++k)
+                    view.positions.at (i * viewTargets + k) = v.targetPos.at (k);
+            }
         }
 
         /// One piece of a block: controllers, then the voices over mix[pos .. pos + n).

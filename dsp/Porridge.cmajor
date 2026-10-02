@@ -17,6 +17,7 @@ graph Porridge  [[ main ]]
     input event int impulseView;
     input event int panic;
     input event int levelRequest;
+    input event int voiceView;
 
     output stream float<2> out                            [[ name: "Audio Out" ]];
     output event float<2> xyOut;
@@ -24,6 +25,7 @@ graph Porridge  [[ main ]]
     output event porridge::CompMeter compMeterOut;
     output event porridge::ImpulseView impulseViewOut;
     output event float levelOut;
+    output event porridge::VoiceView voiceViewOut;
 
     node params = ParamStore;
     node synth  = porridge::Synth;
@@ -40,11 +42,13 @@ graph Porridge  [[ main ]]
         impulseView     -> synth.impulseViewIn;
         panic           -> synth.panicIn;
         levelRequest    -> synth.levelRequestIn;
+        voiceView       -> synth.voiceViewIn;
         synth.out       -> out;
         synth.xyOut     -> xyOut;
         synth.ccOut     -> ccOut;
         synth.compMeterOut -> compMeterOut;
         synth.impulseViewOut -> impulseViewOut;
         synth.levelOut  -> levelOut;
+        synth.voiceViewOut -> voiceViewOut;
     }
 }

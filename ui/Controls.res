@@ -170,6 +170,8 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
   // the range modulation connections sweep, for parameters the matrix can reach
   let target = ModMatrix.targetOfParam(id)
   let modBar = target >= 0 ? Some(el("em", ~parent=track)) : None
+  // where the sounding notes have moved it to, a tick each (VoiceView)
+  let ticks = target >= 0 ? Some(el("span", ~cls="vt", ~parent=track)) : None
 
   let norm = () => c.def.toNorm(current(c))
   let setNorm = n => ctx.model->ParamModel.set(id, c.def.fromNorm(clamp01(n)))
@@ -276,6 +278,26 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
   if modBar != None {
     onSlotChange(ctx.model, updateModBar)
   }
+  ticks->Option.forEach(box => {
+    let notes = VoiceView.get(ctx.pc)
+    notes->VoiceView.listenTarget(target, () => {
+      let positions = e->offsetParent->Option.isSome ? notes->VoiceView.positionsOf(target) : []
+      let marks = box->querySelectorAll("b")->nodesToArray
+      positions->Array.forEachWithIndex((p, i) => {
+        let mark = switch marks[i] {
+        | Some(m) => m
+        | None => el("b", ~parent=box)
+        }
+        mark->setStyle("left", Float.toString(clamp01(p) * 100.) ++ "%")
+        mark->setStyle("display", "block")
+      })
+      marks->Array.forEachWithIndex((m, i) =>
+        if i >= Array.length(positions) {
+          m->setStyle("display", "none")
+        }
+      )
+    })
+  })
   bind(c, update)
   e
 }
