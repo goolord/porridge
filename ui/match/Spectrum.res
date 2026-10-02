@@ -299,7 +299,9 @@ let envelope = (x: Float32Array.t) => {
 // Each frame is a Blackman window (its leakage is under -58 dB from 3 bins on) of at least
 // gridPeriods periods, so that a harmonic's lobe stays well inside its own neighbourhood; the
 // bins within a bin of a harmonic are "on", those at least 0.3 of the pitch from every
-// harmonic "off", and the ratio is of their mean powers.
+// harmonic "off", and the ratio is of the off bins' median power to the on bins' mean: the
+// floor between the harmonics, which noise raises and partials of their own there (a second
+// series, modulation's sidebands) don't; where those sit, the fine spectrum hears.
 //
 // The same frames give the fine spectrum: the power at every sixteenth of a harmonic of the
 // target's pitch (`axisHz`, for the target and every candidate alike), up to the 24th or 16 kHz.
@@ -382,6 +384,27 @@ let measureGrid = (x: Float32Array.t, ~hz, ~axisHz=?) =>
     let ratio = Float64Array.fromLength(frames * gridBands)
     let level = Float64Array.fromLength(frames * gridBands)
     let sums = Float64Array.fromLength(4 * gridBands)
+    // each band's off bins, and room to sort their powers
+    let offBins = Array.fromInitializer(~length=gridBands, b => {
+      let bins = []
+      for k in 0 to half {
+        if band->getInt(k) == b && kind->getInt(k) == 2 {
+          bins->Array.push(k)
+        }
+      }
+      Int32Array.fromArray(bins)
+    })
+    let scratch = Float64Array.fromLength(half + 1)
+    let offMedian = (bins: Float64Array.t, b) => {
+      let ks = offBins->Array.getUnsafe(b)
+      let n = TypedArray.length(ks)
+      for i in 0 to n - 1 {
+        scratch->set64(i, bins->get64(ks->getInt(i)))
+      }
+      let sorted = scratch->TypedArray.subarray(~start=0, ~end=n)
+      sorted->TypedArray.sort((a, b) => a < b ? -1. : a > b ? 1. : 0.)
+      sorted->get64(n / 2)
+    }
     let count = Math.Int.max(1, Math.Int.min(256, Float.toInt(8000. / hz)))
     let harmonics = Float64Array.fromLength(count)
     let fineCells = Math.Int.max(1, Float.toInt(Math.min(24., 16000. / axisHz) * fineSteps) - 1)
@@ -416,7 +439,7 @@ let measureGrid = (x: Float32Array.t, ~hz, ~axisHz=?) =>
         ratio->set64(
           t * gridBands + b,
           onCount > 0. && offCount > 0.
-            ? Math.max(gridFloor, 10. * Math.log10(Math.max(off / offCount, 1e-30) / Math.max(on / onCount, 1e-30)))
+            ? Math.max(gridFloor, 10. * Math.log10(Math.max(offMedian(bins, b), 1e-30) / Math.max(on / onCount, 1e-30)))
             : Float.Constants.nan,
         )
         level->set64(t * gridBands + b, 10. * Math.log10(Math.max(on + off, 1e-30)))

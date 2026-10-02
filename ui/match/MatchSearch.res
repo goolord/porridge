@@ -103,8 +103,11 @@ let islands = [
   },
 ]
 
-// what each optional part a candidate switches on costs it (Genome.parts), about 0.5% of match
+// what each optional part a candidate switches on costs it (Genome.parts), about 0.5% of match;
+// noise twice that (between the harmonics, a little noise can stand in for partials that
+// modulation would put there, and an oscillator or two modulated is the likelier sound)
 let partCost = 0.006
+let noiseCost = 0.006
 
 //==============================================================================
 // Rendering and scoring a candidate (in a worker)
@@ -289,7 +292,7 @@ let candidateOf = (ctx, x, note, values, y, f: Spectrum.features) => {
   }
 }
 
-let cost = x => partCost * Int.toFloat(Genome.parts(x))
+let cost = x => partCost * Int.toFloat(Genome.parts(x)) + (Genome.get(x, "noise") >= Genome.noiseOff ? noiseCost : 0.)
 
 // The amp envelope of x as power (its mean square) over [a, b) ms, from a table every ms.
 let envelopePower = (x, ~ms) => {
@@ -879,9 +882,13 @@ type rec search = {
   mutable archive: array<entry>,
   // what its screens found: short evaluations' scores and genes
   mutable screened: array<(float, Float64Array.t)>,
-  // osc 2's pitches (semitones) the second screen tries besides the intervals: those the
-  // starts play it at off them (a second series of partials the sample was heard to have)
+  // osc 2's pitches (semitones) the screens try besides the intervals: those the starts play
+  // it at off them (a second series of partials the sample was heard to have)
   o2Pitches: array<float>,
+  // the best that the screens found playing osc 2 at one of those: it goes on to the grid and a
+  // run of the outline's own, whatever the screens think of it (in a short render, a second
+  // series seldom beats a patch on the intervals, though tuned it ends up closer)
+  mutable held: option<Float64Array.t>,
 }
 
 let apart = (s, x) => {
@@ -910,8 +917,10 @@ let allowed = (key, lo, hi) => {
 }
 
 // The outline's grid: the starting points, then the first with each allowed first wave and
-// filter type, and played an octave either side.
-let gridOf = (starts: array<Float64Array.t>, lo, hi) => {
+// filter type, and played an octave either side; and for the first pitch in o2Pitches (a second
+// series of partials the sample was heard to have), the first with osc 2 sounding there, with
+// each wave it may take through each filter type.
+let gridOf = (starts: array<Float64Array.t>, lo, hi, ~o2Pitches) => {
   let first = starts->Array.getUnsafe(0)
   let variant = changes => {
     let x = TypedArray.copy(first)
@@ -925,16 +934,31 @@ let gridOf = (starts: array<Float64Array.t>, lo, hi) => {
       ? []
       : waves->Array.flatMap(w => filters->Array.map(f => variant([("o1Wave", w), ("filterType", f)])))
   let octaves = allowed("octave", lo, hi)->Array.filter(v => Genome.choiceOf(v, 3) != 0)->Array.map(v => variant([("octave", v)]))
-  Array.concat(starts, Array.concat(structures, octaves))->Array.map(x => clampInto(x, lo, hi))
+  let series = o2Pitches->Array.slice(~start=0, ~end=1)->Array.flatMap(st =>
+    allowed("o2Wave", lo, hi)->Array.flatMap(w =>
+      filters->Array.map(f =>
+        variant([
+          ("o2Pitch", Genome.o2PitchGene(st)),
+          ("o2Wave", w),
+          ("o2Level", 0.6),
+          ("oscMix", Genome.valueOfChoice(0, 7)),
+          ("width", 0.),
+          ("filterType", f),
+        ])
+      )
+    )
+  )
+  [starts, structures, octaves, series]->Array.flat->Array.map(x => clampInto(x, lo, hi))
 }
 
 // The outline: `starts` (the seed, or what the predictor suggests, best guess first) within
 // the bounds the locks leave.
+let offInterval = x => Genome.secondOscSounds(x) && !Genome.o2OnAnchor(Genome.get(x, "o2Pitch"))
 let o2PitchesOf = (starts: array<Float64Array.t>) =>
-  starts->Array.filterMap(x => {
-    let v = Genome.get(x, "o2Pitch")
-    Genome.secondOscSounds(x) && !Genome.o2OnAnchor(v) ? Some(Genome.o2Semitones(v)) : None
-  })
+  starts
+  ->Array.filter(offInterval)
+  ->Array.map(x => Genome.o2Semitones(Genome.get(x, "o2Pitch")))
+  ->Array.reduce([], (kept, st) => kept->Array.some(k => Math.abs(k - st) < 0.1) ? kept : Array.concat(kept, [st]))
 
 let outline = (~starts, ~fitted, ~fit, ~locks, ~reference, ~budget, ~sigma, ~seed) => {
   let (lo, hi) = boundsFor(None, ~fitted, ~locks, ~reference)
@@ -948,7 +972,7 @@ let outline = (~starts, ~fitted, ~fit, ~locks, ~reference, ~budget, ~sigma, ~see
     sigma,
     seed,
     fit,
-    stage: Screen(gridOf(starts, lo, hi), 1),
+    stage: Screen(gridOf(starts, lo, hi, ~o2Pitches=o2PitchesOf(starts)), 1),
     evals: 0,
     bestLoss: infinity,
     best: None,
@@ -957,6 +981,7 @@ let outline = (~starts, ~fitted, ~fit, ~locks, ~reference, ~budget, ~sigma, ~see
     archive: [],
     screened: [],
     o2Pitches: o2PitchesOf(starts),
+    held: None,
   }
 }
 
@@ -998,6 +1023,7 @@ let branch = (outline: search, islandIndex, ~fitted, ~locks, ~reference, ~budget
     archive: [],
     screened: [],
     o2Pitches: outline.o2Pitches,
+    held: None,
   }
 }
 
@@ -1009,9 +1035,11 @@ let isDone = s =>
 
 // The second screen's structures on a first-screen winner: osc 2 at a middle level with each
 // wave it may take at each interval (and at the pitches the starts play it at off them), each
-// mix mode with a sine or saw osc 2 in unison, a fifth or an octave up, unison (two and four
-// voices, a little and much detuned), noise (some and much), and the second filter (beside and
-// after the first, a little and well above it); all within the bounds.
+// mix mode with a sine or saw osc 2 in unison, a fifth or an octave up (and at those pitches:
+// the sidebands of modulation at an odd ratio, which noise would otherwise stand in for),
+// unison (two and four voices, a little and much detuned), noise (none, some and much), and
+// the second filter (beside and after the first, a little and well above it); all within the
+// bounds.
 let secondScreen = (x: Float64Array.t, lo, hi, ~o2Pitches) => {
   let set = (y, key, v) => y->set64(Genome.indexOf(key), v)
   let choice = (key, o) => Genome.valueOfChoice(o, Genome.gene(Genome.indexOf(key)).options)
@@ -1036,7 +1064,7 @@ let secondScreen = (x: Float64Array.t, lo, hi, ~o2Pitches) => {
     allowed("unison", lo, hi)
     ->Array.filter(v => Genome.choiceOf(v, 4) == 1 || Genome.choiceOf(v, 4) == 3)
     ->Array.flatMap(u => [0.35, 0.7]->Array.map(d => variant([("unison", u), ("unisonDetune", d)])))
-  let noise = [0.45, 0.75]->Array.map(n => variant([("noise", n), ("noiseColour", 0.1)]))
+  let noise = [0., 0.45, 0.75]->Array.map(n => variant([("noise", n), ("noiseColour", 0.1)]))
   let doubled =
     allowed("filterDouble", lo, hi)
     ->Array.filter(v => Genome.choiceOf(v, 3) != 0)
@@ -1047,7 +1075,7 @@ let secondScreen = (x: Float64Array.t, lo, hi, ~o2Pitches) => {
     ->Array.filter(v => Genome.choiceOf(v, 7) != 0)
     ->Array.flatMap(m =>
       [0, 1]->Array.flatMap(w =>
-        [0., 7., 12.]->Array.map(i => {
+        Array.concat([0., 7., 12.], o2Pitches)->Array.map(i => {
           let y = TypedArray.copy(x)
           set(y, "oscMix", m)
           set(y, "o2Level", 0.55)
@@ -1077,7 +1105,33 @@ type pending = {
   short: bool,
 }
 
-let polishMoves = (p: polish) => {
+// The parts a polish may switch off outright, by the value that does (a small step of their
+// level gains nothing until it crosses the threshold, so a part that no longer helps would
+// otherwise stay, its cost unpaid): those on in x that the bounds let off.
+let switches = [
+  ("noise", 0.),
+  ("o2Level", 0.),
+  ("vibrato", 0.),
+  ("wobble", 0.),
+  ("drive", 0.),
+  ("chorus", 0.),
+  ("reverb", 0.),
+  ("modEnvPitch", 0.5),
+  ("modEnvDepth", 0.5),
+]
+let offMoves = (x: Float64Array.t, lo, hi) =>
+  switches->Array.filterMap(((key, off)) => {
+    let i = Genome.indexOf(key)
+    Math.abs(x->get64(i) - off) > 0.05 && lo->get64(i) <= off && hi->get64(i) >= off
+      ? {
+          let y = TypedArray.copy(x)
+          y->set64(i, off)
+          Some(y)
+        }
+      : None
+  })
+
+let polishMoves = (p: polish, lo, hi) => {
   let moves = p.genes->Array.flatMap(i =>
     [-1., 1.]->Array.map(sign => {
       let x = TypedArray.copy(p.at)
@@ -1085,6 +1139,7 @@ let polishMoves = (p: polish) => {
       x
     })
   )
+  let moves = Array.concat(moves, offMoves(p.at, lo, hi))
   switch p.together {
   | Some(x) => [x, ...moves]
   | None => moves
@@ -1099,26 +1154,33 @@ let ask = s =>
   | Rounds(runs, _) =>
     let samples = runs->Array.map(es => (es, Cmaes.ask(es)))
     {genes: samples->Array.flatMap(((_, xs)) => xs->Array.map(sample => sample.x)), samples, short: false}
-  | Polish(p) => {genes: polishMoves(p)->Array.map(x => clampInto(x, s.lo, s.hi)), samples: [], short: false}
+  | Polish(p) => {genes: polishMoves(p, s.lo, s.hi)->Array.map(x => clampInto(x, s.lo, s.hi)), samples: [], short: false}
   }
 
 let archiveSize = 8
 
-// Keeps a candidate if it is the best of its structure so far and among the best few.
+// Keeps a candidate if it is the best of its structure so far and among the best few (or the
+// best playing a second series of partials, kept after them whatever its place, so that the
+// searches after the outline see it).
 let remember = (s, raw, x, c: candidate) => {
   let shape = Genome.structure(x)
   let entry = {raw, genes: TypedArray.copy(x), candidate: c, shape}
   let others = s.archive->Array.filter(e => e.shape != shape)
   let same = s.archive->Array.find(e => e.shape == shape)
   if same->Option.mapOr(true, e => raw < e.raw) {
-    s.archive = [entry, ...others]->Array.toSorted((a, b) => Float.compare(a.raw, b.raw))->Array.slice(~start=0, ~end=archiveSize)
+    let all = [entry, ...others]->Array.toSorted((a, b) => Float.compare(a.raw, b.raw))
+    let kept = all->Array.slice(~start=0, ~end=archiveSize)
+    s.archive = switch all->Array.find(e => offInterval(e.genes)) {
+    | Some(e) if !(kept->Array.includes(e)) => Array.concat(kept, [e])
+    | _ => kept
+    }
   }
 }
 
 // The score under which the workers send a candidate back with its picture: whatever could
 // still enter the archive.
 let threshold = s =>
-  Array.length(s.archive) < archiveSize ? infinity : s.archive->Array.at(-1)->Option.mapOr(infinity, e => e.raw)
+  Array.length(s.archive) < archiveSize ? infinity : s.archive[archiveSize - 1]->Option.mapOr(infinity, e => e.raw)
 
 // Picks the best of the archive against the rivals as they are now, never one on top of a
 // rival's best if it has another; true if it changed.
@@ -1150,17 +1212,21 @@ let roundGenerations = [5, 7]
 let fittedGenes = s => Array.concat(s.fit.envelope ? Genome.envelopeKeys : [], s.fit.eq ? Genome.eqKeys : [])
 
 // CMA-ES over the core genes of an entry's structure (the rest held where the entry has them).
-let coreRun = (s, x, ~seed) => {
+// (and `extra` genes)
+let coreRun = (s, x, ~seed, ~extra=[]) => {
   let lo = TypedArray.copy(s.lo)
   let hi = TypedArray.copy(s.hi)
   Genome.genes->Array.forEachWithIndex((g, i) =>
-    if !(Genome.core->Array.includes(g.key)) || fittedGenes(s)->Array.includes(g.key) {
+    if !(Genome.core->Array.includes(g.key) || extra->Array.includes(g.key)) || fittedGenes(s)->Array.includes(g.key) {
       lo->set64(i, x->get64(i))
       hi->set64(i, x->get64(i))
     }
   )
   Cmaes.make(~start=x, ~lo, ~hi, ~options, ~sigma=s.sigma, ~seed)
 }
+
+// the runs of held structures, which halving keeps
+let heldRuns: WeakMap.t<Cmaes.t, bool> = WeakMap.make()
 
 // the best loss a run has had (its samples' are told to it; Cmaes keeps no record)
 let runBests: WeakMap.t<Cmaes.t, float> = WeakMap.make()
@@ -1225,11 +1291,36 @@ let tell = (s, pending, results: array<result>) => {
     let second = level == 1 ? distinct(bases->Array.flatMap(x => secondScreen(x, s.lo, s.hi, ~o2Pitches=s.o2Pitches))) : []
     s.stage =
       second == []
-        ? Grid(best(x => Array.concat(Genome.structure(x), [Genome.choice(x, "octave")]), screenKept))
+        ? {
+            s.held = ranked->Array.find(((_, x)) => offInterval(x))->Option.map(((_, x)) => x)
+            let kept = best(x => Array.concat(Genome.structure(x), [Genome.choice(x, "octave")]), screenKept)
+            Grid(distinct(Array.concat(kept, s.held->Option.mapOr([], x => [x]))))
+          }
         : Screen(second, 2)
   | Grid(_) if s.islandIndex < 0 =>
-    // the best few structures of the grid, each run over its core genes
-    let runs = s.archive->Array.slice(~start=0, ~end=roundRuns)->Array.mapWithIndex((e, k) => coreRun(s, e.genes, ~seed=s.seed + k))
+    // the best few structures of the grid, each run over its core genes (the held one's in the
+    // last place, from its best so far)
+    let held = s.held->Option.map(x => {
+      let shape = Genome.structure(x)
+      s.archive->Array.find(e => e.shape == shape)->Option.mapOr(x, e => e.genes)
+    })
+    let heldShape = held->Option.map(Genome.structure)
+    let others = s.archive->Array.filter(e => Some(e.shape) != heldShape)->Array.map(e => e.genes)
+    let picked = switch held {
+    | Some(x) => Array.concat(others->Array.slice(~start=0, ~end=roundRuns - 1), [x])
+    | None => others->Array.slice(~start=0, ~end=roundRuns)
+    }
+    let runs = picked->Array.mapWithIndex((x, k) =>
+      if Some(Genome.structure(x)) == heldShape {
+        // (with osc 2's level and pitch, the noise and the second filter free too: a series
+        // found on its own needs them set around it)
+        let es = coreRun(s, x, ~seed=s.seed + k, ~extra=["o2Level", "o2Pitch", "noise", "filterSplit", "filterMix"])
+        heldRuns->WeakMap.set(es, true)->ignore
+        es
+      } else {
+        coreRun(s, x, ~seed=s.seed + k)
+      }
+    )
     s.stage = runs == [] ? Finished : Rounds(runs, roundGenerations[0]->Option.getOr(5))
   | Grid(_) => s.stage = startPolish(s)
   | Rounds(runs, generations) =>
@@ -1240,8 +1331,12 @@ let tell = (s, pending, results: array<result>) => {
       s.stage = Rounds(runs, generations - 1)
     } else if Array.length(runs) > 2 {
       // the better half goes on, down to two (which between them keep the workers busy)
-      let kept =
-        runs->Array.toSorted((a, b) => Float.compare(runBest(a), runBest(b)))->Array.slice(~start=0, ~end=Math.Int.max(1, Array.length(runs) / 2))
+      // (and the held structure's run)
+      let ranked = runs->Array.toSorted((a, b) => Float.compare(runBest(a), runBest(b)))
+      let isHeld = es => heldRuns->WeakMap.has(es)
+      let held = ranked->Array.filter(isHeld)
+      let free = Math.Int.max(1, Array.length(runs) / 2 - Array.length(held))
+      let kept = Array.concat(ranked->Array.filter(es => !isHeld(es))->Array.slice(~start=0, ~end=free), held)
       let round = roundRuns / Array.length(runs)
       s.stage = Rounds(kept, roundGenerations[round]->Option.getOr(1000))
     } else {
@@ -1251,7 +1346,9 @@ let tell = (s, pending, results: array<result>) => {
     if left <= 0 {
       s.stage = Finished
     } else {
-      // each gene's better side, and the round's best
+      // each gene's better side, and the round's best (the moves switching parts off after
+      // the genes', as polishMoves made them)
+      let offs = Array.length(offMoves(p.at, s.lo, s.hi))
       let k = ref(p.together == None ? 0 : 1)
       let gains = []
       let bestMove = ref(None)
@@ -1275,6 +1372,15 @@ let tell = (s, pending, results: array<result>) => {
           p.steps->set64(j, 0.5 * p.steps->get64(j))
         }
       })
+      for o in 0 to offs - 1 {
+        let l = losses->Array.getUnsafe(k.contents + o)
+        if l < p.loss {
+          switch bestMove.contents {
+          | Some((_, b)) if b <= l => ()
+          | _ => bestMove := Some((scored->Array.getUnsafe(k.contents + o), l))
+          }
+        }
+      }
       switch bestMove.contents {
       | Some((x, l)) =>
         p.at = TypedArray.copy(x)
