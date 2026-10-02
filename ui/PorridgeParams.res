@@ -7,7 +7,8 @@
 type kind =
   // read: a typed value (in the text's units) to the parameter's value
   | Float({min: float, max: float, init: float, text: float => string, read?: string => option<float>})
-  | Choice({names: array<string>, init: int})
+  // list: the value list it shows, if it's one of those (ValueList)
+  | Choice({names: array<string>, init: int, list?: ValueList.t})
   // the same range, knob law and text as an Oatmeal parameter (a second effect's copy of it)
   | Like(string)
   // ... with a default of its own
@@ -431,7 +432,7 @@ let bodeSpecs = [
 
 let filterFxSpecs = [
   onSpec("Ff_On", "FX filter on"),
-  {id: "Ff_Type", name: "FX filter type", kind: Choice({names: FilterTypes.all, init: 16})},
+  {id: "Ff_Type", name: "FX filter type", kind: Choice({names: FilterTypes.all, init: 16, list: FxFilterType})},
   {id: "Ff_Cutoff", name: "FX filter cutoff", kind: hzKnob(1200.)},
   {id: "Ff_Resonance", name: "FX filter resonance", kind: unit(0., 1., 0.2)},
   {id: "Ff_Morph", name: "FX filter morph", kind: unit(0., 1., 0.)},

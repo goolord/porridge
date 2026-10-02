@@ -160,10 +160,6 @@ let index = name =>
 let hasDrive = t => types[t]->Option.mapOr(false, i => i.drive)
 
 let morphText = t => types[t]->Option.flatMap(i => i.morph)
-
-// The rack filter's type parameters (Ff_Type, Ff2_Type ...).
-let isFxType = id => String.startsWith(id, "Ff") && String.endsWith(id, "_Type")
-
 // The heading the type menu shows above type t, where a group starts.
 let heading = t =>
   switch (types[t], types[t - 1]) {

@@ -161,7 +161,10 @@ let porridgeOnly = p => {
   // values Porridge added to Oatmeal's lists (HQ waveforms, osc mix modes, filter types)
   let extended = ids =>
     ids->Array.some(id =>
-      p.values->Map.get(id)->Option.mapOr(false, x => ParamDefs.oatmealValue(id, x) != x)
+      switch (p.values->Map.get(id), Lazy.get(defsById)->Map.get(id)) {
+      | (Some(x), Some(d)) => ParamDefs.oatmealValue(d, x) != x
+      | _ => false
+      }
     )
   // (Oatmeal always plays like Oat mode)
   [
@@ -209,7 +212,12 @@ let porridgeOnly = p => {
 // closest ones it does.
 let toOatmeal = p => {
   let bytes = makeDefaultProgram(p.meta.name)
-  let values = p.values->Map.entries->Iterator.toArray->Array.map(((id, x)) => (id, ParamDefs.oatmealValue(id, x)))->Map.fromArray
+  let values =
+    p.values
+    ->Map.entries
+    ->Iterator.toArray
+    ->Array.map(((id, x)) => (id, Lazy.get(defsById)->Map.get(id)->Option.mapOr(x, ParamDefs.oatmealValue(_, x))))
+    ->Map.fromArray
   // Oatmeal always runs its four effects: those left out of the rack go switched off, and an EQ
   // that is off (Oatmeal's has no switch) loses its bands
   let rack = FxRack.read(valueOf(p, _))

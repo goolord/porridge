@@ -140,11 +140,9 @@ let all: array<info> = [
 
 let info = t => all[t]->Option.getOr(all->Array.getUnsafe(0))
 
-// Oatmeal's distortion's type, or a rack copy's (Sat2_Type ...).
-let isTypeId = id => String.startsWith(id, "Sat") && String.endsWith(id, "_Type")
 let isModel = t => t >= firstModel
 
-// The names Porridge adds after Oatmeal's (ParamDefs.porridgeValuesFor).
+// The names Porridge adds after Oatmeal's (ValueList).
 let porridgeNames = all->Array.slice(~start=custom)->Array.map(i => i.name)
 let porridgeShort = all->Array.slice(~start=custom)->Array.map(i => i.short)
 
