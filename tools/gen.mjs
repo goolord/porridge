@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { all as fields } from "../ui/oatmeal/Fields.res.mjs";
 import { xyTargets, modEnvTargets, ccTargets } from "../ui/oatmeal/OatmealParams.res.mjs";
 import { paramInfo } from "../ui/ParamInfo.res.mjs";
-import { all as porridgeParams, slotOf as porridgeSlot, fxOrder, rackId, rackSlots, rackKinds, rackEntries, copyId } from "../ui/PorridgeParams.res.mjs";
+import { all as porridgeParams, endpoints as porridgeEndpoints, slotOf as porridgeSlot, fxOrder, rackId, rackSlots, rackKinds, rackEntries, copyId } from "../ui/PorridgeParams.res.mjs";
 import { makeDefs, choiceValue } from "../ui/ParamDefs.res.mjs";
 import { programSize, tableOffset } from "../ui/oatmeal/OatmealFormat.res.mjs";
 import * as ModMatrix from "../ui/ModMatrix.res.mjs";
@@ -116,6 +116,14 @@ for (const f of all)
     slots.push (`    let ${id} = ${slot};`);
     cfields.push (f.porridge ? `    { "${id}", -1, FieldType::${isInt ? "i32" : "f32"}, ${isInt} },`
                              : `    { "${id}", ${offset}, FieldType::${kind}, ${isInt} },`);
+}
+
+// Porridge's endpoints in the order they came, the retired ones (PorridgeParams.endpoints) in
+// their places as plain events that do nothing: hosts know a parameter by its endpoint's number.
+{
+    const live = new Map (endpoints.splice (fields.length).map ((line, i) => [porridgeParams[i].id, line]));
+    for (const [id, retired] of porridgeEndpoints)
+        endpoints.push (retired ? `    input event float ${id};    // retired` : live.get (id));
 }
 
 // A camelCase identifier from a menu label: "LFO 1 speed" -> lfo1Speed, "1 PWM rate" -> osc1PwmRate.
@@ -328,7 +336,8 @@ writeGenerated (join (root, "tools", "test", "PorridgeTest.cmajorpatch"), JSON.s
 
 const TABLE = 257;
 
-const kinds = { Knob: 1, Pitch: 2, Volume: 3, Pan: 4 };
+// (a retired copy's targets move nothing, like none's)
+const kinds = { Knob: 1, Pitch: 2, Volume: 3, Pan: 4, Retired: 0 };
 const targetKind = [], targetSlot = [], targetRow = [], targetScale = [], rows = [], rowNames = [];
 const rowOf = new Map();    // row text -> row index
 
