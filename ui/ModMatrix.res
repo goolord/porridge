@@ -6,7 +6,9 @@
 // moved in knob space: amount 1 sweeps the whole knob, whatever the parameter's law. The
 // other targets act on the voice directly.
 
-let slots = 16
+let slots = 32
+// the slots there were at first, whose parameters come before the rest of Porridge's
+let firstSlots = 16
 
 // help: what the source is, for the mod page's status line
 type source = {key: string, label: string, bipolar: bool, help: string}
@@ -75,19 +77,83 @@ let sources = [
     bipolar: true,
     help: "white noise at the control rate: a new random value for each voice every 64 samples, -1..1",
   },
+  {key: "lfo3", label: "LFO 3", bipolar: true, help: "LFO 3 (on the synth page's modulation panel), -1..1"},
+  {
+    key: "interval",
+    label: "interval",
+    bipolar: true,
+    help: "how far the note is from the one before: -1 two octaves down, 0 the same, 1 two octaves up",
+  },
+  {key: "alternate", label: "alternate", bipolar: true, help: "1 and -1 on every other note"},
+  {key: "cycle", label: "cycle", bipolar: false, help: "0, 1/3, 2/3 and 1 over four notes, round and round"},
+  {
+    key: "voiceLevel",
+    label: "voice level",
+    bipolar: false,
+    help: "how loud the note itself is, at the end of its voice: 0 at -60 dB, 1 at 0 dB",
+  },
+  {
+    key: "wander",
+    label: "wander",
+    bipolar: true,
+    help: "a slow random drift of the note's own, -1..1 (its knob sets the rate)",
+  },
+  {key: "glide", label: "glide", bipolar: false, help: "1 as a glide starts, falling to 0 as it arrives"},
+  {
+    key: "heldNotes",
+    label: "held notes",
+    bipolar: false,
+    help: "how many notes are held: 0 with one, 1 with eight or more",
+  },
 ]
 
-// The sources, grouped for the mod page, by key (a source left out here is shown in a last
-// group of its own, so appending one to the list above is enough).
+// The sources, grouped for menus, by key (a source left out here is shown in a last group of
+// its own, so appending one to the list above is enough).
 let sourceGroups = [
-  ("lfos & envelopes", ["lfo1", "lfo2", "modEnv1", "modEnv2", "ampEnv", "filterEnv"]),
+  (
+    "lfos & envelopes",
+    ["lfo1", "lfo2", "lfo3", "modEnv1", "modEnv2", "ampEnv", "filterEnv", "voiceLevel", "wander"],
+  ),
   (
     "note & performance",
-    ["velocity", "key", "aftertouch", "bend", "slide", "modWheel", "random", "noise", "x", "y"],
+    [
+      "velocity",
+      "key",
+      "interval",
+      "alternate",
+      "cycle",
+      "glide",
+      "aftertouch",
+      "bend",
+      "slide",
+      "modWheel",
+      "random",
+      "noise",
+      "heldNotes",
+      "x",
+      "y",
+    ],
   ),
   ("macros", ["macro1", "macro2", "macro3", "macro4"]),
   ("controllers", ["cc1", "cc2", "cc3", "cc4", "cc5", "cc6"]),
 ]
+
+// Whether a source has a value for each note (each voice its own) or one every voice shares,
+// with the program's settings read by get: the LFOs follow their mode, aftertouch the touch
+// mode (and MPE), bend and slide MPE.
+type scope = EachNote | Shared
+
+let sourceScope = (get: string => float, key) =>
+  switch key {
+  | "lfo1" => get("LFO_1_Sync") == 0. ? EachNote : Shared
+  | "lfo2" => get("LFO_2_Sync") == 0. ? EachNote : Shared
+  | "lfo3" => get("LFO_3_Mode") == 0. ? EachNote : Shared
+  | "aftertouch" => get("AftertouchMode") == 2. || get("MPE_On") != 0. ? EachNote : Shared
+  | "bend" | "slide" => get("MPE_On") != 0. ? EachNote : Shared
+  | "modWheel" | "x" | "y" | "heldNotes" => Shared
+  | key if String.startsWith(key, "macro") || String.startsWith(key, "cc") => Shared
+  | _ => EachNote
+  }
 
 type law =
   // the parameter's knob, in knob space
@@ -162,7 +228,7 @@ let targets = [
   knob("EQ_3_Freq", "EQ 3 freq", "eq"),
   knob("EQ_4_Freq", "EQ 4 freq", "eq"),
   knob("EQ_5_Freq", "EQ 5 freq", "eq"),
-  knob("Gain", "output gain", "voice"),
+  knob("Gain", "output gain", "output"),
   knob("F_Morph", "filter morph", "filter"),
   knob("PM_Feedback", "pm feedback", "osc"),
   knob("U_Width", "unison width", "osc"),
@@ -201,9 +267,9 @@ let targets = [
   knob("Am_Size", "ambience size", "ambience"),
   knob("Am_Time", "ambience time", "ambience"),
   knob("Am_Mix", "ambience mix", "ambience"),
-  knob("Sat_Drive", "dist drive", "filter"),
-  knob("Sat_Tone", "dist tone", "filter"),
-  knob("Sat_Mix", "dist mix", "filter"),
+  knob("Sat_Drive", "dist drive", "distortion"),
+  knob("Sat_Tone", "dist tone", "distortion"),
+  knob("Sat_Mix", "dist mix", "distortion"),
   knob("Ai_Air", "air amount", "air"),
 ]
 
@@ -402,12 +468,21 @@ let targets = {
   [...targets, ...more->Array.filter(t => !(targets->Array.some(o => o.key == t.key)))]
 }
 
+// Targets added after that batch, in the order they came.
+let targets = [
+  ...targets,
+  knob("LFO_3_Rate", "LFO 3 rate", "lfo"),
+  knob("LFO_3_Fade", "LFO 3 fade-in", "lfo"),
+  knob("Wander_Rate", "wander rate", "lfo"),
+]
+
 // The target groups, by the key in each target's group, with their titles.
 let groups = [
-  ("voice", "voice & output"),
+  ("voice", "voice"),
   ("osc", "oscillators"),
   ("filter", "filter"),
   ("lfo", "LFOs"),
+  ("output", "output"),
   ("chorus", "chorus"),
   ("delay", "delay"),
   ("reverb", "reverb"),
@@ -439,16 +514,46 @@ let sourceId = k => `Mod${Int.toString(k)}_Source`
 let targetId = k => `Mod${Int.toString(k)}_Target`
 let amountId = k => `Mod${Int.toString(k)}_Amount`
 let viaId = k => `Mod${Int.toString(k)}_Via`
-let slotIds = k => [sourceId(k), targetId(k), amountId(k), viaId(k)]
+// how the connection holds and smooths its value (PorridgeParams.slotOptionSpecs)
+let holdId = k => `Mod${Int.toString(k)}_Hold`
+let slewId = k => `Mod${Int.toString(k)}_Slew`
+let curveId = k => `Mod${Int.toString(k)}_Curve`
+let slotIds = k => [sourceId(k), targetId(k), amountId(k), viaId(k), holdId(k), slewId(k), curveId(k)]
+
+// A connection's slew (Mod_Slew 0..1) in milliseconds: up to two seconds.
+let slewMs = x => 2000. * x * x
+
+// What a connection's curve does to its source's value (-1..1 or 0..1): bent towards the ends
+// (curve > 0) or towards 0 (curve < 0), the same both ways for a bipolar source. The DSP's
+// modCurve does the same.
+let curved = (x, curve) =>
+  curve == 0.
+    ? x
+    : {
+        let y = Math.pow(Math.abs(x), ~exp=Math.pow(4., ~exp=-.curve))
+        x < 0. ? -.y : y
+      }
 
 // What slot k holds, by source and target index (0 is none), read with get.
-type slot = {source: int, target: int, amount: float, via: int}
+type slot = {
+  source: int,
+  target: int,
+  amount: float,
+  via: int,
+  // latched at note-on
+  hold: bool,
+  slew: float,
+  curve: float,
+}
 
 let readSlot = (get: string => float, k) => {
   source: Float.toInt(get(sourceId(k))),
   target: Float.toInt(get(targetId(k))),
   amount: get(amountId(k)),
   via: Float.toInt(get(viaId(k))),
+  hold: get(holdId(k)) != 0.,
+  slew: get(slewId(k)),
+  curve: get(curveId(k)),
 }
 
 let isSlotParam = id => String.startsWith(id, "Mod") && String.includes(id, "_")

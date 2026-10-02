@@ -150,6 +150,46 @@ let wave = (ctx: Ctx.t, parent, osc, box) => {
   draw()
 }
 
+// LFO 3's value (-1..1) at a phase (0..1) of its cycle k, for its shape (PorridgeParams.lfo3Shapes);
+// random returns cycle k's random value.
+let lfo3At = (shape, phase, k, random) =>
+  switch shape {
+  | 0 => Math.sin(2. * Math.Constants.pi * phase)
+  | 1 => phase < 0.25 ? 4. * phase : phase < 0.75 ? 2. - 4. * phase : 4. * phase - 4.
+  | 2 => 2. * phase - 1.
+  | 3 => 1. - 2. * phase
+  | 4 => phase < 0.5 ? 1. : -1.
+  | 5 => random(k)
+  | _ =>
+    let t = phase * phase * (3. - 2. * phase)
+    random(k) + (random(k + 1.) - random(k)) * t
+  }
+
+// Two cycles of LFO 3, from its start phase.
+let lfo3 = (ctx: Ctx.t, parent, box) => {
+  let s = svg(parent, box)
+  background(s, box)
+  let mid = s->svgEl("path", [("class", Str("axis"))])
+  let curve = s->svgEl("path", [("class", Str("curve"))])
+  let get = id => ctx.model->ParamModel.get(id)
+  let draw = () => {
+    let shape = Float.toInt(get("LFO_3_Shape"))
+    let start = get("LFO_3_Phase")
+    let (w, h) = (box.w - 6., box.h - 7.)
+    let n = 2 * 64
+    let random = k => 2. * FxDsp.hash(k, 3.) - 1.
+    let points = Array.fromInitializer(~length=n + 1, i => {
+      let p = start + Int.toFloat(i) / Int.toFloat(n) * 2.
+      let v = lfo3At(shape, Float.mod(p, 1.), Math.floor(p), random)
+      (3. + Int.toFloat(i) / Int.toFloat(n) * w, 3. + (0.5 - 0.5 * Float.clamp(v, ~min=-1., ~max=1.)) * h)
+    })
+    curve->setAttribute("d", Str(pathFrom(points)))
+    mid->setAttribute("d", Str(pathFrom([(3., 3. + h / 2.), (3. + w, 3. + h / 2.)])))
+  }
+  ctx.model->ParamModel.listenEach(["LFO_3_Shape", "LFO_3_Phase"], draw)
+  draw()
+}
+
 // Two cycles of an LFO shape.
 let lfo = (ctx: Ctx.t, parent, lfo, box) => {
   let s = svg(parent, box)

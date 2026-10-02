@@ -56,20 +56,54 @@ let macroSpecs = Array.fromInitializer(~length=ModMatrix.macros, i => {
 let sourceNames = ModMatrix.sources->Array.map(s => s.label)
 let targetNames = ModMatrix.targets->Array.map(t => t.label)
 
-let slotSpecs = Array.fromInitializer(~length=ModMatrix.slots, i => {
+// slots first .. last (1-based)
+let slotSpecsFor = (first, last) =>
+  Array.fromInitializer(~length=last - first + 1, i => {
+    let k = first + i
+    let n = Int.toString(k)
+    [
+      {id: ModMatrix.sourceId(k), name: `Mod ${n} source`, kind: Choice({names: sourceNames, init: 0})},
+      {id: ModMatrix.targetId(k), name: `Mod ${n} target`, kind: Choice({names: targetNames, init: 0})},
+      {
+        id: ModMatrix.amountId(k),
+        name: `Mod ${n} amount`,
+        kind: Float({min: -1., max: 1., init: 0., text: signedPercent}),
+      },
+      {id: ModMatrix.viaId(k), name: `Mod ${n} via`, kind: Choice({names: sourceNames, init: 0})},
+    ]
+  })->Array.flat
+
+let slotSpecs = slotSpecsFor(1, ModMatrix.firstSlots)
+
+// The slots that came later, then every slot's options: hold (the value latched when the note
+// starts, so that each note keeps the one it began with), slew (the value eased towards, for a
+// time up to 2 s) and curve (the source bent before the amount: see ModMatrix.curved). Then
+// which note a per-note source follows when it moves something on the whole sound.
+let moreSlotSpecs = slotSpecsFor(ModMatrix.firstSlots + 1, ModMatrix.slots)
+
+let slewText = x => x <= 0. ? "off" : msText(ModMatrix.slewMs(x))
+
+let slotOptionSpecs = Array.fromInitializer(~length=ModMatrix.slots, i => {
   let k = i + 1
   let n = Int.toString(k)
   [
-    {id: ModMatrix.sourceId(k), name: `Mod ${n} source`, kind: Choice({names: sourceNames, init: 0})},
-    {id: ModMatrix.targetId(k), name: `Mod ${n} target`, kind: Choice({names: targetNames, init: 0})},
+    {id: ModMatrix.holdId(k), name: `Mod ${n} hold`, kind: Choice({names: ["free", "latch at note-on"], init: 0})},
+    {id: ModMatrix.slewId(k), name: `Mod ${n} slew`, kind: Float({min: 0., max: 1., init: 0., text: slewText})},
     {
-      id: ModMatrix.amountId(k),
-      name: `Mod ${n} amount`,
-      kind: Float({min: -1., max: 1., init: 0., text: signedPercent}),
+      id: ModMatrix.curveId(k),
+      name: `Mod ${n} curve`,
+      kind: Float({min: -1., max: 1., init: 0., text: x => x == 0. ? "straight" : signedPercent(x)}),
     },
-    {id: ModMatrix.viaId(k), name: `Mod ${n} via`, kind: Choice({names: sourceNames, init: 0})},
   ]
 })->Array.flat
+
+let followSpecs = [
+  {
+    id: "MM_Follow",
+    name: "Mod follows",
+    kind: Choice({names: ["the newest note", "every note, by level"], init: 0}),
+  },
+]
 
 let semitones = x => Float.toFixed(x, ~digits=1) ++ " st"
 
@@ -709,6 +743,26 @@ let oscNoiseSpecs = [1, 2]->Array.flatMap(n => {
 // it, as Synplant's B does.
 let pairMixSpecs = [{id: "O2_PairMix", name: "Osc 2 heard", kind: Float({min: 0., max: 1., init: 0., text: percent})}]
 
+// LFO 3: a plain LFO that only the modulation matrix reaches. In each note (each voice its own,
+// from the note's start) or shared by every voice (restarted by each note, or running free),
+// at a rate in Hz or a length in beats, from a phase of its own, faded in after a delay. The
+// wander source's rate goes with it.
+let lfo3Shapes = ["sine", "triangle", "saw up", "saw down", "square", "sample & hold", "smooth random"]
+let lfo3Syncs = ["free", "4 bars", "2 bars", "1 bar", "1/2", "1/2 T", "1/4", "1/4 T", "1/8", "1/8 T", "1/16", "1/16 T", "1/32"]
+let lfoModes = ["each note", "shared, reset on note", "shared, free"]
+
+let lfo3Specs = [
+  {id: "LFO_3_Shape", name: "LFO 3 shape", kind: Choice({names: lfo3Shapes, init: 0})},
+  {id: "LFO_3_Mode", name: "LFO 3 mode", kind: Choice({names: lfoModes, init: 0})},
+  {id: "LFO_3_Rate", name: "LFO 3 rate", kind: expKnob(~lo=0.02, ~hi=50., ~init=2., ~text=fixedUnit(2, "Hz"))},
+  {id: "LFO_3_Sync", name: "LFO 3 sync", kind: Choice({names: lfo3Syncs, init: 0})},
+  {id: "LFO_3_Phase", name: "LFO 3 phase", kind: Float({min: 0., max: 1., init: 0., text: x => degreesText(x * 360.)})},
+  {id: "LFO_3_PhaseRand", name: "LFO 3 random phase", kind: Float({min: 0., max: 1., init: 0., text: percent})},
+  {id: "LFO_3_Delay", name: "LFO 3 delay", kind: Float({min: 0., max: 5000., init: 0., text: fixedUnit(0, "ms")})},
+  {id: "LFO_3_Fade", name: "LFO 3 fade-in", kind: Float({min: 0., max: 5000., init: 0., text: fixedUnit(0, "ms")})},
+  {id: "Wander_Rate", name: "Wander rate", kind: expKnob(~lo=0.02, ~hi=10., ~init=0.5, ~text=fixedUnit(2, "Hz"))},
+]
+
 type feature =
   | Macros
   | Modulations
@@ -735,6 +789,8 @@ type feature =
   | KeyEq
   | OscNoise
   | PairMix
+  | MoreModulations
+  | Lfo3
 
 let groups = [
   (Macros, macroSpecs),
@@ -763,6 +819,8 @@ let groups = [
   (KeyEq, keyEqSpecs),
   (OscNoise, oscNoiseSpecs),
   (PairMix, pairMixSpecs),
+  (MoreModulations, Array.concat(moreSlotSpecs, Array.concat(slotOptionSpecs, followSpecs))),
+  (Lfo3, lfo3Specs),
 ]
 
 let all = groups->Array.flatMap(((_, specs)) => specs)

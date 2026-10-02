@@ -39,6 +39,9 @@ ui/                     patch view (ReScript)
   Index.res               entry point; View.res builds the pages
   Preset.res              Porridge's preset format; PorridgeParams.res and ModMatrix.res
                           list the parameters and modulation sources/targets Oatmeal doesn't have
+                          (32 connections, each with hold, slew and curve); ModScope.res says
+                          which sources each note has its own of and which targets are in the
+                          voice or on the whole sound, for PageMod.res (the Mod page)
   PresetBrowser.res       the preset browser; Library.res searches and filters for it, and
                           BankLibrary.res asks the plugin for the banks it keeps
   random/                 random patches: RandomDrawer.res (the drawer: the wildness knobs,
@@ -94,7 +97,9 @@ tools/
                           banklibrary.cpp (the plugin's bank library on real files), oneshot.mjs (one-shot LFOs hold their
                           end), levels.mjs (the Vanilla bank's gains, levels and motion),
                           random.mjs (random patches: sound values, the wildness knobs, the
-                          locks, varying the banks, and their levels); lib.mjs has what they
+                          locks, varying the banks, and their levels), modulation.mjs (the
+                          matrix's hold, slew, curve, later sources and slots, and what
+                          per-note sources follow on the whole sound); lib.mjs has what they
                           share
   vanilla-bank.mjs        builds presets/vanilla.porridge
   re/                     comparisons against Oatmeal.dll (32-bit Python) and data checks

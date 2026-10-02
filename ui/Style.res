@@ -294,6 +294,17 @@ let css = `
 .hdr .tg { height: 18px; font-size: 11.5px; }
 .hdr .tg b { width: 9px; height: 9px; border-width: 1px; box-shadow: none; }
 
+/* two halves, one of them on (an LFO's mode: each note or shared), in a parameter's footprint */
+.seg {
+    position: absolute; box-sizing: border-box; height: ${px(controlHeight)}; display: flex; overflow: hidden;
+    border-radius: 2px; background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge); font-size: 12px;
+}
+.seg span { flex: 1 1 50%; display: flex; align-items: center; justify-content: center; cursor: pointer;
+    color: var(--ink-soft); white-space: nowrap; overflow: hidden; }
+.seg span:hover { background: var(--panel-hi); color: var(--ink); }
+.seg span.on { background: var(--signal); color: var(--paper); }
+.seg:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
+
 .btn {
     position: absolute; height: 20px; box-sizing: border-box; padding: 0 8px;
     border: 1px solid var(--edge); border-radius: 2px; background: var(--panel-hi);
@@ -548,6 +559,28 @@ let css = `
 .wire { fill: none; stroke-width: 3.5; stroke-linecap: round; opacity: 0.9; }
 .wire.muted { stroke-dasharray: 5 4; opacity: 0.5; }
 .wire.drag { stroke-dasharray: 7 4; }
+/* the connections scroll between the title and the follow setting */
+.mrows { position: absolute; overflow-x: hidden; overflow-y: auto; }
+.mfoot { position: absolute; border-top: 1px solid var(--tile-edge); }
+.mfoot .note { position: absolute; font-size: 11.5px; line-height: 14px; white-space: normal; }
+/* what a per-note source on the whole sound follows, under its cable */
+.mfollow { position: absolute; height: 10px; font-size: 9.5px; line-height: 10px; text-align: center;
+    color: var(--ink-faint); white-space: nowrap; pointer-events: none; z-index: 2; }
+/* a connection's options button, and its box */
+.mopt { position: absolute; box-sizing: border-box; height: ${px(controlHeight)}; border-radius: 2px;
+    background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge); cursor: pointer;
+    font-size: 11.5px; line-height: ${px(controlHeight)}; text-align: center; color: var(--ink-faint);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 4px; }
+.mopt.set { color: var(--ink); font-weight: 700; }
+.mopt:hover, .mopt:focus-visible { background: var(--panel-hi); box-shadow: inset 0 0 0 1px var(--edge); }
+.mpop { position: absolute; display: none; z-index: 25; box-sizing: border-box; background: var(--panel);
+    border: 1px solid var(--signal); border-radius: 2px; box-shadow: 3px 3px 0 rgba(31,26,14,0.3); }
+.mpop.on { display: block; }
+.mpop > .ttl { position: absolute; left: 6px; right: 6px; top: 3px; font-size: 12px; font-weight: 700;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* the target picker's two sections: in each voice, on the whole sound */
+.psect { position: absolute; font-size: 12.5px; font-weight: 700; line-height: 20px; color: var(--ink);
+    white-space: nowrap; text-transform: uppercase; letter-spacing: 0.06em; }
 .conn { position: absolute; left: 0; display: none; }
 .conn.on { display: block; }
 .conn .btn.gc { font-size: 17px; line-height: 22px; color: var(--ink-soft); }

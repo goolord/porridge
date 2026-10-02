@@ -405,6 +405,62 @@ let toggle = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=?, ~label=?) => {
   bind(c, update)
 }
 
+// An LFO's mode (LFO_n_Sync, LFO_3_Mode: each note 0, shared and restarted by each note 1,
+// shared and free 2) as two halves: each note, or shared. Clicking shared again switches
+// between restarting with each note and running free.
+let lfoMode = (ctx: Ctx.t, parent, id, ~x, ~y, ~w) => {
+  let model = ctx.model
+  let def = model->ParamModel.def(id)
+  let e = el("div", ~cls="seg", ~parent)->place(x, y, ~w)
+  e->setTabIndex(0)
+  let each = el("span", ~text="each note", ~parent=e)
+  let shared = el("span", ~parent=e)
+  let c = {
+    ctx,
+    id,
+    def,
+    status: ctx.status->Status.live(e, () =>
+      switch model->ParamModel.get(id) {
+      | 0. => "Each note has its own: it starts with the note. Click shared for one that every note follows."
+      | 1. => "Shared by every note, restarted by each new one. Click again to let it run free; click each note for one per note."
+      | _ => "Shared by every note, running free. Click again to restart it with each note; click each note for one per note."
+      }
+    ),
+  }
+  hookHostMenu(c, e)
+  let set = x => gestureSet(c, x)
+  let update = () => {
+    let x = current(c)
+    each->toggleClass("on", x == 0.)
+    shared->toggleClass("on", x != 0.)
+    shared->setTextContent(x == 0. ? "shared" : x == 1. ? "shared, reset" : "shared, free")
+    refreshStatus(c)
+  }
+  each->onPointer(#pointerdown, ev => {
+    ev->preventDefault
+    if ev->button == 0 {
+      set(0.)
+    }
+  })
+  shared->onPointer(#pointerdown, ev => {
+    ev->preventDefault
+    if ev->button == 0 {
+      set(current(c) == 1. ? 2. : 1.)
+    }
+  })
+  e->suppressContextMenu
+  e->onKeyDown(ev =>
+    switch ev->key {
+    | "ArrowLeft" => set(0.)
+    | "ArrowRight" | " " | "Enter" =>
+      ev->preventDefault
+      set(current(c) == 1. ? 2. : 1.)
+    | _ => ()
+    }
+  )
+  bind(c, update)
+}
+
 // (an icon goes in front of the text)
 let button = (ctx: Ctx.t, parent, text, ~x, ~y, ~w, ~h=?, ~cls="", ~icon=?, ~status=?, onClick) => {
   let cls = cls == "" ? "btn" : "btn " ++ cls

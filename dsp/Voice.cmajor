@@ -55,6 +55,18 @@ namespace porridge
         Drift[2 * maxUnison + 1] drift;
 
         KeyEq keq;                      // the key EQ (KEQ_On)
+
+        // modulation matrix: each connection's (by slot) value latched at note-on and whether it
+        // has been yet, and its slewed value and whether that has started
+        float[mods::numSlots] latchVal, slewVal;
+        bool[mods::numSlots] latched, slewing;
+
+        // more sources: LFO 3 (each note) and its value, the interval from the note before,
+        // alternate (+-1) and cycle (0..1 over four notes), the voice's level (its follower and
+        // the source, 0..1), wander's drift, and its value
+        Lfo3 lfo3;
+        float lfo3Raw, interval, alternate, cycle, levelFollow, level, wanderValue;
+        Drift wander;
     }
 
     let keyEqBands = 8;

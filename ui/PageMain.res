@@ -94,7 +94,7 @@ let lfo = (ctx: Ctx.t, body, n, box: box) => {
   drawButton(ctx, body, box, ~status=`Draw LFO ${lfo}'s user shape`, n == 1 ? LfoShape1 : LfoShape2)
   let g = Grid.make(ctx, body, ~x=box.x + box.w + 10.)
   g->Grid.choice(prefix ++ "Shape", 0, 0, "shape")
-  g->Grid.choice(prefix ++ "Sync", 1, 0, "mode", ~span=2)
+  g->Grid.at(1, 0, ~span=2, prefix ++ "Sync", b => Controls.lfoMode(ctx, body, prefix ++ "Sync", ~x=b.x, ~y=b.y, ~w=b.w))
   g->Grid.choice(prefix ++ "Unit", 0, 1, "unit")
   g->Grid.param(prefix ++ "Speed", 1, 1, "rate")
   g->Grid.toggle(prefix ++ "Quantize", 2, 1, "quantize")
@@ -109,6 +109,28 @@ let lfo = (ctx: Ctx.t, body, n, box: box) => {
   g->Grid.param(prefix ++ "Slew", 2, 4, "slew")
   g->Grid.choice(prefix ++ "Steps", 0, 5, "s&h steps")
   g->Grid.toggle(prefix ++ "OneShot", 1, 5, "one-shot")
+}
+
+// LFO 3, which only the modulation matrix reaches, and the wander source's rate.
+let lfo3 = (ctx: Ctx.t, body, box: box) => {
+  Plots.lfo3(ctx, body, box)
+  let g = Grid.make(ctx, body, ~x=box.x + box.w + 10.)
+  g->Grid.choice("LFO_3_Shape", 0, 0, "shape")
+  g->Grid.at(1, 0, ~span=2, "LFO_3_Mode", b => Controls.lfoMode(ctx, body, "LFO_3_Mode", ~x=b.x, ~y=b.y, ~w=b.w))
+  g->Grid.choice("LFO_3_Sync", 0, 1, "sync")
+  // (the rate is the sync's when it has one)
+  let rate = g->Grid.at(1, 1, "LFO_3_Rate", b =>
+    Controls.paramControl(ctx, body, "LFO_3_Rate", ~x=b.x, ~y=b.y, ~w=b.w, ~label="rate")
+  )
+  g->Grid.param("LFO_3_Phase", 0, 2, "phase")
+  g->Grid.param("LFO_3_PhaseRand", 1, 2, "random phase")
+  g->Grid.param("LFO_3_Delay", 0, 3, "delay")
+  g->Grid.param("LFO_3_Fade", 1, 3, "fade in")
+  g->Grid.param("Wander_Rate", 0, 4, "wander rate")
+  g->Grid.note("LFO 3 and wander move things through the Mod page's connections.", 1, 4, ~span=2, ~rows=2)->ignore
+  let dim = () => rate->toggleClass("dim", ctx.model->ParamModel.get("LFO_3_Sync") != 0.)
+  ctx.model->ParamModel.listen("LFO_3_Sync", dim)
+  dim()
 }
 
 // Microtuning: a Scala scale (and keyboard mapping) instead of the 12 notes above it.
@@ -366,7 +388,7 @@ let build = (ctx: Ctx.t, page) => {
   // modulation
   let modulation = Panel.make(
     page,
-    ~tabs=["mod env 1", "mod env 2", "pitch env", "lfo 1", "lfo 2"],
+    ~tabs=["mod env 1", "mod env 2", "pitch env", "lfo 1", "lfo 2", "lfo 3"],
     ~x=x0,
     ~y=y1,
     ~w=2. * columnWidth + gap,
@@ -398,6 +420,7 @@ let build = (ctx: Ctx.t, page) => {
 
   lfo(ctx, modulation->Panel.body(3), 1, graph)
   lfo(ctx, modulation->Panel.body(4), 2, graph)
+  lfo3(ctx, modulation->Panel.body(5), graph)
 
   //==============================================================================
   // voice
