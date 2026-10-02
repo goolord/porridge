@@ -18,6 +18,14 @@ let modText = (ctx: Ctx.t, get) => {
     | Some(m) => ModEdit.macroName(ctx.programs, m)
     | None => s.label
     }
+  // a connection's target, with the source that scales it as PatchGen writes it: "cutoff (sweep)"
+  let label = (r: Modulators.route) =>
+    switch r.via {
+    | Connection(k) =>
+      let via = ModMatrix.readSlot(get, k).via
+      via == 0 ? r.label : `${r.label} (${ModMatrix.sources[via]->Option.mapOr("", s => name(s, via))})`
+    | _ => r.label
+    }
   let parts = ModMatrix.sources->Array.filterMapWithIndex((s, i) => {
     // (each target once: an LFO can reach the cutoff by its own depth and by a connection)
     let targets =
@@ -25,7 +33,8 @@ let modText = (ctx: Ctx.t, get) => {
         ? []
         : Modulators.from(get, s.key)
           ->Array.filter(r => get(r.amount) != 0. && !(r.via == Depth && filterOwn->Array.includes(s.key)))
-          ->Array.reduce([], (seen, r) => seen->Array.includes(r.label) ? seen : [...seen, r.label])
+          ->Array.map(label)
+          ->Array.reduce([], (seen, l) => seen->Array.includes(l) ? seen : [...seen, l])
     targets == [] ? None : Some(`${name(s, i)} > ${targets->Array.join(", ")}`)
   })
   parts == [] ? "none" : parts->Array.join("; ")
