@@ -446,15 +446,16 @@ let choice = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=76., ~label=?, ~names=?) => {
   let (c, e) = frame(ctx, parent, id, ~cls="p ch", ~x, ~y, ~w, ~label?, ~labelCls="l")
   let menuNames = namesOf(c.def)
   let names = names->Option.orElse(c.def.shortNames)->Option.getOr(menuNames)
-  let withIcons = Icons.has(id)
-  let v = el("span", ~cls=withIcons ? "v withicon" : "v", ~parent=e)
-  let icon = value => Icons.forValue(id, value, menuNames[value]->Option.getOr(""))
+  let icons = Icons.forList(c.def.list)
+  let v = el("span", ~cls=icons != None ? "v withicon" : "v", ~parent=e)
+  let icon = value =>
+    icons->Option.flatMap(find => Icons.forValue(find, value, menuNames[value]->Option.getOr("")))
 
   let update = () => {
     let x = current(c)
     let i = Float.toInt(x)
     let text = names[i]->Option.getOr(Float.toString(x))
-    switch withIcons ? icon(i) : None {
+    switch icon(i) {
     | Some((mark, _)) =>
       // the short name, less what the icon shows (e.g. "HQ")
       let text = String.endsWith(text, " HQ") ? String.slice(text, ~start=0, ~end=String.length(text) - 3) : text
@@ -466,17 +467,12 @@ let choice = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=76., ~label=?, ~names=?) => {
     refreshStatus(c)
   }
 
-  // the filter types' and distortion types' menus show their groups (the distortion's in an
-  // order of their own)
-  let isFilterType = id == "Filter" || id == "Filter2" || FilterTypes.isFxType(id)
-  let order: array<(int, option<string>)> =
-    DistTypes.isTypeId(id)
-      ? DistTypes.order->Array.filter(((value, _)) => value < Array.length(menuNames))
-      : menuNames->Array.mapWithIndex((_, value) => (value, isFilterType && value > 0 ? FilterTypes.heading(value) : None))
+  // (the filter types' and distortion types' menus show their groups)
+  let order = ValueList.menu(c.def.list, Array.length(menuNames))
   let step = listInput(ctx, e, id, ~items=() =>
     order->Array.map(((value, heading)) => {
       let label = menuNames[value]->Option.getOr("")
-      switch withIcons ? icon(value) : None {
+      switch icon(value) {
       | Some((icon, label)) => {Menu.label, value, icon, ?heading}
       | None => {Menu.label, value, ?heading}
       }

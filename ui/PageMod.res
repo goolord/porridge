@@ -61,9 +61,8 @@ let sourceGroups = {
   rest == [] ? grouped : [...grouped, ("other", rest)]
 }
 
-let keyOf = s => ModMatrix.sources[s]->Option.mapOr("", s => s.key)
-let isMacro = s => String.startsWith(keyOf(s), "macro")
-let isController = s => String.startsWith(keyOf(s), "cc")
+let isMacro = s => ModEdit.macroOf(s) != None
+let isController = ModEdit.isController
 
 let effectOf = ModScope.effectOf
 let copyOf = ModScope.copyOf
@@ -95,7 +94,7 @@ let build = (ctx: Ctx.t, page) => {
   let redraw = ref(() => ())
 
   let macroName = ModEdit.macroName(ctx.programs, _)
-  let macroOf = s => isMacro(s) ? Some(s - ModMatrix.sourceIndex("macro1")) : None
+  let macroOf = ModEdit.macroOf
   let sourceLabel = s =>
     switch (macroOf(s), ModMatrix.sources[s]) {
     | (Some(i), _) => macroName(i)

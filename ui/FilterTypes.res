@@ -1,6 +1,8 @@
 // The filter types: Oatmeal's 16, then Porridge's (long names for menus and the status bar,
 // compact names for the narrow value fields). The voice filters (Filter, Filter2) and the
 // rack's filter (Ff_Type) share the list; dsp/Filter.cmajor runs them.
+//
+// Values are append only (presets and hosts keep the number).
 
 let oatmeal = [
   "off",
@@ -40,64 +42,101 @@ let oatmealShort = [
   "phaser 36",
 ]
 
-// Porridge's types, from 16 on: (long, short, the nearest Oatmeal type for an export)
+// The type menu's groups, in the order of their first types; a heading starts each.
+type group = Oatmeal | ZeroDelay | Normal | Multi | Analog | Combs | Vowels | Misc
+
+let groupTitle = group =>
+  switch group {
+  | Oatmeal => "Oatmeal"
+  | ZeroDelay => "zero-delay feedback"
+  | Normal => "normal"
+  | Multi => "multi (morph)"
+  | Analog => "analog"
+  | Combs => "effects: comb, flanger, phaser"
+  | Vowels => "effects: vowels"
+  | Misc => "effects: EQ, ring mod, S&H, space"
+  }
+
+type info = {
+  name: string,
+  short: string,
+  // the nearest of Oatmeal's types, for an export (one of Oatmeal's is itself)
+  oat: int,
+  group: group,
+  // whether the drive (F_Drive, Ff_Drive) drives it: the analog types
+  drive: bool,
+  // what the morph knob (F_Morph, Ff_Morph) does for it, if anything
+  morph: option<string>,
+}
+
+let lowBandHigh = Some("lowpass › bandpass › highpass")
+let vowels = Some("vowel A › E › I › O › U")
+
+// Porridge's types, from 16 on.
 let porridge = [
-  ("SVF LP > BP > HP", "SVF morph", 2),
-  ("ladder", "ladder", 3),
-  ("diode ladder", "diode", 3),
-  ("Sallen-Key", "Sallen-Key", 2),
-  ("comb", "comb", 0),
-  ("formant", "formant", 9),
-  // normal
-  ("bandpass 12 dB", "BP 12", 8),
-  ("bandpass 24 dB", "BP 24", 9),
-  ("peak 12 dB", "peak 12", 8),
-  ("peak 24 dB", "peak 24", 9),
-  ("notch 12 dB", "notch 12", 10),
-  ("notch 24 dB", "notch 24", 10),
-  // multi: morphing
-  ("L/B/H 24 (morph)", "L/B/H 24", 3),
-  ("L/N/H (morph)", "L/N/H", 10),
-  ("B/P/B (morph)", "B/P/B", 8),
-  ("N/P/N (morph)", "N/P/N", 10),
-  // analog
-  ("MG low 6", "MG 6", 1),
-  ("MG low 12", "MG 12", 2),
-  ("MG low 18", "MG 18", 3),
-  ("MG low 24", "MG 24", 3),
-  ("MG dirty", "MG dirty", 12),
-  ("acid ladder", "acid", 12),
-  ("French LP", "French LP", 11),
-  ("German LP", "German LP", 11),
-  ("clean drive", "clean drive", 2),
-  ("PZ SVF", "PZ SVF", 2),
-  // combs, flanges, phase
-  ("comb +", "comb +", 0),
-  ("comb −", "comb −", 0),
-  ("flanger", "flanger", 0),
-  ("flanger +", "flanger +", 0),
-  ("flanger −", "flanger −", 0),
-  ("phaser", "phaser", 13),
-  ("phaser +", "phaser +", 13),
-  ("phaser −", "phaser −", 13),
-  // vowels
-  ("formant I", "formant I", 9),
-  ("formant II", "formant II", 9),
-  ("formant III", "formant III", 9),
-  // misc
-  ("low EQ", "low EQ", 0),
-  ("band EQ", "band EQ", 0),
-  ("high EQ", "high EQ", 0),
-  ("ring mod", "ring mod", 0),
-  ("sample & hold", "S&H", 0),
-  ("diffusor", "diffusor", 0),
-  ("reverb", "reverb", 0),
+  {name: "SVF LP > BP > HP", short: "SVF morph", oat: 2, group: ZeroDelay, drive: false, morph: lowBandHigh},
+  {name: "ladder", short: "ladder", oat: 3, group: ZeroDelay, drive: false, morph: None},
+  {name: "diode ladder", short: "diode", oat: 3, group: ZeroDelay, drive: false, morph: None},
+  {name: "Sallen-Key", short: "Sallen-Key", oat: 2, group: ZeroDelay, drive: false, morph: None},
+  {name: "comb", short: "comb", oat: 0, group: ZeroDelay, drive: false, morph: Some("feedback + › none › −")},
+  {name: "formant", short: "formant", oat: 9, group: ZeroDelay, drive: false, morph: vowels},
+  {name: "bandpass 12 dB", short: "BP 12", oat: 8, group: Normal, drive: false, morph: None},
+  {name: "bandpass 24 dB", short: "BP 24", oat: 9, group: Normal, drive: false, morph: None},
+  {name: "peak 12 dB", short: "peak 12", oat: 8, group: Normal, drive: false, morph: None},
+  {name: "peak 24 dB", short: "peak 24", oat: 9, group: Normal, drive: false, morph: None},
+  {name: "notch 12 dB", short: "notch 12", oat: 10, group: Normal, drive: false, morph: None},
+  {name: "notch 24 dB", short: "notch 24", oat: 10, group: Normal, drive: false, morph: None},
+  {name: "L/B/H 24 (morph)", short: "L/B/H 24", oat: 3, group: Multi, drive: false, morph: lowBandHigh},
+  {name: "L/N/H (morph)", short: "L/N/H", oat: 10, group: Multi, drive: false, morph: Some("lowpass › notch › highpass")},
+  {name: "B/P/B (morph)", short: "B/P/B", oat: 8, group: Multi, drive: false, morph: Some("bandpass › peak › bandpass")},
+  {name: "N/P/N (morph)", short: "N/P/N", oat: 10, group: Multi, drive: false, morph: Some("notch › peak › notch")},
+  {name: "MG low 6", short: "MG 6", oat: 1, group: Analog, drive: true, morph: None},
+  {name: "MG low 12", short: "MG 12", oat: 2, group: Analog, drive: true, morph: None},
+  {name: "MG low 18", short: "MG 18", oat: 3, group: Analog, drive: true, morph: None},
+  {name: "MG low 24", short: "MG 24", oat: 3, group: Analog, drive: true, morph: None},
+  {name: "MG dirty", short: "MG dirty", oat: 12, group: Analog, drive: true, morph: None},
+  {name: "acid ladder", short: "acid", oat: 12, group: Analog, drive: true, morph: Some("resonance squash")},
+  {name: "French LP", short: "French LP", oat: 11, group: Analog, drive: true, morph: lowBandHigh},
+  {name: "German LP", short: "German LP", oat: 11, group: Analog, drive: true, morph: None},
+  {name: "clean drive", short: "clean drive", oat: 2, group: Analog, drive: true, morph: lowBandHigh},
+  {name: "PZ SVF", short: "PZ SVF", oat: 2, group: Analog, drive: true, morph: lowBandHigh},
+  {name: "comb +", short: "comb +", oat: 0, group: Combs, drive: false, morph: Some("damping in the loop")},
+  {name: "comb −", short: "comb −", oat: 0, group: Combs, drive: false, morph: Some("damping in the loop")},
+  {name: "flanger", short: "flanger", oat: 0, group: Combs, drive: false, morph: Some("notched › delayed only")},
+  {name: "flanger +", short: "flanger +", oat: 0, group: Combs, drive: false, morph: Some("notched › delayed only")},
+  {name: "flanger −", short: "flanger −", oat: 0, group: Combs, drive: false, morph: Some("notched › delayed only")},
+  {name: "phaser", short: "phaser", oat: 13, group: Combs, drive: false, morph: Some("stage spread")},
+  {name: "phaser +", short: "phaser +", oat: 13, group: Combs, drive: false, morph: Some("stage spread")},
+  {name: "phaser −", short: "phaser −", oat: 13, group: Combs, drive: false, morph: Some("stage spread")},
+  {name: "formant I", short: "formant I", oat: 9, group: Vowels, drive: false, morph: vowels},
+  {name: "formant II", short: "formant II", oat: 9, group: Vowels, drive: false, morph: vowels},
+  {name: "formant III", short: "formant III", oat: 9, group: Vowels, drive: false, morph: vowels},
+  {name: "low EQ", short: "low EQ", oat: 0, group: Misc, drive: false, morph: Some("boost › cut")},
+  {name: "band EQ", short: "band EQ", oat: 0, group: Misc, drive: false, morph: Some("boost › cut")},
+  {name: "high EQ", short: "high EQ", oat: 0, group: Misc, drive: false, morph: Some("boost › cut")},
+  {name: "ring mod", short: "ring mod", oat: 0, group: Misc, drive: false, morph: Some("sine › square carrier")},
+  {name: "sample & hold", short: "S&H", oat: 0, group: Misc, drive: false, morph: Some("smoothing")},
+  {name: "diffusor", short: "diffusor", oat: 0, group: Misc, drive: false, morph: Some("wet › dry")},
+  {name: "reverb", short: "reverb", oat: 0, group: Misc, drive: false, morph: Some("wet › dry")},
 ]
 
-let porridgeNames = porridge->Array.map(((long, _, _)) => long)
-let porridgeShort = porridge->Array.map(((_, short, _)) => short)
+// Every type, Oatmeal's first.
+let types = Array.concat(
+  oatmeal->Array.mapWithIndex((name, t) => {
+    name,
+    short: oatmealShort->Array.getUnsafe(t),
+    oat: t,
+    group: Oatmeal,
+    drive: false,
+    morph: None,
+  }),
+  porridge,
+)
 
-let all = Array.concat(oatmeal, porridgeNames)
+let porridgeNames = porridge->Array.map(i => i.name)
+let porridgeShort = porridge->Array.map(i => i.short)
+
+let all = types->Array.map(i => i.name)
 
 let firstPorridge = Array.length(oatmeal)
 
@@ -109,8 +148,7 @@ let cutoffOfHz = (~filterType, hz: float) =>
   Math.cbrt(Math.max(0., Math.min(1., (hz - 20.) / cutoffRange(filterType))))
 
 // The closest type Oatmeal has, for an export.
-let oatmealType = t =>
-  t < firstPorridge ? t : porridge[t - firstPorridge]->Option.mapOr(0, ((_, _, oat)) => oat)
+let oatmealType = t => types[t]->Option.mapOr(0, i => i.oat)
 
 // The index of a type by its long name (which must exist).
 let index = name =>
@@ -119,59 +157,13 @@ let index = name =>
   | i => i
   }
 
-// The groups of the type menu, by the first type of each: their titles.
-let groups = [
-  (0, "Oatmeal"),
-  (16, "zero-delay feedback"),
-  (22, "normal"),
-  (28, "multi (morph)"),
-  (32, "analog"),
-  (42, "effects: comb, flanger, phaser"),
-  (50, "effects: vowels"),
-  (53, "effects: EQ, ring mod, S&H, space"),
-]
+let hasDrive = t => types[t]->Option.mapOr(false, i => i.drive)
 
-// Types that F_Drive / Ff_Drive drives: the analog ones.
-let hasDrive = t => t >= 32 && t <= 41
-
-// What the morph knob (F_Morph, Ff_Morph) does for a type, if anything.
-let morphText = t =>
-  if t == 16 || t == 28 {
-    Some("lowpass › bandpass › highpass")
-  } else if t == 29 {
-    Some("lowpass › notch › highpass")
-  } else if t == 30 {
-    Some("bandpass › peak › bandpass")
-  } else if t == 31 {
-    Some("notch › peak › notch")
-  } else if t == 20 {
-    Some("feedback + › none › −")
-  } else if t == 21 || t >= 50 && t <= 52 {
-    Some("vowel A › E › I › O › U")
-  } else if t == 37 {
-    Some("resonance squash")
-  } else if t == 38 || t == 40 || t == 41 {
-    Some("lowpass › bandpass › highpass")
-  } else if t == 42 || t == 43 {
-    Some("damping in the loop")
-  } else if t >= 44 && t <= 46 {
-    Some("notched › delayed only")
-  } else if t >= 47 && t <= 49 {
-    Some("stage spread")
-  } else if t >= 53 && t <= 55 {
-    Some("boost › cut")
-  } else if t == 56 {
-    Some("sine › square carrier")
-  } else if t == 57 {
-    Some("smoothing")
-  } else if t == 58 || t == 59 {
-    Some("wet › dry")
-  } else {
-    None
-  }
-
-// The rack filter's type parameters (Ff_Type, Ff2_Type ...).
-let isFxType = id => String.startsWith(id, "Ff") && String.endsWith(id, "_Type")
-
+let morphText = t => types[t]->Option.flatMap(i => i.morph)
 // The heading the type menu shows above type t, where a group starts.
-let heading = t => groups->Array.find(((first, _)) => first == t)->Option.map(((_, title)) => title)
+let heading = t =>
+  switch (types[t], types[t - 1]) {
+  | (Some(i), Some(before)) if i.group == before.group => None
+  | (Some(i), _) => Some(groupTitle(i.group))
+  | (None, _) => None
+  }

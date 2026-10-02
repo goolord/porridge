@@ -1,8 +1,8 @@
 // Small inline icons for list values (waveforms, filter types, voice modes, ...) and the arp
 // step commands, drawn as strokes in the current text colour.
 //
-// An icon is drawn on a grid 16 units tall; it is looked up by parameter id and value index
-// (or name, where a list grows), and a value without one simply has none.
+// An icon is drawn on a grid 16 units tall; it is looked up by value list (ValueList) and value
+// index (or name, where a list grows), and a value without one simply has none.
 
 open! Web
 
@@ -348,46 +348,42 @@ let filterDouble = [
 
 let byIndex = icons => (index, _) => icons[index]
 
-// The parameters with icons, and how each finds the icon of a value from its index and its
-// lower-case name (less " hq").
-let lookup = id =>
-  switch id {
-  | "O1_Waveform" | "O2_Waveform" | "LFO_1_Shape" | "LFO_2_Shape" =>
-    Some((_, name) => waveformByName(name))
-  | "Filter" => Some(filterTypes->byIndex)
-  | id if FilterTypes.isFxType(id) => Some(filterTypes->byIndex)
-  | "Filter2" => Some((index, _) => index == 0 ? Some(sameAsFilter1) : filterTypes[index])
-  | "PolyMode" => Some(voiceModes->byIndex)
-  | "OscMix" => Some(oscMix->byIndex)
-  | id if DistTypes.isTypeId(id) => Some(distortion->byIndex)
-  | "Arp_Mode" => Some(arpModes->byIndex)
-  | "F_Double" => Some(filterDouble->byIndex)
-  | "C_Mode" =>
-    Some(
-      (_, name) =>
-        switch name {
-        | "off" => Some(flat)
-        | "sine" => Some(sine)
-        | "ramp" => Some(saw)
-        | "fm" => Some(fmWave)
-        | "irregular" => Some(smoothRandom)
-        | _ => None
-        },
-    )
+let chorusModeByName = name =>
+  switch name {
+  | "off" => Some(flat)
+  | "sine" => Some(sine)
+  | "ramp" => Some(saw)
+  | "fm" => Some(fmWave)
+  | "irregular" => Some(smoothRandom)
   | _ => None
   }
 
-// Whether any value of the parameter has an icon.
-let has = id => lookup(id)->Option.isSome
+// The value lists with icons, and how each finds the icon of a value from its index and its
+// lower-case name (less " hq").
+let ofList = (list: ValueList.t) =>
+  switch list {
+  | Waveform | LfoShape => Some((_, name) => waveformByName(name))
+  | FilterType | FxFilterType => Some(filterTypes->byIndex)
+  | Filter2Type => Some((index, _) => index == 0 ? Some(sameAsFilter1) : filterTypes[index])
+  | FilterDouble => Some(filterDouble->byIndex)
+  | DistType => Some(distortion->byIndex)
+  | VoiceMode => Some(voiceModes->byIndex)
+  | OscMix => Some(oscMix->byIndex)
+  | ArpMode => Some(arpModes->byIndex)
+  | ChorusMode => Some((_, name) => chorusModeByName(name))
+  | DistMode | TouchMode | GlideMode | DelayReverse => None
+  }
 
-// The icon for value `index` (named `name`) of a list parameter, and the text to show beside
-// it (the name, less anything the icon shows).
-let forValue = (id, index, name) => {
+// How a parameter's values find their icons, if they have any.
+let forList = (list: option<ValueList.t>) => list->Option.flatMap(ofList)
+
+// The icon for value `index` (named `name`) of a list (as forList finds it), and the text to
+// show beside it (the name, less anything the icon shows).
+let forValue = (find, index, name) => {
   let lower = String.toLowerCase(name)
   let hq = String.endsWith(lower, " hq")
   let base = hq ? String.slice(lower, ~start=0, ~end=String.length(lower) - 3) : lower
-  lookup(id)
-  ->Option.flatMap(find => find(index, base))
+  find(index, base)
   ->Option.map(icon => {
     let wrap = el("span", ~cls="icw")
     wrap->appendChild(render(icon))
