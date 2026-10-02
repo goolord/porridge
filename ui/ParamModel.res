@@ -1,5 +1,34 @@
 // Parameter model: the single source of truth for the view. Values are internal
 // (preset-struct) values; the patch's endpoints use the same units.
+//
+// It also keeps the undo history. Every edit through set is recorded; what one gesture does
+// (a drag between beginGesture and endGesture, or everything a click sets at once) is one step.
+// The program store adds steps of its own (record: loading a program, init, a rename...).
+// Values that arrive from the patch (the host's automation, a loaded state) and whole programs
+// pushed with setAll are not edits, and are not recorded.
+
+// One thing a step changed: a parameter, or something else that knows how to go back and forth.
+type change = Param({id: string, before: float, mutable after: float}) | Action({undo: unit => unit, redo: unit => unit})
+
+type step = {mutable label: string, changes: array<change>, mutable at: float}
+
+type history = {
+  mutable undo: array<step>,
+  mutable redo: array<step>,
+  // the step being made: it ends once no gesture is open, after the event that made it
+  mutable pending: option<step>,
+  mutable sealing: bool,
+  gestures: Set.t<string>,
+  // while undoing or redoing, or pushing a program, changes aren't recorded
+  mutable quiet: int,
+  // undo goes no further back than this many steps while a preview plays (hold)
+  mutable floor: option<int>,
+}
+
+// how many steps undo keeps
+let historyLength = 100
+// a scroll or arrow keys on one control within this long are one step
+let mergeMs = 800.
 
 type t = {
   pc: PatchConnection.t,
@@ -8,6 +37,7 @@ type t = {
   listeners: Map.t<string, array<unit => unit>>,
   anyListeners: array<string => unit>,
   onParam: PatchConnection.parameterEvent => unit,
+  history: history,
 }
 
 let notifyListeners = (listeners, anyListeners, id) => {
@@ -35,7 +65,23 @@ let make = (pc, defs: array<ParamDefs.t>) => {
     })
 
   pc->PatchConnection.addAllParameterListener(onParam)
-  {pc, defs: defsById, values, listeners, anyListeners, onParam}
+  {
+    pc,
+    defs: defsById,
+    values,
+    listeners,
+    anyListeners,
+    onParam,
+    history: {
+      undo: [],
+      redo: [],
+      pending: None,
+      sealing: false,
+      gestures: Set.make(),
+      quiet: 0,
+      floor: None,
+    },
+  }
 }
 
 // The patch's values, from a full stored state: it lists the parameters that differ from
@@ -75,20 +121,204 @@ let listenAny = (t, fn) => t.anyListeners->Array.push(fn)
 
 let notify = (t, id) => notifyListeners(t.listeners, t.anyListeners, id)
 
+//==============================================================================
+// undo history
+
+// A step's name, for the menu ("Undo cutoff"): what the caller called it, or the parameter it
+// changed (the first of several).
+let stepLabel = (t, changes) =>
+  switch changes->Array.find(c =>
+    switch c {
+    | Param(_) => true
+    | Action(_) => false
+    }
+  ) {
+  | Some(Param({id})) =>
+    // (in lower case, as the controls' labels, but for names like "MPE" or "LFO 1 rate")
+    let name = t.defs->Map.get(id)->Option.mapOr(id, d => d.name)
+    let second = name->String.slice(~start=1, ~end=2)
+    let name =
+      second == second->String.toLowerCase
+        ? name->String.slice(~start=0, ~end=1)->String.toLowerCase ++ name->String.slice(~start=1)
+        : name
+    let more = changes->Array.length - 1
+    more > 0 ? `${name} and ${Int.toString(more)} more` : name
+  | _ => "edit"
+  }
+
+// Ends the step being made: it goes on the undo stack, unless it changed nothing, and a
+// scroll or a key press on the same control as the step before joins that one.
+let seal = t => {
+  let h = t.history
+  h.pending->Option.forEach(step => {
+    h.pending = None
+    let changes = step.changes->Array.filter(c =>
+      switch c {
+      | Param({before, after}) => before != after
+      | Action(_) => true
+      }
+    )
+    let single = changes =>
+      switch changes {
+      | [Param({id})] => Some(id)
+      | _ => None
+      }
+    switch (single(changes), h.undo->Array.at(-1)) {
+    | (_, _) if Array.length(changes) == 0 => ()
+    | (Some(id), Some(last))
+      if single(last.changes) == Some(id) && step.at - last.at < mergeMs && h.floor != Some(Array.length(h.undo)) =>
+      switch (last.changes, changes) {
+      | ([Param(previous)], [Param({after})]) =>
+        previous.after = after
+        last.at = step.at
+      | _ => ()
+      }
+    | _ =>
+      h.undo->Array.push({
+        label: step.label == "" ? stepLabel(t, changes) : step.label,
+        changes,
+        at: step.at,
+      })
+      let over = Array.length(h.undo) - historyLength
+      if over > 0 {
+        h.undo->Array.splice(~start=0, ~remove=over, ~insert=[])
+        h.floor = h.floor->Option.map(f => Math.Int.max(0, f - over))
+      }
+    }
+  })
+}
+
+// Seals the step after the event that is making it, unless a gesture is still open.
+let sealSoon = t => {
+  let h = t.history
+  if !h.sealing {
+    h.sealing = true
+    Promise.resolve()
+    ->Promise.thenResolve(() => {
+      h.sealing = false
+      if h.gestures->Set.size == 0 {
+        seal(t)
+      }
+    })
+    ->ignore
+  }
+}
+
+let pendingStep = t =>
+  switch t.history.pending {
+  | Some(step) => step
+  | None =>
+    let step = {label: "", changes: [], at: Date.now()}
+    t.history.pending = Some(step)
+    t.history.redo = []
+    step
+  }
+
+let recordParam = (t, id, before, after) =>
+  if t.history.quiet == 0 {
+    let step = pendingStep(t)
+    switch step.changes->Array.find(c =>
+      switch c {
+      | Param(p) => p.id == id
+      | Action(_) => false
+      }
+    ) {
+    | Some(Param(p)) => p.after = after
+    | _ => step.changes->Array.push(Param({id, before, after}))
+    }
+    step.at = Date.now()
+    sealSoon(t)
+  }
+
+// Adds something other than a parameter change to the step being made (or a new one), under
+// this name: undo calls undo, redo calls redo.
+let record = (t, ~label, ~undo, ~redo) =>
+  if t.history.quiet == 0 {
+    let step = pendingStep(t)
+    step.changes->Array.push(Action({undo, redo}))
+    step.label = label
+    step.at = Date.now()
+    sealSoon(t)
+  }
+
+// Names the step being made, for the menu.
+let nameStep = (t, label) => t.history.pending->Option.forEach(step => step.label = label)
+
+// Runs f without recording what it changes.
+let quietly = (t, f) => {
+  t.history.quiet = t.history.quiet + 1
+  try f() catch {
+  | e =>
+    t.history.quiet = t.history.quiet - 1
+    throw(e)
+  }
+  t.history.quiet = t.history.quiet - 1
+}
+
+// Forgets every step (another state arrived from the host).
+let clearHistory = t => {
+  let h = t.history
+  h.pending = None
+  h.undo = []
+  h.redo = []
+  h.floor = None
+}
+
+// While something is only being tried (a program from the browser, a random patch), undo stops
+// at what came before it: hold marks that point, and drop forgets the steps made since then.
+let hold = t => {
+  seal(t)
+  t.history.redo = []
+  t.history.floor = Some(Array.length(t.history.undo))
+}
+
+let drop = t => {
+  seal(t)
+  let h = t.history
+  h.floor->Option.forEach(floor => h.undo->Array.splice(~start=floor, ~remove=Array.length(h.undo) - floor, ~insert=[]))
+  h.floor = None
+  h.redo = []
+}
+
+// What undo and redo would take back or do again, if anything.
+let undoLabel = t => {
+  seal(t)
+  Array.length(t.history.undo) > t.history.floor->Option.getOr(0)
+    ? t.history.undo->Array.at(-1)->Option.map(s => s.label)
+    : None
+}
+let redoLabel = t => t.history.redo->Array.at(-1)->Option.map(s => s.label)
+
+//==============================================================================
+// setting values
+
 let set = (t, id, x) =>
   t.defs
   ->Map.get(id)
   ->Option.forEach(d => {
     let x = d.clamp(x)
-    if get(t, id) != x {
+    let before = get(t, id)
+    if before != x {
+      recordParam(t, id, before, x)
       t.values->Map.set(id, x)
       t.pc->PatchConnection.sendEventOrValue(id, x)
       notify(t, id)
     }
   })
 
-let beginGesture = (t, id) => t.pc->PatchConnection.sendParameterGestureStart(id)
-let endGesture = (t, id) => t.pc->PatchConnection.sendParameterGestureEnd(id)
+let beginGesture = (t, id) => {
+  if t.history.quiet == 0 {
+    t.history.gestures->Set.add(id)
+  }
+  t.pc->PatchConnection.sendParameterGestureStart(id)
+}
+
+let endGesture = (t, id) => {
+  t.pc->PatchConnection.sendParameterGestureEnd(id)
+  if t.history.gestures->Set.delete(id) && t.history.gestures->Set.size == 0 {
+    sealSoon(t)
+  }
+}
 
 let gestureSet = (t, id, x) => {
   beginGesture(t, id)
@@ -96,9 +326,53 @@ let gestureSet = (t, id, x) => {
   endGesture(t, id)
 }
 
+// Takes a step back or does it again: its parameters as gestures the host hears, and its actions
+// (in the reverse order going back).
+let replay = (t, step, ~back) => {
+  let changes = back ? step.changes->Array.toReversed : step.changes
+  t->quietly(() =>
+    changes->Array.forEach(c =>
+      switch c {
+      | Param({id, before, after}) => gestureSet(t, id, back ? before : after)
+      | Action({undo, redo}) => back ? undo() : redo()
+      }
+    )
+  )
+}
+
+// Takes back the last step, and returns its name (None if there was none to take back).
+let undo = t => {
+  seal(t)
+  let h = t.history
+  if Array.length(h.undo) > h.floor->Option.getOr(0) {
+    h.undo->Array.pop->Option.map(step => {
+      replay(t, step, ~back=true)
+      h.redo->Array.push(step)
+      step.label
+    })
+  } else {
+    None
+  }
+}
+
+let redo = t => {
+  seal(t)
+  let h = t.history
+  h.redo
+  ->Array.pop
+  ->Option.map(step => {
+    replay(t, step, ~back=false)
+    // (a step done again doesn't join the one before it)
+    step.at = 0.
+    h.undo->Array.push(step)
+    step.label
+  })
+}
+
 // Push a whole set of values (e.g. a loaded program, whose values are kept as it holds them:
 // ParamDefs' load). Every endpoint is sent, even if unchanged, so the patch is guaranteed to
-// match; listeners hear of the changed ones, once every value is in place.
+// match; listeners hear of the changed ones, once every value is in place. Not an edit: the
+// caller records the program it loaded, if that is one.
 let setAll = (t, values: Bank.values) => {
   let changed = []
   values->Map.forEachWithKey((x, id) =>
@@ -113,5 +387,5 @@ let setAll = (t, values: Bank.values) => {
       t.pc->PatchConnection.sendEventOrValueNow(id, x)
     })
   )
-  changed->Array.forEach(id => notify(t, id))
+  t->quietly(() => changed->Array.forEach(id => notify(t, id)))
 }
