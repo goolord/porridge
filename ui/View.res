@@ -54,6 +54,7 @@ let make = (host, pc) => {
   let settings = Settings.make(pc)
   let hostMenu = HostMenu.make(pc)
 
+  let fontFace = el("style", ~text=Style.fontFace, ~parent=document->documentElement)
   let shadow = host->attachShadow({mode: "open"})
   el("style", ~text=Style.css, ~parent=shadow)->ignore
   let stage = el("div", ~cls="pv-stage", ~parent=shadow)
@@ -399,6 +400,7 @@ let make = (host, pc) => {
       resizeObserver->disconnect
       document->offDocumentKeyDown(onShortcut)
       restoreBrowserChrome()
+      fontFace->remove
       settings->Settings.dispose
       hostMenu->HostMenu.dispose
       randomizer.dispose()
