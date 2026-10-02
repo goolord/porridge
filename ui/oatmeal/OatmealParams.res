@@ -612,6 +612,51 @@ let ccTargets = [
 ]
 let oscMix = ["normal", "hardsync", "FM (1 -> 2, 1 silent)"]
 
+// A target of the lists above in the words of the knob it moves, as the modulation matrix's
+// targets name them ("1 amp" is "osc 1 level"): what the view's menus, readouts and status lines
+// show. The lists themselves stay Oatmeal's, for its status texts and the DSP's constants.
+let targetName = name => {
+  let unipolar = String.endsWith(name, " (unipolar)")
+  let base = unipolar ? String.slice(name, ~start=0, ~end=String.length(name) - 11) : name
+  let words = switch base {
+  | "cutoff 1" => "cutoff"
+  // (filter 2's cutoff, which its split from filter 1's sets)
+  | "cutoff 2" => "filter split"
+  | "filter env mod" => "filter env amount"
+  // (more drive: as if the pregain went up)
+  | "distortion" => "dist pregain"
+  | "LFO 1 speed" => "LFO 1 rate"
+  | "LFO 2 speed" => "LFO 2 rate"
+  | "1 pulsewidth" => "osc 1 pulse width"
+  | "2 pulsewidth" => "osc 2 pulse width"
+  | "1 PWM rate" => "osc 1 pwm rate"
+  | "2 PWM rate" => "osc 2 pwm rate"
+  | "1 PWM depth" => "osc 1 pwm depth"
+  | "2 PWM depth" => "osc 2 pwm depth"
+  | "1 amp" => "osc 1 level"
+  | "2 amp" => "osc 2 level"
+  | "noise amp" => "noise level"
+  | "1 pitch" => "osc 1 pitch"
+  // (osc 2's pitch is its transpose knob's)
+  | "2 pitch" => "osc 2 transpose"
+  | "noise pitch" => "noise transpose"
+  | "ME 1 depth" => "mod env 1 depth"
+  | "ME 2 depth" => "mod env 2 depth"
+  | "amp envelope speed" => "amp env speed"
+  | "filter envelope speed" => "filter env speed"
+  | "mod envelope speed" => "mod env speed"
+  | "pitch envelope speed" => "pitch env speed"
+  | "Unison detune" => "unison detune"
+  | "Unison spread" => "unison spread"
+  | words => words
+  }
+  unipolar ? words ++ " (unipolar)" : words
+}
+
+// Whether a parameter (by its action name) picks from those lists: a target slot of the mod
+// envelopes, the XY pad or a controller.
+let isTargetList = action => /^(M[12]|XY_[HV]|CC\d)_Target_\d$/->RegExp.test(action)
+
 // ---------------------------------------------------------------------------------------------------
 // numeric helpers (x87 emulation)
 
@@ -1726,7 +1771,7 @@ def(197, bip(9140, 1., (v: float, _) => `Y: ${fixed(2. * v - 1., 4)}`))
     )
     def(
       base + 3 + k,
-      sw(4 * (base + 3 + k) + 8352, 33, Some(xyTargets), (v: float, _) => {
+      sw(4 * (base + 3 + k) + 8352, 33, Some(xyTargets->Array.map(targetName)), (v: float, _) => {
         let t = ftol(33. * v + 0.5)
         switch xyTargets->at(t) {
         | Some(target) =>
@@ -1824,7 +1869,7 @@ def(261, bip(9508, 1., veloText))
     )
     def(
       base + 3 + k,
-      sw(targetOffset, 30, Some(modEnvTargets), (v: float, _) =>
+      sw(targetOffset, 30, Some(modEnvTargets->Array.map(targetName)), (v: float, _) =>
         switch modEnvTargets->at(ftol(30. * v + 0.5)) {
         | Some(t) => `${env} mod target ${slot}: ${t}`
         | None => ""
@@ -1876,7 +1921,7 @@ for c in 1 to 6 {
     def(base + k, bip(offset + 4 * k, 1., depth), ~reads=[offset + 16 + 4 * k])
     def(
       base + 4 + k,
-      sw(offset + 16 + 4 * k, 34, Some(ccTargets), (v: float, _) => {
+      sw(offset + 16 + 4 * k, 34, Some(ccTargets->Array.map(targetName)), (v: float, _) => {
         let t = ftol(34. * v + 0.5)
         switch ccTargets->at(t) {
         | Some(target) if t >= 33. => `CC ${cc} mod target ${slot}: ${target}`
