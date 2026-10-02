@@ -47,7 +47,9 @@ namespace porridge
         float[64] velCurve, touchCurve;
         bool tuningOn;
         float[128] keySemitones;
-        bool user1Dirty, user2Dirty;
+        bool user1Dirty, user2Dirty;               // changed since their tables were built
+        int userSet1, userSet2;                     // the table sets the oscillators read for them
+        int userJobWave;                            // the one the tables' job is building (0, 1)
 
         float64 sampleRate, samplesPerBeat;
         float bpm = 120.0f;
@@ -346,6 +348,8 @@ namespace porridge
 
             user1Dirty = true;
             user2Dirty = true;
+            userSet1 = setUser1;
+            userSet2 = setUser2;
 
             globalDist.clearState();
             delay.prepare();
@@ -832,6 +836,9 @@ namespace porridge
         /// A new (fresh) voice at the head of the list.
         int allocateVoice()
         {
+            if (numActive == 0)
+                userTablesNow();
+
             for (int vi = 0; vi < maxVoices; ++vi)
             {
                 if (listPos (vi) < 0)
@@ -1898,9 +1905,60 @@ namespace porridge
                 penvC  = makePitchEnvCoefs (P, float64 (srInt));
             }
 
-            if (user1Dirty) { tables.buildUserSet (setUser1, wave1); user1Dirty = false; }
-            if (user2Dirty) { tables.buildUserSet (setUser2, wave2); user2Dirty = false; }
+            updateUserTables();
         }
+
+        /// The user waveforms' tables: a changed waveform's are built into its other set a little
+        /// each block, which then takes over (drawing a waveform sends one every frame, and a
+        /// whole set at once would take a few milliseconds of one block). A note that starts
+        /// while none sounds has them at once (userTablesNow).
+        void updateUserTables()
+        {
+            if (! tables.jobActive)
+            {
+                if (user1Dirty)
+                {
+                    userJobWave = 0;
+                    user1Dirty = false;
+                    tables.startUserJob (userSet1 == setUser1 ? setUser1B : setUser1, wave1);
+                }
+                else if (user2Dirty)
+                {
+                    userJobWave = 1;
+                    user2Dirty = false;
+                    tables.startUserJob (userSet2 == setUser2 ? setUser2B : setUser2, wave2);
+                }
+                else
+                {
+                    return;
+                }
+            }
+
+            // about 0.1 ms a block: a set takes about 22 blocks
+            if (tables.stepJob (32768))
+                userJobDone();
+        }
+
+        void userJobDone()
+        {
+            if (userJobWave == 0) userSet1 = tables.jobSet;
+            else                  userSet2 = tables.jobSet;
+        }
+
+        /// Brings the user waveforms' tables up to date at once (as a program's first notes
+        /// need them), for a note that starts while none sounds.
+        void userTablesNow()
+        {
+            if (tables.jobActive)
+            {
+                tables.finishJob();
+                userJobDone();
+            }
+
+            if (user1Dirty) { tables.buildUserSet (userSet1, wave1); user1Dirty = false; }
+            if (user2Dirty) { tables.buildUserSet (userSet2, wave2); user2Dirty = false; }
+        }
+
 
         /// Controller smoothing and the XY random walk over n samples, once per block after MIDI.
         void smoothControllers (int n)
@@ -2903,13 +2961,13 @@ namespace porridge
                 for (int k = 1; k < U; ++k)
                     v.osc1.at (k).copyShared (v.osc1[0]);
 
-                renderOsc (v.osc1[0], setUser1, oscMix, false, mult1 * v.ratio[0] * (pitchDrift ? driftRatio (v, 0, 0) : 1.0f), bufM, n);
+                renderOsc (v.osc1[0], userSet1, oscMix, false, mult1 * v.ratio[0] * (pitchDrift ? driftRatio (v, 0, 0) : 1.0f), bufM, n);
                 followOsc1 (v, o2ratio, detune, toHz);
 
                 for (int k = 1; k < U; ++k)
                     v.osc2.at (k).copyShared (v.osc2[0]);
 
-                renderOsc (v.osc2[0], setUser2, oscMix, true, mult2 * v.ratio[0] * (pitchDrift ? driftRatio (v, 1, 0) : 1.0f), bufM, n);
+                renderOsc (v.osc2[0], userSet2, oscMix, true, mult2 * v.ratio[0] * (pitchDrift ? driftRatio (v, 1, 0) : 1.0f), bufM, n);
 
                 for (int k = 1; k < U; ++k)
                 {
@@ -3355,11 +3413,11 @@ namespace porridge
         {
             if (mode == oscMixMode::pmFeedback)
             {
-                v.osc2.at (k).renderPlain (tables, setUser2, m2, buf, n);
+                v.osc2.at (k).renderPlain (tables, userSet2, m2, buf, n);
             }
             else
             {
-                v.osc2.at (k).renderRaw (tables, setUser2, m2, bufX, bufMod, n);
+                v.osc2.at (k).renderRaw (tables, userSet2, m2, bufX, bufMod, n);
                 let heard = P[slot::O2_PairMix];
 
                 if (heard > 0)
@@ -3367,16 +3425,16 @@ namespace porridge
                         buf.at (i) += heard * bufX.at (i) * bufMod.at (i);
             }
 
-            v.osc1.at (k).renderShaped (tables, setUser1, m1, buf, bufX, bufMod, mode, feedback, n);
+            v.osc1.at (k).renderShaped (tables, userSet1, m1, buf, bufX, bufMod, mode, feedback, n);
         }
 
         /// One unison copy (k > 0) of the normal, sync and FM modes, added into buf.
         void renderUnisonCopy (Voice& v, int k, int oscMix, float m1, float m2, float64 o2ratio, float64 detune, float64 toHz,
                                float[blockSize]& buf, int n)
         {
-            renderOsc (v.osc1.at (k), setUser1, oscMix, false, m1, buf, n);
+            renderOsc (v.osc1.at (k), userSet1, oscMix, false, m1, buf, n);
             v.osc2.at (k).base = osc2Inc (v.osc1.at (k).base, o2ratio, detune, toHz);
-            renderOsc (v.osc2.at (k), setUser2, oscMix, true, m2, buf, n);
+            renderOsc (v.osc2.at (k), userSet2, oscMix, true, m2, buf, n);
         }
 
         /// Osc 2's phase increment for osc 1's: o2ratio times the frequency, plus detune Hz.

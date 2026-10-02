@@ -7,7 +7,10 @@
 //
 //  The HQ saw and triangle (Porridge's) are the same two waveforms without the aliasing:
 //  4096-sample tables every half octave, each keeping only the harmonics that stay below
-//  Nyquist for the highest note it plays. They follow the four sets in 'sets'.
+//  Nyquist for the highest note it plays. They follow the six sets in 'sets'.
+//
+//  Each user waveform has two sets: the one the oscillators read, and one a new waveform can
+//  be built into a little at a time (a UserJob) while notes play, which then takes over.
 
 namespace porridge
 {
@@ -28,18 +31,20 @@ namespace porridge
     let setTri = 1;
     let setUser1 = 2;
     let setUser2 = 3;
+    let setUser1B = 4;      // the user waveforms' second sets
+    let setUser2B = 5;
 
     let hqLevels = 21;      // 1023 harmonics, then half an octave fewer each level, down to 1
     let hqSize = 4096;
     let hqStride = hqSize + 1;
     let hqHarmonics = 1023;
-    let hqBase = setSize * 4;
+    let hqBase = setSize * 6;
     let hqSetSize = hqLevels * hqStride;
 
     struct WaveTables
     {
         float[32769] sine;
-        float[setSize * 4 + 2 * hqLevels * hqStride] sets;
+        float[setSize * 6 + 2 * hqLevels * hqStride] sets;
         float64[65536] fft;             // scratch: interleaved complex, up to 32768 points
         float64[2 * 1024] spectrum;     // scratch: one-sided spectrum (re, im), up to 1024 bins
         float[32768] source;            // scratch: T0 being built
@@ -49,6 +54,27 @@ namespace porridge
         // user waveforms are rebuilt on the audio thread
         float64[fftMax / 2] twCosF, twSinF;
         int[hqLevels] hqHarm;           // hqLevelHarmonics, by level
+
+        // the set being built (it owns fft and spectrum until it's done): its stage
+        // (userStage), and the step within it
+        bool jobActive;
+        int jobSet, jobStage, jobStep;
+    }
+
+    /// The stages of building a set (a user waveform's from its spectrum, or any set's levels
+    /// from its T0), in order; the FFT's passes and the band-limited tables are steps.
+    namespace userStage
+    {
+        let t0Load = 0;     // the 32768-point spectrum
+        let t0Reorder = 1;  // its bit-reversal permutation
+        let t0Pass = 2;     // its 15 passes (steps)
+        let t0Store = 3;    // T0
+        let levels = 4;     // T1 .. T6 by decimation
+        let analyse512 = 5; // T6's spectrum
+        let m512 = 6;       // the 127 512-sample tables (steps)
+        let m256Top = 7;    // the 256-sample table with harmonics up to 128, and its spectrum
+        let m256 = 8;       // the 127 256-sample tables (steps)
+        let done = 9;
     }
 
     let fftMax = 32768;
@@ -72,6 +98,15 @@ namespace porridge
     /// In-place complex FFT of this.fft (interleaved), n a power of two up to fftMax.
     void fftInPlace (WaveTables& this, int n, bool inverse)
     {
+        this.fftReorder (n);
+
+        for (int len = 2; len <= n; len <<= 1)
+            this.fftPass (n, len, inverse);
+    }
+
+    /// The FFT's bit-reversal permutation.
+    void fftReorder (WaveTables& this, int n)
+    {
         var j = 0;
 
         for (int i = 1; i < n; ++i)
@@ -93,28 +128,49 @@ namespace porridge
                 this.fft.at (2 * j) = tr;                    this.fft.at (2 * j + 1) = ti;
             }
         }
+    }
 
-        for (int len = 2; len <= n; len <<= 1)
+    /// The FFT's butterflies of span len. They are independent, so their order only changes how
+    /// well the memory caches serve them: a twiddle at a time while the points fit in them
+    /// (64 KB), else a group of len points at a time.
+    void fftPass (WaveTables& this, int n, int len, bool inverse)
+    {
+        let half = len >> 1;
+        let stride = fftMax / len;
+
+        if (n <= 4096)
         {
-            let half = len >> 1;
-            let stride = fftMax / len;
-
             for (int k = 0; k < half; ++k)
             {
                 let wr = this.twCosF.at (k * stride);
                 let wi = inverse ? -this.twSinF.at (k * stride) : this.twSinF.at (k * stride);
 
                 for (int i = 0; i < n; i += len)
+                    this.butterfly (i + k, i + k + half, wr, wi);
+            }
+        }
+        else
+        {
+            for (int i = 0; i < n; i += len)
+            {
+                for (int k = 0; k < half; ++k)
                 {
-                    let p = 2 * (i + k), q = 2 * (i + k + half);
-                    let xr = this.fft.at (q) * wr - this.fft.at (q + 1) * wi;
-                    let xi = this.fft.at (q) * wi + this.fft.at (q + 1) * wr;
-                    let ur = this.fft.at (p), ui = this.fft.at (p + 1);
-                    this.fft.at (p) = ur + xr;      this.fft.at (p + 1) = ui + xi;
-                    this.fft.at (q) = ur - xr;      this.fft.at (q + 1) = ui - xi;
+                    let wr = this.twCosF.at (k * stride);
+                    let wi = inverse ? -this.twSinF.at (k * stride) : this.twSinF.at (k * stride);
+                    this.butterfly (i + k, i + k + half, wr, wi);
                 }
             }
         }
+    }
+
+    void butterfly (WaveTables& this, int a, int b, float64 wr, float64 wi)
+    {
+        let p = 2 * a, q = 2 * b;
+        let xr = this.fft.at (q) * wr - this.fft.at (q + 1) * wi;
+        let xi = this.fft.at (q) * wi + this.fft.at (q + 1) * wr;
+        let ur = this.fft.at (p), ui = this.fft.at (p + 1);
+        this.fft.at (p) = ur + xr;      this.fft.at (p + 1) = ui + xi;
+        this.fft.at (q) = ur - xr;      this.fft.at (q + 1) = ui - xi;
     }
 
     /// One-sided spectrum c[0 .. bins - 1] (c_k = X_k / n) of the n real samples in fft.
@@ -146,6 +202,14 @@ namespace porridge
     /// (A real signal's c0 is real: its imaginary part is +0.)
     void synthesise (WaveTables& this, int n, int kmax, int dst, int decimate)
     {
+        this.synthLoad (n, kmax);
+        this.fftInPlace (n, true);
+        this.synthStore (n, dst, decimate);
+    }
+
+    /// synthesise's first part: the two-sided spectrum into fft.
+    void synthLoad (WaveTables& this, int n, int kmax)
+    {
         for (int i = 0; i < 2 * n; ++i)
             this.fft.at (i) = 0;
 
@@ -164,9 +228,11 @@ namespace porridge
                 this.fft.at (2 * (n - k) + 1) = -im;
             }
         }
+    }
 
-        this.fftInPlace (n, true);
-
+    /// synthesise's last part: the inverse transform's real part into 'sets'.
+    void synthStore (WaveTables& this, int n, int dst, int decimate)
+    {
         let outN = n / decimate;
 
         for (int i = 0; i < outN; ++i)
@@ -189,36 +255,21 @@ namespace porridge
     /// The rest of a set from its 32768-point table T0.
     void buildLevels (WaveTables& this, int set)
     {
-        let base = set * setSize;
-        let offsets = int[7] (tabT0, tabT1, tabT2, tabT3, tabT4, tabT5, tabT6);
-
-        for (int lvl = 1; lvl < 7; ++lvl)
-        {
-            let n = 32768 >> lvl;
-            let src = base + offsets.at (lvl - 1);
-            let dst = base + offsets.at (lvl);
-
-            for (int i = 0; i < n; ++i)
-                this.sets.at (dst + i) = this.sets.at (src + 2 * i);
-
-            this.sets.at (dst + n) = this.sets.at (dst);
-        }
-
-        this.analyse (base + tabT6, 512, 257);
-
-        for (int j = 0; j < 127; ++j)
-            this.synthesise (512, 255 - j, base + tabM512 + j * 513, 1);
-
-        this.synthesise (512, 128, base + tabM256Top, 2);
-        this.analyse (base + tabM256Top, 256, 129);
-
-        for (int j = 0; j < 127; ++j)
-            this.synthesise (256, 127 - j, base + tabM256 + j * 257, 1);
+        this.startJob (set, userStage::levels);
+        this.finishJob();
     }
 
-    /// User waveform (512 points) -> band-limited 32768-point T0 -> set.
-    /// The old 512-point Nyquist bin becomes an ordinary bin, doubling harmonic 256 (as in the original).
+    /// User waveform (512 points) -> band-limited 32768-point T0 -> set, at once.
     void buildUserSet (WaveTables& this, int set, const float[512]& wave)
+    {
+        this.startUserJob (set, wave);
+        this.finishJob();
+    }
+
+    /// Starts building a user waveform's set (512 points -> band-limited 32768-point T0 -> the
+    /// set), to be carried on by stepJob. The old 512-point Nyquist bin becomes an ordinary bin,
+    /// doubling harmonic 256 (as in the original).
+    void startUserJob (WaveTables& this, int set, const float[512]& wave)
     {
         for (int i = 0; i < 512; ++i)
         {
@@ -227,8 +278,120 @@ namespace porridge
         }
 
         this.analyseFft (512, 257);
-        this.synthesise (32768, 256, set * setSize + tabT0, 1);
-        this.buildLevels (set);
+        this.startJob (set, userStage::t0Load);
+    }
+
+    void startJob (WaveTables& this, int set, int stage)
+    {
+        this.jobActive = true;
+        this.jobSet = set;
+        this.jobStage = stage;
+        this.jobStep = 0;
+    }
+
+    void finishJob (WaveTables& this)
+    {
+        while (! this.stepJob (1 << 30)) {}
+    }
+
+    /// Carries on building the set for about `budget` units of work (about 3 ns each where
+    /// it was measured), at least one step. Returns whether the set is done (the job is over then).
+    bool stepJob (WaveTables& this, int budget)
+    {
+        let base = this.jobSet * setSize;
+        var left = budget;
+
+        while (this.jobActive && left > 0)
+        {
+            let stage = this.jobStage;
+
+            if (stage == userStage::t0Load)
+            {
+                this.synthLoad (32768, 256);
+                left -= 35000;
+                this.jobStage = userStage::t0Reorder;
+            }
+            else if (stage == userStage::t0Reorder)
+            {
+                this.fftReorder (32768);
+                left -= 35000;
+                this.jobStage = userStage::t0Pass;
+            }
+            else if (stage == userStage::t0Pass)
+            {
+                this.fftPass (32768, 2 << this.jobStep, true);
+                left -= 16384;
+
+                if (++this.jobStep == 15)
+                {
+                    this.jobStep = 0;
+                    this.jobStage = userStage::t0Store;
+                }
+            }
+            else if (stage == userStage::t0Store)
+            {
+                this.synthStore (32768, base + tabT0, 1);
+                left -= 20000;
+                this.jobStage = userStage::levels;
+            }
+            else if (stage == userStage::levels)
+            {
+                let offsets = int[7] (tabT0, tabT1, tabT2, tabT3, tabT4, tabT5, tabT6);
+
+                for (int lvl = 1; lvl < 7; ++lvl)
+                {
+                    let n = 32768 >> lvl;
+                    let src = base + offsets.at (lvl - 1);
+                    let dst = base + offsets.at (lvl);
+
+                    for (int i = 0; i < n; ++i)
+                        this.sets.at (dst + i) = this.sets.at (src + 2 * i);
+
+                    this.sets.at (dst + n) = this.sets.at (dst);
+                }
+
+                left -= 20000;
+                this.jobStage = userStage::analyse512;
+            }
+            else if (stage == userStage::analyse512)
+            {
+                this.analyse (base + tabT6, 512, 257);
+                left -= 2560;
+                this.jobStage = userStage::m512;
+            }
+            else if (stage == userStage::m512)
+            {
+                this.synthesise (512, 255 - this.jobStep, base + tabM512 + this.jobStep * 513, 1);
+                left -= 1850;
+
+                if (++this.jobStep == 127)
+                {
+                    this.jobStep = 0;
+                    this.jobStage = userStage::m256Top;
+                }
+            }
+            else if (stage == userStage::m256Top)
+            {
+                this.synthesise (512, 128, base + tabM256Top, 2);
+                this.analyse (base + tabM256Top, 256, 129);
+                left -= 3000;
+                this.jobStage = userStage::m256;
+            }
+            else if (stage == userStage::m256)
+            {
+                this.synthesise (256, 127 - this.jobStep, base + tabM256 + this.jobStep * 257, 1);
+                left -= 1000;
+
+                if (++this.jobStep == 127)
+                {
+                    this.jobStep = 0;
+                    this.jobStage = userStage::done;
+                    this.jobActive = false;
+                }
+            }
+        }
+
+        return ! this.jobActive;
     }
 
     void buildStatic (WaveTables& this)
