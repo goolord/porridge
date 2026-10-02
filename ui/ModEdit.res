@@ -21,36 +21,19 @@ let macroName = (programs, i) => {
   name == "" ? `macro ${Int.toString(i + 1)}` : name
 }
 
-let sourceColor = s =>
-  switch ModMatrix.sources[s]->Option.mapOr("", s => s.key) {
-  | "lfo1" => "#1c3c73"
-  | "lfo2" => "#4a74b4"
-  | "lfo3" => "#7895c8"
-  | "modEnv1" => "#2e6b3a"
-  | "modEnv2" => "#5c8f3c"
-  | "ampEnv" | "filterEnv" | "voiceLevel" => "#3d7a6d"
-  | "wander" => "#8a6d3b"
-  | "macro1" | "macro2" | "macro3" | "macro4" => "#6a2c70"
-  | "cc1" | "cc2" | "cc3" | "cc4" | "cc5" | "cc6" => "#7a5a1e"
-  | _ => "#a3501c"
-  }
+let sourceColor = s => ModMatrix.sources[s]->Option.mapOr(ModMatrix.playColour, s => s.colour)
 
 // a name short enough for a small chip
-let shortLabel = s =>
+let shortLabel = s => ModMatrix.sources[s]->Option.mapOr("", s => s.short)
+
+// The macro knob source s is (0 the first), if it's one.
+let macroOf = s =>
   switch ModMatrix.sources[s] {
-  | Some({key}) if String.startsWith(key, "cc") => "cc " ++ String.slice(key, ~start=2)
-  | Some({key: "slide"}) => "slide"
-  | Some({key: "modEnv1"}) => "env 1"
-  | Some({key: "modEnv2"}) => "env 2"
-  | Some({key: "filterEnv"}) => "filter env"
-  | Some({key: "voiceLevel"}) => "level"
-  | Some({key: "heldNotes"}) => "held"
-  | Some({key: "aftertouch"}) => "touch"
-  | Some({key: "modWheel"}) => "wheel"
-  | Some({key: "bend"}) => "bend"
-  | Some(source) => source.label
-  | None => ""
+  | Some({kind: Macro(i)}) => Some(i)
+  | _ => None
   }
+
+let isController = s => ModMatrix.sources[s]->Option.mapOr(false, s => s.kind == Controller)
 
 let isUsed = (get, k) => {
   let s = ModMatrix.readSlot(get, k)

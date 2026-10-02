@@ -10,8 +10,27 @@ let slots = 32
 // the slots there were at first, whose parameters come before the rest of Porridge's
 let firstSlots = 16
 
-// help: what the source is, for the mod page's status line
-type source = {key: string, label: string, bipolar: bool, help: string}
+// Whether a source has a value for each note (each voice its own) or one every voice shares.
+type scope = EachNote | Shared
+
+// A source's scope: always the same, or depending on the program's settings, read by get.
+type sourceScope = Fixed(scope) | Depends((string => float) => scope)
+
+// A macro knob (0 the first) or an assignable controller, or neither.
+type sourceKind = Plain | Macro(int) | Controller
+
+// short: a name short enough for a small chip; colour: its colour on the chips, the ranges it
+// sweeps and its cables; help: what the source is, for the mod page's status line
+type source = {
+  key: string,
+  label: string,
+  short: string,
+  colour: string,
+  bipolar: bool,
+  scope: sourceScope,
+  kind: sourceKind,
+  help: string,
+}
 
 let lfoHelp = "the LFO's shape, -1..1 (without its depth modulation)"
 let modEnvHelp = "the mod envelope, with its velocity sensitivity"
@@ -19,90 +38,278 @@ let xyHelp = "the XY pad, including its random walk"
 let macroHelp = "a macro knob on this page"
 let ccHelp = "an assignable controller from the MIDI page"
 
+// the colours: the voice's own envelopes, the macros, the controllers, and the note and the
+// player's hands
+let envColour = "#3d7a6d"
+let macroColour = "#6a2c70"
+let ccColour = "#7a5a1e"
+let playColour = "#a3501c"
+
+// The scopes that follow a setting: an LFO's mode (per-voice at 0), and MPE's
+let perVoiceAt0 = (id, get: string => float) => get(id) == 0. ? EachNote : Shared
+let withMpe = (get: string => float) => get("MPE_On") != 0. ? EachNote : Shared
+
+let lfo = (n, colour, mode) => {
+  key: `lfo${Int.toString(n)}`,
+  label: `LFO ${Int.toString(n)}`,
+  short: `LFO ${Int.toString(n)}`,
+  colour,
+  bipolar: true,
+  scope: Depends(get => perVoiceAt0(mode, get)),
+  kind: Plain,
+  help: lfoHelp,
+}
+
+let macro = n => {
+  key: `macro${Int.toString(n)}`,
+  label: `macro ${Int.toString(n)}`,
+  short: `macro ${Int.toString(n)}`,
+  colour: macroColour,
+  bipolar: false,
+  scope: Fixed(Shared),
+  kind: Macro(n - 1),
+  help: macroHelp,
+}
+
+let cc = n => {
+  key: `cc${Int.toString(n)}`,
+  label: `controller ${Int.toString(n)}`,
+  short: `cc ${Int.toString(n)}`,
+  colour: ccColour,
+  bipolar: false,
+  scope: Fixed(Shared),
+  kind: Controller,
+  help: ccHelp,
+}
+
 let sources = [
-  {key: "none", label: "none", bipolar: false, help: ""},
-  {key: "lfo1", label: "LFO 1", bipolar: true, help: lfoHelp},
-  {key: "lfo2", label: "LFO 2", bipolar: true, help: lfoHelp},
-  {key: "modEnv1", label: "mod env 1", bipolar: false, help: modEnvHelp},
-  {key: "modEnv2", label: "mod env 2", bipolar: false, help: modEnvHelp},
-  {key: "ampEnv", label: "amp env", bipolar: false, help: "the amp envelope level"},
-  {key: "filterEnv", label: "filter env", bipolar: false, help: "the filter envelope level"},
+  {
+    key: "none",
+    label: "none",
+    short: "none",
+    colour: playColour,
+    bipolar: false,
+    scope: Fixed(EachNote),
+    kind: Plain,
+    help: "",
+  },
+  lfo(1, "#1c3c73", "LFO_1_Sync"),
+  lfo(2, "#4a74b4", "LFO_2_Sync"),
+  {
+    key: "modEnv1",
+    label: "mod env 1",
+    short: "env 1",
+    colour: "#2e6b3a",
+    bipolar: false,
+    scope: Fixed(EachNote),
+    kind: Plain,
+    help: modEnvHelp,
+  },
+  {
+    key: "modEnv2",
+    label: "mod env 2",
+    short: "env 2",
+    colour: "#5c8f3c",
+    bipolar: false,
+    scope: Fixed(EachNote),
+    kind: Plain,
+    help: modEnvHelp,
+  },
+  {
+    key: "ampEnv",
+    label: "amp env",
+    short: "amp env",
+    colour: envColour,
+    bipolar: false,
+    scope: Fixed(EachNote),
+    kind: Plain,
+    help: "the amp envelope level",
+  },
+  {
+    key: "filterEnv",
+    label: "filter env",
+    short: "filter env",
+    colour: envColour,
+    bipolar: false,
+    scope: Fixed(EachNote),
+    kind: Plain,
+    help: "the filter envelope level",
+  },
   {
     key: "velocity",
     label: "velocity",
+    short: "velocity",
+    colour: playColour,
     bipolar: false,
+    scope: Fixed(EachNote),
+    kind: Plain,
     help: "note-on velocity, through the velocity curve",
   },
   {
     key: "key",
     label: "key",
+    short: "key",
+    colour: playColour,
     bipolar: true,
+    scope: Fixed(EachNote),
+    kind: Plain,
     help: "the note: -1 at note 0, 0 at middle C (60), 1 at note 120 and above",
   },
   {
     key: "aftertouch",
     label: "aftertouch",
+    short: "touch",
+    colour: playColour,
     bipolar: false,
+    // per-voice in poly touch mode
+    scope: Depends(get => get("AftertouchMode") == 2. ? EachNote : withMpe(get)),
+    kind: Plain,
     help: "poly aftertouch in poly touch mode, channel pressure otherwise; with MPE, the note's pressure",
   },
-  {key: "modWheel", label: "mod wheel", bipolar: false, help: "controller 1"},
+  {
+    key: "modWheel",
+    label: "mod wheel",
+    short: "wheel",
+    colour: playColour,
+    bipolar: false,
+    scope: Fixed(Shared),
+    kind: Plain,
+    help: "controller 1",
+  },
   {
     key: "bend",
     label: "pitch bend",
+    short: "bend",
+    colour: playColour,
     bipolar: true,
+    scope: Depends(withMpe),
+    kind: Plain,
     help: "the pitch bend wheel, -1..1; with MPE, the note's own bend",
   },
-  {key: "x", label: "X", bipolar: true, help: xyHelp},
-  {key: "y", label: "Y", bipolar: true, help: xyHelp},
-  {key: "random", label: "random", bipolar: true, help: "a random value for every note, -1..1"},
-  {key: "macro1", label: "macro 1", bipolar: false, help: macroHelp},
-  {key: "macro2", label: "macro 2", bipolar: false, help: macroHelp},
-  {key: "macro3", label: "macro 3", bipolar: false, help: macroHelp},
-  {key: "macro4", label: "macro 4", bipolar: false, help: macroHelp},
-  {key: "cc1", label: "controller 1", bipolar: false, help: ccHelp},
-  {key: "cc2", label: "controller 2", bipolar: false, help: ccHelp},
-  {key: "cc3", label: "controller 3", bipolar: false, help: ccHelp},
-  {key: "cc4", label: "controller 4", bipolar: false, help: ccHelp},
-  {key: "cc5", label: "controller 5", bipolar: false, help: ccHelp},
-  {key: "cc6", label: "controller 6", bipolar: false, help: ccHelp},
+  {
+    key: "x",
+    label: "X",
+    short: "X",
+    colour: playColour,
+    bipolar: true,
+    scope: Fixed(Shared),
+    kind: Plain,
+    help: xyHelp,
+  },
+  {
+    key: "y",
+    label: "Y",
+    short: "Y",
+    colour: playColour,
+    bipolar: true,
+    scope: Fixed(Shared),
+    kind: Plain,
+    help: xyHelp,
+  },
+  {
+    key: "random",
+    label: "random",
+    short: "random",
+    colour: playColour,
+    bipolar: true,
+    scope: Fixed(EachNote),
+    kind: Plain,
+    help: "a random value for every note, -1..1",
+  },
+  ...[1, 2, 3, 4]->Array.map(macro),
+  ...[1, 2, 3, 4, 5, 6]->Array.map(cc),
   {
     key: "slide",
     label: "slide (CC 74)",
+    short: "slide",
+    colour: playColour,
     bipolar: false,
+    scope: Depends(withMpe),
+    kind: Plain,
     help: "MPE: the note's slide (controller 74), 0..1",
   },
   {
     key: "noise",
     label: "noise",
+    short: "noise",
+    colour: playColour,
     bipolar: true,
+    scope: Fixed(EachNote),
+    kind: Plain,
     help: "white noise at the control rate: a new random value for each voice every 64 samples, -1..1",
   },
-  {key: "lfo3", label: "LFO 3", bipolar: true, help: "LFO 3 (on the synth page's modulation panel), -1..1"},
+  {
+    ...lfo(3, "#7895c8", "LFO_3_Mode"),
+    help: "LFO 3 (on the synth page's modulation panel), -1..1",
+  },
   {
     key: "interval",
     label: "interval",
+    short: "interval",
+    colour: playColour,
     bipolar: true,
+    scope: Fixed(EachNote),
+    kind: Plain,
     help: "how far the note is from the one before: -1 two octaves down, 0 the same, 1 two octaves up",
   },
-  {key: "alternate", label: "alternate", bipolar: true, help: "1 and -1 on every other note"},
-  {key: "cycle", label: "cycle", bipolar: false, help: "0, 1/3, 2/3 and 1 over four notes, round and round"},
+  {
+    key: "alternate",
+    label: "alternate",
+    short: "alternate",
+    colour: playColour,
+    bipolar: true,
+    scope: Fixed(EachNote),
+    kind: Plain,
+    help: "1 and -1 on every other note",
+  },
+  {
+    key: "cycle",
+    label: "cycle",
+    short: "cycle",
+    colour: playColour,
+    bipolar: false,
+    scope: Fixed(EachNote),
+    kind: Plain,
+    help: "0, 1/3, 2/3 and 1 over four notes, round and round",
+  },
   {
     key: "voiceLevel",
     label: "voice level",
+    short: "level",
+    colour: envColour,
     bipolar: false,
+    scope: Fixed(EachNote),
+    kind: Plain,
     help: "how loud the note itself is, at the end of its voice: 0 at -60 dB, 1 at 0 dB",
   },
   {
     key: "wander",
     label: "wander",
+    short: "wander",
+    colour: "#8a6d3b",
     bipolar: true,
+    scope: Fixed(EachNote),
+    kind: Plain,
     help: "a slow random drift of the note's own, -1..1 (its knob sets the rate)",
   },
-  {key: "glide", label: "glide", bipolar: false, help: "1 as a glide starts, falling to 0 as it arrives"},
+  {
+    key: "glide",
+    label: "glide",
+    short: "glide",
+    colour: playColour,
+    bipolar: false,
+    scope: Fixed(EachNote),
+    kind: Plain,
+    help: "1 as a glide starts, falling to 0 as it arrives",
+  },
   {
     key: "heldNotes",
     label: "held notes",
+    short: "held",
+    colour: playColour,
     bipolar: false,
+    scope: Fixed(Shared),
+    kind: Plain,
     help: "how many notes are held: 0 with one, 1 with eight or more",
   },
 ]
@@ -138,22 +345,15 @@ let sourceGroups = [
   ("controllers", ["cc1", "cc2", "cc3", "cc4", "cc5", "cc6"]),
 ]
 
-// Whether a source has a value for each note (each voice its own) or one every voice shares,
-// with the program's settings read by get: the LFOs follow their mode, aftertouch the touch
-// mode (and MPE), bend and slide MPE.
-type scope = EachNote | Shared
-
-let sourceScope = (get: string => float, key) =>
-  switch key {
-  | "lfo1" => get("LFO_1_Sync") == 0. ? EachNote : Shared
-  | "lfo2" => get("LFO_2_Sync") == 0. ? EachNote : Shared
-  | "lfo3" => get("LFO_3_Mode") == 0. ? EachNote : Shared
-  | "aftertouch" => get("AftertouchMode") == 2. || get("MPE_On") != 0. ? EachNote : Shared
-  | "bend" | "slide" => get("MPE_On") != 0. ? EachNote : Shared
-  | "modWheel" | "x" | "y" | "heldNotes" => Shared
-  | key if String.startsWith(key, "macro") || String.startsWith(key, "cc") => Shared
-  | _ => EachNote
+// A source's scope, with the program's settings read by get (the LFOs follow their mode,
+// aftertouch the touch mode and MPE, bend and slide MPE).
+let scopeOf = (get, source) =>
+  switch source.scope {
+  | Fixed(scope) => scope
+  | Depends(scope) => scope(get)
   }
+
+let sourceScope = (get, key) => sources->Array.find(s => s.key == key)->Option.mapOr(EachNote, scopeOf(get, _))
 
 type law =
   // the parameter's knob, in knob space

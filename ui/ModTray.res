@@ -24,9 +24,9 @@ let make = (ctx: Ctx.t, stage) => {
   })
 
   let label = s =>
-    switch ModMatrix.sources[s] {
-    | Some({key}) if String.startsWith(key, "macro") => ModEdit.macroName(ctx.programs, s - ModMatrix.sourceIndex("macro1"))
-    | _ => ModEdit.shortLabel(s)
+    switch ModEdit.macroOf(s) {
+    | Some(i) => ModEdit.macroName(ctx.programs, i)
+    | None => ModEdit.shortLabel(s)
     }
   let longLabel = s => ModMatrix.sources[s]->Option.mapOr("", s => s.label)
 
