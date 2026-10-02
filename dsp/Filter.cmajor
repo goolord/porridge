@@ -1636,15 +1636,96 @@ namespace porridge
         table.at (1025) = table.at (1024);
     }
 
+    /// Outside Oat mode the oversampling is a cascade of 2x half-band stages (Kaiser windows):
+    /// flat to 20 kHz (within 0.001 dB at 44.1 kHz), at least 80 dB down where an image or an
+    /// alias would land below 20 kHz, and unity gain. A stage's taps either side of its centre
+    /// (0.5) at odd offsets 1, 3, 5 ..: 28 for 2x, then 6 for 4x and 4 for 8x.
+    let distHalfBands = float[38] (
+        0.317917139f, -0.104921363f, 0.0617080228f, -0.0427723322f, 0.0319551892f, -0.0248553881f, 0.0197842298f,
+        -0.0159563255f, 0.0129574110f, -0.0105482497f, 0.00858059546f, -0.00695703277f, 0.00561014486f, -0.00449100649f,
+        0.00356251283f, -0.00279536884f, 0.00216561476f, -0.00165307312f, 0.00124036565f, -0.000912289283f, 0.000655420831f,
+        -0.000457866544f, 0.000309101570f, -0.000199862633f, 0.000122069340f, -0.0000687578499f, 0.0000340165277f, -0.0000129174797f,
+        0.308384648f, -0.0794718779f, 0.0277424919f, -0.00807717057f, 0.00148071917f, -0.0000588106998f,
+        0.297073094f, -0.0555748425f, 0.00871566877f, -0.000213919871f);
+
+    /// One side's cascade: per stage, the rings of its input (at its lower rate) and of the
+    /// shaped sound's even and odd samples at its higher rate (stage 1 at 0 .. 63, 2 at 64 ..
+    /// 79, 3 at 80 .. 95), and where each stage writes next.
+    struct DistCascade
+    {
+        float[96] x, e, o;
+        int[3] at;
+    }
+
+    /// A stage's taps (their first in distHalfBands, and how many), and its rings' start and size.
+    int hbFirst (int stage)  { return stage == 0 ? 0 : (stage == 1 ? 28 : 34); }
+    int hbTaps (int stage)   { return stage == 0 ? 28 : (stage == 1 ? 6 : 4); }
+    int hbRing (int stage)   { return stage == 0 ? 0 : (stage == 1 ? 64 : 80); }
+    int hbMask (int stage)   { return stage == 0 ? 63 : 15; }
+
+    /// Stage s up: x (at its lower rate) to two samples at twice the rate, a then b. A late
+    /// stage runs a sample (at the higher rate) behind, which keeps the cascade's delay a whole
+    /// number of samples: 2M - 1 (early) or 2M (late) at the lower rate, for M taps a side.
+    void hbUp (DistCascade& c, int s, float x, bool late, float& a, float& b)
+    {
+        let first = hbFirst (s), m = hbTaps (s), ring = hbRing (s), mask = hbMask (s), n = c.at.at (s);
+        c.x.at (ring + n) = x;
+        float y = 0;
+
+        for (int j = 0; j < m; ++j)
+            y += distHalfBands.at (first + j) * (c.x.at (ring + ((n - m - j) & mask)) + c.x.at (ring + ((n - m + 1 + j) & mask)));
+
+        y *= 2.0f;
+
+        if (late)
+        {
+            a = c.x.at (ring + ((n - m) & mask));
+            b = y;
+        }
+        else
+        {
+            a = y;
+            b = c.x.at (ring + ((n - m + 1) & mask));
+        }
+    }
+
+    /// Stage s down: the shaped pair (a, b) from its hbUp back to one sample at the lower rate.
+    float hbDown (DistCascade& c, int s, float a, float b, bool late)
+    {
+        let first = hbFirst (s), m = hbTaps (s), ring = hbRing (s), mask = hbMask (s), n = c.at.at (s);
+        c.e.at (ring + n) = a;
+        c.o.at (ring + n) = b;
+        float y = 0;
+
+        if (late)
+        {
+            for (int j = 0; j < m; ++j)
+                y += distHalfBands.at (first + j) * (c.o.at (ring + ((n - m - 1 - j) & mask)) + c.o.at (ring + ((n - m + j) & mask)));
+
+            y += 0.5f * c.e.at (ring + ((n - m) & mask));
+        }
+        else
+        {
+            for (int j = 0; j < m; ++j)
+                y += distHalfBands.at (first + j) * (c.e.at (ring + ((n - m - j) & mask)) + c.e.at (ring + ((n - m + 1 + j) & mask)));
+
+            y += 0.5f * c.o.at (ring + ((n - m) & mask));
+        }
+
+        c.at.at (s) = (n + 1) & mask;
+        return y;
+    }
+
     struct Distortion
     {
         bool needsReset;
         float preS, postS;
-        float[32] hL, hR, uL, uR;
+        float[32] hL, hR, uL, uR;               // Oat mode's oversampling (Oatmeal's FIRs)
         int idx;
+        DistCascade cL, cR;                     // and the cascade, outside Oat mode
         // the mix: its ramp, and the dry, delayed as the oversampling delays the sound
         float mixS;
-        float[16] dryL, dryR;
+        float[64] dryL, dryR;
         int dryIdx;
         // the model types' controls for this block and each side's model (Airwindows.cmajor),
         // and the type their state is from; the knobs (drive, tone, character) the controls
@@ -1681,10 +1762,14 @@ namespace porridge
         this.mR = DistModel();
     }
 
-    /// The samples the oversampling delays the sound by, at 2x, 4x and 8x.
-    int distLatency (int os)
+    /// The samples the oversampling delays the sound by, at 2x, 4x and 8x (Oatmeal's in Oat
+    /// mode, a half sample short; the cascade's: 55, then 6 and 2 more).
+    int distLatency (int os, bool oat)
     {
-        return os == 2 ? 15 : (os == 4 ? 7 : (os == 8 ? 3 : 0));
+        if (oat)
+            return os == 2 ? 15 : (os == 4 ? 7 : (os == 8 ? 3 : 0));
+
+        return os == 2 ? 55 : (os == 4 ? 61 : (os == 8 ? 63 : 0));
     }
 
     int distFirSet (float64 sr)
@@ -1795,11 +1880,53 @@ namespace porridge
         return float (m.runModel (c, float64 (v)));
     }
 
+    /// The cascade at 2x, 4x or 8x around the shaper (x: after the pregain).
+    float distCascade (const DistTables& t, const float[1026]& custom, int type, const DistCoefs& k, DistModel& m, int os,
+                       DistCascade& c, float x)
+    {
+        float a0, a1;
+        c.hbUp (0, x, false, a0, a1);
+
+        if (os == 2)
+            return c.hbDown (0, shapeAt (t, custom, type, k, m, a0), shapeAt (t, custom, type, k, m, a1), false);
+
+        float[2] r;
+
+        for (wrap<2> i)
+        {
+            float b0, b1;
+            c.hbUp (1, i == 0 ? a0 : a1, true, b0, b1);
+
+            if (os == 4)
+            {
+                r[i] = c.hbDown (1, shapeAt (t, custom, type, k, m, b0), shapeAt (t, custom, type, k, m, b1), true);
+            }
+            else
+            {
+                float[2] q;
+
+                for (wrap<2> j)
+                {
+                    float c0, c1;
+                    c.hbUp (2, j == 0 ? b0 : b1, true, c0, c1);
+                    q[j] = c.hbDown (2, shapeAt (t, custom, type, k, m, c0), shapeAt (t, custom, type, k, m, c1), true);
+                }
+
+                r[i] = c.hbDown (1, q[0], q[1], true);
+            }
+        }
+
+        return c.hbDown (0, r[0], r[1], false);
+    }
+
     float distSample (const DistTables& t, const float[1026]& custom, int type, const DistCoefs& c, DistModel& m, int os, int firSet,
-                      float x, float preS, float postS, float[32]& h, float[32]& u, int idx)
+                      float x, float preS, float postS, float[32]& h, float[32]& u, int idx, bool oat, DistCascade& cascade)
     {
         if (os <= 1)
             return shapeAt (t, custom, type, c, m, x * preS) * postS;
+
+        if (! oat)
+            return distCascade (t, custom, type, c, m, os, cascade, x * preS) * postS;
 
         let base = (firSet * 3 + (os == 2 ? 0 : (os == 4 ? 1 : 2))) * 32;
         h.at (idx) = x * preS * float (os);
@@ -1830,10 +1957,10 @@ namespace porridge
     }
 
     /// The mix of the distorted y with the dry x, which waits `latency` samples in `dry`.
-    float mixDry (float y, float x, float mixS, bool mixing, float[16]& dry, int dryIdx, int latency)
+    float mixDry (float y, float x, float mixS, bool mixing, float[64]& dry, int dryIdx, int latency)
     {
         dry.at (dryIdx) = x;
-        return mixing ? y * mixS + dry.at ((dryIdx - latency) & 15) * (1.0f - mixS) : y;
+        return mixing ? y * mixS + dry.at ((dryIdx - latency) & 63) * (1.0f - mixS) : y;
     }
 
     /// Per-voice (mono) distortion of one block. noteHz: the voice's note.
@@ -1849,7 +1976,8 @@ namespace porridge
         let type = int (P[slot::Sat_Type]);
         let set = distFirSet (sr);
         let mixing = this.mixS < 1.0f || dmix != 0.0f;
-        let latency = distLatency (os);
+        let oat = P[slot::Oat_Mode] != 0;
+        let latency = distLatency (os, oat);
 
         for (int i = 0; i < n; ++i)
         {
@@ -1858,9 +1986,9 @@ namespace porridge
             this.postS = this.postS + dpost;
             this.mixS = this.mixS + dmix;
             let x = buf.at (i);
-            let y = distSample (t, custom, type, this.coefs, this.mL, os, set, x, this.preS, this.postS, this.hL, this.uL, this.idx);
+            let y = distSample (t, custom, type, this.coefs, this.mL, os, set, x, this.preS, this.postS, this.hL, this.uL, this.idx, oat, this.cL);
             buf.at (i) = mixDry (y, x, this.mixS, mixing, this.dryL, this.dryIdx, latency);
-            this.dryIdx = (this.dryIdx + 1) & 15;
+            this.dryIdx = (this.dryIdx + 1) & 63;
             if (os > 1) this.idx = (this.idx + os) & 31;
         }
 
@@ -1881,7 +2009,8 @@ namespace porridge
         let type = int (P[slot::Sat_Type]);
         let set = distFirSet (sr);
         let mixing = this.mixS < 1.0f || dmix != 0.0f;
-        let latency = distLatency (os);
+        let oat = P[slot::Oat_Mode] != 0;
+        let latency = distLatency (os, oat);
 
         for (wrap<blockSize> i)
         {
@@ -1890,11 +2019,11 @@ namespace porridge
             this.postS = this.postS + dpost;
             this.mixS = this.mixS + dmix;
             let x = buf[i];
-            let l = distSample (t, custom, type, this.coefs, this.mL, os, set, x[0], this.preS, this.postS, this.hL, this.uL, this.idx);
-            let r = distSample (t, custom, type, this.coefs, this.mR, os, set, x[1], this.preS, this.postS, this.hR, this.uR, this.idx);
+            let l = distSample (t, custom, type, this.coefs, this.mL, os, set, x[0], this.preS, this.postS, this.hL, this.uL, this.idx, oat, this.cL);
+            let r = distSample (t, custom, type, this.coefs, this.mR, os, set, x[1], this.preS, this.postS, this.hR, this.uR, this.idx, oat, this.cR);
             buf[i] = float<2> (mixDry (l, x[0], this.mixS, mixing, this.dryL, this.dryIdx, latency),
                                mixDry (r, x[1], this.mixS, mixing, this.dryR, this.dryIdx, latency));
-            this.dryIdx = (this.dryIdx + 1) & 15;
+            this.dryIdx = (this.dryIdx + 1) & 63;
             if (os > 1) this.idx = (this.idx + os) & 31;
         }
 
