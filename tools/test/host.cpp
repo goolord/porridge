@@ -13,7 +13,9 @@
 // frame 0's MIDI. (Cmajor's C++ generator reports a latency of 0 whatever the patch declares.)
 // --voices asks for the view's reports of the sounding notes (VoiceView) and writes one line per
 // report: the frame, then the struct's 450 words as it's laid out (ints, bools as ints, floats).
-// --time prints how long the render loop took ("render_seconds 0.123"), for CPU measurements: on
+// --time renders 64 frames a call and prints how long the render loop took ("render_seconds
+// 0.123"), every call slower than 120 µs ("slow_block <frame> <µs>"; a 64-frame block has 1333 µs
+// at 48 kHz) and the slowest ("render_worst_us"), for CPU measurements: on
 // Windows the time the thread itself ran (its cycles over the TSC's rate), which other busy
 // processes don't add to; elsewhere, wall time.
 //
@@ -96,6 +98,7 @@ int main (int argc, char** argv)
 {
     std::string programPath, eventsPath, inputPath, tuningPath, voicesPath, outPath = "out.f32";
     bool timing = false;
+    double worst = 0;
     long frames = 44100, preroll = 0, latency = 64;
     double rate = 44100.0, tempo = 120.0;
     std::vector<std::pair<std::string, std::string>> overrides;
@@ -237,7 +240,7 @@ int main (int argc, char** argv)
             patch->addEvent (midiHandle, 0, b);
             ++ei;
         }
-        long n = std::min<long> ((long) Patch::maxFramesPerBlock, totalFrames - pos);
+        long n = std::min<long> (timing ? 64L : (long) Patch::maxFramesPerBlock, totalFrames - pos);
         if (ei < events.size()) n = std::min<long> (n, events[ei].frame - pos);
         n = std::max<long> (n, 1);
         if (! inL.empty())
@@ -250,7 +253,14 @@ int main (int argc, char** argv)
             }
             patch->setInputFrames (inHandle, inBlock.data(), (uint32_t) n, 0);
         }
+        const auto callStart = std::chrono::steady_clock::now();
         patch->advance ((int32_t) n);
+        if (timing)
+        {
+            const double us = std::chrono::duration<double, std::micro> (std::chrono::steady_clock::now() - callStart).count() * 64.0 / double (n);
+            worst = std::max (worst, us);
+            if (us > 120.0) printf ("slow_block %ld %.1f%c", pos, us, 10);
+        }
         patch->copyOutputFrames (outHandle, block.data(), (uint32_t) n);
 
         if (voices)
@@ -276,7 +286,10 @@ int main (int argc, char** argv)
     }
 
     if (timing)
+    {
         printf ("render_seconds %.6f%c", clock.seconds(), 10);
+        printf ("render_worst_us %.1f%c", worst, 10);
+    }
 
     FILE* o = fopen (outPath.c_str(), "wb");
     int32_t hdr[2] = { 2, (int32_t) frames };
