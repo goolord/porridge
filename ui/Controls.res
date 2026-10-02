@@ -136,78 +136,89 @@ let editInPlace = (e, text, ~commit, ~maxLength=?, ~within=?) => {
   input->onEvent(#blur, _ => finish(true))
 }
 
-// The modulation bars of a model's parameter rows, redrawn together (once a frame) when a
-// slot changes: one listener per slot parameter rather than one per row.
-let modBars: WeakMap.t<ParamModel.t, array<unit => unit>> = WeakMap.make()
-
-// Each target's connections (ModEdit.connectionsTo), found for every target at once and kept
-// until a slot changes, rather than every row reading all the slots.
-let connectionsByTarget: WeakMap.t<ParamModel.t, Map.t<int, array<int>>> = WeakMap.make()
-
-let onSlotChange = (model, refresh) =>
-  switch modBars->WeakMap.get(model) {
-  | Some(refreshers) => refreshers->Array.push(refresh)
-  | None =>
-    let refreshers = [refresh]
-    modBars->WeakMap.set(model, refreshers)->ignore
-    let refreshAll = perFrame(() => refreshers->Array.forEach(f => f()))
-    let changed = () => {
-      connectionsByTarget->WeakMap.delete(model)->ignore
-      refreshAll()
-    }
-    ModMatrix.slotNumbers->Array.forEach(k => model->ParamModel.listenEach(ModMatrix.slotIds(k), changed))
+// What moves a parameter (Modulators), for its status text: and with matrix connections, that
+// an alt-drag changes the first's amount.
+let modulationText = (ctx: Ctx.t, id) =>
+  switch Modulators.on(ctx.model, id) {
+  | [] => ""
+  | ms =>
+    let connections = ms->Array.filter(m => m.slot != None)->Array.length
+    Modulators.statusText(ctx.model, [id]) ++ (
+      connections == 0
+        ? ""
+        : `: alt-drag to change ${connections > 1 ? "the first connection's amount" : "the connection's amount"}`
+    )
   }
 
-let connectionsTo = (model, target) => {
-  let byTarget = switch connectionsByTarget->WeakMap.get(model) {
-  | Some(m) => m
-  | None =>
-    let get = id => model->ParamModel.get(id)
-    let m = Map.make()
-    ModMatrix.slotNumbers->Array.forEach(k =>
-      if ModEdit.isUsed(get, k) {
-        let t = ModMatrix.readSlot(get, k).target
-        switch m->Map.get(t) {
-        | Some(ks) => ks->Array.push(k)
-        | None => m->Map.set(t, [k])
-        }
+// What moves a control, shown in its sources' colours (Modulators): a band under the track for
+// the range each matrix connection sweeps, one under another, and for what has no known range
+// on the knob (Oatmeal's own routings), a mark down the left edge, split between them. Any
+// control with a track can carry them; the edge marks go into e.
+let modMarks = (ctx: Ctx.t, e, track, id, ~norm) => {
+  let bands = ref(None)
+  let edge = ref(None)
+  let lazyEl = (slot, cls, parent) =>
+    switch slot.contents {
+    | Some(x) => x
+    | None =>
+      let x = el("span", ~cls, ~parent)
+      slot := Some(x)
+      x
+    }
+  let marksIn = (box, tag, count) => {
+    let marks = box->querySelectorAll(tag)->nodesToArray
+    let made = Array.fromInitializer(~length=count, i =>
+      switch marks[i] {
+      | Some(m) => m
+      | None => el(tag, ~parent=box)
       }
     )
-    connectionsByTarget->WeakMap.set(model, m)->ignore
-    m
+    made->Array.forEach(m => m->setStyle("display", "block"))
+    marks->Array.forEachWithIndex((m, i) =>
+      if i >= count {
+        m->setStyle("display", "none")
+      }
+    )
+    made
   }
-  byTarget->Map.get(target)->Option.getOr([])
+  () => {
+    let ms = Modulators.on(ctx.model, id)
+    let ranged = ms->Array.filterMap(m => m.range->Option.map(r => (m, r)))
+    let unranged = ms->Array.filter(m => m.range == None)
+    if ranged != [] || bands.contents != None {
+      let n = clamp01(norm())
+      let box = lazyEl(bands, "mb", track)
+      marksIn(box, "em", Array.length(ranged))->Array.forEachWithIndex((band, i) => {
+        let (m, (lo, hi)) = ranged->Array.getUnsafe(i)
+        let (a, b) = (clamp01(n + lo), clamp01(n + hi))
+        band->setStyle("left", Float.toString(a * 100.) ++ "%")
+        band->setStyle("width", Float.toString(Math.max(0.5, (b - a) * 100.)) ++ "%")
+        band->setStyle("background", Modulators.colour(m))
+        // several: one under another
+        band->setStyle("top", px(-1. - 2. * Int.toFloat(i)))
+      })
+    }
+    if unranged != [] || edge.contents != None {
+      let box = lazyEl(edge, "me", e)
+      marksIn(box, "i", Array.length(unranged))->Array.forEachWithIndex((mark, i) =>
+        mark->setStyle("background", Modulators.colour(unranged->Array.getUnsafe(i)))
+      )
+    }
+  }
 }
 
-// What modulates a parameter's knob (target t), for its status text.
-let modulationText = (ctx: Ctx.t, t) => {
-  let get = id => ctx.model->ParamModel.get(id)
-  switch ModEdit.connectionsTo(get, t) {
-  | [] => ""
-  | ks =>
-    let parts = ks->Array.map(k => {
-      let s = ModMatrix.readSlot(get, k)
-      let source = ModMatrix.sources[s.source]->Option.mapOr("", x => x.label)
-      `${source} ${(ctx.model->ParamModel.def(ModMatrix.amountId(k))).valueText(s.amount)}`
-    })
-    `. Modulated by ${parts->Array.join(", ")}: alt-drag to change ${Array.length(ks) > 1 ? "the first's amount" : "how much"}`
-  }
-}
-
-// A parameter row: label above-left, value right, position track underneath. A parameter the
-// modulation matrix reaches shows each connection's range in its source's colour and a tick
-// where each sounding note has moved it; an alt-drag changes its first connection's amount,
-// and a source dropped on it from the tray (ModTray) connects to it.
+// A parameter row: label above-left, value right, position track underneath, and what moves it
+// (modMarks). A parameter the modulation matrix reaches shows a tick where each sounding note
+// has moved it; an alt-drag changes its first connection's amount, and a source dropped on it
+// from the tray (ModTray) connects to it.
 let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
   let target = ModMatrix.targetOfParam(id)
   let (c, e) = frame(ctx, parent, id, ~cls="p", ~x, ~y, ~w, ~label?, ~labelCls="l", ~more=() =>
-    target >= 0 ? modulationText(ctx, target) : ""
+    modulationText(ctx, id)
   )
   let v = el("span", ~cls="v", ~parent=e)
   let track = el("span", ~cls="t", ~parent=e)
   let fill = el("i", ~parent=track)
-  // the ranges modulation connections sweep, for parameters the matrix can reach
-  let bands = target >= 0 ? Some(el("span", ~cls="mb", ~parent=track)) : None
   // where the sounding notes have moved it to, a tick each (VoiceView)
   let ticks = target >= 0 ? Some(el("span", ~cls="vt", ~parent=track)) : None
   if target >= 0 {
@@ -218,31 +229,7 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
   let setNorm = n => ctx.model->ParamModel.set(id, c.def.fromNorm(clamp01(n)))
   let get = id => ctx.model->ParamModel.get(id)
 
-  let updateModBar = () =>
-    bands->Option.forEach(box => {
-      let ks = connectionsTo(ctx.model, target)->Array.filter(k => get(ModMatrix.amountId(k)) != 0.)
-      let marks = box->querySelectorAll("em")->nodesToArray
-      let n = clamp01(norm())
-      ks->Array.forEachWithIndex((k, i) => {
-        let band = switch marks[i] {
-        | Some(m) => m
-        | None => el("em", ~parent=box)
-        }
-        let (lo, hi) = ModEdit.rangeOf(get, k)
-        let (a, b) = (clamp01(n + lo), clamp01(n + hi))
-        band->setStyle("display", "block")
-        band->setStyle("left", Float.toString(a * 100.) ++ "%")
-        band->setStyle("width", Float.toString(Math.max(0.5, (b - a) * 100.)) ++ "%")
-        band->setStyle("background", ModEdit.sourceColor(ModMatrix.readSlot(get, k).source))
-        // several: one under another
-        band->setStyle("top", px(-1. - 2. * Int.toFloat(i)))
-      })
-      marks->Array.forEachWithIndex((m, i) =>
-        if i >= Array.length(ks) {
-          m->setStyle("display", "none")
-        }
-      )
-    })
+  let updateModBar = modMarks(ctx, e, track, id, ~norm)
 
   let update = () => {
     let x = current(c)
@@ -361,9 +348,7 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
     }
   })
 
-  if bands != None {
-    onSlotChange(ctx.model, updateModBar)
-  }
+  Modulators.watch(ctx.model, updateModBar)
   ticks->Option.forEach(box => {
     let notes = VoiceView.get(ctx.pc)
     notes->VoiceView.listenTarget(target, e, shown => {

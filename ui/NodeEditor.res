@@ -69,12 +69,14 @@ let drag = (t, i, hit, ev, ~ids, ~onMove) => {
   t.schedule()
 }
 
-// Point i: a dot (these attributes) in the graph's layer, with a hit area above every dot. A
+// Point i: a dot (these attributes) in the graph's layer, with a hit area above every dot, and
+// around it what moves the parameters ids() gives (Modulators; r: the dot's largest radius). A
 // press drags it (onDrag gets the hit area and the event), the right button calls onRightClick,
 // and the wheel scrolls the parameter wheel() gives.
-type node = {dot: element, hit: element}
+type node = {dot: element, hit: element, mods: Modulators.dots}
 
-let node = (t, i, ~dot, ~hitR, ~cursor, ~onDrag, ~onRightClick, ~wheel: unit => option<string>) => {
+let node = (t, i, ~dot, ~hitR, ~cursor, ~onDrag, ~onRightClick, ~wheel: unit => option<string>, ~ids, ~r) => {
+  let mods = Modulators.dotsFor(t.g.ctx.model, t.g.layer, ids, ~r)
   let dot = svgEl(t.g.layer, "circle", dot)
   let hit = svgEl(
     t.g.hits,
@@ -101,11 +103,15 @@ let node = (t, i, ~dot, ~hitR, ~cursor, ~onDrag, ~onRightClick, ~wheel: unit => 
     }
   })
   hit->onWheel(ev => wheel()->Option.forEach(id => Controls.wheelParam(t.g.ctx.model, id, ev)))
-  {dot, hit}
+  {dot, hit, mods}
 }
 
-let place = (n, x, y) =>
+// Puts the point at (x, y), shown or not.
+let place = (n, x, y, ~shown=true) => {
   [n.dot, n.hit]->Array.forEach(e => {
     e->setAttribute("cx", Num(x))
     e->setAttribute("cy", Num(y))
+    e->setAttribute("display", Str(shown ? "inline" : "none"))
   })
+  Modulators.placeDots(n.mods, x, y, ~shown)
+}

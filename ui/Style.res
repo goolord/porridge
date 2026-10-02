@@ -311,6 +311,12 @@ let css = `
 }
 /* the range modulation sweeps */
 .p .t .mb em { position: absolute; height: 4px; background: var(--mod); opacity: 0.7; display: none; pointer-events: none; }
+/* what moves it with no known range on the knob (Oatmeal's own routings): its colours down the left edge */
+.p .me { position: absolute; left: 1px; top: 3px; bottom: 3px; width: 2px; display: flex; flex-direction: column;
+    gap: 1px; pointer-events: none; }
+.p .me i { flex: 1; display: none; opacity: 0.85; border-radius: 1px; }
+/* the same on a graph's point: dots around it */
+.mdots { pointer-events: none; }
 /* a source from the tray over it */
 .p.dropping { background: var(--paper); box-shadow: inset 0 0 0 2px var(--signal); }
 /* where each sounding note has moved it (VoiceView) */

@@ -11,6 +11,8 @@ type handle = {
   hot: bool,
   mutable x: float,
   mutable y: float,
+  // what moves its parameters, around it (Modulators)
+  mods: Modulators.dots,
 }
 
 type t = {
@@ -181,9 +183,11 @@ let handle = (
     "circle",
     [("class", Str("hit")), ("r", Num(r + 5.)), ("style", Str("cursor:" ++ cursor))],
   )
-  let h = {dot, hit, key, hot, x: 0., y: 0.}
-  g.handles->Array.push(h)
   let model = g.ctx.model
+  let mods = Modulators.dotsFor(model, g.layer, () => ids, ~r)
+  let h = {dot, hit, key, hot, x: 0., y: 0., mods}
+  g.handles->Array.push(h)
+  let statusText = () => model->ParamModel.statusText(ids) ++ Modulators.statusText(model, ids)
   hit->onPointer(#pointerdown, ev => {
     ev->preventDefault
     // not a press on the graph behind it too
@@ -208,7 +212,7 @@ let handle = (
           moved := (dx, dy)
           drag({x: x + dx, y: y + dy, dx, dy})
           if statusOnDrag {
-            g.ctx.status->Status.show(model->ParamModel.statusText(ids))
+            g.ctx.status->Status.show(statusText())
           }
         },
         ~onUp=() => {
@@ -235,7 +239,7 @@ let handle = (
     )
     switch hover {
     | Some(fn) => fn(on)
-    | None if on => g.ctx.status->Status.show(model->ParamModel.statusText(ids))
+    | None if on => g.ctx.status->Status.show(statusText())
     | None =>
       switch g.hint {
       | Some(hint) => g.ctx.status->Status.show(hint)
@@ -256,6 +260,7 @@ let place = (h: handle, x, y) => {
     e->setAttribute("cx", Num(x))
     e->setAttribute("cy", Num(y))
   })
+  Modulators.placeDots(h.mods, x, y)
 }
 
 let show = (h: handle, on) => [h.dot, h.hit]->Array.forEach(e => e->setStyle("display", on ? "" : "none"))
