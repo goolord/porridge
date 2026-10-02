@@ -1,6 +1,6 @@
 // Host-facing metadata per parameter index (used by tools/gen.mjs to declare the patch's
-// endpoints): name, range, default, switch names, and a unit when the internal value is
-// the number the original displays.
+// endpoints): name, range, default, switch names, a unit when the internal value is the
+// number the original displays, and whether hosts list it.
 
 // The original has a few duplicate or misleading names, and leaves the unison parameters
 // unnamed; hosts need unique ones.
@@ -51,6 +51,37 @@ let unitFor = (d: ParamDefs.t) =>
     }
   }
 
+// Parameters that set up routing rather than the sound (where a connection or an Oatmeal mod
+// slot goes and what it hears, which effect a rack or voice slot holds, the custom shape's
+// points, MIDI setup, tuning, Oat mode): hosts don't list them (automatable: false). The patch
+// still has them, so presets, the plugin's saved state and the view set and read them as before.
+let oatmealSetup = /^(M[12]_Target_\d|XY_[HV]_(Target_\d|CC)|CC\d(_Target_\d)?|MIDI_Channel_\d+|Tune_\w+)$/
+
+let porridgeSetup = Lazy.make(() => {
+  let distortion = PorridgeParams.rackKinds->Array.find(k => k.key == "distortion")->Option.getOrThrow
+  let shaper = PorridgeParams.shaperParams->Array.map(Pair.first)
+  Set.fromArray([
+    ...ModMatrix.slotNumbers->Array.flatMap(k =>
+      ModMatrix.slotIds(k)->Array.filter(id => id != ModMatrix.amountId(k))
+    ),
+    ...shaper,
+    ...distortion.copies->Array.flatMap(n => shaper->Array.map(PorridgeParams.copyId(_, n))),
+    ...Array.fromInitializer(~length=PorridgeParams.rackSlots, k => PorridgeParams.rackId(k + 1)),
+    ...PorridgeParams.laneSpecs->Array.map(s => s.id),
+    "FX_Order",
+    "MM_Follow",
+    "MPE_On",
+    "MPE_BendRange",
+    "Oat_Mode",
+  ])
+})
+
+let isSetup = id =>
+  switch id {
+  | "SustainPedal" | "AftertouchMode" | "BendRange" | "Voices" | "Sat_Mode" | "F_Double" => true
+  | id => oatmealSetup->RegExp.test(id) || Lazy.get(porridgeSetup)->Set.has(id)
+  }
+
 type t = {
   hostName: string,
   min: float,
@@ -58,10 +89,19 @@ type t = {
   init: float,
   names: option<array<string>>,
   unit: option<string>,
+  automatable: bool,
 }
 
 let paramInfo = index => {
   let d = Lazy.get(defs)->Array.getUnsafe(index)
   let hostName = renamed(d.id)->Option.getOr(d.name)
-  {hostName, min: d.min, max: d.max, init: d.init, names: d.names, unit: unitFor(d)}
+  {
+    hostName,
+    min: d.min,
+    max: d.max,
+    init: d.init,
+    names: d.names,
+    unit: unitFor(d),
+    automatable: !isSetup(d.id),
+  }
 }

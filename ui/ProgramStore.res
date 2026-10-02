@@ -80,12 +80,16 @@ let onState = (t, {key, value}: PatchConnection.storedStateEvent) =>
   switch (StoredState.keyOf(key), value) {
   | (Some(key), String(s)) if t.stored->Map.get(key) == Some(s) => ()
   | (Some(StoredState.Bank), String(bank)) if StoredState.isBank(bank) =>
-    Preset.decodeNamedBank(bank)->Option.forEach(((name, presets)) => {
+    Preset.decodeNamedBank(bank)->Option.forEach(((name, presets, warnings)) => {
       t.programs = Preset.fillBank(presets)
       t.bankName = name
       // (the host's state: the steps before it no longer apply)
       t.model->ParamModel.clearHistory
       changed(t)
+      // (what loading it couldn't keep: Preset's warnings)
+      if warnings != [] {
+        t.message(warnings->Array.join("; "))
+      }
     })
   | (Some(StoredState.Program), Number(i)) if Float.isFinite(i) =>
     let i = Math.Int.max(0, Math.Int.min(bankPrograms - 1, Float.toInt(i)))
@@ -426,7 +430,7 @@ let keep = (t, kept: Preset.t) => t.programs->Array.setUnsafe(t.current, kept)
 
 // Init keeps the program's author, for someone writing a bank.
 let initCurrent = t => {
-  let init = Preset.make("Init")
+  let init = Preset.init("Init")
   step(t, "init", () => loadIntoCurrent(t, {...init, meta: {...init.meta, author: meta(t).author}}))
 }
 
@@ -462,17 +466,17 @@ let loadFile = (t, bytes, filename) =>
   } else {
     switch Preset.parseForLoading(bytes, filename) {
     | Error(e) => t.message(e)
-    | Ok({kind: Single, presets: [p]}) =>
+    | Ok({kind: Single, presets: [p], warnings}) =>
       loadIntoCurrent(t, p)
-      t.message(`Loaded "${Preset.name(p)}" into program ${Int.toString(t.current + 1)}`)
-    | Ok({presets: programs, name}) =>
+      t.message([`Loaded "${Preset.name(p)}" into program ${Int.toString(t.current + 1)}`, ...warnings]->Array.join("; "))
+    | Ok({presets: programs, name, warnings}) =>
       loadBank(t, programs, ~name=name != "" ? name : Web.baseName(filename))
       let count = Array.length(programs)
-      t.message(
+      let loaded =
         count > bankPrograms
           ? `Loaded the first ${Int.toString(bankPrograms)} of the ${Int.toString(count)} programs in ${filename}`
-          : `Loaded bank ${filename} (${Int.toString(count)} programs)`,
-      )
+          : `Loaded bank ${filename} (${Int.toString(count)} programs)`
+      t.message([loaded, ...warnings]->Array.join("; "))
     }
   }
 

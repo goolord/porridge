@@ -1,5 +1,5 @@
 // The effects rack (PorridgeParams.rackKinds): up to eight effects on the whole sound, in the
-// order they run, each kind up to four times. The first chorus, delay, reverb and EQ are
+// order they run, each kind up to three times. The first chorus, delay, reverb and EQ are
 // Oatmeal's; the others are numbered copies with parameters of their own (D_Wet: D2_Wet ...).
 // Porridge's own effects (flanger, phaser, compressor, algo reverb, convolve, bode, filter,
 // utility, ambience, air) are numbered the same way from their first (Fl_Rate, Fl2_Rate ...).

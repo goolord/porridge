@@ -87,7 +87,7 @@ let withoutIdleEffects = (values: Bank.values) => {
   values
 }
 
-// Init: the defaults, with an empty effects rack.
+// The defaults, with an empty effects rack (what the tools measure against).
 let make = name => {
   meta: emptyMeta(name),
   values: withoutIdleEffects(defaultValues()),
@@ -96,10 +96,19 @@ let make = name => {
   impulses: Impulse.none(),
 }
 
+// Init, as a new program starts: the defaults, with the HQ saw on both oscillators. (Oatmeal's
+// sine stays the waveforms' default: the bank in the plugin's state leaves defaults out, so a
+// new default would change the programs stored without one.)
+let init = name => {
+  let p = make(name)
+  ["O1_Waveform", "O2_Waveform"]->Array.forEach(id => p.values->Map.set(id, ParamDefs.choiceValue(id, "Saw")))
+  p
+}
+
 // A whole bank: presets, then Init programs. The Init programs share one set of values and
 // tables (a preset's are never changed in place), which spares making 64 of each at startup.
 let fillBank = presets => {
-  let init = Lazy.make(() => make("Init"))
+  let init = Lazy.make(() => init("Init"))
   Array.fromInitializer(~length=bankPrograms, i =>
     switch presets[i] {
     | Some(p) => p
@@ -399,12 +408,129 @@ let getNumber = (d, key) =>
   | _ => 0.
   }
 
-let fromJsonObject = (d: dict<JSON.t>) => {
-  let values = defaultValues()
-  let params = switch d->Dict.get("params") {
-  | Some(Object(params)) => params
-  | _ => Dict.make()
+// A program from before the rack's fourth copies were retired (PorridgeParams) may hold one in a
+// rack or voice slot. It moves onto a free copy of its kind, with its parameters and the
+// connections to them: a copy that no slot holds and no connection moves, so the program sounds
+// as it did. With none free, it's left out with its connections, and the warning says so.
+// Connections to retired copies that no slot held moved nothing, and go. Returns the program's
+// params and modulations as they load, and the warnings.
+let retireCopies = (name, params: dict<JSON.t>, modulations: array<JSON.t>) => {
+  let params = params->Dict.copy
+  let modulations = ref(modulations)
+  let warnings = []
+  let number = id =>
+    switch params->Dict.get(id) {
+    | Some(Number(x)) => Some(x)
+    | _ => None
+    }
+  let setNumber = (id, x) => params->Dict.set(id, JSON.Number(x))
+  let rackIds = Array.fromInitializer(~length=PorridgeParams.rackSlots, k => PorridgeParams.rackId(k + 1))
+  let laneIds = Array.fromInitializer(~length=PorridgeParams.laneSlots, k => PorridgeParams.laneId(k + 1))
+  let slotIds = Array.concat(rackIds, laneIds)
+  let holding = v => slotIds->Array.filter(id => number(id) == Some(Int.toFloat(v)))
+  let targetOf = m =>
+    switch m {
+    | JSON.Object(m) => getString(m, "target")
+    | _ => ""
+    }
+  let idOf = (first, n) => n == 1 ? first : PorridgeParams.copyId(first, n)
+
+  // its parameters, and the connections to them, go to copy `to`'s; the slots that held it
+  // hold `value`
+  let move = (v, ~from, ~to, ~value) => {
+    from->Array.forEachWithIndex((id, i) => {
+      let id2 = to->Array.getUnsafe(i)
+      switch params->Dict.get(id) {
+      | Some(x) => params->Dict.set(id2, x)
+      | None => params->Dict.delete(id2)
+      }
+      params->Dict.delete(id)
+    })
+    holding(v)->Array.forEach(id => setNumber(id, Int.toFloat(value)))
+    modulations :=
+      modulations.contents->Array.map(m =>
+        switch m {
+        | Object(o) if from->Array.includes(getString(o, "target")) =>
+          let o = o->Dict.copy
+          o->Dict.set("target", str(to->Array.getUnsafe(from->Array.indexOf(getString(o, "target")))))
+          JSON.Object(o)
+        | m => m
+        }
+      )
   }
+
+  // out of the rack, or the lane, which is kept without gaps and whose places count the effects
+  // before them
+  let leaveOut = v =>
+    holding(v)->Array.toReversed->Array.forEach(id =>
+      switch laneIds->Array.indexOf(id) {
+      | -1 => setNumber(id, 0.)
+      | i =>
+        laneIds->Array.forEachWithIndex((id, k) =>
+          if k >= i {
+            setNumber(id, laneIds[k + 1]->Option.flatMap(number)->Option.getOr(0.))
+          }
+        )
+        ["VL_FilterAt", "VL_AmpAt"]->Array.forEach(place =>
+          number(place)->Option.forEach(at =>
+            if at > Int.toFloat(i) {
+              setNumber(place, at - 1.)
+            }
+          )
+        )
+      }
+    )
+
+  slotIds
+  ->Array.filterMap(number)
+  ->Array.reduce([], (acc, v) => acc->Array.includes(v) ? acc : [...acc, v])
+  ->Array.forEach(v => {
+    let v = Float.toInt(v)
+    PorridgeParams.retiredEntry(v)->Option.forEach(((key, old)) => {
+      let kind = PorridgeParams.rackKinds->Array.find(k => k.key == key)->Option.getOrThrow
+      let ids = n => kind.params->Array.map(((first, _)) => idOf(first, n))
+      // a copy of its kind (not Oatmeal's chorus, delay, reverb or EQ, which FX_Order places)
+      // that no slot holds and no connection moves
+      let free =
+        PorridgeParams.rackEntries
+        ->Array.mapWithIndex((e, value) => (value, e))
+        ->Array.find(((value, e)) =>
+          switch e {
+          | Some((k, n)) if k == key && (n > 1 || kind.firstInRack) =>
+            holding(value) == [] &&
+              !(modulations.contents->Array.some(m => ids(n)->Array.includes(targetOf(m))))
+          | _ => false
+          }
+        )
+      switch free {
+      | Some((value, Some((_, n)))) => move(v, ~from=ids(old), ~to=ids(n), ~value)
+      | _ =>
+        let what = `${kind.name} ${Int.toString(old)}`
+        warnings->Array.push(
+          `"${name}" has ${what}, which Porridge no longer has, and no other ${kind.name->String.toLowerCase} free to take it: it's left out`,
+        )
+        leaveOut(v)
+      }
+    })
+  })
+  let kept = modulations.contents->Array.filter(m => !PorridgeParams.isRetiredId(targetOf(m)))
+  (params, kept, warnings)
+}
+
+// A preset, and what loading it couldn't keep.
+let fromJsonChecked = (d: dict<JSON.t>) => {
+  let values = defaultValues()
+  let (params, modulations, warnings) = retireCopies(
+    getString(d, "name"),
+    switch d->Dict.get("params") {
+    | Some(Object(params)) => params
+    | _ => Dict.make()
+    },
+    switch d->Dict.get("modulations") {
+    | Some(Array(items)) => items
+    | _ => []
+    },
+  )
   params->Dict.forEachWithKey((v, id) =>
     switch v {
     | Number(x) => loadValue(id, x)->Option.forEach(x => values->Map.set(id, x))
@@ -433,34 +559,30 @@ let fromJsonObject = (d: dict<JSON.t>) => {
 
   // modulations fill the matrix slots in order
   let slot = ref(1)
-  switch d->Dict.get("modulations") {
-  | Some(Array(items)) =>
-    items->Array.forEach(item =>
-      switch item {
-      | Object(m) if slot.contents <= ModMatrix.slots =>
-        let source = ModMatrix.sourceIndex(getString(m, "source"))
-        let target = ModMatrix.targetIndex(getString(m, "target"))
-        let via = ModMatrix.sourceIndex(getString(m, "via"))
-        let number = getNumber(m, ...)
-        let amount = number("amount")
-        if source > 0 && target > 0 {
-          let k = slot.contents
-          let set = (id, x) => loadValue(id, x)->Option.forEach(x => values->Map.set(id, x))
-          set(ModMatrix.sourceId(k), Int.toFloat(source))
-          set(ModMatrix.targetId(k), Int.toFloat(target))
-          set(ModMatrix.amountId(k), amount)
-          set(ModMatrix.viaId(k), Int.toFloat(Math.Int.max(via, 0)))
-          set(ModMatrix.holdId(k), getString(m, "hold") == "latch" ? 1. : 0.)
-          set(ModMatrix.slewId(k), number("slew"))
-          set(ModMatrix.curveId(k), number("curve"))
-          set(ModMatrix.stepsId(k), number("steps"))
-          slot := k + 1
-        }
-      | _ => ()
+  modulations->Array.forEach(item =>
+    switch item {
+    | Object(m) if slot.contents <= ModMatrix.slots =>
+      let source = ModMatrix.sourceIndex(getString(m, "source"))
+      let target = ModMatrix.targetIndex(getString(m, "target"))
+      let via = ModMatrix.sourceIndex(getString(m, "via"))
+      let number = getNumber(m, ...)
+      let amount = number("amount")
+      if source > 0 && target > 0 {
+        let k = slot.contents
+        let set = (id, x) => loadValue(id, x)->Option.forEach(x => values->Map.set(id, x))
+        set(ModMatrix.sourceId(k), Int.toFloat(source))
+        set(ModMatrix.targetId(k), Int.toFloat(target))
+        set(ModMatrix.amountId(k), amount)
+        set(ModMatrix.viaId(k), Int.toFloat(Math.Int.max(via, 0)))
+        set(ModMatrix.holdId(k), getString(m, "hold") == "latch" ? 1. : 0.)
+        set(ModMatrix.slewId(k), number("slew"))
+        set(ModMatrix.curveId(k), number("curve"))
+        set(ModMatrix.stepsId(k), number("steps"))
+        slot := k + 1
       }
-    )
-  | _ => ()
-  }
+    | _ => ()
+    }
+  )
 
   let macroNames = Array.fromInitializer(~length=ModMatrix.macros, i =>
     switch d->Dict.get("macros") {
@@ -484,7 +606,7 @@ let fromJsonObject = (d: dict<JSON.t>) => {
   | _ => []
   }
 
-  {
+  let preset = {
     meta: {
       name: getString(d, "name")->String.slice(~start=0, ~end=maxNameLength),
       author: getString(d, "author"),
@@ -501,7 +623,10 @@ let fromJsonObject = (d: dict<JSON.t>) => {
     ->Option.filter(source => Scala.table(source)->Result.isOk),
     impulses: d->Dict.get("impulses")->Option.mapOr(Impulse.none(), Impulse.listFromJson),
   }
+  (preset, warnings)
 }
+
+let fromJsonObject = d => fromJsonChecked(d)->Pair.first
 
 let bankToJson = (presets, ~name="") =>
   JSON.Object(
@@ -529,19 +654,26 @@ let parseJson = (text): result<parsed, string> =>
       version > Int.toFloat(formatVersion)
         ? ["this file is from a newer Porridge; some settings may be missing"]
         : []
+    let read = items => {
+      let checked = items->Array.filterMap(item =>
+        switch item {
+        | JSON.Object(p) => Some(fromJsonChecked(p))
+        | _ => None
+        }
+      )
+      (checked->Array.map(Pair.first), [...warnings, ...checked->Array.flatMap(Pair.second)])
+    }
     switch d->Dict.get("porridge") {
-    | Some(String("preset")) => Ok({kind: Single, presets: [fromJsonObject(d)], warnings, name: ""})
+    | Some(String("preset")) =>
+      let (presets, warnings) = read([JSON.Object(d)])
+      Ok({kind: Single, presets, warnings, name: ""})
     | Some(String("bank")) =>
-      let presets = switch d->Dict.get("presets") {
-      | Some(Array(items)) =>
-        items->Array.filterMap(item =>
-          switch item {
-          | Object(p) => Some(fromJsonObject(p))
-          | _ => None
-          }
-        )
-      | _ => []
-      }
+      let (presets, warnings) = read(
+        switch d->Dict.get("presets") {
+        | Some(Array(items)) => items
+        | _ => []
+        },
+      )
       Ok({kind: Many, presets, warnings, name: getString(d, "name")})
     | _ => Error("not a Porridge preset or bank")
     }
@@ -637,7 +769,7 @@ let factoryBank = bytes => {
   Array.fromInitializer(~length=bankPrograms, i =>
     switch programs[i] {
     | Some(p) => fromOatmeal(p.bytes)
-    | None => make(i == 0 ? "Init" : `Init ${Int.toString(i)}`)
+    | None => init(i == 0 ? "Init" : `Init ${Int.toString(i)}`)
     }
   )
 }
@@ -658,15 +790,16 @@ let decodeFirst = s =>
   | exception _ => None
   }
 
-// The bank's name and presets. Older sessions stored the bank as base64 Oatmeal chunks.
+// The bank's name and presets, and what loading them couldn't keep. Older sessions stored the
+// bank as base64 Oatmeal chunks.
 let decodeNamedBank = s =>
   if String.startsWith(String.trim(s), "{") {
     switch parseJson(s) {
-    | Ok({presets, name}) => Some((name, presets))
+    | Ok({presets, name, warnings}) => Some((name, presets, warnings))
     | Error(_) => None
     }
   } else {
-    Some(("", Bank.decodeBank(s)->Array.map(fromOatmeal)))
+    Some(("", Bank.decodeBank(s)->Array.map(fromOatmeal), []))
   }
 
-let decodeBank = s => decodeNamedBank(s)->Option.map(((_, presets)) => presets)
+let decodeBank = s => decodeNamedBank(s)->Option.map(((_, presets, _)) => presets)

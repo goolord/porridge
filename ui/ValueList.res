@@ -74,17 +74,29 @@ let filterAdded = {
 
 let info = list =>
   switch list {
+  // The HQ (anti-aliased) saw, pulse and triangle are the waves; Oatmeal's alias, and are there
+  // for its programs, which keep them (and an Oatmeal export makes the HQ ones Oatmeal's).
   | Waveform => {
-      names: None,
-      short: None,
+      names: Some(["Sine", "Oatmeal saw", "Oatmeal pulse", "Oatmeal triangle", "User", "User PWM"]),
+      short: Some(["Sine", "Oat saw", "Oat pulse", "Oat tri", "User", "User PWM"]),
       added: Some({
-        names: ["Saw HQ", "Pulse HQ", "Triangle HQ"],
-        short: ["Saw HQ", "Pulse HQ", "Triangle HQ"],
+        names: ["Saw", "Pulse", "Triangle"],
+        short: ["Saw", "Pulse", "Triangle"],
         // (saw, pulse, triangle)
         toOatmeal: k => k + 1,
-        exportNote: "the HQ waveforms (exported as the plain ones)",
+        exportNote: "the HQ waveforms (exported as Oatmeal's aliasing ones)",
       }),
-      menu: Plain,
+      menu: Ordered([
+        (0, None),
+        (6, None),
+        (7, None),
+        (8, None),
+        (4, None),
+        (5, None),
+        (1, Some("Oatmeal (aliasing)")),
+        (2, None),
+        (3, None),
+      ]),
     }
   | LfoShape => {names: None, short: None, added: None, menu: Plain}
   | FilterType => {

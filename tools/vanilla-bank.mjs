@@ -29,8 +29,8 @@ const author = "Porridge";
 
 // list values: short names here for the labels a parameter's list has (ParamDefs.choiceValue)
 const choices = (id, labels) => Object.fromEntries (Object.entries (labels).map (([k, label]) => [k, choiceValue (id, label)]));
-const wave = choices ("O1_Waveform", { sine: "Sine", saw: "Saw", pulse: "Pulse", tri: "Triangle", user: "User",
-                                       userPwm: "User PWM", sawHQ: "Saw HQ", pulseHQ: "Pulse HQ", triHQ: "Triangle HQ" });
+const wave = choices ("O1_Waveform", { sine: "Sine", saw: "Oatmeal saw", pulse: "Oatmeal pulse", tri: "Oatmeal triangle",
+                                       user: "User", userPwm: "User PWM", sawHQ: "Saw", pulseHQ: "Pulse", triHQ: "Triangle" });
 const mix = choices ("OscMix", { normal: "normal", sync: "hardsync", fm: "FM (1 -> 2, 1 silent)", pm: "PM 2 > 1",
                                  pmFeedback: "PM 1 feedback", ring: "ring 1 × 2", am: "AM 2 > 1" });
 const filter = Object.fromEntries (Object.entries ({
@@ -2272,7 +2272,8 @@ const programs = [
         + "and a soft drive on each voice, ready for the macros and the modulation matrix.",
     macros: ["", "", "", ""],
     params: {
-        O1_Waveform: wave.sawHQ,
+        // (both oscillators, as Init sets them)
+        O1_Waveform: wave.sawHQ, O2_Waveform: wave.sawHQ,
         Filter: filter.ladder, Cutoff: 0.6, Resonance: 0.1, F_Track: 0.5,
         ...amp ({ a: 2, bp: 1, s: 1, r: 120 }),
         Sat_Type: dist.soft, Sat_Mode: distMode.voicePost, Sat_Pregain: 0,

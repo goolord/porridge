@@ -408,10 +408,21 @@ type law =
   | Volume
   // pan position offset, hard left/right at ±1 from the centre
   | Pan
+  // a parameter of a copy Porridge no longer has: moves nothing
+  | Retired
 
 type target = {key: string, label: string, group: string, law: law}
 
 let knob = (id, label, group) => {key: id, label, group, law: Knob(id)}
+
+// The effects' copies Porridge no longer has (PorridgeParams' retired ones: the fourth of each
+// kind, the fifth distortion). Their targets keep their places (the DSP and the Mod_Target
+// parameters know targets by index), in a group of their own that no menu shows.
+let isRetiredCopy = (group, n) => n == (group == "distortion" ? 5 : 4)
+
+// copy n's parameter id as a target in this group
+let copyKnob = (id, label, group, n) =>
+  isRetiredCopy(group, n) ? {key: id, label, group: "retired", law: Retired} : knob(id, label, group)
 
 let targets = [
   {key: "none", label: "none", group: "", law: Volume},
@@ -478,10 +489,12 @@ let targets = [
   knob("U_Width", "unison width", "osc"),
   knob("Drift_Pitch", "drift pitch", "osc"),
   // the rack's copies of the effects (PorridgeParams.rackKinds): their levels
-  ...[2, 3, 4]->Array.map(n => knob(`C${Int.toString(n)}_Mix`, `chorus ${Int.toString(n)} mix`, "chorus")),
-  ...[2, 3, 4]->Array.map(n => knob(`D${Int.toString(n)}_Wet`, `delay ${Int.toString(n)} wet`, "delay")),
-  ...[2, 3, 4]->Array.map(n => knob(`R${Int.toString(n)}_Wet`, `reverb ${Int.toString(n)} wet`, "reverb")),
-  ...[2, 3, 4, 5]->Array.map(n => knob(`Sat${Int.toString(n)}_Pregain`, `dist ${Int.toString(n)} pregain`, "distortion")),
+  ...[2, 3, 4]->Array.map(n => copyKnob(`C${Int.toString(n)}_Mix`, `chorus ${Int.toString(n)} mix`, "chorus", n)),
+  ...[2, 3, 4]->Array.map(n => copyKnob(`D${Int.toString(n)}_Wet`, `delay ${Int.toString(n)} wet`, "delay", n)),
+  ...[2, 3, 4]->Array.map(n => copyKnob(`R${Int.toString(n)}_Wet`, `reverb ${Int.toString(n)} wet`, "reverb", n)),
+  ...[2, 3, 4, 5]->Array.map(n =>
+    copyKnob(`Sat${Int.toString(n)}_Pregain`, `dist ${Int.toString(n)} pregain`, "distortion", n)
+  ),
   knob("F_Drive", "filter drive", "filter"),
   // Porridge's own effects (the first of each kind)
   knob("Fl_Rate", "flanger rate", "flanger"),
@@ -524,13 +537,13 @@ let copyParam = (id, n) => {
 }
 
 // An effect's parameters as targets: its first's (`chorus rate`), then each copy's (`chorus 2
-// rate`).
+// rate`), the retired ones' too.
 let effectTargets = (group, name, copies, params) =>
   [1, ...copies]->Array.flatMap(n =>
     params->Array.map(((id, what)) =>
       n == 1
         ? knob(id, `${name} ${what}`, group)
-        : knob(copyParam(id, n), `${name} ${Int.toString(n)} ${what}`, group)
+        : copyKnob(copyParam(id, n), `${name} ${Int.toString(n)} ${what}`, group, n)
     )
   )
 
@@ -581,7 +594,7 @@ let targets = {
           let (id, band) = (`EQ_${Int.toString(b)}_${p}`, Int.toString(b))
           n == 1
             ? knob(id, `EQ ${band} ${what}`, "eq")
-            : knob(copyParam(id, n), `EQ ${Int.toString(n)} band ${band} ${what}`, "eq")
+            : copyKnob(copyParam(id, n), `EQ ${Int.toString(n)} band ${band} ${what}`, "eq", n)
         })
       )
     ),

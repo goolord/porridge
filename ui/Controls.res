@@ -451,8 +451,6 @@ let choice = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=76., ~label=?, ~names=?) => {
     let text = names[i]->Option.getOr(Float.toString(x))
     switch icon(i) {
     | Some((mark, _)) =>
-      // the short name, less what the icon shows (e.g. "HQ")
-      let text = String.endsWith(text, " HQ") ? String.slice(text, ~start=0, ~end=String.length(text) - 3) : text
       v->setTextContent("")
       v->appendChild(mark)
       el("span", ~text, ~parent=v)->ignore
