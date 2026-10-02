@@ -41,7 +41,7 @@ namespace porridge
 
         //==============================================================================
         float[numSlots] P;                          // program mirror, slot = chunk offset / 4
-        bool paramsChanged = true;                  // since the envelope coefficients were made
+        bool paramsChanged = true;                  // since the coefficients and routings were made
         float[512] wave1, wave2;
         float[512][2] lfoShape;
         float[64] velCurve, touchCurve;
@@ -161,6 +161,19 @@ namespace porridge
         float walkT;
         float curX, curY;
 
+        // the targets the X/Y pad's, mod envelopes' and controllers' slots reach, and whether
+        // any does (scanRoutings): the sums over their slots skip what nothing is aimed at
+        bool[xyTgt::unisonSpread + 1] xyRouted;
+        bool[meTgt::unisonSpread + 1] meRouted;
+        bool[ccTgt::unisonSpread + 1] ccRouted;
+        bool xyAny, meAny, ccAny;
+
+        // the voice lane (scanRoutings): whether it holds anything, how many of its slots come
+        // before the filter and before the amp, whether any between them (the amp then comes
+        // after them) and whether any after the amp (they ring on)
+        bool laneOn, laneAmpLate, laneTail;
+        int laneFilterAt, laneAmpAt;
+
         // note object / arpeggiator
         int[128] heldKey, heldVel, heldStamp, heldSub;
         int heldCount, stampCounter;
@@ -168,7 +181,7 @@ namespace porridge
         bool firstNote, subFlag;
         float64 arpPhase;
 
-        // modulation matrix (dsp/ModTables.cmajor): the connections that are on this block,
+        // modulation matrix (dsp/ModTables.cmajor): the connections that are on (prepareMods),
         // the targets they reach, and the values those targets had before modulation
         int[mods::numSlots] liveSrc, liveTgt, liveVia;
         float[mods::numSlots] liveAmt;
@@ -582,9 +595,59 @@ namespace porridge
         let lfoCcSpeed = int[2] (ccTgt::lfo1Speed, ccTgt::lfo2Speed);
         let lfoXyDepth = int[2] (xyTgt::lfo1Depth, xyTgt::lfo2Depth);
 
+        /// Works out which targets the slots reach, and the voice lane's layout, when a parameter
+        /// changes rather than for every voice in every block (none of these slots is a matrix
+        /// target, so only a parameter change moves them).
+        void scanRoutings()
+        {
+            xyRouted = bool[xyTgt::unisonSpread + 1]();
+            meRouted = bool[meTgt::unisonSpread + 1]();
+            ccRouted = bool[ccTgt::unisonSpread + 1]();
+            xyAny = false;
+            meAny = false;
+            ccAny = false;
+
+            for (int k = 0; k < 4; ++k)
+            {
+                for (int a = 0; a < 2; ++a)
+                {
+                    let x = xyTarget (a, k);
+                    let m = meTarget (a, k);
+                    if (x > 0 && x <= xyTgt::unisonSpread) { xyRouted.at (x) = true; xyAny = true; }
+                    if (m > 0 && m <= meTgt::unisonSpread) { meRouted.at (m) = true; meAny = true; }
+                }
+
+                for (int c = 0; c < 6; ++c)
+                {
+                    let t = ccTarget (c, k);
+                    if (t > 0 && t <= ccTgt::unisonSpread) { ccRouted.at (t) = true; ccAny = true; }
+                }
+            }
+
+            // with no controller aimed anywhere, sumCcMods doesn't run: its sums are nothing
+            if (! ccAny)
+            {
+                ccSum = float[ccTgt::unisonSpread + 1]();
+                ccSumBipolar = float[ccTgt::unisonSpread + 1]();
+                ccXyDepth = 1.0f;
+                ccMe1Depth = 1.0f;
+                ccMe2Depth = 1.0f;
+                ccRes = 0;
+            }
+
+            laneOn = laneHolds (0, laneSlots);
+            laneFilterAt = laneOn ? clamp (int (P[slot::VL_FilterAt]), 0, laneSlots) : 0;
+            laneAmpAt = laneOn ? max (laneFilterAt, clamp (int (P[slot::VL_AmpAt]), 0, laneSlots)) : 0;
+            laneAmpLate = laneOn && laneHolds (laneFilterAt, laneAmpAt);
+            laneTail = laneOn && laneHolds (laneAmpAt, laneSlots);
+        }
+
         float xySum (int target, float x, float y)
         {
             float s = 0;
+
+            if (! xyRouted.at (target))
+                return s;
 
             for (int k = 0; k < 4; ++k)
             {
@@ -597,9 +660,13 @@ namespace porridge
 
         /// The controllers' modulation is the same for every voice: it is summed once per piece,
         /// after the controllers move. ccSum[t] is controller * depth over the slots aimed at
-        /// target t, ccSumBipolar[t] the same with the controller as -1..1.
+        /// target t, ccSumBipolar[t] the same with the controller as -1..1. (While none is aimed
+        /// anywhere, scanRoutings has left them at nothing.)
         void sumCcMods()
         {
+            if (! ccAny)
+                return;
+
             ccSum = float[ccTgt::unisonSpread + 1]();
             ccSumBipolar = float[ccTgt::unisonSpread + 1]();
 
@@ -628,15 +695,19 @@ namespace porridge
             // resonance() sums its controllers in this order (by slot, then controller)
             ccRes = 0;
 
-            for (int k = 0; k < 4; ++k)
-                for (int c = 0; c < 6; ++c)
-                    if (ccTarget (c, k) == ccTgt::resonance)
-                        ccRes += ccSmooth.at (c) * ccDepth (c, k);
+            if (ccRouted[ccTgt::resonance])
+                for (int k = 0; k < 4; ++k)
+                    for (int c = 0; c < 6; ++c)
+                        if (ccTarget (c, k) == ccTgt::resonance)
+                            ccRes += ccSmooth.at (c) * ccDepth (c, k);
         }
 
         float ccDbProduct (int target)
         {
             var f = 1.0f;
+
+            if (! ccRouted.at (target))
+                return f;
 
             for (int c = 0; c < 6; ++c)
                 for (int k = 0; k < 4; ++k)
@@ -650,6 +721,9 @@ namespace porridge
         {
             var f = 1.0f;
 
+            if (! ccRouted.at (target))
+                return f;
+
             for (int c = 0; c < 6; ++c)
                 for (int k = 0; k < 4; ++k)
                     if (ccTarget (c, k) == target)
@@ -661,6 +735,9 @@ namespace porridge
         float xyLinearProduct (int target, float x, float y)
         {
             var f = 1.0f;
+
+            if (! xyRouted.at (target))
+                return f;
 
             for (int k = 0; k < 4; ++k)
             {
@@ -676,6 +753,9 @@ namespace porridge
         {
             float s = 0;
 
+            if (! meRouted.at (target))
+                return s;
+
             for (int k = 0; k < 4; ++k)
             {
                 if (meTarget (0, k) == target) s += me1 * meDepth (0, k);
@@ -688,6 +768,9 @@ namespace porridge
         float meDbProduct (int target, float me1, float me2)
         {
             var f = 1.0f;
+
+            if (! meRouted.at (target))
+                return f;
 
             for (int k = 0; k < 4; ++k)
             {
@@ -1937,8 +2020,9 @@ namespace porridge
             if (octave < 1.001f) octave = 2.0f;
             lnOct = float (log (float64 (octave)));
 
-            // the envelope coefficients follow only parameters (which the modulation matrix
-            // never moves outside a block), so they wait for a parameter change
+            // the envelope coefficients, the routings and the matrix's connections follow only
+            // parameters (which the modulation matrix never moves outside a block), so they wait
+            // for a parameter change
             if (paramsChanged)
             {
                 paramsChanged = false;
@@ -1955,6 +2039,8 @@ namespace porridge
                                                slot::OE2_Breakpoint, slot::OE2_Sustain, slot::Curve_Osc2_Attack, slot::Curve_Osc2_Decay1,
                                                sampleRate, 1.0f);
                 penvC  = makePitchEnvCoefs (P, float64 (srInt));
+                scanRoutings();
+                prepareMods();
             }
 
             updateUserTables();
@@ -2279,7 +2365,8 @@ namespace porridge
         //==============================================================================
         // modulation matrix
 
-        /// The connections that are on, and the knob position of every parameter they reach.
+        /// The connections that are on, and the knob position of every parameter they reach, when
+        /// a parameter changes (at a block's start, the knobs unmodulated).
         void prepareMods()
         {
             for (int i = 0; i < numLiveTargets; ++i)
@@ -2857,12 +2944,9 @@ namespace porridge
             v.age += n;
             v.lfo2Prev = lv[1];
 
-            // the voice lane: whether it holds anything, how many of its slots come before the
-            // filter and before the amp, and whether any come after the amp (they ring on)
-            let laneOn = laneHolds (0, laneSlots);
-            let fAt = laneOn ? clamp (int (P[slot::VL_FilterAt]), 0, laneSlots) : 0;
-            let aAt = laneOn ? max (fAt, clamp (int (P[slot::VL_AmpAt]), 0, laneSlots)) : 0;
-            let laneTail = laneOn && laneHolds (aAt, laneSlots);
+            // the voice lane's slots before the filter and before the amp (scanRoutings)
+            let fAt = laneFilterAt;
+            let aAt = laneAmpAt;
 
             // amp envelope
             if (! v.ampEnv.renderAmp (ampC, ampSpeed * v.envSpeed, sustainDown, ampSmooth, bufE, n))
@@ -2925,7 +3009,9 @@ namespace porridge
             var D = P[slot::U_Detune];
             var spread = P[slot::U_Spread];
 
-            for (int k = 0; k < 8; ++k)
+            // the mod envelopes', X/Y pad's and controllers' slots, each kind's only while one of
+            // its slots is aimed somewhere
+            for (int k = 0; k < 8 && meAny; ++k)
             {
                 let isME2 = k >= 4;
                 let t = meTarget (k >> 2, k & 3);
@@ -2962,7 +3048,7 @@ namespace porridge
                 else if (t == meTgt::unisonSpread)       spread += me * d;
             }
 
-            for (int k = 0; k < 8; ++k)
+            for (int k = 0; k < 8 && xyAny; ++k)
             {
                 let t = xyTarget (k >> 2, k & 3);
                 let d = xyDepth (k >> 2, k & 3);
@@ -2980,7 +3066,7 @@ namespace porridge
                 else if (t == xyTgt::unisonSpread)   spread += x * d;
             }
 
-            for (int c = 0; c < 6; ++c)
+            for (int c = 0; c < 6 && ccAny; ++c)
             {
                 let cc = ccSmooth.at (c);
 
@@ -3229,7 +3315,7 @@ namespace porridge
 
             // the amp after some of the lane's slots, or (as Oatmeal has it) with the filter and
             // the voice's distortion, which then gets the amp's level
-            let ampLate = laneOn && laneHolds (fAt, aAt);
+            let ampLate = laneAmpLate;
             let voiceDist = distOn && distMode != satMode::global;
             let gainInDist = voiceDist && ! ampLate;
 
@@ -3639,8 +3725,9 @@ namespace porridge
             float cutX = 0, cutY = 0, cutCC = 0;
             let xyCut = isF2 ? xyTgt::cutoff2 : xyTgt::cutoff1;
             let ccCut = isF2 ? ccTgt::cutoff2 : ccTgt::cutoff1;
+            let routed = xyRouted[xyTgt::filterEnvMod] || xyRouted.at (xyCut) || ccRouted[ccTgt::filterEnvMod] || ccRouted.at (ccCut);
 
-            for (int k = 0; k < 4; ++k)
+            for (int k = 0; k < 4 && routed; ++k)
             {
                 let tx = xyTarget (0, k), dx = xyDepth (0, k);
                 let ty = xyTarget (1, k), dy = xyDepth (1, k);
@@ -3673,7 +3760,7 @@ namespace porridge
         {
             float resX = 0, resY = 0;
 
-            for (int k = 0; k < 4; ++k)
+            for (int k = 0; k < 4 && xyRouted[xyTgt::resonance]; ++k)
             {
                 if (xyTarget (0, k) == xyTgt::resonance) resX += xyDepth (0, k);
                 if (xyTarget (1, k) == xyTgt::resonance) resY += xyDepth (1, k);
@@ -3973,7 +4060,6 @@ namespace porridge
         {
             smoothControllers (n);
             sumCcMods();
-            prepareMods();
             useShaper (0);
             let active = renderVoices (pos, n);
             if (numLive > 0) restoreMods();
