@@ -107,48 +107,23 @@ namespace porridge
     let ambLettersR = int[16] (3, 7, 11, 15,  2, 6, 10, 14,  1, 5, 9, 13,  0, 4, 8, 12);
 
     //==============================================================================
-    // Delay lines in the pool
-
-    void ambWrite (Ambience& this, int j, float x)
-    {
-        this.pool.at (this.base.at (j) + this.wp.at (j)) = x;
-    }
-
-    void ambAdvance (Ambience& this, int j)
-    {
-        let w = this.wp.at (j) + 1;
-        this.wp.at (j) = w >= this.cap.at (j) ? 0 : w;
-    }
-
-    /// A fractional delay (>= 1, read before the write) with linear interpolation.
-    float ambRead (const Ambience& this, int j, float64 delay)
-    {
-        let di = int (delay);
-        let f = float (delay - float64 (di));
-        let c = this.cap.at (j);
-        let b = this.base.at (j);
-        var i = this.wp.at (j) - di;
-        if (i < 0) i += c;
-        let newer = this.pool.at (b + i);
-        let older = this.pool.at (b + (i == 0 ? c - 1 : i - 1));
-        return newer + f * (older - newer);
-    }
+    // Delay lines in the pool (Common.cmajor's poolWrite, poolAdvance, poolReadLin)
 
     /// A Schroeder allpass (-g + z^-d) / (1 - g z^-d) on line j at its moving delay.
     float ambAllpass (Ambience& this, int j, float x, float g)
     {
-        let z = this.ambRead (j, this.d.at (j));
+        let z = this.poolReadLin (j, this.d.at (j));
         let v = x + g * z;
-        this.ambWrite (j, v);
-        this.ambAdvance (j);
+        this.poolWrite (j, v);
+        this.poolAdvance (j);
         return z - g * v;
     }
 
     /// An Airwindows delay: writes x and returns what was written cap - 1 samples ago.
     float ambPush (Ambience& this, int j, float x)
     {
-        this.ambWrite (j, x);
-        this.ambAdvance (j);
+        this.poolWrite (j, x);
+        this.poolAdvance (j);
         return this.pool.at (this.base.at (j) + this.wp.at (j));
     }
 
@@ -173,12 +148,9 @@ namespace porridge
     void ambLine (Ambience& this, int capacity, int& top)
     {
         let j = this.numLines;
-        this.base.at (j) = top;
-        this.cap.at (j) = capacity;
-        this.wp.at (j) = 0;
+        this.poolLine (j, capacity, top);
         this.d.at (j) = 1;
         this.dInc.at (j) = 0;
-        top += capacity;
         this.numLines = j + 1;
     }
 
@@ -237,11 +209,7 @@ namespace porridge
 
         this.d[0] = max (1.0, float64 (predelayMs) * sr * 0.001);
 
-        if (! this.clean)
-            for (int i = 0; i < top; ++i)
-                this.pool.at (i) = 0;
-
-        this.clean = false;
+        this.clearPool (top);
 
         for (wrap<4> k) { this.fb[k] = 0; this.hiLp[k] = 0; this.loLp[k] = 0; }
         for (wrap<8> k) { this.awFb[k] = 0; this.sub[k] = 0; }
@@ -260,10 +228,7 @@ namespace porridge
 
     void clearState (Ambience& this)
     {
-        for (int i = 0; i < ambPoolSize; ++i)
-            this.pool.at (i) = 0;
-
-        this.clean = true;
+        this.resetPool();
         this.model = -1;
         this.numLines = 0;
         this.idle = true;
@@ -689,12 +654,12 @@ namespace porridge
         for (wrap<blockSize> i)
         {
             this.inFade = min (this.inFade + inStep, 1.0f);
-            this.ambWrite (0, buf[i][0] * this.inFade + dc);
-            this.ambWrite (1, buf[i][1] * this.inFade + dc);
+            this.poolWrite (0, buf[i][0] * this.inFade + dc);
+            this.poolWrite (1, buf[i][1] * this.inFade + dc);
             let pd = this.d[0];
-            pre[i] = float<2> (this.ambRead (0, pd), this.ambRead (1, pd));
+            pre[i] = float<2> (this.poolReadLin (0, pd), this.poolReadLin (1, pd));
             this.d[0] += this.dInc[0];
-            this.ambAdvance (0);
+            this.poolAdvance (0);
             this.wp[1] = this.wp[0];
         }
 
@@ -731,8 +696,8 @@ namespace porridge
         let wantFade = change ? 0.0f : 1.0f;
         let fadeStep = float (1.0 / (0.015 * sr));
         let inv = 1.0f / float (blockSize);
-        let wet0 = float (sin (float64 (mix0) * pi * 0.5)), wet1 = float (sin (float64 (this.mix) * pi * 0.5));
-        let dry0 = float (cos (float64 (mix0) * pi * 0.5)), dry1 = float (cos (float64 (this.mix) * pi * 0.5));
+        let wet0 = mixWet (mix0), wet1 = mixWet (this.mix);
+        let dry0 = mixDry (mix0), dry1 = mixDry (this.mix);
 
         for (wrap<blockSize> i)
         {
