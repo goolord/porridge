@@ -9,8 +9,9 @@
 // `evaluate` scores genes by weights, with the candidate if it scores under the threshold:
 // the workers' (MatchPool.evaluate), or the engine itself in tools/test/match.mjs.
 
-// genes, weights, threshold, whether to fit the envelope, and whether to render only the start
-type evaluate = (Float64Array.t, MatchLoss.weights, float, bool, bool) => promise<MatchSearch.result>
+// genes, weights, threshold, what to fit (the envelope, the key EQ), and whether to render only
+// the start
+type evaluate = (Float64Array.t, MatchLoss.weights, float, MatchSearch.fitting, bool) => promise<MatchSearch.result>
 
 type handlers = {
   onCandidate: MatchSearch.candidate => unit,
@@ -70,7 +71,7 @@ let search = (evaluate: evaluate, m: MatchSearch.match_, handlers) => {
         let confirmed = await Promise.all(
           searches->Array.map(s =>
             switch s.bestGenes {
-            | Some(x) => evaluate(x, MatchLoss.standard, infinity, false, false)->Promise.thenResolve(r => (s, r.candidate))
+            | Some(x) => evaluate(x, MatchLoss.standard, infinity, MatchSearch.noFitting, false)->Promise.thenResolve(r => (s, r.candidate))
             | None => Promise.resolve((s, None))
             }
           ),
@@ -93,7 +94,7 @@ let vary = (evaluate: evaluate, mutants: array<Float64Array.t>, handlers) => {
   let t = {cancelled: false}
   mutants
   ->Array.mapWithIndex((x, slot) =>
-    evaluate(x, MatchLoss.standard, infinity, false, false)->Promise.thenResolve(r =>
+    evaluate(x, MatchLoss.standard, infinity, MatchSearch.noFitting, false)->Promise.thenResolve(r =>
       if !t.cancelled {
         r.candidate->Option.forEach(c => handlers.onCandidate({...c, slot}))
         handlers.onProgress(~island=slot, ~evals=1, ~budget=1)

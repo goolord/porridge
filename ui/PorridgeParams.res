@@ -678,6 +678,22 @@ let oscEnvSpecs = [1, 2]->Array.flatMap(n => {
   ]
 })
 
+// The key EQ: eight peaking bands at the end of each voice, an octave wide and an octave
+// apart, centred on the note's harmonics 1, 2, 4 ... 128, so that its curve moves with the note
+// (a band past 18 kHz fades out over the next octave). The sound matcher fits it to a sample.
+let keyEqBands = 8
+let keyEqGainId = k => `KEQ_${Int.toString(k)}_Gain`
+let keyEqHarmonic = k => Math.pow(2., ~exp=Int.toFloat(k - 1))
+
+let keyEqSpecs = [
+  {id: "KEQ_On", name: "Key EQ", kind: Choice({names: onOff, init: 0})},
+  ...Array.fromInitializer(~length=keyEqBands, i => {
+    id: keyEqGainId(i + 1),
+    name: `Key EQ ${Float.toString(keyEqHarmonic(i + 1))}× gain`,
+    kind: decibels(-24., 24., 0.),
+  }),
+]
+
 type feature =
   | Macros
   | Modulations
@@ -701,6 +717,7 @@ type feature =
   | Ambience
   | DistModels
   | AirEffect
+  | KeyEq
 
 let groups = [
   (Macros, macroSpecs),
@@ -726,6 +743,7 @@ let groups = [
   (Ambience, Array.concat(ambienceSpecs, ambienceCopySpecs)),
   (DistModels, Array.concat(distModelSpecs, distModelCopySpecs)),
   (AirEffect, Array.concat(airSpecs, airCopySpecs)),
+  (KeyEq, keyEqSpecs),
 ]
 
 let all = groups->Array.flatMap(((_, specs)) => specs)

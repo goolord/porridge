@@ -7,9 +7,9 @@
 //  - random patches the genes can make (Genome.random), whose answer is known: "true" is how
 //    close their own genes score, so a search that falls short of it fell short as a search.
 //
-// It checks that every search finds a patch at least as close as the seed, that the four
-// differ, that every value they set is within its parameter's range, and that Init's own
-// sound is matched nearly exactly. --wav writes the targets and the matches to
+// It checks that every search finds a patch at least as close as the seed (within its bounds),
+// that the four differ, that every value they set is within its parameter's range, and that
+// Init's own sound is matched nearly exactly. --wav writes the targets and the matches to
 // tools/test/build/match/ to listen to.
 //
 // run: node tools/test/match.mjs [--wav] [--budget n] [--genomes n] [--jobs n] [--no-model] [name ...]
@@ -77,7 +77,7 @@ async function matcher ({ budget, wav, useModel })
     const programs = bankPrograms ();
     const frames = Math.round (seconds * 44100);
     const dir = wav ? outDir ("match") : undefined;
-    const asSample = (l, r) => ({ samples: l.map ((v, i) => 0.5 * (v + r[i])), sampleRate: 44100, frameSize: undefined });
+    const asSample = (l, r) => ({ samples: l.map ((v, i) => 0.5 * (v + r[i])), sampleRate: 44100, frameSize: undefined, sides: [l, r] });
 
     return async job =>
     {
@@ -111,20 +111,30 @@ async function matcher ({ budget, wav, useModel })
         for (const x of Genome.probes ()) MatchSearch.renderGenes (ctx, undefined, x);
         const again = MatchSearch.renderGenes (ctx, undefined, probe)[2];
         const repeatable = first.every ((v, i) => v === again[i]);
-        // an envelope put on a flat render's measurements scores as a render with it does
-        const shapedOff = Array.from ({ length: 4 }, (_, k) =>
+        // an envelope, and a key EQ, put on a flat render's measurements score as a render with
+        // them does
+        const fittedOff = fit => Array.from ({ length: 4 }, (_, k) =>
         {
             const x = Genome.random (Cmaes.makeRandom (57 + 13 * job.index + k));
             for (const key of ["drive", "chorus", "reverb"]) x[Genome.indexOf (key)] = 0;
-            const fitted = MatchSearch.evaluate (ctx, x, MatchLoss.standard, -1, true, false);
-            const real = MatchSearch.evaluate (ctx, Float64Array.from (fitted.genes), MatchLoss.standard, -1, false, false);
+            const fitted = MatchSearch.evaluate (ctx, x, MatchLoss.standard, -1, fit, false);
+            const real = MatchSearch.evaluate (ctx, Float64Array.from (fitted.genes), MatchLoss.standard, -1, MatchSearch.noFitting, false);
             return Math.abs (MatchLoss.similarity (fitted.loss) - MatchLoss.similarity (real.loss));
         });
-        const score = x => MatchSearch.evaluate (ctx, x, MatchLoss.standard, -1, false, false).loss - MatchSearch.cost (x);
+        const shapedOff = fittedOff ({ envelope: true, eq: false });
+        const eqOff = fittedOff ({ envelope: false, eq: true });
+        const score = x => MatchSearch.evaluate (ctx, x, MatchLoss.standard, -1, MatchSearch.noFitting, false).loss - MatchSearch.cost (x);
         const similarity = loss => MatchLoss.similarity (loss);
         const seedGenes = Genome.seed (target);
         const suggestions = model ? MatchModel.suggest (model, target) : [];
         const seed = similarity (score (seedGenes));
+        // the seed as each search may take it (within its bounds: Simple keeps to one oscillator
+        // where the seed may have heard unison or noise)
+        const seeds = MatchSearch.islands.map (island =>
+        {
+            const [lo, hi] = MatchSearch.boundsFor (island, target.wave !== undefined, [], undefined);
+            return similarity (score (MatchSearch.clampInto (seedGenes, lo, hi)));
+        });
         const predicted = suggestions.length ? similarity (score (suggestions[0])) : undefined;
         // the true genes, played as a candidate would be from the pitch found: at the octave and
         // tuning (to 5 cents) that suit them best, as the search's render genes would
@@ -135,7 +145,8 @@ async function matcher ({ budget, wav, useModel })
             x[Genome.indexOf ("tune")] = k / 20;
             return score (x);
         })))) : undefined;
-        const m = MatchSearch.makeMatch ([seedGenes, ...suggestions], target.wave !== undefined, [], undefined, budget, 0.25, 1234);
+        const m = MatchSearch.makeMatch ([seedGenes, ...suggestions], target.wave !== undefined, [], undefined,
+                                         MatchSearch.budgetFor (budget, SoundTarget.seconds (target)), 0.25, 1234);
         const evaluate = (x, weights, threshold, fit, short) => Promise.resolve (MatchSearch.evaluate (ctx, x, weights, threshold, fit, short));
         await new Promise (done => MatchRun.search (evaluate, m, { onCandidate: () => {}, onProgress: () => {}, onDone: done }));
         const ms = performance.now () - t0;
@@ -153,7 +164,7 @@ async function matcher ({ budget, wav, useModel })
             }
         }
         return {
-            job, name, seed, predicted, truth, evals, ms, repeatable, shapedOff,
+            job, name, seed, seeds, predicted, truth, evals, ms, repeatable, shapedOff, eqOff,
             pitch: SoundTarget.pitchText (target),
             shape: `${SoundTarget.seconds (target).toFixed (2)} s, attack ${(target.attack * 1000).toFixed (0)} ms, decay ${(target.decay * 1000).toFixed (0)} ms, sustain ${target.sustain.toFixed (2)}`,
             outline: m.outline.best?.similarity,
@@ -225,9 +236,10 @@ else
         const found = r.cards.filter (Boolean);
         check (r.repeatable, `${name}: a render is the same after others`);
         check (Math.max (...r.shapedOff) < 4, `${name}: a fitted envelope scores as rendered (off by ${Math.max (...r.shapedOff).toFixed (2)} points)`);
+        check (Math.max (...r.eqOff) < 4, `${name}: a fitted key EQ scores as rendered (off by ${Math.max (...r.eqOff).toFixed (2)} points)`);
         check (found.length === r.cards.length, `${name}: every search found a patch`);
-        for (const c of found)
-            check (c.similarity >= r.seed - 1, `${name}: ${c.title} (${c.similarity.toFixed (1)}%) is no further than the seed (${r.seed.toFixed (1)}%)`);
+        r.cards.forEach ((c, i) =>
+            c && check (c.similarity >= r.seeds[i] - 1, `${name}: ${c.title} (${c.similarity.toFixed (1)}%) is no further than the seed (${r.seeds[i].toFixed (1)}%)`));
         for (let i = 0; i < found.length; i++)
             for (let j = i + 1; j < found.length; j++)
                 check (MatchSearch.distance (Float64Array.from (found[i].genes), Float64Array.from (found[j].genes)) > 0.01,

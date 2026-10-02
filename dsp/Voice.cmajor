@@ -53,6 +53,72 @@ namespace porridge
         // analog drift: slow random values for each unison copy of both oscillators' pitch
         // (0 .. 31) and the cutoff (32)
         Drift[2 * maxUnison + 1] drift;
+
+        KeyEq keq;                      // the key EQ (KEQ_On)
+    }
+
+    let keyEqBands = 8;
+
+    /// The key EQ's peaking bands (transposed direct form II), on the left (or mono) and right.
+    struct KeyEq
+    {
+        float[keyEqBands] b0, b1, b2, a1, a2;
+        float[keyEqBands] l1, l2, r1, r2;
+        bool[keyEqBands] live;
+    }
+
+    /// Band k's coefficients for gain g dB at hz: an octave wide (RBJ peaking, Q = sqrt 2). A band
+    /// past 18 kHz sits there and fades out over the next octave.
+    void setKeyEqBand (KeyEq& this, int k, float g, float hz, float sampleRate)
+    {
+        let over = hz > 18000.0f ? float (log (float64 (hz) / 18000.0) / log (2.0)) : 0.0f;
+        let gain = g * max (0.0f, 1.0f - over);
+        this.live.at (k) = abs (gain) > 0.01f;
+
+        if (! this.live.at (k))
+            return;
+
+        let f = min (min (hz, 18000.0f), 0.45f * sampleRate);
+        let w = twoPi * float64 (f) / float64 (sampleRate);
+        let A = pow (10.0, float64 (gain) / 40.0);
+        let alpha = sin (w) / (2.0 * sqrt (2.0));
+        let c = cos (w);
+        let a0 = 1.0 + alpha / A;
+        this.b0.at (k) = float ((1.0 + alpha * A) / a0);
+        this.b1.at (k) = float (-2.0 * c / a0);
+        this.b2.at (k) = float ((1.0 - alpha * A) / a0);
+        this.a1.at (k) = float (-2.0 * c / a0);
+        this.a2.at (k) = float ((1.0 - alpha / A) / a0);
+    }
+
+    /// The live bands on buf (the right channel's state with `right`).
+    void processKeyEq (KeyEq& this, bool right, float[blockSize]& buf, int n)
+    {
+        for (int k = 0; k < keyEqBands; ++k)
+        {
+            if (! this.live.at (k))
+                continue;
+
+            let b0 = this.b0.at (k);
+            let b1 = this.b1.at (k);
+            let b2 = this.b2.at (k);
+            let a1 = this.a1.at (k);
+            let a2 = this.a2.at (k);
+            var s1 = right ? this.r1.at (k) : this.l1.at (k);
+            var s2 = right ? this.r2.at (k) : this.l2.at (k);
+
+            for (int i = 0; i < n; ++i)
+            {
+                let x = buf.at (i);
+                let y = b0 * x + s1;
+                s1 = b1 * x - a1 * y + s2;
+                s2 = b2 * x - a2 * y;
+                buf.at (i) = y;
+            }
+
+            if (right) { this.r1.at (k) = s1; this.r2.at (k) = s2; }
+            else       { this.l1.at (k) = s1; this.l2.at (k) = s2; }
+        }
     }
 
     /// A slow random value, -1..1: eases from a to b, then picks a new b.

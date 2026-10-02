@@ -63,7 +63,7 @@ async function generator ({ seed, count })
         const seconds = random () < 0.3 ? 0.25 + 1.3 * random () : 1.6;
         const frames = Math.round (seconds * 44100);
         const [l, r] = MatchEngine.renderStereo (engine, Genome.decode (genes, note, initValue), note, 0, frames, frames);
-        const prepared = SoundTarget.prepare ("x", { samples: l.map ((v, i) => 0.5 * (v + r[i])), sampleRate: 44100, frameSize: undefined });
+        const prepared = SoundTarget.prepare ("x", { samples: l.map ((v, i) => 0.5 * (v + r[i])), sampleRate: 44100, frameSize: undefined, sides: [l, r] });
         if (prepared.TAG !== "Ok") continue;
         const target = prepared._0;
 

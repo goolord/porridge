@@ -226,7 +226,7 @@ let build = (ctx: Ctx.t, page) => {
   let filterEl = ref(None)
   let filter = Panel.make(
     page,
-    ~tabs=["filter", "response", "dual filter"],
+    ~tabs=["filter", "response", "dual filter", "key EQ"],
     ~onSelect=i => {
       // the response covers the filter envelope
       filterEl.contents->Option.forEach(e => e->Web.toggleClass("responding", i == 1))
@@ -327,6 +327,16 @@ let build = (ctx: Ctx.t, page) => {
   dual->Grid.param("F_Split", 3, 0, "split")
   dual->Grid.param("F_Mix", 0, 1, "mix")
   dual->Grid.param("F_Speed", 1, 1, "speed ratio")
+  // the key EQ: a band on each of the note's harmonics 1, 2, 4 ... 128
+  let keyEq = Grid.make(ctx, filter->Panel.body(3))
+  keyEq->Grid.toggle("KEQ_On", 0, 0, "key EQ")
+  keyEq
+  ->Grid.note("Octave-wide bands on the note's harmonics, at the end of each voice: they move with the key", 1, 0, ~span=3)
+  ->ignore
+  for k in 1 to PorridgeParams.keyEqBands {
+    let label = Float.toString(PorridgeParams.keyEqHarmonic(k)) ++ "×"
+    keyEq->Grid.param(PorridgeParams.keyEqGainId(k), mod(k - 1, 4), 1 + (k - 1) / 4, label)
+  }
   let top = Grid.padTop + 3. * Grid.rowHeight + 6.
   envelope(
     ctx,

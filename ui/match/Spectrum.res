@@ -289,6 +289,157 @@ let envelope = (x: Float32Array.t) => {
   out
 }
 
+//==============================================================================
+// The harmonic grid: for a sound whose pitch is known, how loud what lies between its
+// harmonics is against the harmonics themselves, in each of `gridBands` octave-wide bands,
+// frame by frame. A plain oscillator has next to nothing between its harmonics; noise,
+// detuned unison, vibrato or a rough recording fill the gaps, which the mel bands above a
+// kilohertz or so (wider than the harmonics' spacing) can't tell from more harmonic level.
+//
+// Each frame is a Blackman window (its leakage is under -58 dB from 3 bins on) of at least
+// gridPeriods periods, so that a harmonic's lobe stays well inside its own neighbourhood; the
+// bins within a bin of a harmonic are "on", those at least 0.3 of the pitch from every
+// harmonic "off", and the ratio is of their mean powers.
+
+let gridPeriods = 16.
+let gridEdges = [400., 800., 1600., 3200., 6400., 12800.]
+let gridBands = Array.length(gridEdges) - 1
+// a band with nothing between its harmonics reads this (the window's leakage is about -60)
+let gridFloor = -60.
+
+type grid = {
+  frames: int,
+  // samples between frames
+  hop: int,
+  // frames × bands, dB: off against on (NaN where a band has no bins of either)
+  ratio: Float64Array.t,
+  // frames × bands, dB: the band's whole level (for weighing it)
+  level: Float64Array.t,
+  // each harmonic's mean power over the frames, up to 8 kHz (the key EQ's fit weighs a band's
+  // harmonics by them)
+  harmonics: Float64Array.t,
+}
+
+let gridResolutions: Map.t<int, resolution> = Map.make()
+
+let gridResolution = size =>
+  switch gridResolutions->Map.get(size) {
+  | Some(r) => r
+  | None =>
+    let r = makeResolution(~size, ~hop=size / 2, ~bands=1, ~lowest=30.)
+    for i in 0 to size - 1 {
+      let t = twoPi * Int.toFloat(i) / Int.toFloat(size)
+      r.window->set64(i, 0.42 - 0.5 * Math.cos(t) + 0.08 * Math.cos(2. * t))
+    }
+    gridResolutions->Map.set(size, r)
+    r
+  }
+
+// None when the pitch is too low for a window of the longest size to hold its periods
+let measureGrid = (x: Float32Array.t, ~hz) =>
+  if hz < 30. || hz > 4000. {
+    None
+  } else {
+    let want = gridPeriods * sampleRate / hz
+    let size = ref(2048)
+    while Int.toFloat(size.contents) < want && size.contents < 32768 {
+      size := size.contents * 2
+    }
+    let r = gridResolution(size.contents)
+    let half = r.size / 2
+    let binHz = sampleRate / Int.toFloat(r.size)
+    // each bin's band (or -1) and whether it is on (1) or off (2) the harmonics (or neither)
+    let band = Int32Array.fromLength(half + 1)
+    let kind = Int32Array.fromLength(half + 1)
+    for k in 0 to half {
+      let f = Int.toFloat(k) * binHz
+      let b = ref(-1)
+      for j in 0 to gridBands - 1 {
+        if f >= gridEdges->Array.getUnsafe(j) && f < gridEdges->Array.getUnsafe(j + 1) {
+          b := j
+        }
+      }
+      band->setInt(k, b.contents)
+      let m = Math.max(1., Math.round(f / hz))
+      let d = Math.abs(f - m * hz)
+      kind->setInt(k, d <= binHz ? 1 : d >= 0.3 * hz && d >= 3. * binHz ? 2 : 0)
+    }
+    let n = TypedArray.length(x)
+    let frames = n / r.hop + 1
+    let ratio = Float64Array.fromLength(frames * gridBands)
+    let level = Float64Array.fromLength(frames * gridBands)
+    let sums = Float64Array.fromLength(4 * gridBands)
+    let count = Math.Int.max(1, Math.Int.min(256, Float.toInt(8000. / hz)))
+    let harmonics = Float64Array.fromLength(count)
+    let gather = (t, bins: Float64Array.t) => {
+      for k in 0 to half {
+        if kind->getInt(k) == 1 {
+          let m = Float.toInt(Math.round(Int.toFloat(k) * binHz / hz))
+          if m >= 1 && m <= count {
+            harmonics->set64(m - 1, harmonics->get64(m - 1) + bins->get64(k) / Int.toFloat(frames))
+          }
+        }
+      }
+      sums->TypedArray.fillAll(0.)->ignore
+      for k in 0 to half {
+        let b = band->getInt(k)
+        let c = kind->getInt(k)
+        if b >= 0 && c > 0 {
+          let o = 4 * b + 2 * (c - 1)
+          sums->set64(o, sums->get64(o) + bins->get64(k))
+          sums->set64(o + 1, sums->get64(o + 1) + 1.)
+        }
+      }
+      for b in 0 to gridBands - 1 {
+        let (on, onCount, off, offCount) = (sums->get64(4 * b), sums->get64(4 * b + 1), sums->get64(4 * b + 2), sums->get64(4 * b + 3))
+        ratio->set64(
+          t * gridBands + b,
+          onCount > 0. && offCount > 0.
+            ? Math.max(gridFloor, 10. * Math.log10(Math.max(off / offCount, 1e-30) / Math.max(on / onCount, 1e-30)))
+            : Float.Constants.nan,
+        )
+        level->set64(t * gridBands + b, 10. * Math.log10(Math.max(on + off, 1e-30)))
+      }
+    }
+    let t = ref(0)
+    while t.contents < frames {
+      let pair = t.contents + 1 < frames
+      transform(r, x, t.contents * r.hop, pair ? (t.contents + 1) * r.hop : -2 * r.size)
+      gather(t.contents, r.powerA)
+      if pair {
+        gather(t.contents + 1, r.powerB)
+      }
+      t := t.contents + 2
+    }
+    Some({frames, hop: r.hop, ratio, level, harmonics})
+  }
+
+// The grid's ratio in each band over all its frames (power ratio, by the bands' levels), and
+// the one for a frequency (the bands' lowest below them, highest above).
+let gridMeanRatio = (g: grid) =>
+  Array.fromInitializer(~length=gridBands, b => {
+    let (sum, weight) = (ref(0.), ref(0.))
+    for f in 0 to g.frames - 1 {
+      let r = g.ratio->get64(f * gridBands + b)
+      if !Float.isNaN(r) {
+        let w = Math.pow(10., ~exp=g.level->get64(f * gridBands + b) / 10.)
+        sum := sum.contents + w * Math.pow(10., ~exp=r / 10.)
+        weight := weight.contents + w
+      }
+    }
+    weight.contents > 0. ? sum.contents / weight.contents : 0.
+  })
+
+let gridRatioAt = (ratios: array<float>, f) => {
+  let b = ref(0)
+  gridEdges->Array.forEachWithIndex((edge, j) =>
+    if j < gridBands && f >= edge {
+      b := j
+    }
+  )
+  ratios[b.contents]->Option.getOr(0.)
+}
+
 type features = {
   length: int,
   energy: float,
@@ -296,11 +447,17 @@ type features = {
   spectra: array<Float64Array.t>,
   pools: array<int>,
   envelope: Float64Array.t,
+  // the harmonic grid (with a pitch to measure it on)
+  grid: option<grid>,
+  // the side signal's RMS every 10 ms step, as `envelope` is the mid's (for a stereo sound)
+  side: option<Float64Array.t>,
 }
 
 // `period` is the target's pitch period in samples, which sets the pooling (the same for the
 // target and every candidate).
-let measure = (x: Float32Array.t, ~period): features => {
+// `gridHz`: the pitch to measure the harmonic grid on (the sound's own); `side`: the side signal
+// of a stereo sound (x being its mid).
+let measure = (x: Float32Array.t, ~period, ~gridHz=?, ~side=?): features => {
   let energy = ref(0.)
   x->TypedArray.forEach(v => energy := energy.contents + v * v)
   let pools = resolutions->Array.map(poolFor(_, ~period))
@@ -310,6 +467,8 @@ let measure = (x: Float32Array.t, ~period): features => {
     spectra: resolutions->Array.mapWithIndex((r, i) => bandLevels(r, x, ~pool=pools->Array.getUnsafe(i))),
     pools,
     envelope: envelope(x),
+    grid: gridHz->Option.flatMap(hz => measureGrid(x, ~hz)),
+    side: side->Option.map(envelope),
   }
 }
 

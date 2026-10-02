@@ -29,7 +29,7 @@ const targetOf = (engine, program) =>
 {
     MatchEngine.setBase (engine, program.values, program.tables);
     const [l, r] = MatchEngine.renderStereo (engine, [], 57, 0, 66150, 66150);
-    return SoundTarget.prepare ("x", { samples: l.map ((v, k) => 0.5 * (v + r[k])), sampleRate: 44100, frameSize: undefined })._0;
+    return SoundTarget.prepare ("x", { samples: l.map ((v, k) => 0.5 * (v + r[k])), sampleRate: 44100, frameSize: undefined, sides: [l, r] })._0;
 };
 
 const makeEngine = async () =>
@@ -103,7 +103,7 @@ else
     if (only !== "match")
         for (const count of [1, 6, 12])
         {
-            const workers = await start (count, i => ({ role: "rate", seed: 100 + i, ms: seconds * 1000, fit: true }));
+            const workers = await start (count, i => ({ role: "rate", seed: 100 + i, ms: seconds * 1000, fit: { envelope: true, eq: true } }));
             const counts = await Promise.all (workers.map (w => new Promise (r => { w.once ("message", r); w.postMessage ("go"); })));
             workers.forEach (w => w.terminate ());
             const total = counts.reduce ((a, b) => a + b, 0);

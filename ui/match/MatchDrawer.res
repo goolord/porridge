@@ -16,7 +16,8 @@
 open! Web
 
 let slotCount = 4
-// the renders a match has, for the outline and the four searches together
+// the renders a match of a long sample has, for the outline and the four searches together (a
+// short one has more: MatchSearch.budgetFor)
 let budget = 1000
 let amounts = [("a little", 0.15), ("some", 0.35), ("a lot", 0.7)]
 
@@ -235,6 +236,7 @@ let make = (ctx: Ctx.t, stage): t => {
     | #env => "env"
     | #mod => "mod"
     | #fx => "fx"
+    | #eq => "eq"
     }
   let lockChips = Genome.groups->Array.map(g => {
     let chip = el("div", ~cls="mt-lock", ~parent=lockRow)
@@ -670,7 +672,7 @@ let make = (ctx: Ctx.t, stage): t => {
             ~fitted=l.target.wave != None,
             ~locks=locked,
             ~reference=reference->Option.map(c => Float64Array.fromArray(c.genes)),
-            ~budget,
+            ~budget=MatchSearch.budgetFor(~base=budget, ~seconds=SoundTarget.seconds(l.target)),
             ~sigma=reference == None ? 0.25 : 0.2,
             ~seed,
           ),

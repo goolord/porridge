@@ -13,12 +13,20 @@ type request =
   // the engine's module, and the predictor's file if the build has one (MatchModel.res)
   | @as("init") Init({wasm: MatchEngine.wasmModule, model: option<Uint8Array.t>})
   // makes a sample ready to match (SoundTarget.prepare)
-  | @as("prepare") Prepare({task: int, name: string, samples: Float32Array.t, sampleRate: float})
+  | @as("prepare")
+  Prepare({task: int, name: string, samples: Float32Array.t, sides: option<(Float32Array.t, Float32Array.t)>, sampleRate: float})
   // what the evaluations of a session render against, sent before its first one
   | @as("setup") Setup({session: int, setup: setup})
   // renders and scores genes (MatchSearch.evaluate)
   | @as("evaluate")
-  Evaluate({task: int, genes: array<float>, weights: MatchLoss.weights, threshold: float, fit: bool, short: bool})
+  Evaluate({
+      task: int,
+      genes: array<float>,
+      weights: MatchLoss.weights,
+      threshold: float,
+      fit: MatchSearch.fitting,
+      short: bool,
+    })
 
 @tag("type")
 type response =

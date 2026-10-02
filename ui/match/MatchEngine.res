@@ -221,8 +221,9 @@ let restore = t =>
 let send = (t, values: array<(string, float)>) =>
   values->Array.forEach(((id, v)) => t.instance->sendParam(id, v))
 
-// Runs n frames, adding the mono mix into out from `at` (or dropping it without out).
-let run = (t, n, ~out=?, ~at=0) => {
+// Runs n frames, adding the mono mix into out from `at` (or dropping it without out), and the
+// side signal into `side`.
+let run = (t, n, ~out=?, ~side=?, ~at=0) => {
   let pos = ref(0)
   while pos.contents < n {
     let k = Math.Int.min(block, n - pos.contents)
@@ -233,6 +234,11 @@ let run = (t, n, ~out=?, ~at=0) => {
       for i in 0 to k - 1 {
         out->set32(at + pos.contents + i, 0.5 * (t.left->get32(i) + t.right->get32(i)))
       }
+      side->Option.forEach(side =>
+        for i in 0 to k - 1 {
+          side->set32(at + pos.contents + i, 0.5 * (t.left->get32(i) - t.right->get32(i)))
+        }
+      )
     | None => ()
     }
     pos := pos.contents + k
@@ -269,6 +275,20 @@ let render = (t, values, ~note, ~cents, ~frames) => {
   run(t, latency)
   run(t, frames, ~out)
   out
+}
+
+// The same as mono and side samples.
+let renderSides = (t, values, ~note, ~cents, ~frames) => {
+  restore(t)
+  send(t, values)
+  t.instance->sendParam("Tune_Main", 440. * Math.pow(2., ~exp=cents / 1200.))
+  run(t, settle)
+  t.instance->sendMidi(noteMessage(0x90, note, velocity))
+  let out = Float32Array.fromLength(frames)
+  let side = Float32Array.fromLength(frames)
+  run(t, latency)
+  run(t, frames, ~out, ~side)
+  (out, side)
 }
 
 // The same, with the key let go after `held` frames, in stereo, for listening.

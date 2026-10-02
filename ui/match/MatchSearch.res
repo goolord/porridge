@@ -110,10 +110,20 @@ let partCost = 0.006
 //==============================================================================
 // Rendering and scoring a candidate (in a worker)
 
+// What an evaluation fits to the sample rather than taking from the genes: the amp envelope
+// (unless the envelopes are locked) and the key EQ (unless it is).
+type fitting = {envelope: bool, eq: bool}
+
+let noFitting = {envelope: false, eq: false}
+
 type context = {
   engine: MatchEngine.t,
   target: SoundTarget.t,
   measured: Spectrum.features,
+  // the target's average spectrum (the long bands, dB) and how much each band counts, which the
+  // key EQ is fitted to
+  eqTarget: array<float>,
+  eqWeights: array<float>,
   // the amp envelope that follows its loudness (Genome.seed's genes, in envelopeKeys' order),
   // where envelope fits start from as well as from the candidate's own
   seedEnvelope: Float64Array.t,
@@ -132,6 +142,20 @@ let tablesFor = (target: SoundTarget.t, tables: OatmealFormat.tables) =>
 // rendered past the target's length, so that a render can start at its onset as the sample does
 let onsetRoom = 4410
 
+// A cut-off target's last 20 ms may be an editor's fade, not the sound: its loudness steps there
+// are left out of the comparison.
+let fadeSteps = 2
+
+let trimEnd = (f: Spectrum.features, ~steps) => {
+  let keep = a => a->TypedArray.slice(~start=0, ~end=Math.Int.max(1, TypedArray.length(a) - steps))
+  {...f, envelope: keep(f.envelope), side: f.side->Option.map(keep)}
+}
+
+let eqWeightsOf = (levels: array<float>) => {
+  let top = levels->Array.reduce(neg_infinity, Math.max)
+  levels->Array.map(l => Math.max(0., Math.min(1., (l - (top - 50.)) / 50.)))
+}
+
 let makeContext = (engine, target: SoundTarget.t, ~base: Bank.values, ~tables) => {
   MatchEngine.setBase(engine, base, tablesFor(target, tables))
   let baseValue = id => base->Map.get(id)->Option.getOr(0.)
@@ -141,10 +165,20 @@ let makeContext = (engine, target: SoundTarget.t, ~base: Bank.values, ~tables) =
     ~note=target.note,
     ~frames=TypedArray.length(target.samples) + onsetRoom,
   )
+  let measured = Spectrum.measure(
+    target.samples,
+    ~period=SoundTarget.period(target),
+    ~gridHz=?target.hz,
+    ~side=?target.side,
+  )
+  let measured = target.truncated ? trimEnd(measured, ~steps=fadeSteps) : measured
+  let eqTarget = Spectrum.averageSpectrum(measured)
   {
     engine,
     target,
-    measured: Spectrum.measure(target.samples, ~period=SoundTarget.period(target)),
+    measured,
+    eqTarget,
+    eqWeights: eqWeightsOf(eqTarget),
     seedEnvelope: {
       let seed = Genome.seed(target)
       Float64Array.fromArray(Genome.envelopeKeys->Array.map(key => Genome.get(seed, key)))
@@ -158,21 +192,34 @@ let baseValue = (ctx, id) => ctx.base->Map.get(id)->Option.getOr(0.)
 
 let frames = ctx => TypedArray.length(ctx.target.samples)
 
+// The pitch x plays at, Hz (the harmonic grid is measured on it).
+let playedHz = (ctx, x) => {
+  let note = Genome.playedNote(x, ~note=ctx.target.note)
+  let cents = Genome.playedCents(x, ~cents=ctx.target.cents)
+  440. * Math.pow(2., ~exp=(Int.toFloat(note) + cents / 100. - 69.) / 12.)
+}
+
 // Renders x at the key and tuning its genes play it at, from its onset (SoundTarget.onsetOf),
-// as long as the target (or only its first `frames`).
-let renderGenes = (ctx, ~frames as length=?, x) => {
+// as long as the target (or only its first `frames`); with its side signal for a stereo target.
+let renderSides = (ctx, ~frames as length=?, x) => {
   let note = Genome.playedNote(x, ~note=ctx.target.note)
   let values = Genome.decode(x, ~note, ~base=baseValue(ctx, _))
   let n = length->Option.getOr(frames(ctx))
-  let y = MatchEngine.render(
-    ctx.engine,
-    values,
-    ~note,
-    ~cents=Genome.playedCents(x, ~cents=ctx.target.cents),
-    ~frames=n + onsetRoom,
-  )
+  let cents = Genome.playedCents(x, ~cents=ctx.target.cents)
+  let (y, side) = switch ctx.target.side {
+  | Some(_) =>
+    let (y, side) = MatchEngine.renderSides(ctx.engine, values, ~note, ~cents, ~frames=n + onsetRoom)
+    (y, Some(side))
+  | None => (MatchEngine.render(ctx.engine, values, ~note, ~cents, ~frames=n + onsetRoom), None)
+  }
   let start = Math.Int.min(onsetRoom, SoundTarget.onsetOf(y))
-  (note, values, y->TypedArray.subarray(~start, ~end=start + n))
+  let cut = a => a->TypedArray.subarray(~start, ~end=start + n)
+  (note, values, cut(y), side->Option.map(cut))
+}
+
+let renderGenes = (ctx, ~frames=?, x) => {
+  let (note, values, y, _) = renderSides(ctx, ~frames?, x)
+  (note, values, y)
 }
 
 // the level a single note is set to: -24 dB RMS over its loudest 300 ms (a four-note chord
@@ -283,12 +330,14 @@ let shaped = (f: Spectrum.features, power) => {
   })
   let step = 1000. * Int.toFloat(Spectrum.envelopeStep) / Spectrum.sampleRate
   let energy = ref(0.)
+  let gain = s => Math.sqrt(power(Int.toFloat(s) * step, Int.toFloat(s + 1) * step))
   let envelope = f.envelope->TypedArray.mapWithIndex((v, s) => {
-    let e = v * Math.sqrt(power(Int.toFloat(s) * step, Int.toFloat(s + 1) * step))
+    let e = v * gain(s)
     energy := energy.contents + e * e * Int.toFloat(Spectrum.envelopeStep)
     e
   })
-  {...f, spectra, envelope, energy: energy.contents}
+  // (the harmonic grid is a ratio within each frame, which a level doesn't move)
+  {...f, spectra, envelope, energy: energy.contents, side: f.side->Option.map(side => side->TypedArray.mapWithIndex((v, s) => v * gain(s)))}
 }
 
 // Where a flat render with the envelope put on it would start, as SoundTarget.onsetOf finds
@@ -347,7 +396,13 @@ let fitEnvelope = (ctx, x, flat: Spectrum.features, ~weights, ~quick) => {
 // was), and the candidate if it scored under the threshold.
 type result = {loss: float, genes: array<float>, candidate: option<candidate>}
 
-let measureOf = (ctx, y) => Spectrum.measure(y, ~period=SoundTarget.period(ctx.target))
+let measureOf = (ctx, y, ~side=?, ~hz) =>
+  Spectrum.measure(
+    y,
+    ~period=SoundTarget.period(ctx.target),
+    ~gridHz=?ctx.target.hz->Option.map(_ => hz),
+    ~side?,
+  )
 
 // A short render (`short` evaluations) is the first this many seconds of the note.
 let shortSeconds = 0.45
@@ -374,14 +429,235 @@ let extend = (f: Spectrum.features, ~like: Spectrum.features) => {
   })
   let steps = TypedArray.length(like.envelope)
   let last = Math.Int.max(0, TypedArray.length(f.envelope) - 2)
-  let envelope = Float64Array.fromLength(steps)
-  let energy = ref(0.)
-  for s in 0 to steps - 1 {
-    let v = f.envelope->get64(Math.Int.min(s, last))
-    envelope->set64(s, v)
-    energy := energy.contents + v * v * Int.toFloat(Spectrum.envelopeStep)
+  let held = (a: Float64Array.t) => {
+    let out = Float64Array.fromLength(steps)
+    for s in 0 to steps - 1 {
+      out->set64(s, a->get64(Math.Int.min(s, last)))
+    }
+    out
   }
-  {...f, length: like.length, spectra, envelope, energy: energy.contents}
+  let envelope = held(f.envelope)
+  let energy = ref(0.)
+  envelope->TypedArray.forEach(v => energy := energy.contents + v * v * Int.toFloat(Spectrum.envelopeStep))
+  {...f, length: like.length, spectra, envelope, energy: energy.contents, side: f.side->Option.map(held)}
+}
+
+//==============================================================================
+// The key EQ, fitted
+
+// Band k's response in dB at f for gain g dB on a note at hz, as the DSP has it (dsp/Voice.cmajor
+// setKeyEqBand: RBJ peaking, Q = sqrt 2, sitting at 18 kHz and fading out past it).
+let eqBandDb = (~k, ~g, ~hz, ~f) => {
+  let centre = hz * PorridgeParams.keyEqHarmonic(k + 1)
+  let over = centre > 18000. ? Math.log2(centre / 18000.) : 0.
+  let gain = g * Math.max(0., 1. - over)
+  if Math.abs(gain) <= 0.01 {
+    0.
+  } else {
+    let fc = Math.min(Math.min(centre, 18000.), 0.45 * Spectrum.sampleRate)
+    let w = Spectrum.twoPi * fc / Spectrum.sampleRate
+    let a = Math.pow(10., ~exp=gain / 40.)
+    let alpha = Math.sin(w) / (2. * Math.sqrt(2.))
+    let c = Math.cos(w)
+    let (b0, b1, b2) = (1. + alpha * a, -2. * c, 1. - alpha * a)
+    let (a0, a1, a2) = (1. + alpha / a, -2. * c, 1. - alpha / a)
+    let v = Spectrum.twoPi * Math.min(f, 0.5 * Spectrum.sampleRate) / Spectrum.sampleRate
+    let (c1, s1, c2, s2) = (Math.cos(v), Math.sin(v), Math.cos(2. * v), Math.sin(2. * v))
+    let num = Math.pow(b0 + b1 * c1 + b2 * c2, ~exp=2.) + Math.pow(b1 * s1 + b2 * s2, ~exp=2.)
+    let den = Math.pow(a0 + a1 * c1 + a2 * c2, ~exp=2.) + Math.pow(a1 * s1 + a2 * s2, ~exp=2.)
+    10. * Math.log10(num / den)
+  }
+}
+
+let eqResponse = (gains: array<float>, ~hz, ~f) =>
+  gains->Array.reduceWithIndex(0., (sum, g, k) => sum + eqBandDb(~k, ~g, ~hz, ~f))
+
+// Where a band's level comes from, for a note at hz, as (frequency, power) points: with the
+// render's harmonic grid, the harmonics in it, each by the band's weight there times its power (a
+// low band can hold a loud harmonic and a quiet one, and its level is theirs, not its centre's),
+// and what lies between them (five points across the band, at the grid's ratio to the nearest
+// harmonic); in a band with no harmonic, the harmonic nearest it, which leaks into it. Without a
+// grid, five points across the band, as its weights have them.
+let spreadPoints = 5
+
+let bandPoints = (r: Spectrum.resolution, ~hz, ~grid: option<Spectrum.grid>) => {
+  let binHz = Spectrum.sampleRate / Int.toFloat(r.size)
+  let between = grid->Option.map(Spectrum.gridMeanRatio)
+  Array.fromInitializer(~length=r.bands, b => {
+    let (first, last) = (r.first->Spectrum.getInt(b), r.last->Spectrum.getInt(b))
+    let offset = r.offset->Spectrum.getInt(b)
+    let weightAt = f => {
+      let k = Float.toInt(Math.round(f / binHz))
+      k >= first && k <= last ? r.weights->get64(offset + k - first) : 0.
+    }
+    let spread = Array.fromInitializer(~length=spreadPoints, i => {
+      let f = (Int.toFloat(first) + (Int.toFloat(last - first) * (Int.toFloat(i) + 0.5)) / Int.toFloat(spreadPoints)) * binHz
+      (f, weightAt(f))
+    })->Array.filter(((_, w)) => w > 0.)
+    let harmonics = grid->Option.map(g => g.harmonics)
+    let power = m =>
+      switch harmonics {
+      | Some(h) if m >= 1 && m <= TypedArray.length(h) => h->get64(m - 1)
+      | Some(h) if TypedArray.length(h) > 0 => h->get64(TypedArray.length(h) - 1)
+      | _ => 1.
+      }
+    let points = []
+    let m = ref(Math.Int.max(1, Float.toInt(Math.ceil(Int.toFloat(first) * binHz / hz))))
+    while Int.toFloat(m.contents) * hz <= Int.toFloat(last) * binHz {
+      let f = Int.toFloat(m.contents) * hz
+      let k = Math.Int.max(first, Math.Int.min(last, Float.toInt(Math.round(f / binHz))))
+      let w = r.weights->get64(offset + k - first) * power(m.contents)
+      if w > 0. {
+        points->Array.push((f, w))
+      }
+      m := m.contents + 1
+    }
+    switch between {
+    | None => spread == [] ? [(r.centres->get64(b), 1.)] : spread
+    | Some(ratios) =>
+      let nearest = Math.max(1., Math.round(r.centres->get64(b) / hz))
+      let harmonicPoints = points == [] ? [(nearest * hz, power(Float.toInt(nearest)))] : points
+      // (the grid's ratio is of mean powers per bin; a harmonic's power is about three bins')
+      let ratio = Spectrum.gridRatioAt(ratios, r.centres->get64(b))
+      let noise = spread->Array.map(((f, w)) => (f, w * ratio * power(Float.toInt(Math.max(1., Math.round(f / hz)))) / 3.))
+      Array.concat(harmonicPoints, noise)
+    }
+  })
+}
+
+// The EQ's response on each band (dB), from its points.
+let bandResponse = (points: array<array<(float, float)>>, gains, ~hz) =>
+  points->Array.map(ps => {
+    let (sum, weight) = ps->Array.reduce((0., 0.), ((s, w), (f, pw)) => (
+      s + pw * Math.pow(10., ~exp=eqResponse(gains, ~hz, ~f) / 10.),
+      w + pw,
+    ))
+    10. * Math.log10(Math.max(sum / weight, 1e-30))
+  })
+
+// Solves the small symmetric system m x = v (Gaussian elimination with pivoting).
+let solve = (m: array<array<float>>, v: array<float>) => {
+  let n = Array.length(v)
+  let a = m->Array.mapWithIndex((row, i) => Array.concat(row, [v->Array.getUnsafe(i)]))
+  for col in 0 to n - 1 {
+    let pivot = ref(col)
+    for r in col + 1 to n - 1 {
+      if Math.abs(a->Array.getUnsafe(r)->Array.getUnsafe(col)) > Math.abs(a->Array.getUnsafe(pivot.contents)->Array.getUnsafe(col)) {
+        pivot := r
+      }
+    }
+    let tmp = a->Array.getUnsafe(col)
+    a->Array.setUnsafe(col, a->Array.getUnsafe(pivot.contents))
+    a->Array.setUnsafe(pivot.contents, tmp)
+    let p = a->Array.getUnsafe(col)->Array.getUnsafe(col)
+    if Math.abs(p) > 1e-12 {
+      for r in 0 to n - 1 {
+        if r != col {
+          let row = a->Array.getUnsafe(r)
+          let factor = row->Array.getUnsafe(col) / p
+          if factor != 0. {
+            for c in col to n {
+              row->Array.setUnsafe(c, row->Array.getUnsafe(c) - factor * a->Array.getUnsafe(col)->Array.getUnsafe(c))
+            }
+          }
+        }
+      }
+    }
+  }
+  Array.fromInitializer(~length=n, i => {
+    let p = a->Array.getUnsafe(i)->Array.getUnsafe(i)
+    Math.abs(p) > 1e-12 ? a->Array.getUnsafe(i)->Array.getUnsafe(n) / p : 0.
+  })
+}
+
+// how hard the fit holds the gains near flat, against the bands' weights
+let eqRidge = 0.03
+let eqLimit = 18.
+
+// The gains (dB) that best turn a render's average spectrum (with the EQ flat) into the
+// target's, with a free overall level: weighted least squares over the long bands, each band's
+// response taken as linear in its gain (its response at 6 dB, per dB), then once more on what
+// is left with the response as it really is.
+let fitEqGains = (ctx, f: Spectrum.features, ~hz) => {
+  let r = Spectrum.resolutions->Array.getUnsafe(0)
+  let bands = PorridgeParams.keyEqBands
+  let own = Spectrum.averageSpectrum(f)
+  let points = bandPoints(r, ~hz, ~grid=f.grid)
+  let unit = Array.fromInitializer(~length=bands, k =>
+    bandResponse(points, Array.fromInitializer(~length=bands, j => j == k ? 6. : 0.), ~hz)->Array.map(d => d / 6.)
+  )
+  let weights = ctx.eqWeights
+  let total = weights->Array.reduce(0., (s, w) => s + w)
+  let step = (residual: array<float>) => {
+    // unknowns: the gains, then the level
+    let n = bands + 1
+    let column = (j, b) => j < bands ? unit->Array.getUnsafe(j)->Array.getUnsafe(b) : 1.
+    let m = Array.fromInitializer(~length=n, i =>
+      Array.fromInitializer(~length=n, j => {
+        let s = ref(i == j && i < bands ? eqRidge * total : 0.)
+        for b in 0 to r.bands - 1 {
+          s := s.contents + weights->Array.getUnsafe(b) * column(i, b) * column(j, b)
+        }
+        s.contents
+      })
+    )
+    let v = Array.fromInitializer(~length=n, i => {
+      let s = ref(0.)
+      for b in 0 to r.bands - 1 {
+        s := s.contents + weights->Array.getUnsafe(b) * column(i, b) * residual->Array.getUnsafe(b)
+      }
+      s.contents
+    })
+    solve(m, v)->Array.slice(~start=0, ~end=bands)
+  }
+  let clampGain = g => Math.max(-.eqLimit, Math.min(eqLimit, g))
+  let diff = Array.fromInitializer(~length=r.bands, b => ctx.eqTarget->Array.getUnsafe(b) - own->Array.getUnsafe(b))
+  let first = step(diff)->Array.map(clampGain)
+  let response = bandResponse(points, first, ~hz)
+  let left = diff->Array.mapWithIndex((d, b) => d - response->Array.getUnsafe(b))
+  let more = step(left)
+  first->Array.mapWithIndex((g, k) => clampGain(g + more->Array.getUnsafe(k)))
+}
+
+// The key EQ on a render, as the DSP runs it at the end of the voice (dsp/Voice.cmajor: the same
+// bands, in double precision): for a single note it is the same as rendering with it, as the
+// EQ is the last thing on the voice and what follows it is linear.
+let applyEq: (Float32Array.t, array<float>, float) => Float32Array.t = %raw(`(x, gains, hz) => {
+  const sr = 44100, out = Float32Array.from(x);
+  gains.forEach((g, k) => {
+    const centre = hz * Math.pow(2, k);
+    const over = centre > 18000 ? Math.log2(centre / 18000) : 0;
+    const gain = g * Math.max(0, 1 - over);
+    if (Math.abs(gain) <= 0.01) return;
+    const f = Math.min(centre, 18000, 0.45 * sr);
+    const w = 2 * Math.PI * f / sr, A = Math.pow(10, gain / 40), alpha = Math.sin(w) / (2 * Math.SQRT2), c = Math.cos(w);
+    const a0 = 1 + alpha / A;
+    const b0 = (1 + alpha * A) / a0, b1 = -2 * c / a0, b2 = (1 - alpha * A) / a0, a1 = -2 * c / a0, a2 = (1 - alpha / A) / a0;
+    let s1 = 0, s2 = 0;
+    for (let i = 0; i < out.length; i++) {
+      const v = out[i], y = b0 * v + s1;
+      s1 = b1 * v - a1 * y + s2;
+      s2 = b2 * v - a2 * y;
+      out[i] = y;
+    }
+  });
+  return out;
+}`)
+
+// x with its key EQ flat, as rendered before the EQ is fitted
+let withFlatEq = (x: Float64Array.t) => {
+  let y = TypedArray.copy(x)
+  Genome.eqKeys->Array.forEach(key => y->set64(Genome.indexOf(key), 0.5))
+  y
+}
+
+// The gains fitted to a render's measurements (to a tenth of a dB, as the parameter keeps them),
+// and x with them.
+let fitEq = (ctx, x: Float64Array.t, f: Spectrum.features) => {
+  let gains = fitEqGains(ctx, f, ~hz=playedHz(ctx, x))->Array.map(g => Math.round(g * 10.) / 10.)
+  let y = TypedArray.copy(x)
+  Genome.eqKeys->Array.forEachWithIndex((key, k) => y->set64(Genome.indexOf(key), Genome.eqGene(gains->Array.getUnsafe(k))))
+  (y, gains)
 }
 
 // Renders x and scores it by these weights (with its parts' cost); the candidate too if it
@@ -397,38 +673,48 @@ let extend = (f: Spectrum.features, ~like: Spectrum.features) => {
 //
 // A `short` evaluation renders only the first shortSeconds and measures the rest as that
 // settled (`extend`): for ranking many candidates cheaply, never shown (it has no candidate).
-let evaluate = (ctx, x, ~weights, ~threshold, ~fit, ~short) => {
+let evaluate = (ctx, x, ~weights, ~threshold, ~fit: fitting, ~short) => {
   let length = short ? Math.Int.min(frames(ctx), Float.toInt(shortSeconds * Spectrum.sampleRate)) : frames(ctx)
-  let measure = y => {
-    let f = measureOf(ctx, y)
+  // (with the EQ fitted, x is rendered with it flat and the fit put on the render)
+  let x = fit.eq ? withFlatEq(x) : x
+  let measure = (y, side) => {
+    let f = measureOf(ctx, y, ~side?, ~hz=playedHz(ctx, x))
     short ? extend(f, ~like=ctx.measured) : f
   }
-  let finish = (x, note, values, y, f) => {
+  let finish = (x, note, y, side, f) => {
+    // the EQ fitted to the render, then put on it and measured again
+    let (x, y, f) = if fit.eq {
+      let (x, gains) = fitEq(ctx, x, f)
+      let hz = playedHz(ctx, x)
+      let y = applyEq(y(), gains, hz)
+      (x, () => y, measure(y, side()->Option.map(s => applyEq(s, gains, hz))))
+    } else {
+      (x, y, f)
+    }
     let loss = MatchLoss.compare(weights, ctx.measured, f) + cost(x)
     {
       loss,
       genes: Array.fromInitializer(~length=TypedArray.length(x), i => x->get64(i)),
-      candidate: loss < threshold && !short ? Some(candidateOf(ctx, x, note, values, y(), f)) : None,
+      candidate: loss < threshold && !short
+        ? Some(candidateOf(ctx, x, note, Genome.decode(x, ~note, ~base=baseValue(ctx, _)), y(), f))
+        : None,
     }
   }
-  if !fit || Genome.wet(x) {
-    let (note, values, y) = renderGenes(ctx, ~frames=length, x)
-    finish(x, note, values, () => y, measure(y))
+  if !fit.envelope || Genome.wet(x) {
+    let (note, _, y, side) = renderSides(ctx, ~frames=length, x)
+    finish(x, note, () => y, () => side, measure(y, side))
   } else {
-    let (note, _, flatY) = renderGenes(ctx, ~frames=length, Genome.flatOf(x))
-    let flatF = measure(flatY)
+    let (note, _, flatY, flatSide) = renderSides(ctx, ~frames=length, Genome.flatOf(x))
+    let flatF = measure(flatY, flatSide)
     // (a short evaluation, which only ranks, takes the quick fit)
     let x = fitEnvelope(ctx, x, flatF, ~weights, ~quick=short)
-    {
-      let values = Genome.decode(x, ~note, ~base=baseValue(ctx, _))
-      let ms = Float.toInt(1000. * Int.toFloat(frames(ctx)) / Spectrum.sampleRate) + 20
-      let power = envelopePower(x, ~ms=ms + 120)
-      // a render with the envelope would start where it first reaches -40 dB (SoundTarget.onsetOf),
-      // later than the flat one with a slow attack: the envelope moves on by as much
-      let onset = onsetMs(flatY, power)
-      let power = onset > 0. ? (a, b) => power(a +. onset, b +. onset) : power
-      finish(x, note, values, () => shapedSamples(flatY, power), shaped(flatF, power))
-    }
+    let ms = Float.toInt(1000. * Int.toFloat(frames(ctx)) / Spectrum.sampleRate) + 20
+    let power = envelopePower(x, ~ms=ms + 120)
+    // a render with the envelope would start where it first reaches -40 dB (SoundTarget.onsetOf),
+    // later than the flat one with a slow attack: the envelope moves on by as much
+    let onset = onsetMs(flatY, power)
+    let power = onset > 0. ? (a, b) => power(a +. onset, b +. onset) : power
+    finish(x, note, () => shapedSamples(flatY, power), () => flatSide->Option.map(s => shapedSamples(s, power)), shaped(flatF, power))
   }
 }
 
@@ -544,8 +830,8 @@ type rec search = {
   budget: int,
   sigma: float,
   seed: int,
-  // whether the amp envelope is fitted to each candidate (evaluate's fit), not searched
-  fit: bool,
+  // what is fitted to each candidate (evaluate's fit), not searched
+  fit: fitting,
   mutable stage: stage,
   mutable evals: int,
   mutable bestLoss: float,
@@ -675,41 +961,57 @@ let isDone = s =>
   }
 
 // The second screen's structures on a first-screen winner: osc 2 at a middle level with each
-// wave and interval it may take, and each mix mode with a sine or saw osc 2 in unison, a fifth
-// or an octave up (within the bounds).
+// wave it may take at each interval, each mix mode with a sine or saw osc 2 in unison, a fifth
+// or an octave up, unison (two and four voices, a little and much detuned), noise (some and
+// much), and the second filter (beside and after the first, a little and well above it); all
+// within the bounds.
 let secondScreen = (x: Float64Array.t, lo, hi) => {
   let set = (y, key, v) => y->set64(Genome.indexOf(key), v)
   let choice = (key, o) => Genome.valueOfChoice(o, Genome.gene(Genome.indexOf(key)).options)
+  let anchor = st => Genome.o2PitchGene(st)
   let plain =
     allowed("o2Wave", lo, hi)->Array.flatMap(w =>
-      allowed("o2Interval", lo, hi)->Array.map(i => {
+      Genome.o2Anchors->Array.map(st => {
         let y = TypedArray.copy(x)
         set(y, "oscMix", choice("oscMix", 0))
         set(y, "o2Level", 0.55)
-        set(y, "o2Fine", 0.5)
         set(y, "o2Wave", w)
-        set(y, "o2Interval", i)
+        set(y, "o2Pitch", anchor(st))
         y
       })
     )
+  let variant = changes => {
+    let y = TypedArray.copy(x)
+    changes->Array.forEach(((key, v)) => set(y, key, v))
+    y
+  }
+  let unison =
+    allowed("unison", lo, hi)
+    ->Array.filter(v => Genome.choiceOf(v, 4) == 1 || Genome.choiceOf(v, 4) == 3)
+    ->Array.flatMap(u => [0.35, 0.7]->Array.map(d => variant([("unison", u), ("unisonDetune", d)])))
+  let noise = [0.45, 0.75]->Array.map(n => variant([("noise", n), ("noiseColour", 0.1)]))
+  let doubled =
+    allowed("filterDouble", lo, hi)
+    ->Array.filter(v => Genome.choiceOf(v, 3) != 0)
+    ->Array.flatMap(d => [0.25, 0.6]->Array.map(split => variant([("filterDouble", d), ("filterSplit", split), ("filterMix", 0.5)])))
+  let extras = Array.concat(Array.concat(unison, noise), doubled)
   let mixes =
     allowed("oscMix", lo, hi)
     ->Array.filter(v => Genome.choiceOf(v, 7) != 0)
     ->Array.flatMap(m =>
       [0, 1]->Array.flatMap(w =>
-        [0, 3, 1]->Array.map(i => {
+        [0., 7., 12.]->Array.map(i => {
           let y = TypedArray.copy(x)
           set(y, "oscMix", m)
           set(y, "o2Level", 0.55)
-          set(y, "o2Fine", 0.5)
           set(y, "feedback", 0.3)
           set(y, "o2Wave", choice("o2Wave", w))
-          set(y, "o2Interval", choice("o2Interval", i))
+          set(y, "o2Pitch", anchor(i))
           y
         })
       )
     )
-  Array.concat(plain, mixes)->Array.map(y => clampInto(y, lo, hi))
+  Array.concat(Array.concat(plain, mixes), extras)->Array.map(y => clampInto(y, lo, hi))
 }
 
 // how many first-screen winners the second screen builds on, and how many of all screened go
@@ -798,7 +1100,7 @@ let roundRuns = 4
 let roundGenerations = [5, 7]
 
 // the genes fitted to each candidate rather than searched, when the envelope is fitted
-let fittedGenes = s => s.fit ? Genome.envelopeKeys : []
+let fittedGenes = s => Array.concat(s.fit.envelope ? Genome.envelopeKeys : [], s.fit.eq ? Genome.eqKeys : [])
 
 // CMA-ES over the core genes of an entry's structure (the rest held where the entry has them).
 let coreRun = (s, x, ~seed) => {
@@ -957,8 +1259,8 @@ type match_ = {
   // the four searches, once the outline is done
   mutable searches: array<search>,
   fitted: bool,
-  // whether each candidate's envelope is fitted (unless the envelopes are locked)
-  fit: bool,
+  // what is fitted to each candidate: the envelope and the key EQ, unless they are locked
+  fit: fitting,
   locks: array<Genome.group>,
   reference: option<Float64Array.t>,
   // each search's renders
@@ -968,9 +1270,14 @@ type match_ = {
 // the outline's share of the renders
 let outlineShare = 0.75
 
+// The renders a match of a sample this long gets: `base` for 1.2 s or longer, and more for a
+// shorter one (a render costs about as much as it is long), up to five times as many.
+let budgetFor = (~base, ~seconds) =>
+  Float.toInt(Int.toFloat(base) * Math.max(1., Math.min(5., Math.pow(1.2 / Math.max(seconds, 0.01), ~exp=0.8))))
+
 let makeMatch = (~starts, ~fitted, ~locks, ~reference, ~budget, ~sigma, ~seed) => {
   let outlineBudget = Float.toInt(outlineShare * Int.toFloat(budget))
-  let fit = !(locks->Array.includes(#env))
+  let fit = {envelope: !(locks->Array.includes(#env)), eq: !(locks->Array.includes(#eq))}
   {
     outline: outline(~starts, ~fitted, ~fit, ~locks, ~reference, ~budget=outlineBudget, ~sigma, ~seed),
     searches: [],

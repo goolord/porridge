@@ -1,8 +1,10 @@
-// The sound to match: a sample, made ready for the matcher. It is mixed to mono, resampled to
-// 44.1 kHz, trimmed to start at its onset and cut to at most maxSeconds; then its pitch is
-// found (the note the synth plays when rendering a candidate) and its shape described, which
-// gives the search its starting point (Genome.seed). A pitched sample's harmonics also make a
-// waveform (fitWave), which the first oscillator's "fitted" wave plays.
+// The sound to match: a sample, made ready for the matcher. It is mixed to mono (its side
+// signal kept apart when it is stereo), resampled to 44.1 kHz, trimmed to start at its onset and
+// cut to at most maxSeconds; then its pitch is found (the note the synth plays when rendering a
+// candidate) and its shape described, which gives the search its starting point (Genome.seed):
+// its envelope, brightness and how that falls, its pitch sweep (tracked every 2 ms through its
+// start), how much lies between its harmonics (noise) and how wide it is. A pitched sample's
+// harmonics also make a waveform (fitWave), which the first oscillator's "fitted" wave plays.
 
 @get_index external get32: (Float32Array.t, int) => float = ""
 @set_index external set32: (Float32Array.t, int, float) => unit = ""
@@ -31,8 +33,23 @@ type t = {
   sustain: float,
   // the spectral centroid, Hz
   brightness: float,
-  // how much the pitch falls during the first 100 ms (semitones; negative: rises)
+  // how far above its settled pitch it starts (semitones; negative: below), and how long it
+  // takes to get within a tenth of that (seconds)
   pitchDrop: float,
+  pitchTime: float,
+  // how far its brightness falls from its brightest (octaves), and the time to fall halfway
+  brightnessDrop: float,
+  brightnessTime: float,
+  // what lies between its harmonics against them, dB (-60: nothing; 0 or so when it has no
+  // pitch), over its loud part
+  noise: float,
+  // its side signal against its mid, dB (-60 when mono), over its loud part
+  width: float,
+  // its side signal ((left - right) / 2, cut and scaled as the samples are), when stereo
+  side: option<Float32Array.t>,
+  // whether it was cut off still sounding (its file ends, or maxSeconds), so that its last
+  // moments may be an editor's fade rather than the sound's
+  truncated: bool,
   // peak levels of 160 stretches, for the drawer's picture of it
   overview: array<float>,
   // its loudness every 10 ms, dB
@@ -92,8 +109,10 @@ let median = (xs: array<float>) => {
 
 // The pitch at each of several points through the loud part (WaveImport's YIN): their median,
 // if at least half of them agree with it, sharpened by matching about 100 ms of cycles at
-// each agreeing point (a cent off shows at the high harmonics); and how much higher the first
-// is than that.
+// each agreeing point (a cent off shows at the high harmonics). Points in the first 150 ms,
+// where a sweep may still be settling, count only when there are too few others.
+let settleSeconds = 0.15
+
 let findPitch = (x: Float32Array.t, env: Float64Array.t) => {
   let steps = TypedArray.length(env)
   let loudest = ref(0.)
@@ -101,6 +120,8 @@ let findPitch = (x: Float32Array.t, env: Float64Array.t) => {
   let loud = Array.fromInitializer(~length=steps, s => s)->Array.filter(s =>
     env->get64(s) > loudest.contents * 0.1 && s >= 2
   )
+  let late = loud->Array.filter(s => Int.toFloat(s * Spectrum.envelopeStep) >= settleSeconds * sampleRate)
+  let loud = Array.length(late) >= 3 ? late : loud
   let count = Math.Int.min(9, Array.length(loud))
   let points =
     Array.fromInitializer(~length=count, i => loud->Array.getUnsafe(i * Array.length(loud) / Math.Int.max(1, count)))
@@ -109,24 +130,230 @@ let findPitch = (x: Float32Array.t, env: Float64Array.t) => {
     WaveImport.findPeriod(x, ~center=centre, ~sampleRate)->Option.map(period => (centre, sampleRate / period))
   })
   switch found {
-  | [] => (None, 0.)
+  | [] => None
   | _ =>
     let mid = median(found->Array.map(((_, hz)) => hz))->Option.getOr(0.)
     let agree = found->Array.filter(((_, hz)) => Math.abs(12. * Math.log2(hz / mid)) < 0.5)
     if 2 * Array.length(agree) < Array.length(found) || mid <= 0. {
-      (None, 0.)
+      None
     } else {
       let period = sampleRate / mid
       let cycles = Math.Int.max(1, Math.Int.min(64, Float.toInt(0.1 * sampleRate / period)))
       let sharpened = agree->Array.map(((centre, _)) =>
         sampleRate / WaveImport.refinePeriod(x, ~start=centre, ~period, ~cycles)
       )
-      let refined = median(sharpened)->Option.getOr(mid)
-      let (_, first) = found->Array.getUnsafe(0)
-      let drop = 12. * Math.log2(first / refined)
-      (Some(refined), Math.abs(drop) < 0.5 || Math.abs(drop) > 36. ? 0. : drop)
+      Some(median(sharpened)->Option.getOr(mid))
     }
   }
+}
+
+// The periods a point might have by YIN over a short window: every dip of the cumulative mean
+// normalized difference under 0.4 between minLag and maxLag samples (to a fraction of a sample),
+// with its depth.
+let periodDips = (x: Float32Array.t, ~centre, ~minLag, ~maxLag, ~window) => {
+  let n = TypedArray.length(x)
+  let s = centre - window / 2
+  if s < 0 || s + window + maxLag + 1 >= n || minLag < 2 {
+    []
+  } else {
+    let d = Float64Array.fromLength(maxLag + 2)
+    for tau in 1 to maxLag + 1 {
+      let sum = ref(0.)
+      for j in 0 to window - 1 {
+        let e = x->get32(s + j) - x->get32(s + j + tau)
+        sum := sum.contents + e * e
+      }
+      d->set64(tau, sum.contents)
+    }
+    // normalized by the mean of those before it
+    let cm = Float64Array.fromLength(maxLag + 2)
+    let running = ref(0.)
+    for tau in 1 to maxLag + 1 {
+      running := running.contents + d->get64(tau)
+      cm->set64(tau, running.contents > 0. ? d->get64(tau) * Int.toFloat(tau) / running.contents : 1.)
+    }
+    let found = []
+    for t in Math.Int.max(minLag, 2) to maxLag {
+      let (a, b, c) = (cm->get64(t - 1), cm->get64(t), cm->get64(t + 1))
+      if b < 0.5 && b <= a && b <= c {
+        let curve = a - 2. * b + c
+        found->Array.push((Int.toFloat(t) + (curve > 0. ? 0.5 * (a - c) / curve : 0.), b))
+      }
+    }
+    found
+  }
+}
+
+// The pitch through the sound's start, every 2 ms for its first 300 ms, in semitones from
+// `hz` (from three octaves above it to one below), followed back from where it settles: each
+// point takes the period among its dips nearest the next point's (within 7 semitones; a deeper
+// dip counts for a little more), so that a fast sweep isn't read an octave off. How far from
+// `hz` the sound starts (the median of the first three points), and how long until it stays
+// within a tenth of that (or a quarter of a semitone). (0, 0) when it starts at its pitch.
+let trackSeconds = 0.3
+
+let pitchSweep = (x: Float32Array.t, ~hz) => {
+  let period = sampleRate / hz
+  let minLag = Math.Int.max(2, Float.toInt(Math.floor(period / 8.)))
+  let maxLag = Float.toInt(Math.ceil(period * 2.))
+  let window = Math.Int.max(32, Float.toInt(Math.round(period * 0.7)))
+  let step = 88
+  let count = Float.toInt(trackSeconds * sampleRate) / step
+  let dips = Array.fromInitializer(~length=count, i =>
+    periodDips(x, ~centre=window / 2 + i * step, ~minLag, ~maxLag, ~window)->Array.map(((lag, depth)) => (
+      12. * Math.log2(period / lag),
+      depth,
+    ))
+  )
+  let track = Array.make(~length=count, None)
+  let later = ref(0.)
+  for i in count - 1 downto 0 {
+    let near = dips->Array.getUnsafe(i)->Array.filter(((st, _)) => Math.abs(st - later.contents) <= 7.)
+    let best = near->Array.reduce(None, (best, (st, depth)) => {
+      let cost = Math.abs(st - later.contents) + 4. * depth
+      switch best {
+      | Some((_, c)) if c <= cost => best
+      | _ => Some((st, cost))
+      }
+    })
+    best->Option.forEach(((st, _)) => {
+      track->Array.setUnsafe(i, Some(st))
+      later := st
+    })
+  }
+  let track = track->Array.filterMap(v => v)
+  if Array.length(track) < 6 {
+    (0., 0.)
+  } else {
+    let start = median(track->Array.slice(~start=0, ~end=3))->Option.getOr(0.)
+    if Math.abs(start) < 0.25 || Math.abs(start) > 36. {
+      (0., 0.)
+    } else {
+      let near = Math.max(0.25, 0.1 * Math.abs(start))
+      // the last point still away from the pitch
+      let last = ref(0)
+      track->Array.forEachWithIndex((v, i) =>
+        if Math.abs(v) > near {
+          last := i
+        }
+      )
+      (start, Int.toFloat((last.contents + 1) * step) / sampleRate)
+    }
+  }
+}
+
+// What lies between the harmonics against them (Spectrum.measureGrid), dB: over the frames
+// within 20 dB of the loudest that start `from` seconds on (after a sweep has settled, which
+// smears the harmonics) and the bands within 30 dB of a frame's loudest, weighed by level; and
+// each band's own mean (as a power ratio), for fitWave.
+let gridSummary = (g: Spectrum.grid, ~from) => {
+  let bands = Spectrum.gridBands
+  let frameLevel = f => {
+    let p = ref(0.)
+    for b in 0 to bands - 1 {
+      p := p.contents + Math.pow(10., ~exp=g.level->get64(f * bands + b) / 10.)
+    }
+    10. * Math.log10(Math.max(p.contents, 1e-30))
+  }
+  let levels = Array.fromInitializer(~length=g.frames, frameLevel)
+  let top = levels->Array.reduce(neg_infinity, Math.max)
+  let (sum, weight) = (ref(0.), ref(0.))
+  let bandSum = Float64Array.fromLength(bands)
+  let bandWeight = Float64Array.fromLength(bands)
+  let first = Math.Int.min(g.frames - 1, Float.toInt(Math.ceil(from * sampleRate / Int.toFloat(g.hop))))
+  for f in first to g.frames - 1 {
+    if levels->Array.getUnsafe(f) > top - 20. {
+      let loudestBand = ref(neg_infinity)
+      for b in 0 to bands - 1 {
+        loudestBand := Math.max(loudestBand.contents, g.level->get64(f * bands + b))
+      }
+      for b in 0 to bands - 1 {
+        let r = g.ratio->get64(f * bands + b)
+        let l = g.level->get64(f * bands + b)
+        if !Float.isNaN(r) && l > loudestBand.contents - 30. {
+          let w = Math.pow(10., ~exp=(l - loudestBand.contents) / 20.)
+          sum := sum.contents + w * r
+          weight := weight.contents + w
+          bandSum->set64(b, bandSum->get64(b) + w * Math.pow(10., ~exp=r / 10.))
+          bandWeight->set64(b, bandWeight->get64(b) + w)
+        }
+      }
+    }
+  }
+  (
+    weight.contents > 0. ? sum.contents / weight.contents : Spectrum.gridFloor,
+    Array.fromInitializer(~length=bands, b => bandWeight->get64(b) > 0. ? bandSum->get64(b) / bandWeight->get64(b) : 0.),
+  )
+}
+
+// How far the brightness (where the middle spectra fall 30 dB under their loudest band, in
+// octaves: a lowpass's cutoff moves it as much as itself) falls from its brightest in the first
+// half of the loud part to where it settles (the median of the last third), and how long it
+// takes to fall halfway: a filter envelope's sweep, or a string's top dying first.
+let brightnessFall = (f: Spectrum.features) => {
+  let ri = 1
+  let r = Spectrum.resolutions->Array.getUnsafe(ri)
+  let levels = f.spectra->Array.getUnsafe(ri)
+  let frames = TypedArray.length(levels) / r.bands
+  let seconds = Int.toFloat(r.hop * f.pools->Array.getUnsafe(ri)) / sampleRate
+  let power = Array.fromInitializer(~length=frames, t => {
+    let p = ref(0.)
+    for b in 0 to r.bands - 1 {
+      let v = levels->get64(t * r.bands + b)
+      p := p.contents + v * v
+    }
+    p.contents
+  })
+  let top = power->Array.reduce(0., Math.max)
+  let valid = Array.fromInitializer(~length=frames, t => t)->Array.filter(t => power->Array.getUnsafe(t) > top * 0.003)
+  let centre = t => {
+    let loudest = ref(0.)
+    for b in 0 to r.bands - 1 {
+      loudest := Math.max(loudest.contents, levels->get64(t * r.bands + b))
+    }
+    let top = ref(0)
+    for b in 0 to r.bands - 1 {
+      if levels->get64(t * r.bands + b) > loudest.contents * 0.0316 {
+        top := b
+      }
+    }
+    Math.log2(r.centres->get64(top.contents))
+  }
+  let count = Array.length(valid)
+  if count < 4 {
+    (0., 0.)
+  } else {
+    let cs = valid->Array.map(centre)
+    let (peakAt, peak) = cs->Array.slice(~start=0, ~end=Math.Int.max(1, count / 2))->Array.reduceWithIndex((0, neg_infinity), ((i, m), c, j) => c > m ? (j, c) : (i, m))
+    let settled = median(cs->Array.slice(~start=count - Math.Int.max(1, count / 3), ~end=count))->Option.getOr(peak)
+    let drop = peak - settled
+    if drop <= 0. {
+      (0., 0.)
+    } else {
+      let half = ref(None)
+      cs->Array.forEachWithIndex((c, j) =>
+        if j > peakAt && half.contents == None && c <= peak - drop / 2. {
+          half := Some(j)
+        }
+      )
+      let frames = Int.toFloat(half.contents->Option.getOr(count - 1) - peakAt)
+      (drop, Math.max(seconds, frames * seconds))
+    }
+  }
+}
+
+// Side against mid over the loud part (10 ms steps within 20 dB of the loudest), dB.
+let widthOf = (mid: Float64Array.t, side: Float64Array.t) => {
+  let loudest = ref(0.)
+  mid->TypedArray.forEach(v => loudest := Math.max(loudest.contents, v))
+  let (m, s) = (ref(0.), ref(0.))
+  for i in 0 to Math.Int.min(TypedArray.length(mid), TypedArray.length(side)) - 1 {
+    if mid->get64(i) > loudest.contents * 0.1 {
+      m := m.contents + mid->get64(i) * mid->get64(i)
+      s := s.contents + side->get64(i) * side->get64(i)
+    }
+  }
+  m.contents > 0. ? Math.max(-60., 10. * Math.log10(Math.max(s.contents / m.contents, 1e-6))) : -60.
 }
 
 // The pitch from the spectrum, when YIN finds none (a pitched sound with noise in it, or one
@@ -273,8 +500,11 @@ let overviewOf = (x: Float32Array.t, ~points) => {
 
 // The sample's harmonics at its pitch, as a waveform: their levels over up to eight points in
 // its loud part (whole periods under a window, as WaveImport measures a recording), averaged
-// by power, with the phases of the loudest point.
-let fitWave = (x: Float32Array.t, env: Float64Array.t, ~hz) => {
+// by power, with the phases of the loudest point. What lies between the harmonics lies on them
+// too: each harmonic's power is cut by the share of its band that is that (`between`, per
+// Spectrum grid band, as gridSummary gives it), so that a noisy sample's wave doesn't carry its
+// noise as harmonics and leaves the noise to the noise source.
+let fitWave = (x: Float32Array.t, env: Float64Array.t, ~hz, ~between: array<float>) => {
   let n = TypedArray.length(x)
   let period = sampleRate / hz
   let cycles = Math.Int.max(2, Math.Int.min(24, Float.toInt(Math.round(0.06 * sampleRate / period))))
@@ -304,8 +534,22 @@ let fitWave = (x: Float32Array.t, env: Float64Array.t, ~hz) => {
     points->Array.forEach(s =>
       spectrumAt(s).amp->Array.forEachWithIndex((a, k) => power->Array.setUnsafe(k, power->Array.getUnsafe(k) + a * a))
     )
+    let share = k => {
+      let f = Int.toFloat(k + 1) * hz
+      let b = ref(-1)
+      Spectrum.gridEdges->Array.forEachWithIndex((edge, j) =>
+        if j < Spectrum.gridBands && f >= edge {
+          b := j
+        }
+      )
+      let r = between[b.contents]->Option.getOr(0.)
+      // (the lowest band's share holds below it, the highest's above)
+      let r = b.contents < 0 ? between[0]->Option.getOr(0.) : r
+      // the bins on a harmonic hold about three bins' worth of what lies between
+      Math.max(0., 1. - r)
+    }
     WaveImport.synthesise({
-      amp: power->Array.map(p => Math.sqrt(p / Int.toFloat(count))),
+      amp: power->Array.mapWithIndex((p, k) => Math.sqrt(p / Int.toFloat(count) * share(k))),
       phase: shape.phase,
     })
   }
@@ -330,6 +574,10 @@ let prepare = (~name, audio: AudioFile.t): result<t, string> => {
   if n == 0 || peak < 1e-6 {
     Error(`${name} is silent`)
   } else {
+    // the side signal of a stereo sample, resampled as the mid is
+    let sideRaw = audio.sides->Option.map(((l, r)) =>
+      resample(l->TypedArray.mapWithIndex((v, i) => 0.5 * (v - r->get32(i))), ~from=audio.sampleRate)
+    )
     // from its onset to 20 ms after it last passes -60 dB
     let start = onsetOf(x)
     let ending = ref(n - 1)
@@ -347,13 +595,29 @@ let prepare = (~name, audio: AudioFile.t): result<t, string> => {
       for i in 0 to length - 1 {
         samples->set32(i, x->get32(start + i) * 0.5 / cutPeak)
       }
-      let features = Spectrum.measure(samples, ~period=None)
-      let (hz, pitchDrop) = switch findPitch(samples, features.envelope) {
-      | (None, _) => (spectralPitch(samples, features.envelope), 0.)
-      | found => found
+      let side = sideRaw->Option.flatMap(s => {
+        let out = Float32Array.fromLength(length)
+        for i in 0 to length - 1 {
+          out->set32(i, start + i < TypedArray.length(s) ? s->get32(start + i) * 0.5 / cutPeak : 0.)
+        }
+        // (a stereo file whose channels are the same is mono)
+        peakOf(out) > 1e-4 ? Some(out) : None
+      })
+      let features = Spectrum.measure(samples, ~period=None, ~side=?side)
+      let (hz, pitchDrop, pitchTime) = switch findPitch(samples, features.envelope) {
+      | None => (spectralPitch(samples, features.envelope), 0., 0.)
+      | Some(hz) =>
+        let (drop, time) = pitchSweep(samples, ~hz)
+        (Some(hz), drop, time)
       }
       let (note, cents) = hz->Option.mapOr((60, 0.), noteOf)
       let (attack, decay, sustain) = describeEnvelope(features.envelope)
+      // without a pitch there are no harmonics to stand over the rest: all of it is noise
+      let (noise, between) =
+        hz
+        ->Option.flatMap(hz => Spectrum.measureGrid(samples, ~hz))
+        ->Option.mapOr((0., []), g => gridSummary(g, ~from=pitchTime))
+      let (brightnessDrop, brightnessTime) = brightnessFall(features)
       Ok({
         name,
         samples,
@@ -366,11 +630,18 @@ let prepare = (~name, audio: AudioFile.t): result<t, string> => {
         sustain,
         brightness: centroid(features),
         pitchDrop,
+        pitchTime,
+        brightnessDrop,
+        brightnessTime,
+        noise,
+        width: features.side->Option.mapOr(-60., s => widthOf(features.envelope, s)),
+        side,
+        truncated: stop >= n || length < stop - start,
         overview: overviewOf(samples, ~points=160),
         loudness: Array.fromInitializer(~length=TypedArray.length(features.envelope), s =>
           Spectrum.db(features.envelope->get64(s))
         ),
-        wave: hz->Option.flatMap(hz => fitWave(samples, features.envelope, ~hz)),
+        wave: hz->Option.flatMap(hz => fitWave(samples, features.envelope, ~hz, ~between)),
       })
     }
   }
