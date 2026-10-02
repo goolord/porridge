@@ -501,10 +501,11 @@ let seed = (t: SoundTarget.t) => {
   set("o2Detune", 0.3)
   setChoice("oscMix", 0)
   set("feedback", 0.)
-  // noise: as loud against osc 1 (at 0 dB) as what lies between the harmonics says (a plain
-  // oscillator reads about -52 dB there, with noise at -29, -20 and -12 dB about -43, -36 and -29)
-  let noiseDb = 1.26 * t.noise + 25.
-  set("noise", t.noise < -46. ? 0. : noiseOff + (1. - noiseOff) * (noiseDb + 36.) / 36.)
+  // noise: as loud against osc 1 (at 0 dB) as the floor between the harmonics says (a plain
+  // oscillator's is at -60 dB, the bottom, and noise at -29, -20 and -12 dB makes it about -55,
+  // -47 and -39; peaks between them are partials, not noise)
+  let noiseDb = t.noise + 28.
+  set("noise", t.noise < -57.5 ? 0. : noiseOff + (1. - noiseOff) * (noiseDb + 36.) / 36.)
   set("noiseColour", 0.1)
   // a wide sound: two voices of unison (spread), detuned more the wider it is
   setChoice("unison", t.width > -18. ? 1 : 0)
@@ -580,16 +581,28 @@ let seed = (t: SoundTarget.t) => {
   x
 }
 
-// Where the search starts: the seed, and when the sample has a second series of partials
-// (SoundTarget.secondSeries), the seed with osc 2 playing it beside osc 1 (at 0 dB): at its
+// Where the search starts: the seed; when the sample has a second series of partials
+// (SoundTarget.partialsOf), the seed with osc 2 playing it beside osc 1 (at 0 dB): at its
 // ratio, a square wave where only its odd multiples are there and a sine where not, about as
-// loud as it is.
+// loud as it is; and for each of the ratios its partials off the harmonics suggest, the seed
+// with a sine osc 2 there phase-modulating osc 1 (whose sidebands would put them there).
 let seeds = (t: SoundTarget.t) => {
   let x = seed(t)
-  switch t.series {
+  let range = st => st >= o2Anchors->Array.getUnsafe(0) && st <= o2Anchors->Array.at(-1)->Option.getOr(24.)
+  let modulated = t.ratios->Array.filter(range)->Array.map(st => {
+    let y = TypedArray.copy(x)
+    let set = (key, value) => y->set64(indexOf(key), clamp01(value))
+    set("oscMix", valueOfChoice(3, 7))
+    set("o2Wave", valueOfChoice(0, 4))
+    set("o2Pitch", o2PitchGene(st))
+    set("o2Level", 0.55)
+    set("feedback", 0.)
+    y
+  })
+  let series = switch t.series {
   | Some((ratio, odd, level)) =>
     let st = 12. * Math.log2(ratio)
-    if st >= o2Anchors->Array.getUnsafe(0) && st <= o2Anchors->Array.at(-1)->Option.getOr(24.) {
+    if range(st) {
       let y = TypedArray.copy(x)
       let set = (key, value) => y->set64(indexOf(key), clamp01(value))
       set("oscMix", valueOfChoice(0, 7))
@@ -597,12 +610,13 @@ let seeds = (t: SoundTarget.t) => {
       set("width", 0.)
       set("o2Pitch", o2PitchGene(st))
       set("o2Level", o2Off + (1. - o2Off) * (level + 3. + 30.) / 36.)
-      [x, y]
+      [y]
     } else {
-      [x]
+      []
     }
-  | None => [x]
+  | None => []
   }
+  [[x], series, modulated]->Array.flat
 }
 
 // How many of the optional parts the genes switch on (a second oscillator, noise, unison, a

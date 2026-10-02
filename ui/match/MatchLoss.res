@@ -74,9 +74,10 @@ let maxOf = (a: Float64Array.t) => {
   m.contents
 }
 
-let compare = (w, target: Spectrum.features, c: Spectrum.features) =>
+// The loss's terms, each weighted: (spectral, envelope, grid, fine, width).
+let terms = (w, target: Spectrum.features, c: Spectrum.features) =>
   if c.energy <= 1e-12 || target.energy <= 0. {
-    silence
+    (silence, 0., 0., 0., 0.)
   } else {
     let gain = Math.sqrt(target.energy / c.energy)
     let total = ref(0.)
@@ -243,8 +244,13 @@ let compare = (w, target: Spectrum.features, c: Spectrum.features) =>
       weight.contents > 0. ? sum.contents / weight.contents : 0.
     | (None, _) => 0.
     }
-    spectral + w.envelope * envelope + gridWeight * grid + fineWeight * fine + widthWeight * width
+    (spectral, w.envelope * envelope, gridWeight * grid, fineWeight * fine, widthWeight * width)
   }
+
+let compare = (w, target, c) => {
+  let (spectral, envelope, grid, fine, width) = terms(w, target, c)
+  spectral + envelope + grid + fine + width
+}
 
 // A loss as the percentage the cards show: two takes of one plucked string come out near 85%,
 // a string against a filtered saw near 60%, a string against a noise burst near 35%.
