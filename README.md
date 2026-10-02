@@ -44,7 +44,9 @@ ui/                     patch view (ReScript)
                           list the parameters and modulation sources/targets Oatmeal doesn't have
                           (32 connections, each with hold, slew and curve); ModScope.res says
                           which sources each note has its own of and which targets are in the
-                          voice or on the whole sound, for PageMod.res (the Mod page)
+                          voice or on the whole sound, for PageMod.res (the Mod page);
+                          ModEdit.res connects a source to a control, and ModTray.res is the
+                          source tray (from the status line) whose chips drop onto any control
   PresetBrowser.res       the preset browser; Library.res searches and filters for it, and
                           BankLibrary.res asks the plugin for the banks it keeps
   random/                 random patches: RandomDrawer.res (the drawer: the wildness knobs,

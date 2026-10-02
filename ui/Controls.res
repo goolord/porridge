@@ -37,10 +37,16 @@ let hookHostMenu = (c, e) => c.ctx.hostMenu->HostMenu.attach(c.ctx.model, e, c.i
 
 // A control's element: focusable, with its label (after an on/off box, with ~box), showing the
 // parameter's status text while hovered, and the host's menu on a double right-click.
-let frame = (ctx: Ctx.t, parent, id, ~cls, ~x, ~y, ~w=?, ~label=?, ~labelCls=?, ~box=false) => {
+// (more: what the status text says after the parameter's own)
+let frame = (ctx: Ctx.t, parent, id, ~cls, ~x, ~y, ~w=?, ~label=?, ~labelCls=?, ~box=false, ~more=() => "") => {
   let e = el("div", ~cls, ~parent)->place(x, y, ~w?)
   let def = ctx.model->ParamModel.def(id)
-  let c = {ctx, id, def, status: ctx.status->Status.live(e, () => def.longText(ctx.model->ParamModel.get(id)))}
+  let c = {
+    ctx,
+    id,
+    def,
+    status: ctx.status->Status.live(e, () => def.longText(ctx.model->ParamModel.get(id)) ++ more()),
+  }
   e->setTabIndex(0)
   if box {
     el("b", ~parent=e)->ignore
@@ -130,23 +136,6 @@ let editInPlace = (e, text, ~commit, ~maxLength=?, ~within=?) => {
   input->onEvent(#blur, _ => finish(true))
 }
 
-// The knob range the modulation connections to a target sweep, relative to its knob position
-// (bipolar sources swing both ways), or None if nothing modulates it.
-let modulationRange = (model, target) => {
-  let (lo, hi, any) = ModMatrix.slotNumbers->Array.reduce((0., 0., false), ((lo, hi, any), k) => {
-    let slot = ModMatrix.readSlot(ParamModel.get(model, _), k)
-    let amount = slot.amount
-    switch ModMatrix.sources[slot.source] {
-    | Some(source) if source.key != "none" && slot.target == target && amount != 0. =>
-      source.bipolar
-        ? (lo - Math.abs(amount), hi + Math.abs(amount), true)
-        : (lo + Math.min(amount, 0.), hi + Math.max(amount, 0.), true)
-    | _ => (lo, hi, any)
-    }
-  })
-  any ? Some((lo, hi)) : None
-}
-
 // The modulation bars of a model's parameter rows, redrawn together (once a frame) when a
 // slot changes: one listener per slot parameter rather than one per row.
 let modBars: WeakMap.t<ParamModel.t, array<unit => unit>> = WeakMap.make()
@@ -161,33 +150,70 @@ let onSlotChange = (model, refresh) =>
     ModMatrix.slotNumbers->Array.forEach(k => model->ParamModel.listenEach(ModMatrix.slotIds(k), refreshAll))
   }
 
-// A parameter row: label above-left, value right, position track underneath.
+// What modulates a parameter's knob (target t), for its status text.
+let modulationText = (ctx: Ctx.t, t) => {
+  let get = id => ctx.model->ParamModel.get(id)
+  switch ModEdit.connectionsTo(get, t) {
+  | [] => ""
+  | ks =>
+    let parts = ks->Array.map(k => {
+      let s = ModMatrix.readSlot(get, k)
+      let source = ModMatrix.sources[s.source]->Option.mapOr("", x => x.label)
+      `${source} ${(ctx.model->ParamModel.def(ModMatrix.amountId(k))).valueText(s.amount)}`
+    })
+    `. Modulated by ${parts->Array.join(", ")}: alt-drag to change ${Array.length(ks) > 1 ? "the first's amount" : "how much"}`
+  }
+}
+
+// A parameter row: label above-left, value right, position track underneath. A parameter the
+// modulation matrix reaches shows each connection's range in its source's colour and a tick
+// where each sounding note has moved it; an alt-drag changes its first connection's amount,
+// and a source dropped on it from the tray (ModTray) connects to it.
 let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
-  let (c, e) = frame(ctx, parent, id, ~cls="p", ~x, ~y, ~w, ~label?, ~labelCls="l")
+  let target = ModMatrix.targetOfParam(id)
+  let (c, e) = frame(ctx, parent, id, ~cls="p", ~x, ~y, ~w, ~label?, ~labelCls="l", ~more=() =>
+    target >= 0 ? modulationText(ctx, target) : ""
+  )
   let v = el("span", ~cls="v", ~parent=e)
   let track = el("span", ~cls="t", ~parent=e)
   let fill = el("i", ~parent=track)
-  // the range modulation connections sweep, for parameters the matrix can reach
-  let target = ModMatrix.targetOfParam(id)
-  let modBar = target >= 0 ? Some(el("em", ~parent=track)) : None
+  // the ranges modulation connections sweep, for parameters the matrix can reach
+  let bands = target >= 0 ? Some(el("span", ~cls="mb", ~parent=track)) : None
   // where the sounding notes have moved it to, a tick each (VoiceView)
   let ticks = target >= 0 ? Some(el("span", ~cls="vt", ~parent=track)) : None
+  if target >= 0 {
+    ModEdit.addDropTarget(e, id, target)
+  }
 
   let norm = () => c.def.toNorm(current(c))
   let setNorm = n => ctx.model->ParamModel.set(id, c.def.fromNorm(clamp01(n)))
+  let get = id => ctx.model->ParamModel.get(id)
 
   let updateModBar = () =>
-    modBar->Option.forEach(bar =>
-      switch modulationRange(ctx.model, target) {
-      | Some((lo, hi)) =>
-        let n = clamp01(norm())
+    bands->Option.forEach(box => {
+      let ks = ModEdit.connectionsTo(get, target)->Array.filter(k => get(ModMatrix.amountId(k)) != 0.)
+      let marks = box->querySelectorAll("em")->nodesToArray
+      let n = clamp01(norm())
+      ks->Array.forEachWithIndex((k, i) => {
+        let band = switch marks[i] {
+        | Some(m) => m
+        | None => el("em", ~parent=box)
+        }
+        let (lo, hi) = ModEdit.rangeOf(get, k)
         let (a, b) = (clamp01(n + lo), clamp01(n + hi))
-        bar->setStyle("display", "block")
-        bar->setStyle("left", Float.toString(a * 100.) ++ "%")
-        bar->setStyle("width", Float.toString(Math.max(0.5, (b - a) * 100.)) ++ "%")
-      | None => bar->setStyle("display", "none")
-      }
-    )
+        band->setStyle("display", "block")
+        band->setStyle("left", Float.toString(a * 100.) ++ "%")
+        band->setStyle("width", Float.toString(Math.max(0.5, (b - a) * 100.)) ++ "%")
+        band->setStyle("background", ModEdit.sourceColor(ModMatrix.readSlot(get, k).source))
+        // several: one under another
+        band->setStyle("top", px(-1. - 2. * Int.toFloat(i)))
+      })
+      marks->Array.forEachWithIndex((m, i) =>
+        if i >= Array.length(ks) {
+          m->setStyle("display", "none")
+        }
+      )
+    })
 
   let update = () => {
     let x = current(c)
@@ -224,6 +250,37 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
     | 1 =>
       gestureSet(c, c.def.fromNorm(0.5))
       ev->preventDefault
+    | 0 if ev->altKey && target >= 0 && ModEdit.connectionsTo(get, target) != [] =>
+      ev->preventDefault
+      switch ModEdit.connectionsTo(get, target)[0] {
+      | Some(k) =>
+        let amountId = ModMatrix.amountId(k)
+        let amountDef = ctx.model->ParamModel.def(amountId)
+        let source = ModMatrix.sources[ModMatrix.readSlot(get, k).source]->Option.mapOr("", s => s.label)
+        let show = () => ctx.status->Status.show(`${source} → ${c.def.name}: ${amountDef.valueText(get(amountId))}`)
+        e->addClass("drag")
+        ctx.model->ParamModel.beginGesture(amountId)
+        let a = ref(get(amountId))
+        show()
+        dragBy(
+          ctx,
+          e,
+          ev,
+          ~onMove=(dx, dy, mv) => {
+            let d = 2. * (dx * 0.35 - dy) / dragPixels
+            let d = mv->shiftKey ? d * fineShift : d
+            a := Float.clamp(a.contents + d, ~min=-1., ~max=1.)
+            ctx.model->ParamModel.set(amountId, a.contents)
+            show()
+          },
+          ~onUp=() => {
+            e->removeClass("drag")
+            ctx.model->ParamModel.endGesture(amountId)
+            refreshStatus(c)
+          },
+        )
+      | None => ()
+      }
     | 0 =>
       ev->preventDefault
       c.status.setDragging(true)
@@ -275,7 +332,7 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
     }
   })
 
-  if modBar != None {
+  if bands != None {
     onSlotChange(ctx.model, updateModBar)
   }
   ticks->Option.forEach(box => {

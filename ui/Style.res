@@ -269,7 +269,9 @@ let css = `
     position: absolute; top: 0; bottom: 0; background: var(--signal);
 }
 /* the range modulation sweeps */
-.p .t em { position: absolute; top: -1px; bottom: -1px; background: var(--mod); opacity: 0.6; display: none; }
+.p .t .mb em { position: absolute; height: 4px; background: var(--mod); opacity: 0.7; display: none; pointer-events: none; }
+/* a source from the tray over it */
+.p.dropping { background: var(--paper); box-shadow: inset 0 0 0 2px var(--signal); }
 /* where each sounding note has moved it (VoiceView) */
 .p .t .vt b { position: absolute; display: none; top: -4px; width: 2px; height: 6px; margin-left: -1px;
     background: var(--ink); opacity: 0.75; pointer-events: none; }
@@ -439,6 +441,26 @@ let css = `
     font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .pv-status.idle { color: var(--ink-faint); font-size: 12px; }
+.pv-status { padding-right: 120px; }
+
+/* the source tray: its switch at the end of the status line, and the chips over the page's bottom */
+.mtoggle { position: absolute; right: 6px; bottom: 3px; height: ${px(statusHeight - 6.)}; z-index: 41; box-sizing: border-box;
+    padding: 0 8px; border: 1px solid var(--edge); border-radius: 2px; background: var(--panel-hi);
+    font-size: 11.5px; line-height: ${px(statusHeight - 8.)}; cursor: pointer; white-space: nowrap; }
+.mtoggle:hover { background: var(--paper); }
+.mtoggle.on { background: var(--signal); color: var(--paper); border-color: var(--signal); }
+.mtray { position: absolute; left: 0; right: 0; bottom: ${px(statusHeight)}; z-index: 40; display: none;
+    flex-wrap: wrap; gap: 3px; padding: 5px 6px; box-sizing: border-box; background: var(--panel);
+    border-top: 1px solid var(--signal); box-shadow: 0 -2px 0 rgba(31,26,14,0.15); }
+.mtray.on { display: flex; }
+.mchip { position: relative; height: 20px; box-sizing: border-box; padding: 0 7px 0 12px; border-radius: 2px;
+    background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge); font-size: 11.5px; line-height: 20px;
+    white-space: nowrap; cursor: grab; max-width: 96px; overflow: hidden; text-overflow: ellipsis; }
+.mchip i { position: absolute; left: 4px; top: 4px; bottom: 4px; width: 3px; border-radius: 2px; }
+.mchip:hover { background: var(--panel-hi); box-shadow: inset 0 0 0 1px var(--edge); }
+.mchip.vary { font-weight: 700; padding-right: 9px; }
+.mghost { position: absolute; z-index: 80; height: 20px; padding: 0 8px; box-sizing: border-box; border: 2px solid;
+    border-radius: 2px; background: var(--paper); font-size: 11.5px; line-height: 16px; pointer-events: none; white-space: nowrap; }
 
 /* menus */
 .menu {
@@ -514,7 +536,7 @@ let css = `
 .drop.on { display: flex; }
 
 .toast {
-    position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); z-index: 90;
+    position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%); z-index: 90;
     background: var(--ink); color: var(--paper); padding: 5px 12px; font-size: 13px; border-radius: 2px;
     display: none; max-width: 80%;
 }

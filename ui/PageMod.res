@@ -25,19 +25,7 @@ let footerHeight = 36.
 // for its scrollbar
 let (pickerColumns, pickerTop, scrollbarWidth) = (5, 26., 9.)
 
-let sourceColor = s =>
-  switch ModMatrix.sources[s]->Option.mapOr("", s => s.key) {
-  | "lfo1" => "#1c3c73"
-  | "lfo2" => "#4a74b4"
-  | "lfo3" => "#7895c8"
-  | "modEnv1" => "#2e6b3a"
-  | "modEnv2" => "#5c8f3c"
-  | "ampEnv" | "filterEnv" | "voiceLevel" => "#3d7a6d"
-  | "wander" => "#8a6d3b"
-  | "macro1" | "macro2" | "macro3" | "macro4" => "#6a2c70"
-  | "cc1" | "cc2" | "cc3" | "cc4" | "cc5" | "cc6" => "#7a5a1e"
-  | _ => "#a3501c"
-  }
+let sourceColor = ModEdit.sourceColor
 
 type point = {x: float, y: float}
 

@@ -158,6 +158,7 @@ let make = (host, pc) => {
   }
 
   pageEls->Array.forEach(((p, e)) => p.build(ctx, e))
+  ModTray.make(ctx, stage)
 
   //==============================================================================
   // header
