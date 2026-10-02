@@ -597,7 +597,7 @@ let build = (ctx: Ctx.t, page) => {
   v->Grid.toggle("Oat_Mode", 1, 3, "Oat mode", ~span=2)
   v
   ->Grid.note(
-    "Oat mode keeps Oatmeal's MIDI timing: notes, controllers and arpeggiator steps start on the next 64-sample block instead of on their own sample.",
+    "Oat mode keeps Oatmeal's MIDI timing (notes, controllers and arpeggiator steps start on the next 64-sample block, not on their own sample) and its legato quirk: a stereo voice's right filter envelopes never start.",
     0,
     4,
     ~span=3,

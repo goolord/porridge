@@ -966,7 +966,11 @@ namespace porridge
                 v.envClock = float[4]();
                 v.clockReleased = false;
 
-                for (int k = 0; k < (voiceMode < 2 ? 4 : 2); ++k)
+                // (Oatmeal never triggers the right side's filter envelopes in legato, so that a
+                // stereo voice's right filter stays shut: Oat mode keeps that)
+                let filterEnvs = voiceMode < 2 || P[slot::Oat_Mode] == 0 ? 4 : 2;
+
+                for (int k = 0; k < filterEnvs; ++k)
                     v.fenv.at (k).trigger (fenvCoefs (k), true);
 
                 v.modEnv1.trigger (mod1C, true);
@@ -983,6 +987,13 @@ namespace porridge
                 retriggerEnded (v.ampEnv, ampC, false);
                 retriggerEnded (v.fenv[0], filtC, true);
                 retriggerEnded (v.fenv[1], filt2C, true);
+
+                if (P[slot::Oat_Mode] == 0)
+                {
+                    retriggerEnded (v.fenv[2], filtC, true);
+                    retriggerEnded (v.fenv[3], filt2C, true);
+                }
+
                 retriggerEnded (v.modEnv1, mod1C, true);
                 retriggerEnded (v.modEnv2, mod2C, true);
                 for (wrap<2> k) retriggerEnded (v.oscEnv[k], oscEnvC[k], false);
