@@ -71,6 +71,7 @@ let waveformByName = name =>
   switch name {
   | "sine" => Some(sine)
   | "saw" | "oatmeal saw" => Some(saw)
+  | "saw down" => Some({...saw, mirrored: true})
   | "pulse" | "square" | "oatmeal pulse" => Some(pulse)
   | "triangle" | "oatmeal triangle" => Some(triangle)
   | "user" => Some(user)
@@ -298,6 +299,8 @@ let rackKind = key =>
   | "reverb" => Some(wide([Line("M1 13 H21 M3 13 V3 M6 13 V6 M8.5 13 V7.5 M11 13 V9 M13.5 13 V10 M16 13 V11 M18.5 13 V12")]))
   | "space" => Some(wide([Line("M2 14.5 V6 L11 2 L20 6 V14.5"), Line("M7 14.5 A4 4 0 0 1 15 14.5 M4.5 14.5 A6.5 6.5 0 0 1 17.5 14.5")]))
   | "ambience" => Some(wide([Line("M4 3.5 H18 V13.5 H4 Z"), Dot(8.5, 9.5, 1.3), Line("M8.5 9.5 L13 6 L16 9 M8.5 9.5 L14 11.5")]))
+  // a cabinet: a speaker in its box
+  | "cabinet" => Some(wide([Line("M3.5 1.5 H18.5 V14.5 H3.5 Z"), Line(circle(11., 8., 4.3)), Dot(11., 8., 1.3)]))
   | "convolve" => Some(wide([Line("M1 13 H21 M4 13 V2.5"), Line("M6 13 C7.5 13 7.5 8 9 9.5 S11.5 12 13 11 S16.5 12.5 20 12.5")]))
   | "eq" => Some(wide([Line("M1 10 H4.5 C6.5 10 7 3.5 8.5 3.5 S10.5 10 12.5 10 C15.5 10 15.5 5.5 21 5.5")]))
   | "filter" => Some(wide([Line(lp2)]))
@@ -370,7 +373,7 @@ let chorusModeByName = name =>
 // lower-case name.
 let ofList = (list: ValueList.t) =>
   switch list {
-  | Waveform | LfoShape => Some((_, name) => waveformByName(name))
+  | Waveform | LfoShape | Lfo3Shape => Some((_, name) => waveformByName(name))
   | FilterType | FxFilterType => Some(filterTypes->byIndex)
   | Filter2Type => Some((index, _) => index == 0 ? Some(sameAsFilter1) : filterTypes[index])
   | FilterDouble => Some(filterDouble->byIndex)
@@ -379,7 +382,7 @@ let ofList = (list: ValueList.t) =>
   | OscMix => Some(oscMix->byIndex)
   | ArpMode => Some(arpModes->byIndex)
   | ChorusMode => Some((_, name) => chorusModeByName(name))
-  | DistMode | TouchMode | GlideMode | DelayReverse => None
+  | DistMode | TouchMode | GlideMode | DelayReverse | LfoUnit | DelayUnit | ArpUnit => None
   }
 
 // How a parameter's values find their icons, if they have any.

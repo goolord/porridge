@@ -180,7 +180,7 @@ else
     if (presets.some (p => p.values.get ("O1_Waveform") >= 6 || p.values.get ("O2_Waveform") >= 6)) fail ("an Oatmeal program has an HQ wave");
     const v = Bank.programValues (Preset.toOatmeal (Preset.init ("x")));
     if (v.get ("O1_Waveform") !== 1 || v.get ("O2_Waveform") !== 1) fail ("Init's HQ saws export as " + v.get ("O1_Waveform"));
-    const menu = ValueList.menu ("Waveform", 9).map (([v, heading]) => (heading ? `[${heading}] ` : "") + v).join ();
+    const menu = ValueList.menu ("Waveform", 9, 0).map (({ value, heading }) => (heading ? `[${heading}] ` : "") + value).join ();
     if (menu !== "0,6,7,8,4,5,[Oatmeal (aliasing)] 1,2,3") fail ("the waveform menu: " + menu);
 }
 

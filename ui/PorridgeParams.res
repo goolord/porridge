@@ -1028,13 +1028,14 @@ let pairMixSpecs = [{id: "O2_PairMix", name: "Osc 2 heard", kind: Float({min: 0.
 // LFO 3: a plain LFO that only the modulation matrix reaches. Per-voice (each voice its own,
 // from the note's start) or shared by every voice (restarted by each note, or running free),
 // at a rate in Hz or a length in beats, from a phase of its own, faded in after a delay. The
-// wander source's rate goes with it.
-let lfo3Shapes = ["sine", "triangle", "saw up", "saw down", "square", "sample & hold", "smooth random"]
+// wander source's rate goes with it. Its shapes are named as LFO 1 and 2's are, and its menu
+// has them in their order (ValueList.Lfo3Shape); the values keep their own.
+let lfo3Shapes = ["Sine", "Triangle", "Saw", "Saw down", "Square", "Stepping random", "Smooth random"]
 let lfo3Syncs = ["free", "4 bars", "2 bars", "1 bar", "1/2", "1/2 T", "1/4", "1/4 T", "1/8", "1/8 T", "1/16", "1/16 T", "1/32"]
 let lfoModes = ["per-voice", "shared, reset on note", "shared, free"]
 
 let lfo3Specs = [
-  {id: "LFO_3_Shape", name: "LFO 3 shape", kind: Choice({names: lfo3Shapes, init: 0})},
+  {id: "LFO_3_Shape", name: "LFO 3 shape", kind: Choice({names: lfo3Shapes, init: 0, list: Lfo3Shape})},
   {id: "LFO_3_Mode", name: "LFO 3 mode", kind: Choice({names: lfoModes, init: 0})},
   {id: "LFO_3_Rate", name: "LFO 3 rate", kind: expKnob(~lo=0.02, ~hi=50., ~init=2., ~text=fixedUnit(2, "Hz"))},
   {id: "LFO_3_Sync", name: "LFO 3 sync", kind: Choice({names: lfo3Syncs, init: 0})},

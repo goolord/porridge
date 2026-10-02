@@ -555,6 +555,22 @@ let css = `
 .menu div.off:hover { background: none; color: var(--ink-faint); }
 .menu.icons div { display: flex; align-items: center; }
 .menu.icons .icw { width: 38px; flex: none; }
+/* pickers (Menu): a row's own menu beside it, its variants' chips, a badge, the rare values behind "more" */
+.menu.pick div { display: flex; align-items: center; }
+.menu .hid { display: none !important; }
+.menu div.open { background: var(--panel-hi); }
+.menu .sa { margin-left: auto; padding-left: 14px; color: var(--ink-faint); }
+.menu div:hover .sa { color: var(--paper); }
+.menu .bdg { margin-left: 8px; padding: 0 3px; font-size: 9.5px; line-height: 12px; color: var(--ink-faint);
+    border: 1px solid var(--tile-edge); border-radius: 2px; letter-spacing: 0.04em; }
+.menu div:hover .bdg { color: var(--paper); border-color: var(--paper); }
+.menu .tail { margin-left: auto; padding-left: 14px; display: flex; gap: 3px; }
+.menu .chip { min-width: 12px; padding: 0 4px; font-size: 11px; line-height: 13px; text-align: center; font-weight: 400;
+    border: 1px solid var(--tile-edge); border-radius: 2px; }
+.menu .chip.cur { font-weight: 700; border-color: currentColor; }
+.menu div:hover .chip { border-color: var(--paper); }
+.menu .chip:hover { background: var(--paper); color: var(--signal); }
+.menu div.more { color: var(--ink-faint); font-style: italic; }
 
 /* icons (Icons.res): strokes in the text colour */
 .ic { display: block; height: 14px; width: auto; flex: none; overflow: visible;
