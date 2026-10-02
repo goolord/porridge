@@ -270,10 +270,14 @@ let makeDefs = (~context=() => None) => {
       ->Array.flatMap(offset => Fields.all->Array.filter(f => f.offset == offset && f.id != id))
       ->Array.map(f => f.id)
       ->Array.concat(typeOfLaw->Option.mapOr([], typeId => [typeId]))
+    // a list Porridge words its own way (ValueList) reads its words in every text (unless the
+    // original's text reads other fields, as filter 2's does)
+    let ownNames = p.reads == [] ? listInfo->Option.flatMap(l => l.names) : None
     let valueText = (x: float) =>
-      switch zdfType() {
-      | Some(filterType) => Float.toFixed(FilterTypes.cutoffHz(~filterType, x), ~digits=2) ++ " Hz"
-      | None => OatmealParams.displayText(index, toF(x), ~prog=?context())
+      switch (zdfType(), ownNames) {
+      | (Some(filterType), _) => Float.toFixed(FilterTypes.cutoffHz(~filterType, x), ~digits=2) ++ " Hz"
+      | (None, Some(names)) => names[Float.toInt(clamp(x))]->Option.getOr("")
+      | (None, None) => OatmealParams.displayText(index, toF(x), ~prog=?context())
       }
 
     // Find the knob position whose displayed number matches.
@@ -323,7 +327,7 @@ let makeDefs = (~context=() => None) => {
       toNorm: x => OatmealParams.toNormalized(index, toF(x)),
       fromNorm,
       longText: x =>
-        zdfType() != None
+        zdfType() != None || ownNames != None
           ? `${name}: ${valueText(x)}`
           : OatmealParams.statusText(
               index,

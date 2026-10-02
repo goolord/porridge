@@ -313,7 +313,7 @@ let keep = (t, kept: Preset.t) => t.programs->Array.setUnsafe(t.current, kept)
 
 // Init keeps the program's author, for someone writing a bank.
 let initCurrent = t => {
-  let init = Preset.make("Init")
+  let init = Preset.init("Init")
   loadIntoCurrent(t, {...init, meta: {...init.meta, author: meta(t).author}})
 }
 

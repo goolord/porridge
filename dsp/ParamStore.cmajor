@@ -7,13 +7,13 @@ processor ParamStore
 {
     output event porridge::ParamChange paramOut;
 
-    input event int O1_Waveform [[ name: "1 Waveform", min: 0, max: 8, init: 0, text: "Sine|Saw|Pulse|Triangle|User|User PWM|Saw HQ|Pulse HQ|Triangle HQ" ]];
+    input event int O1_Waveform [[ name: "1 Waveform", min: 0, max: 8, init: 0, text: "Sine|Oatmeal saw|Oatmeal pulse|Oatmeal triangle|User|User PWM|Saw|Pulse|Triangle" ]];
     input event float O1_Amp [[ name: "1 Amp", min: 0, max: 31.622777938842773, init: 1 ]];
     input event float O1_Afterpitch [[ name: "1 Afterpitch", min: -48, max: 48, init: 0, unit: "semitones" ]];
     input event float O1_PWM_W [[ name: "1 Pulsewidth", min: 0, max: 1, init: 0.5 ]];
     input event float O1_PWM_R [[ name: "1 PWM rate", min: 0, max: 8, init: 0, unit: "Hz" ]];
     input event float O1_PWM_D [[ name: "1 PWM depth", min: -1, max: 1, init: 0 ]];
-    input event int O2_Waveform [[ name: "2 Waveform", min: 0, max: 8, init: 0, text: "Sine|Saw|Pulse|Triangle|User|User PWM|Saw HQ|Pulse HQ|Triangle HQ" ]];
+    input event int O2_Waveform [[ name: "2 Waveform", min: 0, max: 8, init: 0, text: "Sine|Oatmeal saw|Oatmeal pulse|Oatmeal triangle|User|User PWM|Saw|Pulse|Triangle" ]];
     input event float O2_Amp [[ name: "2 Amp", min: 0, max: 31.622777938842773, init: 0 ]];
     input event float O2_Afterpitch [[ name: "2 Afterpitch", min: -48, max: 48, init: 0, unit: "semitones" ]];
     input event float O2_PWM_W [[ name: "2 Pulsewidth", min: 0, max: 1, init: 0.5 ]];

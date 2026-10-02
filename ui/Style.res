@@ -544,7 +544,6 @@ let css = `
 .icw { display: inline-flex; align-items: center; gap: 2px; vertical-align: middle; }
 .hq { font-size: 7.5px; font-weight: 700; line-height: 9px; padding: 0 2px; border-radius: 2px;
     background: var(--signal); color: var(--paper); letter-spacing: 0.03em; }
-.menu div:hover .hq { background: var(--paper); color: var(--signal); }
 .hq.plotbadge { position: absolute; font-size: 9px; line-height: 12px; padding: 0 3px; cursor: help; }
 .hq.plotbadge.hidden { display: none; }
 .p .v.withicon { display: flex; align-items: center; gap: 2px; top: 9px; max-width: calc(100% - 6px); }

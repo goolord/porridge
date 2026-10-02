@@ -87,7 +87,7 @@ let withoutIdleEffects = (values: Bank.values) => {
   values
 }
 
-// Init: the defaults, with an empty effects rack.
+// The defaults, with an empty effects rack (what the tools measure against).
 let make = name => {
   meta: emptyMeta(name),
   values: withoutIdleEffects(defaultValues()),
@@ -96,10 +96,19 @@ let make = name => {
   impulses: Impulse.none(),
 }
 
+// Init, as a new program starts: the defaults, with the HQ saw on both oscillators. (Oatmeal's
+// sine stays the waveforms' default: the bank in the plugin's state leaves defaults out, so a
+// new default would change the programs stored without one.)
+let init = name => {
+  let p = make(name)
+  ["O1_Waveform", "O2_Waveform"]->Array.forEach(id => p.values->Map.set(id, ParamDefs.choiceValue(id, "Saw")))
+  p
+}
+
 // A whole bank: presets, then Init programs. The Init programs share one set of values and
 // tables (a preset's are never changed in place), which spares making 64 of each at startup.
 let fillBank = presets => {
-  let init = Lazy.make(() => make("Init"))
+  let init = Lazy.make(() => init("Init"))
   Array.fromInitializer(~length=bankPrograms, i =>
     switch presets[i] {
     | Some(p) => p
@@ -760,7 +769,7 @@ let factoryBank = bytes => {
   Array.fromInitializer(~length=bankPrograms, i =>
     switch programs[i] {
     | Some(p) => fromOatmeal(p.bytes)
-    | None => make(i == 0 ? "Init" : `Init ${Int.toString(i)}`)
+    | None => init(i == 0 ? "Init" : `Init ${Int.toString(i)}`)
     }
   )
 }

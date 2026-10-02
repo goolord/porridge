@@ -22,6 +22,7 @@ import * as FxRack from "../../ui/FxRack.res.mjs";
 import * as PorridgeParams from "../../ui/PorridgeParams.res.mjs";
 import * as ModMatrix from "../../ui/ModMatrix.res.mjs";
 import * as ParamDefs from "../../ui/ParamDefs.res.mjs";
+import * as ValueList from "../../ui/ValueList.res.mjs";
 import { root, checker } from "./lib.mjs";
 
 const { fail, done } = checker ();
@@ -162,6 +163,25 @@ else
     if (! near (t[72] - t[60], 12)) fail ("tuning: the mapping repeats an octave up");
     if (t[61] > -1000) fail ("tuning: C# is unmapped");
     if (Preset.make ("plain").tuning !== undefined) fail ("Init has a tuning");
+}
+
+// Init has the HQ saw while the waveforms' default stays Oatmeal's sine: an Init program goes
+// through the stored bank (which leaves defaults out) and back with its saw, a program stored
+// without waveforms reads back with sines, and Oatmeal programs keep their aliasing waves
+{
+    const hqSaw = ParamDefs.choiceValue ("O1_Waveform", "Saw");
+    const wave = p => [p.values.get ("O1_Waveform"), p.values.get ("O2_Waveform")].join ();
+    if (hqSaw !== 6 || ParamDefs.choiceValue ("O1_Waveform", "Oatmeal saw") !== 1) fail ("the waveforms' values moved");
+    const bank = Preset.fillBank ([Preset.make ("plain")]);
+    const back = Preset.decodeBank (Preset.encodeBank (bank));
+    if (wave (bank[1]) !== "6,6" || wave (Preset.init ("x")) !== "6,6") fail ("Init's waveforms: " + wave (bank[1]));
+    if (! back || ! back.every ((p, i) => sameValues (bank[i].values, p.values))) fail ("the stored bank changes Init's waveforms");
+    if (wave (back[0]) !== "0,0" || Preset.defaultValues ().get ("O1_Waveform") !== 0) fail ("the waveforms' default changed");
+    if (presets.some (p => p.values.get ("O1_Waveform") >= 6 || p.values.get ("O2_Waveform") >= 6)) fail ("an Oatmeal program has an HQ wave");
+    const v = Bank.programValues (Preset.toOatmeal (Preset.init ("x")));
+    if (v.get ("O1_Waveform") !== 1 || v.get ("O2_Waveform") !== 1) fail ("Init's HQ saws export as " + v.get ("O1_Waveform"));
+    const menu = ValueList.menu ("Waveform", 9).map (([v, heading]) => (heading ? `[${heading}] ` : "") + v).join ();
+    if (menu !== "0,6,7,8,4,5,[Oatmeal (aliasing)] 1,2,3") fail ("the waveform menu: " + menu);
 }
 
 // The rack's fourth copies (the fifth distortion) are retired: their rack values and modulation
