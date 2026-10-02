@@ -76,6 +76,7 @@ let genes: array<gene> = [
   {key: "pitchTime", group: #env, options: 0},
   {key: "vibrato", group: #mod, options: 0},
   {key: "vibratoRate", group: #mod, options: 0},
+  {key: "vibratoShape", group: #mod, options: 2},
   {key: "wobble", group: #mod, options: 0},
   {key: "wobbleRate", group: #mod, options: 0},
   {key: "modEnvPitch", group: #mod, options: 0},
@@ -223,6 +224,9 @@ let pitchMs = v => logScale(v, 10., 3000.)
 // an LFO rate in Hz to a speed in the "10 ms" unit
 let lfoSpeed = hz => 100. / hz
 let vibratoHz = v => logScale(v, 1.5, 12.)
+// a pitch that wanders (LFO 1's smooth random shape) moves faster than a vibrato
+let wanderHz = v => logScale(v, 4., 60.)
+let vibratoShapes = [0., 4.]
 let wobbleHz = v => logScale(v, 0.3, 12.)
 // A gene whose middle fifth is none and whose ends reach ±range, squared towards the middle: the
 // pitch sweep's start (±36 semitones) and osc 2's fine ratio (±12).
@@ -259,6 +263,11 @@ let o2Off = 0.12
 let noiseOff = 0.12
 let effectOff = 0.15
 let modOff = 0.2
+
+let wanders = x => choice(x, "vibratoShape") == 1
+// LFO 1's pitch depth (24 v^4 semitones) for a gene above modOff, and back
+let vibratoValue = v => v < modOff ? 0. : 0.5 * (v - modOff) / (1. - modOff)
+let vibratoGeneOf = semitones => modOff + (1. - modOff) * 2. * Math.pow(semitones / 24., ~exp=0.25)
 
 // The key a candidate is played at, and its tuning: the sample's, moved by the render genes.
 let playedNote = (x, ~note) => Math.Int.max(12, Math.Int.min(115, note + octaves->Array.getUnsafe(choice(x, "octave"))))
@@ -353,10 +362,10 @@ let decode = (x: Float64Array.t, ~note, ~base: string => float): array<(string, 
   // vibrato on LFO 1, filter wobble on LFO 2, both sines restarting with each note
   let vib = v("vibrato")
   set("LFO_1_Unit", 1.)
-  set("LFO_1_Shape", 0.)
+  set("LFO_1_Shape", vibratoShapes->Array.getUnsafe(choice(x, "vibratoShape")))
   set("LFO_1_Sync", 0.)
-  set("LFO_1_Speed", lfoSpeed(vibratoHz(v("vibratoRate"))))
-  set("LFO_1_Pitch", vib < modOff ? 0. : def("LFO_1_Pitch").fromNorm(0.5 * (vib - modOff) / (1. - modOff)))
+  set("LFO_1_Speed", lfoSpeed(wanders(x) ? wanderHz(v("vibratoRate")) : vibratoHz(v("vibratoRate"))))
+  set("LFO_1_Pitch", def("LFO_1_Pitch").fromNorm(vibratoValue(vib)))
   set("LFO_1_Cutoff_1", 0.)
   let wob = v("wobble")
   set("LFO_2_Unit", 1.)
@@ -524,8 +533,17 @@ let seed = (t: SoundTarget.t) => {
   set("filterMix", 0.5)
   set("pitchEnv", Math.abs(t.pitchDrop) < 0.25 ? 0.5 : pitchGene(t.pitchDrop))
   set("pitchTime", ofLogScale(Math.max(10., 1000. * t.pitchTime), 10., 3000.))
-  set("vibrato", 0.)
-  set("vibratoRate", ofLogScale(5., 1.5, 12.))
+  // a pitch that wanders (more than the tracking's own spread): LFO 1's smooth random, as deep
+  // as about twice the spread
+  if t.wander >= 8. {
+    set("vibrato", vibratoGeneOf(2. * t.wander / 100.))
+    set("vibratoRate", ofLogScale(25., 4., 60.))
+    setChoice("vibratoShape", 1)
+  } else {
+    set("vibrato", 0.)
+    set("vibratoRate", ofLogScale(5., 1.5, 12.))
+    setChoice("vibratoShape", 0)
+  }
   set("wobble", 0.)
   set("wobbleRate", ofLogScale(2., 0.3, 12.))
   set("modEnvPitch", 0.5)
@@ -560,6 +578,31 @@ let seed = (t: SoundTarget.t) => {
   ->Option.getOr((start, 0.))
   envelopeKeys->Array.forEachWithIndex((key, i) => set(key, best->get64(i)))
   x
+}
+
+// Where the search starts: the seed, and when the sample has a second series of partials
+// (SoundTarget.secondSeries), the seed with osc 2 playing it beside osc 1 (at 0 dB): at its
+// ratio, a square wave where only its odd multiples are there and a sine where not, about as
+// loud as it is.
+let seeds = (t: SoundTarget.t) => {
+  let x = seed(t)
+  switch t.series {
+  | Some((ratio, odd, level)) =>
+    let st = 12. * Math.log2(ratio)
+    if st >= o2Anchors->Array.getUnsafe(0) && st <= o2Anchors->Array.at(-1)->Option.getOr(24.) {
+      let y = TypedArray.copy(x)
+      let set = (key, value) => y->set64(indexOf(key), clamp01(value))
+      set("oscMix", valueOfChoice(0, 7))
+      set("o2Wave", valueOfChoice(odd ? 2 : 0, 4))
+      set("width", 0.)
+      set("o2Pitch", o2PitchGene(st))
+      set("o2Level", o2Off + (1. - o2Off) * (level + 3. + 30.) / 36.)
+      [x, y]
+    } else {
+      [x]
+    }
+  | None => [x]
+  }
 }
 
 // How many of the optional parts the genes switch on (a second oscillator, noise, unison, a
@@ -603,7 +646,7 @@ let structure = (x: Float64Array.t) => {
     choice(x, "unison"),
     v("noise") >= noiseOff ? 1 : 0,
     Math.abs(pitchSemitones(v("pitchEnv"))) >= 0.25 ? 1 : 0,
-    v("vibrato") >= modOff ? 1 : 0,
+    v("vibrato") >= modOff ? 1 + choice(x, "vibratoShape") : 0,
     v("wobble") >= modOff ? 1 : 0,
     modEnvOn(x) && o2 ? 1 : 0,
     choice(x, "filterDouble"),
@@ -635,7 +678,7 @@ let relevant = (x: Float64Array.t) => {
     | "filterDecay1" => v("filterDrop") >= 0.1
     | "decay1" => v("drop") >= 0.1
     | "pitchTime" => Math.abs(pitchSemitones(v("pitchEnv"))) >= 0.25
-    | "vibratoRate" => v("vibrato") >= modOff
+    | "vibratoRate" | "vibratoShape" => v("vibrato") >= modOff
     | "wobbleRate" => v("wobble") >= modOff
     | "reverbTime" => v("reverb") >= effectOff
     | key if eqKeys->Array.includes(key) => false
@@ -764,7 +807,7 @@ let describe = (x: Float64Array.t) => {
   }
   let extras = [
     Math.abs(pitchSemitones(v("pitchEnv"))) >= 0.25 ? Some("pitch sweep") : None,
-    v("vibrato") >= modOff ? Some("vibrato") : None,
+    v("vibrato") >= modOff ? Some(wanders(x) ? "pitch wander" : "vibrato") : None,
     v("wobble") >= modOff ? Some("wobble") : None,
     modEnvOn(x) && o2 ? Some("mod env") : None,
     v("drive") >= effectOff ? Some("drive") : None,

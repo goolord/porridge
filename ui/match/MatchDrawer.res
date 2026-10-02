@@ -652,7 +652,7 @@ let make = (ctx: Ctx.t, stage): t => {
       let reference = locked == [] ? None : chosen.contents->Option.flatMap(candidateAt)
       let starts = switch reference {
       | Some(c) => [Float64Array.fromArray(c.genes)]
-      | None => [Genome.seed(l.target), ...l.suggestions]
+      | None => [...Genome.seeds(l.target), ...l.suggestions]
       }
       runs := runs.contents + 1
       let seed = 7919 * runs.contents

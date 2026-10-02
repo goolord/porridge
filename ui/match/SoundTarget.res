@@ -37,6 +37,11 @@ type t = {
   // takes to get within a tenth of that (seconds)
   pitchDrop: float,
   pitchTime: float,
+  // how much its pitch wanders once settled (cents)
+  wander: float,
+  // a second series of partials beside the harmonics (secondSeries): its ratio, whether it has
+  // only odd multiples, and its level (dB under the loudest partial)
+  series: option<(float, bool, float)>,
   // how far its brightness falls from its brightest (octaves), and the time to fall halfway
   brightnessDrop: float,
   brightnessTime: float,
@@ -189,7 +194,8 @@ let periodDips = (x: Float32Array.t, ~centre, ~minLag, ~maxLag, ~window) => {
 // point takes the period among its dips nearest the next point's (within 7 semitones; a deeper
 // dip counts for a little more), so that a fast sweep isn't read an octave off. How far from
 // `hz` the sound starts (the median of the first three points), and how long until it stays
-// within a tenth of that (or a quarter of a semitone). (0, 0) when it starts at its pitch.
+// within a tenth of that (or a quarter of a semitone), (0, 0) when it starts at its pitch; and
+// how much it wanders once settled (the spread of the points after that, in cents).
 let trackSeconds = 0.3
 
 let pitchSweep = (x: Float32Array.t, ~hz) => {
@@ -222,12 +228,19 @@ let pitchSweep = (x: Float32Array.t, ~hz) => {
     })
   }
   let track = track->Array.filterMap(v => v)
+  // (robustly: the median distance from the median, as a deviation, leaving out slips of a
+  // semitone or more that the tracking makes on a sound with partials of its own)
+  let spread = (points: array<float>) => {
+    let centre = median(points)->Option.getOr(0.)
+    let near = points->Array.filter(v => Math.abs(v - centre) < 1.)
+    Array.length(near) < 6 ? 0. : 148.26 * median(near->Array.map(v => Math.abs(v - centre)))->Option.getOr(0.)
+  }
   if Array.length(track) < 6 {
-    (0., 0.)
+    (0., 0., 0.)
   } else {
     let start = median(track->Array.slice(~start=0, ~end=3))->Option.getOr(0.)
     if Math.abs(start) < 0.25 || Math.abs(start) > 36. {
-      (0., 0.)
+      (0., 0., spread(track))
     } else {
       let near = Math.max(0.25, 0.1 * Math.abs(start))
       // the last point still away from the pitch
@@ -237,8 +250,79 @@ let pitchSweep = (x: Float32Array.t, ~hz) => {
           last := i
         }
       )
-      (start, Int.toFloat((last.contents + 1) * step) / sampleRate)
+      let settled = track->Array.slice(~start=last.contents + 1, ~end=Array.length(track))
+      (
+        start,
+        Int.toFloat((last.contents + 1) * step) / sampleRate,
+        Array.length(settled) >= 6 ? spread(settled) : 0.,
+      )
     }
+  }
+}
+
+// A second series of partials beside the harmonics, as a second oscillator at an odd ratio
+// makes (a bell's, a struck bar's, or Synplant's B oscillator a hair off an octave): the
+// partials of the first twelve harmonics' neighbourhoods (a long Blackman window over the
+// loud part, each peak placed between bins), those 30 cents or more off where most of them sit
+// starting it. Its ratio to the main series' fundamental (the lowest such partial's), whether
+// its odd multiples are there too (a square wave's series), and its level against the
+// loudest partial (dB); and how far the main series sits from `hz` (cents, the median).
+let secondSeries = (x: Float32Array.t, ~hz) => {
+  let size = ref(8192)
+  while Int.toFloat(size.contents) < 24. * sampleRate / hz && size.contents < 32768 {
+    size := size.contents * 2
+  }
+  let r = Spectrum.gridResolution(size.contents)
+  let half = r.size / 2
+  let binHz = sampleRate / Int.toFloat(r.size)
+  let n = TypedArray.length(x)
+  let power = Float64Array.fromLength(half + 1)
+  let centres = Array.fromInitializer(~length=Math.Int.max(1, n / (r.size / 2) + 1), i => i * (r.size / 2))
+  centres->Array.forEach(c => {
+    Spectrum.transform(r, x, c, -2 * r.size)
+    for k in 0 to half {
+      power->set64(k, power->get64(k) + r.powerA->get64(k))
+    }
+  })
+  let level = k => 10. * Math.log10(Math.max(power->get64(k), 1e-30))
+  // each neighbourhood's peak: (harmonic, frequency, dB)
+  let peaks = Array.fromInitializer(~length=12, i => {
+    let k = Int.toFloat(i + 1)
+    let (a, b) = (Float.toInt(Math.ceil((k - 0.45) * hz / binHz)), Float.toInt(Math.floor((k + 0.45) * hz / binHz)))
+    if b >= half || a < 1 {
+      None
+    } else {
+      let best = ref(a)
+      for j in a to b {
+        if power->get64(j) > power->get64(best.contents) {
+          best := j
+        }
+      }
+      let j = best.contents
+      let (l, m, u) = (level(j - 1), level(j), level(j + 1))
+      let curve = l - 2. * m + u
+      let offset = curve < 0. ? 0.5 * (l - u) / curve : 0.
+      Some((k, (Int.toFloat(j) + offset) * binHz, m))
+    }
+  })->Array.filterMap(p => p)
+  let loudest = peaks->Array.reduce(neg_infinity, (m, (_, _, l)) => Math.max(m, l))
+  let heard = peaks->Array.filter(((_, _, l)) => l > loudest - 30.)
+  let cents = ((k, f, _)) => 1200. * Math.log2(f / (k * hz))
+  switch median(heard->Array.map(cents)) {
+  | None => (None, 0.)
+  | Some(main) =>
+    let off = heard->Array.filter(p => Math.abs(cents(p) - main) >= 30.)
+    let fundamental = hz * Math.pow(2., ~exp=main / 1200.)
+    let series = switch off {
+    | [] => None
+    | _ =>
+      let (_, f, l) = off->Array.getUnsafe(0)
+      let ratio = f / fundamental
+      let odd = off->Array.some(((_, g, _)) => Math.abs(1200. * Math.log2(g / (3. * f))) < 40.)
+      // (two partials or more off the series, or one within 12 dB of the loudest)
+      Array.length(off) >= 2 || l > loudest - 12. ? Some((ratio, odd, l - loudest)) : None
+    }
+    (series, Math.abs(main) <= 30. ? main : 0.)
   }
 }
 
@@ -604,12 +688,16 @@ let prepare = (~name, audio: AudioFile.t): result<t, string> => {
         peakOf(out) > 1e-4 ? Some(out) : None
       })
       let features = Spectrum.measure(samples, ~period=None, ~side=?side)
-      let (hz, pitchDrop, pitchTime) = switch findPitch(samples, features.envelope) {
-      | None => (spectralPitch(samples, features.envelope), 0., 0.)
+      let (hz, pitchDrop, pitchTime, wander) = switch findPitch(samples, features.envelope) {
+      | None => (spectralPitch(samples, features.envelope), 0., 0., 0.)
       | Some(hz) =>
-        let (drop, time) = pitchSweep(samples, ~hz)
-        (Some(hz), drop, time)
+        let (drop, time, wander) = pitchSweep(samples, ~hz)
+        (Some(hz), drop, time, wander)
       }
+      // the main series' pitch, if it sits off the period found (a second series pulls YIN's
+      // period towards it), and the second series
+      let (series, offset) = hz->Option.mapOr((None, 0.), hz => secondSeries(samples, ~hz))
+      let hz = hz->Option.map(hz => hz * Math.pow(2., ~exp=offset / 1200.))
       let (note, cents) = hz->Option.mapOr((60, 0.), noteOf)
       let (attack, decay, sustain) = describeEnvelope(features.envelope)
       // without a pitch there are no harmonics to stand over the rest: all of it is noise
@@ -631,6 +719,8 @@ let prepare = (~name, audio: AudioFile.t): result<t, string> => {
         brightness: centroid(features),
         pitchDrop,
         pitchTime,
+        wander,
+        series,
         brightnessDrop,
         brightnessTime,
         noise,

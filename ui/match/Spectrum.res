@@ -300,6 +300,13 @@ let envelope = (x: Float32Array.t) => {
 // gridPeriods periods, so that a harmonic's lobe stays well inside its own neighbourhood; the
 // bins within a bin of a harmonic are "on", those at least 0.3 of the pitch from every
 // harmonic "off", and the ratio is of their mean powers.
+//
+// The same frames give the fine spectrum: the power at every sixteenth of a harmonic of the
+// target's pitch (`axisHz`, for the target and every candidate alike), up to the 24th or 16 kHz.
+// Where its partials sit, a hair sharp or flat, and whether what lies between them hugs them
+// (a wavering pitch) or fills the gaps evenly (noise): the mel bands are tens of cents wide
+// above a few hundred hertz and see none of it. The frames' size follows axisHz, so that a
+// candidate's frames are the target's.
 
 let gridPeriods = 16.
 let gridEdges = [400., 800., 1600., 3200., 6400., 12800.]
@@ -318,7 +325,12 @@ type grid = {
   // each harmonic's mean power over the frames, up to 8 kHz (the key EQ's fit weighs a band's
   // harmonics by them)
   harmonics: Float64Array.t,
+  // frames × fineCells: the power at cell c's frequency, (c + 1) / 16 of axisHz
+  fine: Float64Array.t,
+  fineCells: int,
 }
+
+let fineSteps = 16.
 
 let gridResolutions: Map.t<int, resolution> = Map.make()
 
@@ -336,11 +348,12 @@ let gridResolution = size =>
   }
 
 // None when the pitch is too low for a window of the longest size to hold its periods
-let measureGrid = (x: Float32Array.t, ~hz) =>
+let measureGrid = (x: Float32Array.t, ~hz, ~axisHz=?) =>
   if hz < 30. || hz > 4000. {
     None
   } else {
-    let want = gridPeriods * sampleRate / hz
+    let axisHz = axisHz->Option.getOr(hz)
+    let want = gridPeriods * sampleRate / axisHz
     let size = ref(2048)
     while Int.toFloat(size.contents) < want && size.contents < 32768 {
       size := size.contents * 2
@@ -371,7 +384,15 @@ let measureGrid = (x: Float32Array.t, ~hz) =>
     let sums = Float64Array.fromLength(4 * gridBands)
     let count = Math.Int.max(1, Math.Int.min(256, Float.toInt(8000. / hz)))
     let harmonics = Float64Array.fromLength(count)
+    let fineCells = Math.Int.max(1, Float.toInt(Math.min(24., 16000. / axisHz) * fineSteps) - 1)
+    let fine = Float64Array.fromLength(frames * fineCells)
     let gather = (t, bins: Float64Array.t) => {
+      for c in 0 to fineCells - 1 {
+        let at = (Int.toFloat(c + 1) / fineSteps) * axisHz / binHz
+        let k = Math.Int.min(half - 1, Float.toInt(Math.floor(at)))
+        let u = at - Int.toFloat(k)
+        fine->set64(t * fineCells + c, (1. - u) * bins->get64(k) + u * bins->get64(k + 1))
+      }
       for k in 0 to half {
         if kind->getInt(k) == 1 {
           let m = Float.toInt(Math.round(Int.toFloat(k) * binHz / hz))
@@ -411,7 +432,7 @@ let measureGrid = (x: Float32Array.t, ~hz) =>
       }
       t := t.contents + 2
     }
-    Some({frames, hop: r.hop, ratio, level, harmonics})
+    Some({frames, hop: r.hop, ratio, level, harmonics, fine, fineCells})
   }
 
 // The grid's ratio in each band over all its frames (power ratio, by the bands' levels), and
@@ -455,9 +476,9 @@ type features = {
 
 // `period` is the target's pitch period in samples, which sets the pooling (the same for the
 // target and every candidate).
-// `gridHz`: the pitch to measure the harmonic grid on (the sound's own); `side`: the side signal
-// of a stereo sound (x being its mid).
-let measure = (x: Float32Array.t, ~period, ~gridHz=?, ~side=?): features => {
+// `gridHz`: the pitch to measure the harmonic grid on (the sound's own), and `axisHz` the fine
+// spectrum's (the target's); `side`: the side signal of a stereo sound (x being its mid).
+let measure = (x: Float32Array.t, ~period, ~gridHz=?, ~axisHz=?, ~side=?): features => {
   let energy = ref(0.)
   x->TypedArray.forEach(v => energy := energy.contents + v * v)
   let pools = resolutions->Array.map(poolFor(_, ~period))
@@ -467,7 +488,7 @@ let measure = (x: Float32Array.t, ~period, ~gridHz=?, ~side=?): features => {
     spectra: resolutions->Array.mapWithIndex((r, i) => bandLevels(r, x, ~pool=pools->Array.getUnsafe(i))),
     pools,
     envelope: envelope(x),
-    grid: gridHz->Option.flatMap(hz => measureGrid(x, ~hz)),
+    grid: gridHz->Option.flatMap(hz => measureGrid(x, ~hz, ~axisHz?)),
     side: side->Option.map(envelope),
   }
 }

@@ -19,6 +19,12 @@
 //           weighted by how loud the target is in them and bands by how loud they are in it;
 //           noise, unison's detuning and a rough recording show here where the bands can't
 //           tell them from more harmonic level;
+//   fine    (with a pitch) the fine spectrum (Spectrum.measureGrid): the power at every sixteenth
+//           of a harmonic of the target's pitch, frame by frame, in dB (smoothed over three
+//           sixteenths, floored 60 dB under the target's loudest), the mean distance in units of
+//           20 dB, weighted by how loud the target is there: a candidate out of tune, with its
+//           partials a hair off the sample's, or with noise where the sample's pitch wavers,
+//           is heard here;
 //   width   (for a stereo target) side against mid every 10 ms (as a ratio of their levels: a
 //           little width, 20 dB under, counts little against none; unison's, a few dB under,
 //           much), the mean distance over the steps weighted as the timbre's frames are.
@@ -49,6 +55,7 @@ let standard = {envelope: 0.5, early: 1., treble: 1., resolutions: [1., 1., 1.]}
 let earlySeconds = 0.15
 let detailWeight = 0.1
 let gridWeight = 0.2
+let fineWeight = 0.6
 let widthWeight = 0.4
 // a difference in the grid counts at most this many dB
 let gridCap = 30.
@@ -190,6 +197,35 @@ let compare = (w, target: Spectrum.features, c: Spectrum.features) =>
     | _ => 0.
     }
 
+    // the fine spectrum
+    let fine = switch (target.grid, c.grid) {
+    | (Some(tg), Some(cg)) if tg.fineCells == cg.fineCells =>
+      let cells = tg.fineCells
+      let frames = Math.Int.min(tg.frames, cg.frames)
+      let power = gain * gain
+      let rows = (g: Spectrum.grid, scale) =>
+        Float64Array.fromLength(frames * cells)->TypedArray.mapWithIndex((_, i) =>
+          10. * Math.log10(Math.max(scale * g.fine->get64(i), 1e-30))
+        )
+      let (a, z) = (rows(tg, 1.), rows(cg, power))
+      let top = maxOf(a)
+      let smooth = (m: Float64Array.t, f, k) => {
+        let at = j => Math.max(top - 60., m->get64(f * cells + Math.Int.max(0, Math.Int.min(cells - 1, j))))
+        0.25 * at(k - 1) + 0.5 * at(k) + 0.25 * at(k + 1)
+      }
+      let (sum, weight) = (ref(0.), ref(0.))
+      for f in 0 to frames - 1 {
+        for k in 0 to cells - 1 {
+          let (x, y) = (smooth(a, f, k), smooth(z, f, k))
+          let w = Math.max(0., Math.min(1., (x - (top - 50.)) / 50.))
+          sum := sum.contents + w * Math.abs(x - y)
+          weight := weight.contents + w
+        }
+      }
+      weight.contents > 0. ? sum.contents / weight.contents / 20. : 0.
+    | _ => 0.
+    }
+
     // the width
     let width = switch (target.side, c.side) {
     | (Some(ts), side) =>
@@ -207,7 +243,7 @@ let compare = (w, target: Spectrum.features, c: Spectrum.features) =>
       weight.contents > 0. ? sum.contents / weight.contents : 0.
     | (None, _) => 0.
     }
-    spectral + w.envelope * envelope + gridWeight * grid + widthWeight * width
+    spectral + w.envelope * envelope + gridWeight * grid + fineWeight * fine + widthWeight * width
   }
 
 // A loss as the percentage the cards show: two takes of one plucked string come out near 85%,

@@ -145,7 +145,7 @@ async function matcher ({ budget, wav, useModel })
             x[Genome.indexOf ("tune")] = k / 20;
             return score (x);
         })))) : undefined;
-        const m = MatchSearch.makeMatch ([seedGenes, ...suggestions], target.wave !== undefined, [], undefined,
+        const m = MatchSearch.makeMatch ([...Genome.seeds (target), ...suggestions], target.wave !== undefined, [], undefined,
                                          MatchSearch.budgetFor (budget, SoundTarget.seconds (target)), 0.25, 1234);
         const evaluate = (x, weights, threshold, fit, short) => Promise.resolve (MatchSearch.evaluate (ctx, x, weights, threshold, fit, short));
         await new Promise (done => MatchRun.search (evaluate, m, { onCandidate: () => {}, onProgress: () => {}, onDone: done }));
@@ -159,7 +159,7 @@ async function matcher ({ budget, wav, useModel })
             for (const s of searches)
             {
                 MatchEngine.setBase (engine, init.values, MatchSearch.tablesFor (target, init.tables));
-                const [l, r] = MatchEngine.renderStereo (engine, s.best.values, s.best.note, 0, frames, frames + 44100);
+                const [l, r] = MatchEngine.renderStereo (engine, s.best.values, s.best.note, Genome.playedCents (Float64Array.from (s.best.genes), target.cents), frames, frames + 44100);
                 writeWav (join (dir, `${safe (name)}-${MatchSearch.islands[s.islandIndex].key}.wav`), [l, r]);
             }
         }

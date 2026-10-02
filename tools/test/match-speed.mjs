@@ -129,7 +129,7 @@ else
                 const pump = () => { while (idle.length && queue.length) { const w = idle.shift (), job = queue.shift (); w.once ("message", r => { idle.push (w); job.resolve (r); pump (); }); w.postMessage (job.message); } };
                 const evaluate = (x, weights, threshold, fit, short) => new Promise (resolve => { queue.push ({ message: { genes: Array.from (x), weights, threshold, fit, short }, resolve }); pump (); });
                 const t0 = performance.now ();
-                const starts = [Genome.seed (target), ...(model ? MatchModel.suggest (model, target) : [])];
+                const starts = [...Genome.seeds (target), ...(model ? MatchModel.suggest (model, target) : [])];
                 const m = MatchSearch.makeMatch (starts, target.wave !== undefined, [], undefined, budget, 0.25, 1234);
                 await new Promise (done => MatchRun.search (evaluate, m, { onCandidate: () => {}, onProgress: () => {}, onDone: done }));
                 times.push ((performance.now () - t0) / 1000);
