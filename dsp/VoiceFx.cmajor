@@ -394,6 +394,7 @@ namespace porridge
         this.flFb += (t.fb - this.flFb) * k;
         this.flMix += (t.mix - this.flMix) * k;
         let step = 1.0f / float (n);
+        var sweep = flangerSweep (this.flPhase, inc, offset);
 
         for (int i = 0; i < n; ++i)
         {
@@ -403,11 +404,9 @@ namespace porridge
             let fb = fb0 + (this.flFb - fb0) * f;
             let mix = mix0 + (this.flMix - mix0) * f;
 
-            let span = 4.0f * 0.693147181f * depth;
-            let lfoL = 0.5f - 0.5f * float (cos (twoPi * this.flPhase));
-            let lfoR = 0.5f - 0.5f * float (cos (twoPi * (this.flPhase + offset)));
-            let yL = this.laneFlangerRead (clamp (delay * exp (span * lfoL), 2.0f, longest), 0);
-            let yR = this.laneFlangerRead (clamp (delay * exp (span * lfoR), 2.0f, longest), 1);
+            let e = sweep.next (4.0f * 0.693147181f * depth);
+            let yL = this.laneFlangerRead (clamp (delay * e[0], 2.0f, longest), 0);
+            let yR = this.laneFlangerRead (clamp (delay * e[1], 2.0f, longest), 1);
 
             let xL = l.at (i);
             let xR = both ? r.at (i) : xL;

@@ -122,6 +122,65 @@ namespace porridge
         return t;
     }
 
+    /// The flanger's LFO and sweep through a block (the rack's and every voice's): a phasor
+    /// turned by the LFO's step from the phase at the block's start (the right side's turned
+    /// ahead by its offset), and each side's sweep factor exp (span lfo) moved on from the last
+    /// sample's by the exponential of the difference, which is small. That spares a cos and an
+    /// exp per sample and side; the block's first sample works the factors out afresh.
+    struct FlangerSweep
+    {
+        float64 c, s, rc, rs, oc, os;       // the phasor, its turn per sample, the right side's offset
+        float64 eL, eR;                     // the sweep factors
+        float xL, xR;                       // and their exponents
+        bool started;
+    }
+
+    FlangerSweep flangerSweep (float64 phase, float64 inc, float64 offset)
+    {
+        FlangerSweep w;
+        w.c = cos (twoPi * phase); w.s = sin (twoPi * phase);
+        w.rc = cos (twoPi * inc); w.rs = sin (twoPi * inc);
+        w.oc = cos (twoPi * offset); w.os = sin (twoPi * offset);
+        return w;
+    }
+
+    /// exp (x), from e = exp (x0): e times exp (x - x0), by its Taylor series while x - x0 is small.
+    float64 expFrom (float64 e, float x, float x0)
+    {
+        let d = float64 (x) - float64 (x0);
+
+        if (abs (d) > 0.03)
+            return exp (float64 (x));
+
+        return e * (1.0 + d * (1.0 + d * 0.5 * (1.0 + d * (1.0 / 3.0) * (1.0 + d * 0.25 * (1.0 + d * 0.2)))));
+    }
+
+    /// This sample's sweep factors per side: the delay is the shortest times these (span = 4 ln 2
+    /// depth, an lfo of 0..1). The phasor turns on.
+    float<2> next (FlangerSweep& this, float span)
+    {
+        let xL = span * (0.5f - 0.5f * float (this.c));
+        let xR = span * (0.5f - 0.5f * float (this.c * this.oc - this.s * this.os));
+
+        if (this.started)
+        {
+            this.eL = expFrom (this.eL, xL, this.xL);
+            this.eR = expFrom (this.eR, xR, this.xR);
+        }
+        else
+        {
+            this.eL = exp (float64 (xL));
+            this.eR = exp (float64 (xR));
+            this.started = true;
+        }
+
+        this.xL = xL; this.xR = xR;
+        let c1 = this.c * this.rc - this.s * this.rs;
+        this.s = this.s * this.rc + this.c * this.rs;
+        this.c = c1;
+        return float<2> (float (this.eL), float (this.eR));
+    }
+
     /// Channel ch of the line d samples back (d >= 2), cubic-interpolated.
     float flangerRead (const Flanger& this, float d, int ch)
     {
@@ -150,6 +209,7 @@ namespace porridge
         }
 
         float written = 0;
+        var sweep = flangerSweep (this.phase, inc, offset);
 
         for (wrap<blockSize> i)
         {
@@ -159,11 +219,9 @@ namespace porridge
             this.mix += (t.mix - this.mix) * k;
 
             // delay = shortest * 2^(4 depth lfo), lfo 0..1
-            let span = 4.0f * 0.693147181f * this.depth;
-            let lfoL = 0.5f - 0.5f * float (cos (twoPi * this.phase));
-            let lfoR = 0.5f - 0.5f * float (cos (twoPi * (this.phase + offset)));
-            let yL = this.flangerRead (clamp (this.delay * exp (span * lfoL), 2.0f, longest), 0);
-            let yR = this.flangerRead (clamp (this.delay * exp (span * lfoR), 2.0f, longest), 1);
+            let e = sweep.next (4.0f * 0.693147181f * this.depth);
+            let yL = this.flangerRead (clamp (this.delay * e[0], 2.0f, longest), 0);
+            let yR = this.flangerRead (clamp (this.delay * e[1], 2.0f, longest), 1);
             let y = float<2> (yL, yR);
             let x = buf[i];
 
@@ -512,6 +570,13 @@ namespace porridge
 
         float written = 0;
 
+        // the oscillator: a phasor from the phase at the block's start, turned by the shift's
+        // step, which is worked out again only while the shift glides
+        var pc = cos (twoPi * this.phase), ps = sin (twoPi * this.phase);
+        float64 rc = 1.0, rs = 0.0;
+        var turnHz = 0.0f;
+        var turnSet = false;
+
         for (wrap<blockSize> i)
         {
             this.hz += (tHz - this.hz) * k;
@@ -544,10 +609,23 @@ namespace porridge
                 b = this.bodeSection (wrap<hilbertCoefs> (2 * j + 1), b);
             }
 
-            let cs = float (cos (twoPi * this.phase));
-            let sn = float (sin (twoPi * this.phase));
-            this.phase += float64 (this.hz) / sr;
+            let cs = float (pc);
+            let sn = float (ps);
+            let turn = float64 (this.hz) / sr;
+            this.phase += turn;
             this.phase -= floor (this.phase);
+
+            if (! turnSet || this.hz != turnHz)
+            {
+                turnSet = true;
+                turnHz = this.hz;
+                rc = cos (twoPi * turn);
+                rs = sin (twoPi * turn);
+            }
+
+            let c1 = pc * rc - ps * rs;
+            ps = ps * rc + pc * rs;
+            pc = c1;
 
             // up: b cos + a sin, down: b cos - a sin, ring: their mean (b cos); the mode's
             // sign glides so that switching modes doesn't click
