@@ -683,6 +683,9 @@ namespace porridge
             let a = (k + 1) % 3;
             let b = (k + 2) % 3;
             var h = m.baHead.at (k) + lows * c.baBassGain;
+            // (past the cubic's peak the loop runs away to infinity on a hot input, as the
+            // original's does: held there, which changes nothing below it)
+            if (c.baBumpFreq > 0) h = clamp (h, -1.0 / sqrt (3.0 * c.baBumpFreq), 1.0 / sqrt (3.0 * c.baBumpFreq));
             h -= h * h * h * c.baBumpFreq;
             m.baHead.at (k) = (1.0 - randy) * h + randy * 0.5 * m.baHead.at (a) + randy * 0.5 * m.baHead.at (b);
         }
@@ -711,6 +714,7 @@ namespace porridge
             let a = (k + 1) % 3;
             let b = (k + 2) % 3;
             var s = m.baSub.at (k) + sub * c.baSubGain;
+            if (c.baSubFreq > 0) s = clamp (s, -1.0 / sqrt (3.0 * c.baSubFreq), 1.0 / sqrt (3.0 * c.baSubFreq));
             s -= s * s * s * c.baSubFreq;
             m.baSub.at (k) = (1.0 - randy) * s + randy * 0.5 * m.baSub.at (a) + randy * 0.5 * m.baSub.at (b);
         }

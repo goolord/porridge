@@ -21,7 +21,8 @@ dsp/                    Cmajor DSP
   ParamStore.cmajor       the parameter endpoints: Oatmeal's 342, then Porridge's own (generated)
   Slots.cmajor            parameter -> program-struct slot constants (generated)
   ModTables.cmajor        modulation sources, targets and knob laws (generated)
-  Synth.cmajor            MIDI, voice manager, arpeggiator, per-voice rendering, effects chain
+  Synth.cmajor            MIDI, voice manager, arpeggiator, per-voice rendering, effects chain,
+                          and a K-weighted level meter the view asks for (levelRequest/levelOut)
   Oscillator, Filter, Modulation, Effects, Tables, Voice, Types
                           (Voice.cmajor also has the key EQ: a low shelf under each voice's
                           note and bands on its harmonics; Oscillator.cmajor each oscillator's
@@ -41,9 +42,10 @@ ui/                     patch view (ReScript)
   PresetBrowser.res       the preset browser; Library.res searches and filters for it, and
                           BankLibrary.res asks the plugin for the banks it keeps
   random/                 random patches: RandomDrawer.res (the drawer: the wildness knobs,
-                          the locks, four cards to play, keep or vary), PatchGen.res (making a
-                          patch of a kind with each area as wild as its knob, varying any
-                          patch, naming and describing one, and the output gain from an
+                          the locks, four cards to play, keep or vary, each card's level
+                          metered silently as it first plays and its output gain set from
+                          that), PatchGen.res (making a patch of a kind with each area as wild
+                          as its knob, varying any patch, naming and describing one, and an
                           estimate of its level), LevelTables.res (what the estimate knows
                           of the synth's levels, measured by tools/random-levels.mjs)
   NewBankDialog.res       starts a new bank of Init programs, for someone writing one
@@ -67,9 +69,10 @@ tools/
   gen.mjs                 regenerates ParamStore/Slots/ModTables from the parameter tables, and
                           the test host's field table and manifest
   bundle.mjs              bundles the compiled view and worker into bundle/
-  random-levels.mjs       measures the synth's levels for the random patches' estimate
-                          (--tables writes ui/random/LevelTables.res) and fits the estimate's
-                          weights to renders of random patches (uses the test host)
+  random-levels.mjs       measures the synth's levels for the random patches' estimate, K-
+                          weighted (--tables writes ui/random/LevelTables.res: waves, noise,
+                          each filter type, each distortion type's curve) and fits the
+                          estimate's weights to renders of random patches (uses the test host)
   clap/                   the C++ clap-patch.mjs adds: PorridgeBridge.h (settings, the host's
                           menu, the view's requests), PorridgeLibrary.h (the bank library:
                           bank folders scanned and copied, files opened in the browser kept)

@@ -67,4 +67,46 @@ namespace porridge
     {
         return float (1.0 - exp (-2.0 * pi * min (hz, 0.45 * sr) / sr));
     }
+
+    /// ITU-R BS.1770's K-weighting, for one channel: a high shelf of +4 dB from about 1.7 kHz,
+    /// then a highpass at 38 Hz (as pyloudnorm designs them at any rate). What a loudness meter
+    /// hears: the level the view sets random patches by (ui/random/RandomDrawer.res).
+    struct KWeighting
+    {
+        float64[5] shelf, high;                 // b0, b1, b2, a1, a2
+        float64[2] shelfState, highState;
+    }
+
+    KWeighting makeKWeighting (float64 sr)
+    {
+        KWeighting k;
+        let A = pow (10.0, 3.99984385397 / 40.0);
+        let w = 2.0 * pi * 1681.974450955533 / sr;
+        let alpha = sin (w) / (2.0 * 0.7071752369554193);
+        let c = cos (w);
+        let s = 2.0 * sqrt (A) * alpha;
+        let a0 = (A + 1.0) - (A - 1.0) * c + s;
+        k.shelf = float64[5] (A * ((A + 1.0) + (A - 1.0) * c + s) / a0, -2.0 * A * ((A - 1.0) + (A + 1.0) * c) / a0,
+                              A * ((A + 1.0) + (A - 1.0) * c - s) / a0, 2.0 * ((A - 1.0) - (A + 1.0) * c) / a0,
+                              ((A + 1.0) - (A - 1.0) * c - s) / a0);
+        let w2 = 2.0 * pi * 38.13547087613982 / sr;
+        let alpha2 = sin (w2) / (2.0 * 0.5003270373253953);
+        let c2 = cos (w2);
+        let b0 = (1.0 + alpha2);
+        k.high = float64[5] ((1.0 + c2) / 2.0 / b0, -(1.0 + c2) / b0, (1.0 + c2) / 2.0 / b0, -2.0 * c2 / b0, (1.0 - alpha2) / b0);
+        return k;
+    }
+
+    float64 biquad (const float64[5]& f, float64[2]& z, float64 x)
+    {
+        let y = f[0] * x + z[0];
+        z[0] = f[1] * x - f[3] * y + z[1];
+        z[1] = f[2] * x - f[4] * y;
+        return y;
+    }
+
+    float64 kWeight (KWeighting& k, float64 x)
+    {
+        return biquad (k.high, k.highState, biquad (k.shelf, k.shelfState, x));
+    }
 }

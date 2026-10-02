@@ -9,7 +9,8 @@
 //   - varying every program of the factory and Vanilla banks a lot keeps them sound and leaves
 //     their locked areas as they were;
 //   - with the test host built (tools/test/build.sh): patches at a middling wildness sound (none
-//     silent) and come out near the level their output gain aims at.
+//     silent) and come out near the level their output gain aims at (K-weighted, as the drawer
+//     meters them), and with the wildest effects (heavy distortion) none comes out much louder.
 //
 // run: node tools/test/random.mjs [-v]
 
@@ -21,7 +22,7 @@ import * as FxRack from "../../ui/FxRack.res.mjs";
 import * as ModMatrix from "../../ui/ModMatrix.res.mjs";
 import * as OatmealFormat from "../../ui/oatmeal/OatmealFormat.res.mjs";
 import * as PatchGen from "../../ui/random/PatchGen.res.mjs";
-import { root, host, outDir, render, readBank, checker } from "./lib.mjs";
+import { root, host, outDir, render, readBank, checker, kWeight, loudest } from "./lib.mjs";
 
 const { check, fail, done } = checker ({ verbose: process.argv.includes ("-v") });
 const defs = Lazy.get (Preset.defsById);
@@ -151,38 +152,40 @@ if (existsSync (host))
 {
     const dir = outDir ("random");
     const rate = 44100;
-    const levels = [];
-    for (let i = 0; i < 70; ++i)
+    // how far from their level patches made at this wildness come out, dB, in order
+    const levelsAt = (wild, label) =>
     {
-        const kind = PatchGen.kinds[i % PatchGen.kinds.length];
-        const m = PatchGen.generate (wildAt (0.3), kind, r);
-        const note = PatchGen.profile (kind).note;
-        const program = join (dir, "p.bin"), events = join (dir, "p.txt");
-        writeFileSync (program, Preset.toOatmeal ({ ...Preset.make ("p"), values: m }));
-        writeFileSync (events, `0 144 ${note} 100\n${2 * rate} 128 ${note} 0\n`);
-        // (every value that isn't Init's, or isn't what the DSP starts with: its rack holds
-        // Oatmeal's four, Init's is empty)
-        const sets = Object.fromEntries ([...m].filter (([id, x]) => x !== init.get (id) || x !== defs.get (id).init));
-        const [left, right] = render ({ program, events, frames: 2.5 * rate, rate, sets, out: join (dir, "p.f32") });
-        // RMS over the loudest 300 ms
-        const step = rate / 100, power = [];
-        for (let a = 0; a + step <= left.length; a += step)
+        const levels = [];
+        for (let i = 0; i < 70; ++i)
         {
-            let s = 0;
-            for (let j = a; j < a + step; ++j) s += left[j] * left[j] + right[j] * right[j];
-            power.push (s / (2 * step));
+            const kind = PatchGen.kinds[i % PatchGen.kinds.length];
+            const m = PatchGen.generate (wild, kind, r);
+            const note = PatchGen.profile (kind).note;
+            const program = join (dir, "p.bin"), events = join (dir, "p.txt");
+            writeFileSync (program, Preset.toOatmeal ({ ...Preset.make ("p"), values: m }));
+            writeFileSync (events, `0 144 ${note} 100\n${2 * rate} 128 ${note} 0\n`);
+            // (every value that isn't Init's, or isn't what the DSP starts with: its rack holds
+            // Oatmeal's four, Init's is empty)
+            const sets = Object.fromEntries ([...m].filter (([id, x]) => x !== init.get (id) || x !== defs.get (id).init));
+            const [left, right] = render ({ program, events, frames: 2.5 * rate, rate, sets, out: join (dir, "p.f32") });
+            // the loudest 300 ms, K-weighted (as the drawer's meter measures), with the patch's own
+            // output gain
+            const db = loudest ([kWeight (left, rate), kWeight (right, rate)], rate);
+            if (db < -60) fail (`${kind} ${label} is silent (${db.toFixed (1)} dB): ${PatchGen.describe (m, note).map (([, t]) => t).join ("; ")}`);
+            levels.push (db - PatchGen.targetDb);
         }
-        let best = 0;
-        for (let k = 0; k + 30 <= power.length; ++k) best = Math.max (best, power.slice (k, k + 30).reduce ((a, b) => a + b, 0) / 30);
-        const db = 10 * Math.log10 (Math.max (best, 1e-18));
-        if (db < -60) fail (`${kind} at 0.3 is silent (${db.toFixed (1)} dB): ${PatchGen.describe (m, note).map (([, t]) => t).join ("; ")}`);
-        levels.push (db - PatchGen.targetDb);
-    }
-    levels.sort ((a, b) => a - b);
-    const median = levels[levels.length >> 1];
-    const within = levels.filter (d => Math.abs (d - median) < 6).length / levels.length;
+        return levels.sort ((a, b) => a - b);
+    };
+    const tame = levelsAt (wildAt (0.3), "at 0.3");
+    const median = tame[tame.length >> 1];
+    const within = tame.filter (d => Math.abs (d - median) < 6).length / tame.length;
     check (Math.abs (median) < 3, `patches at 0.3 come out near their level (median ${median.toFixed (1)} dB from it)`);
     check (within >= 0.85, `most of them within 6 dB of each other (${Math.round (100 * within)}%)`);
+    // with the effects at their wildest (heavy distortion among them), none far louder
+    const wild = levelsAt ({ ...wildAt (0.3), fx: 1 }, "with wild effects");
+    const top = wild[wild.length - 1];
+    check (Math.abs (wild[wild.length >> 1]) < 3, `patches with wild effects come out near their level too (median ${wild[wild.length >> 1].toFixed (1)} dB from it)`);
+    check (top < 9, `none of them much louder (the loudest ${top.toFixed (1)} dB over)`);
 }
 else
     console.log ("(no test host: tools/test/build.sh builds it; the levels weren't checked)");

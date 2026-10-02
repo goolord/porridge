@@ -24,8 +24,9 @@
 // the wilder its area may go, a part made again, added or taken away (osc 2 and the mix mode, the
 // filter type, the pitch envelope, a routing, an effect). Locked areas stay as they are.
 //
-// The output gain follows an estimate of how loud the patch plays (`loudness`), so that new
-// patches and variations come out at about the same level.
+// The output gain follows an estimate of how loud the patch plays (`loudness`: K-weighted, as a
+// loudness meter hears it), so that new patches and variations come out at about the same
+// level; the drawer then measures each card as it first plays, and sets it from that.
 
 type area = [#osc | #filter | #env | #mod | #fx]
 
@@ -219,11 +220,37 @@ let resonanceLevel = (t, res, octaves) => {
 }
 let filterDriveLevel = (t, drive) => 2. * drive * LevelTables.filterDrive[t]->Option.getOr(0.)
 
+// A distortion type's output level (dB, LevelTables) for an input at x dB, before its postgain:
+// between the measured points, following the input below them and the last slope above.
+let driveCurve = (t, x) => {
+  let xs = LevelTables.driveInputs
+  let ys = rowOf(LevelTables.drive, t)
+  let n = Array.length(xs)
+  let at = (a, i) => a->Array.getUnsafe(i)
+  if t == 0 {
+    x
+  } else if x < at(xs, 0) {
+    at(ys, 0) + x - at(xs, 0)
+  } else if x > at(xs, n - 1) {
+    at(ys, n - 1) + (x - at(xs, n - 1)) * (at(ys, n - 1) - at(ys, n - 2)) / (at(xs, n - 1) - at(xs, n - 2))
+  } else {
+    interpolate(xs, ys, x)
+  }
+}
+
+// the level a voice has going into its distortion in a usual patch (a saw at 0 dB)
+let usualInput = LevelTables.waves[6]->Option.getOr(-12.)
+
+// The postgain that leaves a usual voice as loud as it is without the distortion: a clipper
+// holds its output under its ceiling and needs less taking down than its pregain; a bitcrusher
+// only raises the level, all of which comes off again.
+let neutralPostgain = (t, pregain) => usualInput - driveCurve(t, usualInput + pregain)
+
 // The cutoff's frequency at a note (as dsp/Synth.cmajor's cutoffHz has it, without envelopes and
-// modulation).
-let cutoffAt = (m, ~note) => {
+// modulation), with its knob where it is or at `knob`.
+let cutoffAt = (m, ~note, ~knob=?) => {
   let t = Float.toInt(get(m, "Filter"))
-  let hz = FilterTypes.cutoffHz(~filterType=t, get(m, "Cutoff"))
+  let hz = FilterTypes.cutoffHz(~filterType=t, knob->Option.getOr(get(m, "Cutoff")))
   hz *
   Math.pow(noteHz(note) / 440., ~exp=get(m, "F_Track")) *
   Math.pow(2., ~exp=get(m, "Tune_CutReference") / 12.)
@@ -878,15 +905,15 @@ let driveTypes = [
   (16., 0.8, 0.3),
 ]
 
-// A distortion's type and gains, by the ids of its copy (`id`): its pregain mostly made up for
-// after, and the models' own knobs near their middles (their tone and character are filters
-// on some models, which would leave little).
+// A distortion's type and gains, by the ids of its copy (`id`): its pregain made up for after,
+// as far as that type changes a usual voice's level, and the models' own knobs near their
+// middles (their tone and character are filters on some models, which would leave little).
 let distortion = (r, w, m, id) => {
   let t = tiered(r, w, driveTypes)
   let pregain = within(r, w, (2., 9.), (0., 24.))
   put(m, id("Sat_Type"), t)
   put(m, id("Sat_Pregain"), pregain)
-  put(m, id("Sat_Postgain"), -0.6 * pregain)
+  put(m, id("Sat_Postgain"), neutralPostgain(Float.toInt(t), pregain))
   if t >= Int.toFloat(DistTypes.firstModel) {
     put(m, id("Sat_Drive"), within(r, w, (0.4, 0.6), (0.25, 0.8)))
     put(m, id("Sat_Tone"), within(r, w, (0.45, 0.55), (0.35, 0.65)))
@@ -947,7 +974,7 @@ let effectSettings = (r, w, m, e: FxRack.effect) => {
     s("R_Brightness", between(r, 0.1, 0.4))
     s("R_Predelay", between(r, 0., 30.))
     s("R_Dry", 1.)
-    s("R_Wet", level((-20., -12.), (-16., -4.)))
+    s("R_Wet", level((-20., -12.), (-18., -8.)))
   | #space =>
     s("Rv_Model", tiered(r, w, [(0., 0., 2.), (1., 0., 1.5), (4., 0., 1.), (2., 0.5, 0.7), (3., 0.5, 0.7)]))
     s("Rv_Size", within(r, w, (0.3, 0.7), (0.05, 1.)))
@@ -974,8 +1001,8 @@ let effectSettings = (r, w, m, e: FxRack.effect) => {
     s("Fl_Rate", within(r, w, (0.2, 0.45), (0.05, 0.85)))
     s("Fl_Depth", between(r, 0.3, 0.8))
     s("Fl_Delay", within(r, w, (0.3, 0.6), (0.1, 0.9)))
-    s("Fl_Feedback", within(r, w, (0.2, 0.55), (-0.9, 0.9)))
-    s("Fl_Mix", within(r, w, (0.25, 0.5), (0.2, 0.8)))
+    s("Fl_Feedback", within(r, w, (0.15, 0.4), (-0.6, 0.6)))
+    s("Fl_Mix", within(r, w, (0.25, 0.45), (0.2, 0.6)))
   | #phaser =>
     s("Ph_Rate", within(r, w, (0.2, 0.45), (0.05, 0.85)))
     s("Ph_Depth", between(r, 0.4, 0.85))
@@ -1005,10 +1032,10 @@ let effectSettings = (r, w, m, e: FxRack.effect) => {
     s("Cv_Mix", within(r, w, (0.1, 0.3), (0.08, 0.5)))
     s("Cv_LowCut", between(r, 0.1, 0.35))
   | #air =>
-    s("Ai_Air", within(r, w, (0.55, 0.7), (0.3, 0.9)))
-    s("Ai_Body", between(r, 0.4, 0.6))
+    s("Ai_Air", within(r, w, (0.52, 0.6), (0.45, 0.68)))
+    s("Ai_Body", between(r, 0.45, 0.55))
   | #utility =>
-    s("Ut_Width", within(r, w, (1.15, 1.5), (0.6, 2.)))
+    s("Ut_Width", within(r, w, (1.1, 1.35), (0.8, 1.6)))
     s("Ut_BassMono", PorridgeParams.bassMonoValue(between(r, 80., 160.)))
   | #distortion => distortion(r, w, m, first => FxRack.id(e, first))
   | #eq => ()
@@ -1541,7 +1568,7 @@ let makeMod = (r, w, k, m) => {
 // How loud a patch plays is estimated from what LevelTables has measured of the synth: the
 // oscillators' levels (by wave and mix mode) and the noise's, then a note simulated every 2 ms,
 // its amp envelope on what the filter lets through as its envelope moves the cutoff (for a saw's
-// spectrum and for a sine's), the loudest 300 ms of that, and what the distortion does. What is
+// spectrum and for a sine's) and its distortions, and the loudest 300 ms of that. What is
 // left (the unison, the rack's effects, the modes' quirks) is weighed by loudnessWeights, fitted
 // to renders of random patches (tools/random-levels.mjs).
 
@@ -1632,20 +1659,6 @@ let envelopeAt = (e, t) => {
 // velocity 100's scaling, by a velocity sensitivity (as dsp/Modulation.cmajor's velScale)
 let velocityScale = sens => sens > 0.001 ? Math.pow(100. / 127., ~exp=2. * sens) : 1.
 
-// what a distortion does to the level (dB) at its pregain, with its postgain as it is
-let driveLevel = (m, ~type_, ~pre, ~post) => {
-  let t = Float.toInt(get(m, type_))
-  if t == 0 {
-    0.
-  } else {
-    let pregain = get(m, pre)
-    let curve = rowOf(LevelTables.drive, t)
-    interpolate(Array.concat([0.], LevelTables.pregains), Array.concat([0.], curve), pregain) +
-    get(m, post) +
-    0.6 * pregain
-  }
-}
-
 // What the rack's filters do to the level (dB), for a saw's spectrum or a sine's: each at its
 // cutoff against the note, with its resonance, mixed with the dry sound.
 let rackFilters = (m, rows, ~note) =>
@@ -1692,17 +1705,43 @@ let volumeLevel = m => {
   })
 }
 
-// The simulated note (dB RMS over its loudest 300 ms, with the output gain at 1), and its
-// loudest moment (dB, about where the peak is).
-let simulated = (m, ~note) => {
+// How far routings take the cutoff up while the loudest 300 ms play, as a knob position: an LFO
+// near its peak, a random value on average, velocity 100, the key, an envelope near its start
+// (a routing through the mod wheel or aftertouch, which the note doesn't move, adds nothing).
+let cutoffShift = (m, ~note) => {
+  let cutoff = Int.toFloat(ModMatrix.targetIndex("Cutoff"))
+  usedSlots(m)
+  ->Array.filter(k => get(m, ModMatrix.targetId(k)) == cutoff && get(m, ModMatrix.viaId(k)) == 0.)
+  ->Array.reduce(0., (s, k) => {
+    let a = get(m, ModMatrix.amountId(k))
+    switch ModMatrix.sources[Float.toInt(get(m, ModMatrix.sourceId(k)))]->Option.mapOr("", s => s.key) {
+    | "lfo1" | "lfo2" => s + 0.7 * Math.abs(a)
+    | "random" | "noise" => s + 0.3 * Math.abs(a)
+    | "velocity" => s + a * 100. / 127.
+    | "key" => s + a * (Int.toFloat(note) - 60.) / 60.
+    | "modEnv1" | "modEnv2" | "ampEnv" | "filterEnv" => s + 0.5 * Math.max(0., a)
+    | _ => s
+    }
+  })
+}
+
+// The simulated note (dB over its loudest 300 ms, with the output gain at 1), and its loudest
+// moment (dB, about where the peak is); only its first `within` ms, if given.
+//
+// A voice's own distortion comes after the amp envelope and the velocity (dsp/Synth.cmajor's
+// gainAndDistort), so it takes each moment's level through its curve (LevelTables.drive): a
+// driven note's decay is squashed back up towards the clip, and only fades below 1/16 of the
+// envelope. The global distortion and the rack's come after that, on the whole sound.
+let simulated = (m, ~note, ~within=2000.) => {
   let (bright, pure) = sources(m)
-  let bright = bright * Math.pow(10., ~exp=rackFilters(m, LevelTables.saw, ~note) / 10.)
-  let pure = pure * Math.pow(10., ~exp=rackFilters(m, LevelTables.sine, ~note) / 10.)
+  let rackSaw = rackFilters(m, LevelTables.saw, ~note)
+  let rackSine = rackFilters(m, LevelTables.sine, ~note)
   let t = Float.toInt(get(m, "Filter"))
   let filtered = t != 0
   let amp = envelopeOf(m, "", ~curves="Amp")
   let filterEnv = envelopeOf(m, "F_", ~curves="Filter")
-  let base = filtered ? Math.log2(Math.max(1., cutoffAt(m, ~note)) / noteHz(note)) : 0.
+  let knob = Math.max(0., Math.min(1., get(m, "Cutoff") + cutoffShift(m, ~note)))
+  let base = filtered ? Math.log2(Math.max(1., cutoffAt(m, ~note, ~knob)) / noteHz(note)) : 0.
   let envOctaves = 8. * get(m, "F_EnvMod") * velocityScale(get(m, "F_VeloSens"))
   // the second filter: after the first, or beside it, up to F_Split's two octaves above
   let double = filtered ? Float.toInt(get(m, "F_Double")) : 0
@@ -1726,51 +1765,67 @@ let simulated = (m, ~note) => {
       | _ => one
       }
     }
+  let db = p => 10. * Math.log10(Math.max(p, 1e-12))
+  let power10 = x => Math.pow(10., ~exp=x / 10.)
+  let velocity = 20. * Math.log10(velocityScale(get(m, "VeloSens")))
+  // the distortions: the voice's (by Sat_Mode: 0 global, 1 after the filter, 2 before it,
+  // 3 both), then the rack's, each as (type, pregain, postgain)
+  let driveType = Float.toInt(get(m, "Sat_Type"))
+  let driveMode = Float.toInt(get(m, "Sat_Mode"))
+  let voiceDrive = driveType != 0 && driveMode != 0
+  let globalDrive = driveType != 0 && (driveMode == 0 || driveMode == 3)
+  let (pregain, postgain) = (get(m, "Sat_Pregain"), get(m, "Sat_Postgain"))
+  let rackDrives =
+    rackOf(m)
+    ->Array.filter(e => e.kind == #distortion)
+    ->Array.map(e => {
+      let id = first => FxRack.id(e, first)
+      (Float.toInt(get(m, id("Sat_Type"))), get(m, id("Sat_Pregain")), get(m, id("Sat_Postgain")))
+    })
   let step = 2.
-  let steps = 1000
+  let window = Float.toInt(300. / step)
+  let steps = Math.Int.max(window, Math.Int.min(1000, Float.toInt(within / step)))
   let power = Array.fromInitializer(~length=steps, i => {
     let ms = Int.toFloat(i) * step
     let a = envelopeAt(amp, ms)
     let octaves = base + envOctaves * (filtered ? envelopeAt(filterEnv, ms) : 0.)
-    a *
-    a *
-    (bright * Math.pow(10., ~exp=through(LevelTables.saw, octaves) / 10.) +
-      pure * Math.pow(10., ~exp=through(LevelTables.sine, octaves) / 10.))
+    let (saw, sine) = (through(LevelTables.saw, octaves), through(LevelTables.sine, octaves))
+    let voice = bright * power10(saw) + pure * power10(sine)
+    let level = if voiceDrive {
+      // (what it puts out is bright, whatever goes in: the rack's filters take it as a saw)
+      let raw = bright + pure
+      let input = db(driveMode == 2 ? raw : voice) + db(a * a) + velocity
+      let out = driveCurve(driveType, input + pregain) + postgain + (driveMode == 2 ? db(voice) - db(raw) : 0.) + rackSaw
+      a < 0.0625 ? out + 20. * Math.log10(Math.max(16. * a, 1e-6)) : out
+    } else {
+      db(a * a * (bright * power10(saw + rackSaw) + pure * power10(sine + rackSine))) + velocity
+    }
+    let level = globalDrive ? driveCurve(driveType, level + pregain) + postgain : level
+    power10(rackDrives->Array.reduce(level, (l, (t, pre, post)) => driveCurve(t, l + pre) + post))
   })
-  let window = Float.toInt(300. / step)
   let sum = ref(power->Array.slice(~start=0, ~end=window)->Array.reduce(0., (s, p) => s + p))
   let loudest = ref(sum.contents)
   for i in window to steps - 1 {
     sum := sum.contents + power->Array.getUnsafe(i) - power->Array.getUnsafe(i - window)
     loudest := Math.max(loudest.contents, sum.contents)
   }
-  let gains =
-    driveLevel(m, ~type_="Sat_Type", ~pre="Sat_Pregain", ~post="Sat_Postgain") +
-    20. * Math.log10(velocityScale(get(m, "VeloSens"))) +
-    volumeLevel(m)
-  let db = p => 10. * Math.log10(Math.max(p, 1e-12))
+  let gains = volumeLevel(m)
   (db(loudest.contents / Int.toFloat(window)) + gains, db(power->Array.reduce(0., Math.max)) + gains)
 }
 
-let simulatedLevel = (m, ~note) => {
-  let (level, _) = simulated(m, ~note)
+let simulatedLevel = (m, ~note, ~within=?) => {
+  let (level, _) = simulated(m, ~note, ~within?)
   level
 }
 
 // What the simulation leaves out, as `loudness` weighs it: the unison, osc 2's interval against
-// osc 1 (at one, they add more than their powers), the modes, the rack's distortions and
-// compressor, its spaces and echoes, the chorus's voices, the flanger and phaser, the filter's
-// the distortion models' own drive, and the second filter.
+// osc 1 (at one, they add more than their powers), the modes, the rack's compressor, its spaces
+// and echoes, the chorus's voices, the flanger and phaser, the frequency shifter, the
+// distortion models' own drive, and the second filter.
 let loudnessFeatures = (m, ~note as _) => {
   let mode = mixMode(m)
   let rack = rackOf(m)
   let has = kind => rack->Array.some(e => e.kind == kind) ? 1. : 0.
-  let rackDrive =
-    rack
-    ->Array.filter(e => e.kind == #distortion)
-    ->Array.reduce(0., (s, e) =>
-      s + driveLevel(m, ~type_=FxRack.id(e, "Sat_Type"), ~pre=FxRack.id(e, "Sat_Pregain"), ~post=FxRack.id(e, "Sat_Postgain"))
-    )
   let chorus = rack->Array.find(e => e.kind == #chorus)
   [
     10. * Math.log10(Math.max(1., get(m, "U_Voices"))),
@@ -1778,7 +1833,6 @@ let loudnessFeatures = (m, ~note as _) => {
     mode == sync ? 1. : 0.,
     mode == fm ? 1. : 0.,
     mode == pm || mode == pmFeedback ? get(m, "PM_Feedback") : 0.,
-    rackDrive,
     has(#compressor),
     has(#space) + has(#reverb) + has(#ambience) + has(#convolve),
     has(#delay),
@@ -1790,10 +1844,11 @@ let loudnessFeatures = (m, ~note as _) => {
   ]
 }
 
-let loudnessWeights = [0.2, -0.579, 0.039, 0.257, -0.648, 1.1, -3.609, -0.2, 0.116, -2.548, -2.054, -2.059, 4.349, -1.221]
-let loudnessBias = 2.021
+let loudnessWeights = [0.037, 0.048, -0.164, 0.54, 0.481, -4.44, -0.133, -0.361, -2.428, -1.714, -1.66, 3.559, -0.509]
+let loudnessBias = 1.628
 
-// About how loud a patch's note plays: dB RMS over its loudest 300 ms, with the output gain at 1.
+// About how loud a patch's note plays: dB over its loudest 300 ms, K-weighted (as a loudness
+// meter hears it), with the output gain at 1.
 let loudness = (m, ~note) =>
   loudnessFeatures(m, ~note)->Array.reduceWithIndex(simulatedLevel(m, ~note) + loudnessBias, (s, x, i) =>
     s + x * loudnessWeights->Array.getUnsafe(i)
@@ -1932,7 +1987,7 @@ let nudges = (a: area) =>
 
 // The rack's effects' settings that move: their continuous ones, but not their levels in and out
 // (which the output gain answers for) nor what restarts an effect.
-let fixedFx = ["Gain", "Wet", "InGain", "OutGain", "Predelay", "Length", "Dry", "Phase", "Spread", "Width", "Pan", "Freq", "Inv", "Swap", "Thresh", "Ratio", "Split"]
+let fixedFx = ["Gain", "Pregain", "Postgain", "Limit", "Wet", "InGain", "OutGain", "Predelay", "Length", "Dry", "Phase", "Spread", "Width", "Pan", "Freq", "Inv", "Swap", "Thresh", "Ratio", "Split"]
 let rackNudges = m =>
   rackOf(m)->Array.flatMap(e =>
     FxRack.params(e)->Array.filterMap(id => {
@@ -2070,6 +2125,12 @@ let vary = (src: Bank.values, ~amount, ~wild: wildness, ~locks: array<area>, ~ki
     }
   })
   tamedFeedback(m)
+  // a distortion's pregain or type moved: its postgain follows, as far as the curves differ
+  let (t0, t1) = (Float.toInt(get(src, "Sat_Type")), Float.toInt(get(m, "Sat_Type")))
+  let (p0, p1) = (get(src, "Sat_Pregain"), get(m, "Sat_Pregain"))
+  if t0 != 0 && t1 != 0 && (t0 != t1 || p0 != p1) {
+    put(m, "Sat_Postgain", get(src, "Sat_Postgain") + neutralPostgain(t1, p1) - neutralPostgain(t0, p0))
+  }
   let note = profile(kind).note
   let before = get(src, "Gain")
   m->Map.set("Gain", Math.min(2., before * ampOfDb(loudness(src, ~note) - loudness(m, ~note))))

@@ -12,6 +12,11 @@
 //    filter, the envelopes, the modulation and the effects (saved with the settings).
 //  - The locks keep areas of what is playing (the chosen card, or else the program) while the
 //    rest is made again or varied.
+//  - Every card plays at the same loudness: the first time it plays (or is kept), its note is
+//    played silently while the plugin meters it (dsp/Synth.cmajor's levelOut: K-weighted, as a
+//    loudness meter hears it), and its output gain is set from what was heard. Variations of
+//    the program are set to the program's own loudness, measured the same way. Without a meter
+//    (the browser preview) the output gain is PatchGen's estimate.
 
 open! Web
 
@@ -35,8 +40,18 @@ type card = {
 
 // A card's patch: its values, the program it goes into (Init, or the program it varies, for its
 // shapes, tuning and impulses), its kind and name, and where it came from (for the program's
-// description).
-type patch = {values: Bank.values, base: Preset.t, kind: PatchGen.kind, name: string, origin: string}
+// description); the level it is to play at (dB at the output, as a loudness meter hears it: the
+// variations of a program play as loud as it does), and whether its output gain has been set from
+// a measurement of how loud it plays (until then it is the estimate's).
+type patch = {
+  values: Bank.values,
+  base: Preset.t,
+  kind: PatchGen.kind,
+  name: string,
+  origin: string,
+  target: option<float>,
+  measured: bool,
+}
 
 // A row of cards: new patches, or variations of one.
 type generation = {label: string, patches: array<patch>}
@@ -114,6 +129,8 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
   // what Keep replaced, to undo it
   let undo: ref<option<(Preset.t, int)>> = ref(None)
   let keptSlot = ref(None)
+  // the card being measured, before it plays
+  let measuring = ref(None)
   let noteTimer = ref(None)
   let playingNote = ref(None)
   let init = Lazy.make(() => Preset.make("Init"))
@@ -295,7 +312,13 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
       card.root->toggleClass("live", chosen.contents == Some(slot) && original.contents != None)
       card.root->toggleClass("kept", keptSlot.contents == Some(slot))
       card.badge->setTextContent(
-        keptSlot.contents == Some(slot) ? "kept" : chosen.contents == Some(slot) && original.contents != None ? "playing" : "",
+        measuring.contents == Some(slot)
+          ? "measuring"
+          : keptSlot.contents == Some(slot)
+          ? "kept"
+          : chosen.contents == Some(slot) && original.contents != None
+          ? "playing"
+          : "",
       )
       let note = PatchGen.profile(p.kind).note
       PatchGen.describe(p.values, ~note)->Array.forEachWithIndex(((_, text), i) =>
@@ -389,21 +412,150 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
     applying := false
   }
 
-  let tryCard = slot =>
-    patchAt(slot)->Option.forEach(p => {
+  //==============================================================================
+  // measuring how loud a card plays
+
+  // The meter's readings (dsp/Synth.cmajor's levelOut: the output's K-weighted power before the
+  // output gain, every 512 frames) while a measurement asks for them, and whether the plugin
+  // gives any (the browser preview doesn't, nor a host that isn't running the plugin).
+  let readings: array<float> = []
+  let meterWorks = ref(true)
+  ctx.pc->PatchConnection.addEndpointListener("levelOut", j =>
+    switch j {
+    | Number(x) => readings->Array.push(x)
+    | _ => ()
+    }
+  )
+  // the measurement under way, if any (a newer one, a new row or closing the drawer stops it,
+  // and puts back what was playing: the measured patch was on, silent)
+  let probe = ref(0)
+  let probing = ref(false)
+  let stopProbe = () => {
+    probe := probe.contents + 1
+    measuring := None
+    if probing.contents {
+      probing := false
+      noteOff()
+      ctx.pc->PatchConnection.sendEventOrValue("levelRequest", 0)
+      original.contents->Option.forEach(((before, index)) =>
+        if index == programs.current {
+          apply(before)
+        }
+      )
+    }
+  }
+  // (readings of 512 frames are about 11 ms: 27 of them make 300 ms)
+  let windowReadings = 27
+  let db = p => 10. * Math.log10(Math.max(p, 1e-12))
+
+  // how long a patch's note is measured for: past its attack, within reason
+  let probeMs = (values: Bank.values) =>
+    Math.max(450., Math.min(700., values->Map.get("Attack")->Option.getOr(5.) + 350.))
+
+  // Plays a program's note silently (with the output gain at 0, after clearing what was still
+  // sounding) and gives how loud it was: the mean power of its loudest 300 ms and its loudest
+  // reading, dB before the output gain; None if the meter gave too little. Nothing comes if
+  // something else starts meanwhile.
+  let measure = (preset: Preset.t, ~note, ~ms, done) => {
+    stopProbe()
+    let token = probe.contents
+    probing := true
+    noteOff()
+    let silent = PatchGen.copy(preset.values)
+    silent->Map.set("Gain", 0.)
+    apply({...preset, values: silent})
+    programs->ProgramStore.panic
+    readings->Array.splice(~start=0, ~remove=Array.length(readings), ~insert=[])
+    ctx.pc->PatchConnection.sendEventOrValue("levelRequest", Float.toInt(ms / 10.) + 20)
+    let later = (wait, f) => setTimeout(() => probe.contents == token ? f() : (), wait)->ignore
+    later(40, () => {
+      Wheels.send(ctx, 0x90, note, 100)
+      playingNote := Some(note)
+      later(Float.toInt(ms), () => {
+        probing := false
+        noteOff()
+        ctx.pc->PatchConnection.sendEventOrValue("levelRequest", 0)
+        let n = Array.length(readings)
+        if n < 10 {
+          meterWorks := false
+          done(None)
+        } else {
+          let w = Math.Int.min(windowReadings, n)
+          let sum = ref(readings->Array.slice(~start=0, ~end=w)->Array.reduce(0., (s, x) => s + x))
+          let best = ref(sum.contents)
+          for i in w to n - 1 {
+            sum := sum.contents + readings->Array.getUnsafe(i) - readings->Array.getUnsafe(i - w)
+            best := Math.max(best.contents, sum.contents)
+          }
+          done(Some((db(best.contents / Int.toFloat(w)), db(readings->Array.reduce(0., Math.max)))))
+        }
+      })
+    })
+  }
+
+  // How loud a patch's whole note plays (dB before the output gain) and its loudest moment, from
+  // a measurement of its first `ms`: the estimate adds what comes later (a slow attack's loudest
+  // moments are past the measurement), never less.
+  let wholeNote = (values, ~kind, ~ms, (level, loudest)) => {
+    let note = PatchGen.profile(kind).note
+    let (later, laterLoudest) = PatchGen.simulated(values, ~note)
+    let (early, earlyLoudest) = PatchGen.simulated(values, ~note, ~within=ms)
+    (level + Math.max(0., later - early), loudest + Math.max(0., laterLoudest - earlyLoudest))
+  }
+
+  // Sets a card's output gain from a measurement of how loud it plays, the first time (unless it
+  // has no level to keep to, or there's no meter), then goes on.
+  let withMeasured = (slot, next) =>
+    switch (shown(), patchAt(slot)) {
+    | (Some(gen), Some(p)) if !p.measured && p.target != None && meterWorks.contents =>
       if original.contents == None {
         original := Some((ProgramStore.captureCurrent(programs), programs.current))
       }
-      if chosen.contents != Some(slot) || !edited.contents {
-        let preset = presetOf(p)
-        apply(preset)
-        triedMeta := Some(preset.meta)
-        edited := false
+      let ms = probeMs(p.values)
+      measure(presetOf(p), ~note=PatchGen.profile(p.kind).note, ~ms, result => {
+        measuring := None
+        switch (result, p.target) {
+        | (Some(heard), Some(target)) =>
+          let (level, loudest) = wholeNote(p.values, ~kind=p.kind, ~ms, heard)
+          let values = PatchGen.copy(p.values)
+          let gainDb = Math.min(target - level, PatchGen.ceilingDb - loudest)
+          values->Map.set("Gain", Math.min(2., PatchGen.ampOfDb(gainDb)))
+          if gen.patches[slot]->Option.mapOr(false, q => q === p) {
+            gen.patches->Array.setUnsafe(slot, {...p, values, measured: true})
+          }
+        | _ => ()
+        }
+        // (the measured note's tail goes, before the card plays)
+        programs->ProgramStore.panic
+        setTimeout(next, 30)->ignore
+      })
+      measuring := Some(slot)
+      renderAll()
+    | _ => next()
+    }
+
+  let tryCard = slot =>
+    patchAt(slot)->Option.forEach(_ => {
+      if original.contents == None {
+        original := Some((ProgramStore.captureCurrent(programs), programs.current))
       }
+      // (a card played and edited goes on with the edits)
+      let fresh = chosen.contents != Some(slot) || !edited.contents
       chosen := Some(slot)
       keptSlot := None
-      playNote(p)
       renderAll()
+      let play = () =>
+        patchAt(slot)->Option.forEach(p => {
+          if fresh {
+            let preset = presetOf(p)
+            apply(preset)
+            triedMeta := Some(preset.meta)
+            edited := false
+          }
+          playNote(p)
+          renderAll()
+        })
+      fresh ? withMeasured(slot, play) : play()
     })
 
   // Puts the program back as it was before a card was played, unless the card has been
@@ -427,7 +579,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
     edited := false
   }
 
-  let keep = slot =>
+  let keepNow = slot =>
     patchAt(slot)->Option.forEach(p => {
       noteOff()
       let before = switch original.contents {
@@ -446,6 +598,10 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
       ctx.toast(`Kept “${Preset.name(preset)}” in program ${ProgramStore.number(programs.current)}`)
       renderAll()
     })
+
+  // (a card that was never played is measured first, so that it goes in at its level)
+  let keep = slot =>
+    chosen.contents == Some(slot) && edited.contents ? keepNow(slot) : withMeasured(slot, () => keepNow(slot))
 
   let undoKeep = () =>
     undo.contents->Option.forEach(((before, index)) => {
@@ -492,6 +648,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
 
   // A new row of cards, after the rows before it (the last few of them, to go back to).
   let push = (gen: generation) => {
+    stopProbe()
     generations->Array.push(gen)
     if Array.length(generations) > maxRows {
       generations->Array.splice(~start=0, ~remove=Array.length(generations) - maxRows, ~insert=[])
@@ -538,7 +695,15 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
     }
     let patches = kinds->Array.map(k => {
       let values = PatchGen.generate(~wild=wild.contents, ~kind=k, ~random=r, ~keep?)
-      {values, base: Lazy.get(init), kind: k, name: PatchGen.nameOf(values, ~kind=k, ~random=r), origin: "Made at random"}
+      {
+        values,
+        base: Lazy.get(init),
+        kind: k,
+        name: PatchGen.nameOf(values, ~kind=k, ~random=r),
+        origin: "Made at random",
+        target: Some(PatchGen.targetDb),
+        measured: false,
+      }
     })
     let label = switch kind.contents {
     | Some(k) => "new " ++ PatchGen.kindName(k)
@@ -557,6 +722,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
         values,
         name: from.base === Lazy.get(init) ? PatchGen.nameOf(values, ~kind=from.kind, ~random=r) : `${from.name} ${Int.toString(i + 1)}`,
         origin: `${from.origin}, varied ${amountName}`,
+        measured: false,
       }
     })
     push({label: `${title}, varied ${amountName}${lockText(locked)}`, patches: named(patches)})
@@ -570,22 +736,36 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
       variations(from, amount, ~title=p.name->String.toLowerCase)
     })
 
-  // the program as it is, before any card was played on it
+  // The program as it is, before any card was played on it: measured first (silently), so that
+  // its variations play as loud as it does (as they're estimated to, without a meter).
   let startVaryProgram = amount => {
     settle()
     let program = ProgramStore.captureCurrent(programs)
     let name = Preset.name(program)
-    variations(
-      {
-        values: program.values,
-        base: program,
-        kind: PatchGen.kindOf(program.values),
-        name,
-        origin: `Varied from ${name}`,
-      },
-      amount,
-      ~title=name,
-    )
+    let kind = PatchGen.kindOf(program.values)
+    let vary = target =>
+      variations(
+        {values: program.values, base: program, kind, name, origin: `Varied from ${name}`, target, measured: false},
+        amount,
+        ~title=name,
+      )
+    if meterWorks.contents {
+      original := Some((program, programs.current))
+      let ms = probeMs(program.values)
+      measure(program, ~note=PatchGen.profile(kind).note, ~ms, result => {
+        // (the program goes back on as it was)
+        settle()
+        let gain = program.values->Map.get("Gain")->Option.getOr(0.1)
+        vary(
+          result->Option.map(heard => {
+            let (level, _) = wholeNote(program.values, ~kind, ~ms, heard)
+            level + PatchGen.dbOfAmp(gain)
+          }),
+        )
+      })
+    } else {
+      vary(None)
+    }
   }
 
   //==============================================================================
@@ -608,6 +788,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
       if saveTimer.contents != None {
         save()
       }
+      stopProbe()
       settle()
       chosen := None
       undo := None
