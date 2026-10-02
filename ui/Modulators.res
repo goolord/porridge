@@ -9,6 +9,9 @@
 // knob is known, a mark on the edge for the rest) and the graphs' points (FxGraph.handle,
 // NodeEditor.node). The index is worked out once for every parameter, again (at most once a
 // frame) when a routing changes, and the controls watching it refresh then.
+//
+// The other way round, `from` lists what a source moves in every system, which the sources'
+// panels show as chips (Destinations).
 
 open! Web
 
@@ -262,3 +265,142 @@ let placeDots = (d, x, y, ~shown=true) => {
   d.group->setAttribute("transform", Str(`translate(${Float.toString(x)} ${Float.toString(y)})`))
   d.group->setAttribute("display", Str(shown ? "inline" : "none"))
 }
+
+//==============================================================================
+// what a source moves: the index the other way round
+
+// Oatmeal's target slots, by source: their parameters' prefix and target list (as `routings`).
+let slotSets = [
+  ("modEnv1", "M1_", OatmealParams.modEnvTargets),
+  ("modEnv2", "M2_", OatmealParams.modEnvTargets),
+  ("x", "XY_H_", OatmealParams.xyTargets),
+  ("y", "XY_V_", OatmealParams.xyTargets),
+  ...[1, 2, 3, 4, 5, 6]->Array.map(c => (`cc${Int.toString(c)}`, `CC${Int.toString(c)}_`, OatmealParams.ccTargets)),
+]
+
+// The fixed depths each source has, by the name its target has in Oatmeal's lists: the LFOs'
+// (cut 1, cut 2, res, pitch, pan and the other's rate), the filter's envelope, key, velocity and
+// aftertouch amounts, and the oscillators' and the noise's aftertouch.
+let fixedDepths = key =>
+  switch key {
+  | "lfo1" | "lfo2" =>
+    let (n, other) = key == "lfo1" ? ("1", "2") : ("2", "1")
+    let l = `LFO_${n}_`
+    [
+      (l ++ "Cutoff_1", "cutoff 1"),
+      (l ++ "Cutoff_2", "cutoff 2"),
+      (l ++ "Resonance", "resonance"),
+      (l ++ "Pitch", "pitch"),
+      (l ++ "Pan", "pan"),
+      (l ++ other, `LFO ${other} speed`),
+    ]
+  | "filterEnv" => [("F_EnvMod", "cutoff 1")]
+  | "key" => [("F_Track", "cutoff 1")]
+  | "velocity" => [("F_VeloSens", "filter env mod")]
+  | "aftertouch" => [
+      ("F_Aftertouch", "cutoff 1"),
+      ("OscAftertouch", "osc amp"),
+      ("O1_Afterpitch", "1 pitch"),
+      ("O2_Afterpitch", "2 pitch"),
+      ("N_Aftertouch", "noise amp"),
+    ]
+  | _ => []
+  }
+
+// A name from Oatmeal's target lists in the words of the knob it moves, as the matrix's targets
+// name it ("1 amp" is "osc 1 amp"), and the rest in the same words.
+let targetLabel = name => {
+  let unipolar = String.endsWith(name, " (unipolar)")
+  let base = unipolar ? String.slice(name, ~start=0, ~end=String.length(name) - 11) : name
+  let label = switch base {
+  // (filter 2's own cutoff, though the knob it moves is the split)
+  | "cutoff 2" => "cutoff 2"
+  | "osc amp" => "osc amps"
+  | "1 pitch" => "osc 1 pitch"
+  | "ME 1 depth" => "mod env 1 depth"
+  | "ME 2 depth" => "mod env 2 depth"
+  | "amp envelope speed" => "amp env speed"
+  | "filter envelope speed" => "filter env speed"
+  | "mod envelope speed" => "mod env speed"
+  | "pitch envelope speed" => "pitch env speed"
+  | _ =>
+    switch targetParams(base) {
+    | [id] => ModMatrix.targets[ModMatrix.targetOfParam(id)]->Option.mapOr(base, t => t.label)
+    | _ => base
+    }
+  }
+  unipolar ? label ++ " (uni)" : label
+}
+
+// How a route leaves its source: a matrix connection (its slot), one of Oatmeal's target slots
+// (its target parameter), or a fixed depth.
+type via = Connection(int) | Slot(string) | Depth
+
+type route = {
+  source: int,
+  via: via,
+  // what it moves, in its knob's words ("cutoff", "osc 2 transpose")
+  label: string,
+  // the parameter that holds its amount
+  amount: string,
+  // the parameters it moves (none for pitch, pan ...)
+  targets: array<string>,
+}
+
+// Everything source key moves, read with get: its Oatmeal slots that have a target (a
+// controller's while it's assigned), its fixed depths that aren't 0, then the matrix's
+// connections from it.
+let from = (get: string => float, key) => {
+  let source = ModMatrix.sourceIndex(key)
+  let slotRoutes = slotSets->Array.flatMap(((k, prefix, list)) =>
+    k != key || String.startsWith(prefix, "CC") && get(String.slice(prefix, ~start=0, ~end=3)) == 0.
+      ? []
+      : [1, 2, 3, 4]->Array.filterMap(i => {
+          let n = Int.toString(i)
+          let target = `${prefix}Target_${n}`
+          switch list[Float.toInt(get(target))] {
+          | Some(name) if name != "none" =>
+            Some({source, via: Slot(target), label: targetLabel(name), amount: `${prefix}Depth_${n}`, targets: targetParams(name)})
+          | _ => None
+          }
+        })
+  )
+  let depths = fixedDepths(key)->Array.filterMap(((amount, name)) =>
+    get(amount) != 0. ? Some({source, via: Depth, label: targetLabel(name), amount, targets: targetParams(name)}) : None
+  )
+  let connections = ModMatrix.slotNumbers->Array.filterMap(k => {
+    let s = ModMatrix.readSlot(get, k)
+    switch ModMatrix.targets[s.target] {
+    | Some(t) if s.source == source && s.target > 0 =>
+      Some({
+        source,
+        via: Connection(k),
+        label: t.label,
+        amount: ModMatrix.amountId(k),
+        targets: switch t.law {
+        | Knob(id) => [id]
+        | _ => []
+        },
+      })
+    | _ => None
+    }
+  })
+  [...slotRoutes, ...depths, ...connections]
+}
+
+// The parameters that can change what source key moves.
+let fromIds = key => [
+  ...slotSets->Array.flatMap(((k, prefix, _)) =>
+    k != key
+      ? []
+      : [
+          String.slice(prefix, ~start=0, ~end=3),
+          ...[1, 2, 3, 4]->Array.flatMap(i => [`${prefix}Target_${Int.toString(i)}`, `${prefix}Depth_${Int.toString(i)}`]),
+        ]
+  ),
+  ...fixedDepths(key)->Array.map(Pair.first),
+  ...ModMatrix.slotNumbers->Array.flatMap(k => [ModMatrix.sourceId(k), ModMatrix.targetId(k), ModMatrix.amountId(k)]),
+]
+
+// Whether source key moves anything: a route with an amount.
+let movesAnything = (get: string => float, key) => from(get, key)->Array.some(r => get(r.amount) != 0.)
