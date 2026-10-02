@@ -32,7 +32,7 @@ const chord = [[0, 48, 0.6], [0, 55, 0.6], [0, 64, 0.6]];
 const kinds = [
     ["filter", "filter", { Ff_On: 1, Ff_Type: 17, Ff_Resonance: 0.7, Ff_Track: 1 }],
     ["distortion", entry ("distortion", 2), { Sat2_Type: 7, Sat2_Pregain: 18 }],
-    ["eq", "eq", { EQ_On: 1, EQ_1_Type: 1, EQ_1_Freq: 1000, EQ_1_Amp: 12, EQ_1_Slope: 1 }],
+    ["eq", entry ("eq", 2), { EQ2_On: 1, EQ2_1_Type: 1, EQ2_1_Freq: 1000, EQ2_1_Amp: 12, EQ2_1_Slope: 1 }],
     ["phaser", "phaser", { Ph_On: 1, Ph_Feedback: 0.8 }],
     ["flanger", "flanger", { Fl_On: 1, Fl_Feedback: 0.9 }],
     ["utility", "utility", { Ut_On: 1, Ut_Pan: 0.5, Ut_Gain: -6 }],
@@ -54,6 +54,17 @@ for (const [name, value, sets] of kinds)
         }
     check (finite && peak > 1e-3 && peak < 16 && last < l.length - 1,
            `${name.padEnd (11)} in each voice: peak ${peak.toFixed (3)}, silent after ${(last / rate).toFixed (2)} s`);
+}
+
+// the lane's EQ runs in the voices: a 12 dB bell at 1 kHz lifts a saw's harmonic there (C3's
+// 8th, 1046.5 Hz) by most of that, and leaves its fundamental
+{
+    const eq = { VL_1: entry ("eq", 2), EQ2_On: 1, EQ2_1_Type: 1, EQ2_1_Freq: 1046.5, EQ2_1_Amp: 12, EQ2_1_Slope: 1 };
+    const [x] = play ([[0, 48, 1]], eq, 1);
+    const [dry] = play ([[0, 48, 1]], {}, 1);
+    const lift = at (x, 1046.5, 0.3) - at (dry, 1046.5, 0.3);
+    const low = at (x, 130.8, 0.3) - at (dry, 130.8, 0.3);
+    check (lift > 9 && Math.abs (low) < 1, `EQ in each voice: 1 kHz harmonic ${lift.toFixed (1)} dB, fundamental ${low.toFixed (1)} dB`);
 }
 
 // the shifter follows the key: half the note up moves 220 Hz to 330 and 440 Hz to 660

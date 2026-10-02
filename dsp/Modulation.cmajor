@@ -580,7 +580,7 @@ namespace porridge
 
         let shape = int (P.at (lfoSlot::shape.at (which)));
 
-        if (shape == 4 || shape == 5)
+        if (shape == lfoShape::smoothRandom || shape == lfoShape::steppingRandom)
         {
             if (old > this.phase)
             {
@@ -588,7 +588,7 @@ namespace porridge
                 this.curR = float (rng.next()) / 32768.0f;
             }
 
-            if (shape == 5)
+            if (shape == lfoShape::steppingRandom)
                 return this.curR;
 
             return float (float64 (this.prevR) + float64 (this.curR - this.prevR) * float64 (ph) * (1.0 / two32));
@@ -597,7 +597,7 @@ namespace porridge
         // A table's last interval interpolates towards the wrap guard (T[32768] = T[0], or the
         // user shape's (i+1)&511), i.e. back to the start of the cycle. A one-shot never wraps,
         // so it reads no further than the start of that interval: it ends on the last real value.
-        if (shape == 6)
+        if (shape == lfoShape::user)
         {
             let p6 = oneShot ? min (ph, 0xff800000i64) : ph;
             let i = int (p6 >> 23);
