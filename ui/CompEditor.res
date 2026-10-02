@@ -193,7 +193,6 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
   // the compress amount
 
   let right = Panel.make(body, ~title="compress", ~x=w - rightW, ~y=0., ~w=rightW, ~h=topH)
-  right->Panel.headerToggle(ctx, FxRack.switchId(e), ~label="on")
   let size = Math.min(rightW - 40., topH - 25. - 3. * Grid.rowHeight - 30.)
   let knobBox: box = {x: (rightW - size) / 2., y: 30., w: size, h: size}
   let knob = Plots.svg(right.el, knobBox)

@@ -46,7 +46,6 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
   // the shape over time
 
   let panel = Panel.make(body, ~title="sound", ~x=0., ~y=0., ~w, ~h=topHeight)
-  panel->Panel.headerToggle(ctx, id("R_On"), ~label="on")
   let g = FxGraph.inPanel(ctx, panel, ~hint)
   let (left, right) = (16., g.w - 16.)
   let axisHeight = 14.

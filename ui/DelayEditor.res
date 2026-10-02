@@ -24,7 +24,6 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
   // echoes
 
   let panel = Panel.make(body, ~title="echoes", ~x=0., ~y=0., ~w, ~h=topHeight)
-  panel->Panel.headerToggle(ctx, id("D_On"), ~label="on")
   let g = FxGraph.inPanel(ctx, panel, ~hint)
   let (left, right) = (laneLabel + 10., g.w - 10.)
   let axisHeight = 14.
