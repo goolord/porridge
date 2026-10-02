@@ -118,16 +118,24 @@ let css = `
 .ptab { background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge); }
 .ptab:hover { color: var(--ink); background: var(--panel-hi); }
 .ptab.on { color: var(--paper); background: var(--signal); }
+/* a tab whose feature is in use (Panel.mark) */
+.ptab.used::after { content: ""; display: inline-block; width: 5px; height: 5px; margin-left: 5px; border-radius: 50%;
+    background: var(--signal); vertical-align: 2px; }
+.ptab.on.used::after { background: var(--paper); }
 .pbody { position: absolute; inset: 0; display: none; }
 .pbody.on { display: block; }
-.pbody.cover { background: var(--panel); z-index: 1; border-radius: inherit; }
-.blk:has(> .pbody.cover.on) > .ptabs { z-index: 2; }
-.blk.responding > :not(.pbody):not(.ptabs) { visibility: hidden; }
+/* a panel the synth page's flow just opened */
+@keyframes pflash { from { box-shadow: 0 0 0 3px var(--signal); } to { box-shadow: 0 0 0 3px transparent; } }
+.blk.flash { animation: pflash 0.8s ease-out; }
 .blk > .hdr, .pbody > .hdr { position: absolute; right: 6px; top: 1px; width: 40px; height: 18px; }
 
-/* the FX page: a tab per effect in the order they run (the rack's are dragged sideways), and a
-   page per tab */
-.fxstrip { position: absolute; display: flex; align-items: center; gap: 3px; }
+/* the FX page: the strip is the signal path, per-voice (tinted) then the whole sound, with a tab
+   per effect; an effect that is off shrinks to its icon, and so do the closed ones while the
+   strip is full. A page per tab. */
+.fxstrip { position: absolute; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.fxzone { display: flex; align-items: center; gap: 3px; height: 26px; padding: 0 3px 0 4px; border-radius: 3px; }
+.fxzone.voice { background: rgba(${signalRgb}, 0.14); box-shadow: inset 0 0 0 1px rgba(${signalRgb}, 0.4); }
+.fxgrp { font-size: 11px; font-weight: 700; color: var(--paper); opacity: 0.85; padding: 0 3px 0 2px; }
 .fxtab {
     position: relative; display: flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 2px;
     font-size: 13px; font-weight: 700; white-space: nowrap; color: var(--ink-soft); cursor: pointer;
@@ -135,109 +143,96 @@ let css = `
 }
 .fxtab:hover { color: var(--ink); background: var(--panel-hi); }
 .fxtab.on { color: var(--paper); background: var(--signal); box-shadow: none; }
-.fxtab .led { width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--ink-faint); }
+.fxtab .led { width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--ink-faint);
+    cursor: pointer; position: relative; flex: none; }
+.fxtab .led::after { content: ""; position: absolute; inset: -5px; }
+.fxtab .led:hover { box-shadow: 0 0 0 2px var(--panel-hi), 0 0 0 3px var(--ink-soft); }
 .fxtab .led.lit { background: var(--signal); border-color: var(--signal); }
-.fxtab .led, .card .led { cursor: pointer; position: relative; }
-.fxtab .led::after, .card .led::after { content: ""; position: absolute; inset: -5px; }
-.fxtab .led:hover, .card .led:hover { box-shadow: 0 0 0 2px var(--panel-hi), 0 0 0 3px var(--ink-soft); }
 .fxtab.on .led { border-color: var(--paper); }
 .fxtab.on .led.lit { background: var(--paper); }
+.fxtab .fxic { display: none; }
 .fxtab .x { font-weight: 400; font-size: 14px; margin: 0 -4px 0 1px; opacity: 0; }
 .fxtab:hover .x { opacity: 0.6; }
 .fxtab .x:hover { opacity: 1; }
+.fxtab.idle:not(.on) { background: transparent; box-shadow: inset 0 0 0 1px var(--tile-edge); color: var(--ink-faint); }
+.fxtab.idle:not(.on):hover { background: var(--panel-hi); color: var(--ink-soft); }
+.fxtab.idle:not(.on), .fxstrip.tight .fxtab:not(.on):not(.add) { padding: 0 6px; }
+.fxtab.idle:not(.on) .fxic, .fxstrip.tight .fxtab:not(.on) .fxic { display: block; }
+.fxtab.idle:not(.on) .fxname, .fxstrip.tight .fxtab:not(.on) .fxname,
+.fxtab.idle:not(.on) .x, .fxstrip.tight .fxtab:not(.on) .x { display: none; }
+/* Oatmeal's distortion's second place, when it is "double" */
+.fxtab.echo { background: transparent; box-shadow: none; border: 1px dashed var(--edge); height: 20px; }
+.fxtab.echo.on { background: var(--signal); border-color: var(--signal); }
 .fxtab.add { padding: 0 8px; font-size: 15px; background: transparent; box-shadow: none; border: 1.5px dashed var(--edge); height: 19px; }
 .fxtab.add:hover { background: var(--panel-hi); }
-.fxtab.drag { z-index: 2; cursor: grabbing; color: var(--paper); background: var(--signal); }
-.fxtab.drop-before, .card.drop-before { box-shadow: inset 0 0 0 1px var(--edge), -4px 0 0 var(--signal); }
-.fxtab.drop-after, .card.drop-after { box-shadow: inset 0 0 0 1px var(--edge), 4px 0 0 var(--signal); }
+.fxtab.drag, .fxnode.drag { z-index: 2; cursor: grabbing; color: var(--paper); background: var(--signal); }
+/* the filter and the amp envelope, among the per-voice effects */
+.fxnode { height: 20px; line-height: 20px; padding: 0 7px; border-radius: 10px; font-size: 12px; color: var(--ink-soft);
+    background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge); cursor: grab; }
+.fxnode:hover { color: var(--ink); background: var(--panel-hi); }
+.fxtab.drop-before, .fxnode.drop-before { box-shadow: inset 0 0 0 1px var(--edge), -4px 0 0 var(--signal); }
+.fxtab.drop-after, .fxnode.drop-after, .fxgrp.drop-after { box-shadow: inset 0 0 0 1px var(--edge), 4px 0 0 var(--signal); }
 .fxsep { font-weight: 700; color: var(--paper); font-size: 15px; }
-.fxgap { width: 10px; }
+.fxsep.into { font-size: 18px; }
+.fxsep.out { font-size: 13px; }
 .fxbody { position: absolute; display: none; }
 .fxbody.on { display: block; }
 
-/* the routing tab: nodes, the distortion's places, and the rack's cards */
-.flowsvg { left: 0; top: 0; pointer-events: none; }
-.fnode, .fslot {
-    position: absolute; box-sizing: border-box; border-radius: 2px; font-size: 13px; text-align: center;
-    line-height: 28px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+/* per-voice: what each voice runs its own of */
+.pervoice { background: repeating-linear-gradient(135deg, rgba(28,60,115,0.14) 0 5px, rgba(28,60,115,0.05) 5px 10px);
+    box-shadow: inset 0 0 0 1px rgba(28,60,115,0.4); }
+/* the synth page's flow: the voice's nodes in the order it runs them, then the whole sound's */
+.blk.flow { display: flex; align-items: center; gap: 6px; padding: 0 3px; }
+.fvoice { display: flex; align-items: center; gap: 4px; height: 24px; padding: 0 3px; border-radius: 2px; min-width: 0; flex: 0 1 auto; }
+.fwhole { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 1 1 0; }
+.fgrp { font-size: 10.5px; font-weight: 700; color: var(--signal); white-space: nowrap; padding: 0 2px; }
+.fnd {
+    position: relative; flex: 0 1 auto; min-width: 24px; height: 20px; line-height: 20px; padding: 0 7px; box-sizing: border-box;
+    border-radius: 2px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+    background: var(--paper); box-shadow: inset 0 0 0 1px var(--edge); color: var(--ink);
 }
-.fnode { background: var(--paper); border: 1px solid var(--edge); color: var(--ink); }
-.fnode.out { line-height: normal; text-align: left; background: var(--tile); }
-.fnode.end { background: transparent; border: none; font-weight: 700; text-align: left; padding-left: 4px; }
-.fnode .olabel { position: absolute; left: 7px; top: 3px; font-weight: 700; font-size: 13px; }
-.fslot { border: 1.5px dashed var(--edge); color: var(--ink-faint); cursor: pointer; }
-.fslot:hover { background: var(--panel-hi); }
-.fslot:empty::after { content: "distortion here?"; opacity: 0; }
-.fslot:empty:hover::after { opacity: 1; }
-.fslot.on { border: 1px solid var(--signal); background: var(--signal); color: var(--paper); font-weight: 700; }
-.fslot.idle { border-style: solid; color: var(--ink-soft); }
-.card {
-    position: absolute; box-sizing: border-box; border-radius: 3px; background: var(--tile);
-    box-shadow: inset 0 0 0 1px var(--edge);
-}
-.card.drag { z-index: 3; box-shadow: inset 0 0 0 1.5px var(--signal), 3px 3px 0 rgba(31,26,14,0.25); background: var(--panel-hi); }
-.card .chead {
-    position: absolute; left: 0; right: 0; top: 0; height: 26px; display: flex; align-items: center; gap: 6px;
-    padding: 0 6px; box-sizing: border-box; cursor: grab; border-bottom: 1px solid var(--tile-edge);
-}
-.card .chead:hover { background: var(--panel-hi); }
-.card .ctitle { flex: 1; font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.card .led { flex: none; width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--ink-faint); }
-.card .led.lit { background: var(--signal); border-color: var(--signal); }
-.card .cx { font-weight: 400; font-size: 15px; color: var(--ink-faint); cursor: pointer; }
-.card .cx:hover { color: var(--ink); }
-.card .cctl { position: absolute; left: 6px; right: 6px; top: 32px; height: 56px; }
-.card .csum { position: absolute; left: 7px; right: 6px; top: 92px; font-size: 11.5px; line-height: 1.4;
-    color: var(--ink-soft); white-space: pre-line; overflow: hidden; }
-.card.off .csum { opacity: 0.55; }
-.card.compact .cctl { display: none; }
-.card.compact .csum { top: 34px; }
-/* a voice lane card: one line, a light, the name and × */
-.lcard {
-    position: absolute; box-sizing: border-box; border-radius: 3px; background: var(--tile);
-    box-shadow: inset 0 0 0 1px var(--signal); display: flex; align-items: center; gap: 6px; padding: 0 6px;
-    cursor: grab; font-size: 13px;
-}
-.lcard:hover { background: var(--panel-hi); }
-.lcard .ctitle { flex: 1; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lcard .led { flex: none; width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--ink-faint);
+.fnd:hover { background: var(--panel-hi); }
+.fnd.grab { cursor: grab; }
+.fnd.lane { display: flex; align-items: center; gap: 5px; background: var(--tile); box-shadow: inset 0 0 0 1px var(--signal); font-weight: 700; }
+.fnd.lane > span { overflow: hidden; text-overflow: ellipsis; }
+.fnd.lane.off > span { opacity: 0.55; }
+.fnd .led { flex: none; width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--ink-faint);
     cursor: pointer; position: relative; }
-.lcard .led::after { content: ""; position: absolute; inset: -5px; }
-.lcard .led.lit { background: var(--signal); border-color: var(--signal); }
-.lcard .cx { font-weight: 400; font-size: 15px; color: var(--ink-faint); cursor: pointer; }
-.lcard .cx:hover { color: var(--ink); }
-.lcard.off .ctitle { opacity: 0.55; }
-.lcard.drag, .fnode.drag { z-index: 3; box-shadow: inset 0 0 0 1.5px var(--signal), 3px 3px 0 rgba(31,26,14,0.25); background: var(--panel-hi); }
-.lcard.drop-before, .fnode.drop-before { box-shadow: inset 0 0 0 1px var(--edge), -4px 0 0 var(--signal); }
-.lcard.drop-after, .fnode.drop-after { box-shadow: inset 0 0 0 1px var(--edge), 4px 0 0 var(--signal); }
-.fnode.grab { cursor: grab; }
-/* the synth page's voice fx tab: a row per effect, and the filter's and amp's */
-.vrow { position: absolute; box-sizing: border-box; height: ${px(controlHeight)}; border-radius: 2px; }
-.vrow .vname { position: absolute; left: 0; top: 0; bottom: 0; width: 40%; box-sizing: border-box; padding-left: 22px;
-    line-height: ${px(controlHeight)}; font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; cursor: grab; }
-.vrow.node { background: var(--paper); box-shadow: inset 0 0 0 1px var(--edge); }
-.vrow.node .vname { width: 100%; padding-left: 10px; font-weight: 400; }
-.vrow.fx { background: var(--tile); box-shadow: inset 0 0 0 1px var(--signal); }
-.vrow.fx .vname:hover, .vrow.node .vname:hover { background: var(--panel-hi); }
-.vrow .led { position: absolute; left: 8px; top: 9px; width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box;
-    border: 1.5px solid var(--ink-faint); cursor: pointer; z-index: 1; }
-.vrow .led.lit { background: var(--signal); border-color: var(--signal); }
-.vrow .vx { position: absolute; right: 6px; top: 0; line-height: ${px(controlHeight)}; font-weight: 400; font-size: 15px;
-    color: var(--ink-faint); cursor: pointer; }
-.vrow .vx:hover { color: var(--ink); }
-.vrow.off .vname { opacity: 0.55; }
-.vrow.drag { z-index: 3; box-shadow: inset 0 0 0 1.5px var(--signal), 3px 3px 0 rgba(31,26,14,0.25); }
-.vrow.drop-before { box-shadow: inset 0 0 0 1px var(--edge), 0 -3px 0 var(--signal); }
-.vrow.drop-after { box-shadow: inset 0 0 0 1px var(--edge), 0 3px 0 var(--signal); }
-.addrow.vadd { height: ${px(controlHeight)}; }
-/* the FX page's strip: which tabs are per-voice, which on the whole sound */
-.fxgrp { font-size: 11px; font-weight: 700; color: var(--paper); opacity: 0.8; white-space: nowrap; padding: 0 2px; }
-.addcard {
-    position: absolute; box-sizing: border-box; border: 1.5px dashed var(--edge); border-radius: 3px;
-    display: flex; align-items: center; justify-content: center; font-size: 20px; color: var(--ink-soft); cursor: pointer;
+.fnd .led::after { content: ""; position: absolute; inset: -5px; }
+.fnd .led.lit { background: var(--signal); border-color: var(--signal); }
+.fnd .x { font-weight: 400; font-size: 14px; color: var(--ink-faint); margin-right: -3px; display: none; }
+.fnd:hover .x { display: inline; }
+.fnd .x:hover { color: var(--ink); }
+.fnd.dist { box-shadow: inset 0 0 0 1px var(--signal); }
+.fnd.add { flex: none; background: transparent; box-shadow: none; border: 1.5px dashed var(--edge); font-size: 14px; line-height: 17px; }
+.fnd.fx { flex: 0 1 auto; }
+.fnd.fx.off { color: var(--ink-faint); }
+.fnd.drag { z-index: 3; cursor: grabbing; box-shadow: inset 0 0 0 1.5px var(--signal), 3px 3px 0 rgba(31,26,14,0.25); }
+.fnd.drop-before { box-shadow: inset 0 0 0 1px var(--edge), inset 3px 0 0 var(--signal); }
+.fnd.drop-after { box-shadow: inset 0 0 0 1px var(--edge), inset -3px 0 0 var(--signal); }
+.fsep { flex: none; font-size: 13px; color: var(--ink-soft); }
+.fsep.big { font-size: 16px; font-weight: 700; color: var(--ink); padding: 0 2px; }
+/* a source's destinations (Destinations): a chip per route in its colour, + for another */
+.dests { position: absolute; display: flex; flex-direction: column; gap: 3px; overflow-x: hidden; overflow-y: auto; }
+.dchip {
+    position: relative; flex: none; height: 22px; box-sizing: border-box; border-radius: 2px; padding: 0 19px 0 12px;
+    display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: ew-resize;
+    background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge);
 }
-.addcard:hover { background: var(--panel-hi); color: var(--ink); }
+.dchip:hover, .dchip.drag { background: var(--panel-hi); box-shadow: inset 0 0 0 1px var(--edge); }
+.dchip .sw { position: absolute; left: 4px; top: 4px; bottom: 4px; width: 4px; border-radius: 2px; }
+.dchip .dl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dchip .dv { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dchip .dt { position: absolute; left: 12px; right: 19px; bottom: 1px; height: 2px; background: rgba(31,26,14,0.12); }
+.dchip .dt i { position: absolute; top: 0; bottom: 0; }
+.dchip .dx { position: absolute; right: 6px; top: 0; line-height: 22px; font-weight: 400; font-size: 14px; color: var(--ink-faint); cursor: pointer; }
+.dchip .dx:hover { color: var(--ink); }
+.dchip.zero .dl, .dchip.zero .dv { opacity: 0.55; }
+.dchip.add { cursor: pointer; justify-content: center; padding: 0; background: transparent; box-shadow: none;
+    border: 1.5px dashed var(--edge); color: var(--ink-soft); }
+.dchip.add:hover { background: var(--panel-hi); color: var(--ink); }
+.dchip.add b { font-size: 15px; }
+.dchip:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
 .plot path.flow { fill: none; stroke: var(--ink-soft); stroke-width: 1.5; }
 .plot path.flowhead { fill: none; stroke: var(--ink-soft); stroke-width: 1.5; stroke-linejoin: round; }
 
@@ -386,11 +381,13 @@ let css = `
 .plot path.fill { fill: var(--signal-soft); stroke: none; }
 .plot path.axis, .plot line.axis { stroke: rgba(31,26,14,0.28); stroke-width: 1; fill: none; }
 .plot.off { opacity: 0.4; }
-.plot.mini { cursor: pointer; }
+/* an oscillator's wave beside its row: click to draw */
+.plot.thumb { cursor: pointer; }
+.plot.thumb:hover rect.bg { stroke: var(--signal); }
+.plot.thumb path.pencil { fill: var(--ink-faint); }
+.plot.thumb:hover path.pencil { fill: var(--signal); }
 .plot path.curve.depth { stroke: var(--mod); stroke-width: 1.2; stroke-dasharray: 4 3; }
 .plot text.tick.depth { fill: var(--mod); }
-.plot.mini line.mark { stroke-dasharray: 2 2; stroke-width: 1; }
-.plot.mini:hover rect.bg { stroke: var(--signal); }
 .plot rect.bg { fill: rgba(236, 227, 196, 0.35); stroke: var(--edge); stroke-width: 1; }
 .plot path.curve.faint { stroke-width: 1; stroke-dasharray: 3 2; opacity: 0.7; }
 .plot path.curve.dim { stroke-width: 1; opacity: 0.45; }
@@ -481,22 +478,40 @@ let css = `
 .pv-head .spacer { flex: 1; }
 .pv-head .prog { display: flex; align-items: center; gap: 3px; min-width: 0; }
 .pv-head .prog .name {
-    width: 200px; min-width: 0; height: 20px; line-height: 20px; padding: 0 6px; border: 1px solid var(--edge); background: var(--paper);
-    font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    width: 230px; min-width: 0; height: 20px; line-height: 20px; padding: 0 4px 0 6px; border: 1px solid var(--edge); background: var(--paper);
+    font-size: 13px; cursor: pointer; white-space: nowrap; display: flex; align-items: center; gap: 4px;
 }
-.pv-head .prog .btn { width: 22px; padding: 0; }
+.pv-head .prog .name > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+/* the pencil that renames, on hover, and the arrow that says the name opens a list */
+.pv-head .prog .name .pen { visibility: hidden; color: var(--ink-soft); font-size: 12px; padding: 0 2px; border-radius: 2px; }
+.pv-head .prog .name:hover .pen { visibility: visible; }
+.pv-head .prog .name .pen:hover { background: var(--signal); color: var(--paper); }
+.pv-head .prog .name .arrow { color: var(--ink-faint); font-size: 10px; }
+.pv-head .prog .btn { width: 22px; padding: 0; font-size: 15px; line-height: 17px; }
 .pv-head .btn.icon { width: 26px; padding: 0; font-size: 15px; line-height: 19px; }
 .pv-head .btn.icon .ic { height: 15px; margin: auto; }
+.pv-head .btn.menu-btn { font-size: 17px; line-height: 18px; }
+.pv-head .btn.panic { width: 22px; color: #8a2a1a; }
+.pv-head .btn.panic .ic { height: 13px; }
+.pv-head .btn.panic:active { color: var(--paper); }
 
 /* status line: hover texts, or a hint for the page */
 .pv-status {
-    position: absolute; left: 0; right: 0; bottom: 0; height: ${px(statusHeight)};
+    position: absolute; left: 0; right: 0; bottom: 0; height: ${px(statusHeight)}; z-index: 35;
     padding: 0 8px; box-sizing: border-box; line-height: ${px(statusHeight)};
     background: var(--panel); border-top: 1px solid var(--edge);
     font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .pv-status.idle { color: var(--ink-faint); font-size: 12px; }
 .pv-status { padding-right: 120px; }
+/* a text too long for a line: a little smaller, or two lines, growing up over the pages' bottom
+   margin (it ends in an ellipsis only past that; hovering the bar shows the rest) */
+.pv-status.small { font-size: 11.5px; }
+.pv-status.two {
+    height: auto; min-height: ${px(statusHeight)}; padding-top: 1px; padding-bottom: 1px; line-height: 12px; font-size: 11.5px;
+    white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+}
+.pv-status.two:hover { -webkit-line-clamp: unset; }
 
 /* the source tray: its switch at the end of the status line, and the chips over the page's bottom */
 .mtoggle { position: absolute; right: 6px; bottom: 3px; height: ${px(statusHeight - 6.)}; z-index: 41; box-sizing: border-box;
@@ -531,6 +546,13 @@ let css = `
 .menu div.mh { padding: 4px 12px 1px 10px; font-size: 11px; color: var(--ink-faint); cursor: default;
     text-transform: uppercase; letter-spacing: 0.06em; }
 .menu div.mh:hover { background: none; color: var(--ink-faint); }
+.menu hr { border: none; border-top: 1px solid var(--tile-edge); margin: 3px 0; }
+.menu.rich div { display: flex; align-items: center; }
+.menu .ck { width: 14px; flex: none; font-size: 11px; }
+.menu .keys { margin-left: auto; padding-left: 24px; font-size: 11px; color: var(--ink-faint); }
+.menu div:hover .keys { color: var(--paper); }
+.menu div.off { color: var(--ink-faint); cursor: default; }
+.menu div.off:hover { background: none; color: var(--ink-faint); }
 .menu.icons div { display: flex; align-items: center; }
 .menu.icons .icw { width: 38px; flex: none; }
 
@@ -544,7 +566,6 @@ let css = `
 .icw { display: inline-flex; align-items: center; gap: 2px; vertical-align: middle; }
 .hq { font-size: 7.5px; font-weight: 700; line-height: 9px; padding: 0 2px; border-radius: 2px;
     background: var(--signal); color: var(--paper); letter-spacing: 0.03em; }
-.menu div:hover .hq { background: var(--paper); color: var(--signal); }
 .hq.plotbadge { position: absolute; font-size: 9px; line-height: 12px; padding: 0 3px; cursor: help; }
 .hq.plotbadge.hidden { display: none; }
 .p .v.withicon { display: flex; align-items: center; gap: 2px; top: 9px; max-width: calc(100% - 6px); }
@@ -681,6 +702,30 @@ let css = `
 .mempty .big { font-size: 17px; font-weight: 700; color: var(--ink); margin-bottom: 6px; }
 .msw { display: block; width: 12px; height: 12px; border-radius: 50%; }
 .menu.icons .icw:has(.msw) { width: 20px; }
+
+/* the shapes editor, over the pages */
+.pv-overlay { position: absolute; left: 0; right: 0; top: ${px(headerHeight)}; bottom: ${px(statusHeight)}; z-index: 30;
+    display: none; background: var(--ground); }
+.pv-overlay.on { display: block; }
+.pv-overlay .xclose { right: 6px; top: 2px; height: 18px; line-height: 16px; font-size: 12px; z-index: 2; }
+
+/* the play page: target slots shown as rows (SlotRows), with their "+" button; the controllers'
+   list; what a macro moves; a tab whose settings aren't Init's */
+.srow { position: absolute; left: 0; top: 0; }
+.slist { position: absolute; overflow-x: hidden; overflow-y: auto; }
+.slist::-webkit-scrollbar { width: 6px; }
+.slist::-webkit-scrollbar-thumb { background: rgba(111,95,54,0.45); border-radius: 3px; }
+.slist::-webkit-scrollbar-track { background: transparent; }
+.btn.add { background: transparent; border: 1.5px dashed var(--edge); color: var(--ink-soft); text-align: left; padding: 0 8px;
+    height: ${px(controlHeight)}; line-height: ${px(controlHeight - 3.)}; font-size: 12.5px; white-space: nowrap; }
+.btn.add:hover { background: var(--panel-hi); color: var(--ink); border-color: var(--ink); }
+.btn.add.off { opacity: 0.4; pointer-events: none; }
+.mdest { position: absolute; height: 14px; font-size: 11px; line-height: 14px; color: var(--ink-soft); cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mdest.none { color: var(--ink-faint); }
+.mdest:hover { color: var(--signal); }
+.ptab.mark::after { content: ""; display: inline-block; width: 5px; height: 5px; margin-left: 4px; vertical-align: 2px;
+    border-radius: 50%; background: var(--mod); }
 
 /* dialogs */
 .shade { position: absolute; inset: 0; z-index: 80; background: rgba(31,26,14,0.35); display: flex; align-items: center; justify-content: center; }

@@ -262,7 +262,7 @@ let build = (ctx: Ctx.t, page) => {
   let eachHeading = heading("per-voice", "Sources each voice has its own of: on something in the voice, every voice moves it its own way")
   let sharedHeading = heading("shared", "Sources every note shares (an LFO is here while its mode is shared)")
   let macroHeading = heading("macros", "Knobs to turn, automate or map: shared by every note")
-  let ccHeading = heading("controllers", "The MIDI page's assignable controllers: shared by every note")
+  let ccHeading = heading("controllers", "The Play page's assignable controllers: shared by every note")
 
   // the groups, laid out again when an LFO's mode, the touch mode or MPE moves a source between them
   let c3 = Grid.fitColumns(sourcesWidth, sourceColumns)

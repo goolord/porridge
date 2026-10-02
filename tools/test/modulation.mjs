@@ -1,7 +1,8 @@
 // The modulation matrix's later features: a connection's hold (latched at note-on), slew and
 // curve, the later sources (LFO 3, interval, alternate, cycle, voice level, wander, glide, held
 // notes), the later slots (17..32), and which note a per-note source follows on the whole sound
-// (MM_Follow). Renders a plain sine voice through the test host and measures its level.
+// (MM_Follow), and MPE mode's controller timing. Renders a plain sine voice through the test host
+// and measures its level.
 //
 //   node tools/test/modulation.mjs
 //
@@ -12,7 +13,7 @@ import { join } from "node:path";
 import * as ModMatrix from "../../ui/ModMatrix.res.mjs";
 import * as PorridgeParams from "../../ui/PorridgeParams.res.mjs";
 import * as Preset from "../../ui/Preset.res.mjs";
-import { root, outDir, render, player, rms as rmsOf, checker } from "./lib.mjs";
+import { root, outDir, render, player, rms as rmsOf, levelAt, checker } from "./lib.mjs";
 
 const dir = outDir ("modulation");
 const init = join (root, "tools", "re", "init_prog.bin");
@@ -172,6 +173,56 @@ const lfo3 = { LFO_3_Mode: 2, LFO_3_Rate: hz (2) };
     check (target === tgt ("Cutoff") && new Set (positions.map (p => p.toFixed (3))).size === 3 && moved,
            `each note's own cutoff position: ${positions.map (p => p.toFixed (3))}, and moving`);
     check (cutoffs.every (c => c > 20 && c < 20000), `each note's cutoff in Hz: ${cutoffs.map (c => c.toFixed (0))}`);
+}
+
+// MPE mode: the controllers (bend, pressure, slide, CCs) apply once per block instead of splitting
+// it, the notes still on their own sample. midi: [frame, status, data 1, data 2] lines.
+const midi = (name, lines, sets, frames) =>
+{
+    const events = join (dir, `${name}.txt`);
+    writeFileSync (events, lines.map (e => e.join (" ")).join ("\n") + "\n");
+    return render ({ program: init, events, frames, rate, sets: { ...plain, ...sets }, out: join (dir, `${name}.f32`) });
+};
+const same = (a, b) => a.every ((x, c) => x.every ((v, i) => v === b[c][i]));
+
+// three notes on member channels 2-4, off the block grid, under a dense stream of controllers
+// that move nothing they reach (a centred bend; pressure, slide and poly pressure while touch is
+// ignored); with MPE on, the render is the notes' alone, sample for sample, and the same as with
+// MPE off, which places them on their own samples. Outside MPE the stream splits the blocks: the
+// per-voice LFO and filter envelope then step differently.
+{
+    const notes = [[1003, 0x91, 57, 100], [5011, 0x92, 64, 90], [9999, 0x93, 69, 110],
+                   [30017, 0x81, 57, 0], [31007, 0x82, 64, 0], [32023, 0x83, 69, 0]];
+    const stream = [];
+    for (let t = 5, i = 0; t < 40000; t += 16, ++i)
+        for (const ch of [1, 2, 3])
+            stream.push ([t + ch, 0xe0 + ch, 0, 64], [t + ch, 0xd0 + ch, (i * 7 + ch) % 128, 0],
+                         [t + ch + 3, 0xb0 + ch, 74, (i * 5) % 128], [t + 9, 0xa0 + ch, 57 + 7 * (ch - 1), (i * 3) % 128]);
+    const sets = { O1_Waveform: 1, Filter: 3, Cutoff: 0.3, F_EnvMod: 0.6, F_Decay1: 200, F_Sustain: 0.2, LFO_1_Pitch: 0.3, AftertouchMode: 0 };
+    const frames = 44100;
+    const streamed = midi ("mpe_stream", [...notes, ...stream], { ...sets, MPE_On: 1 }, frames);
+    const alone = midi ("mpe_notes", notes, { ...sets, MPE_On: 1 }, frames);
+    const offAlone = midi ("mpe_off_notes", notes, { ...sets, MPE_On: 0 }, frames);
+    const offStreamed = midi ("mpe_off_stream", [...notes, ...stream], { ...sets, MPE_On: 0 }, frames);
+    const onset = streamed[0].findIndex (x => x !== 0);
+    check (same (streamed, alone) && same (alone, offAlone) && onset >= 1003 && onset < 1003 + 8,
+           `MPE: a controller stream doesn't split the blocks, notes on their own sample (the first sounds at ${onset}, played at 1003)`);
+    check (! same (offStreamed, offAlone), "... outside MPE the same stream splits them (the render changes)");
+}
+
+// with MPE on, a note's bend, pressure and slide, and the master channel's mod wheel, still apply
+{
+    const on = [[0, 0x91, 69, 100], [40000, 0x81, 69, 0]];
+    const sets = { MPE_On: 1, MPE_BendRange: 48 };
+    const level = (name, lines, more) => rms (midi (name, [...on, ...lines], { ...sets, ...more }, 40000), 0.4, 0.9);
+    const plainLevel = level ("mpe_plain", [], {});
+    const bent = midi ("mpe_bend", [...on, [4410, 0xe1, 0, 80]], sets, 40000);     // +12 st of 48
+    const up = levelAt (bent[0], 880, 0.4, rate) - levelAt (bent[0], 440, 0.4, rate);
+    const touch = level ("mpe_pressure", [[4410, 0xd1, 127, 0]], { AftertouchMode: 1, ...conn (1, "aftertouch", "volume", -0.5) }) / plainLevel;
+    const slide = level ("mpe_slide", [[4410, 0xb1, 74, 127]], conn (1, "slide", "volume", -0.5)) / plainLevel;
+    const wheel = level ("mpe_wheel", [[4410, 0xb0, 1, 127]], conn (1, "modWheel", "volume", -0.5)) / plainLevel;
+    check (up > 40 && near (touch, 0.5, 0.01) && near (slide, 0.5, 0.01) && near (wheel, 0.5, 0.01),
+           `MPE: note bend an octave up (880 Hz ${up.toFixed (1)} dB over 440 Hz), note pressure ${f (touch)}, slide ${f (slide)}, mod wheel ${f (wheel)} (0.5)`);
 }
 
 // a preset keeps a connection's options, in a later slot too

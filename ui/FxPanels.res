@@ -1,8 +1,8 @@
 // The tabs of Porridge's own rack effects (flanger, phaser, algo reverb, convolve, bode,
 // filter, utility, ambience, air; the compressor has CompEditor) and the voice lane's shifter,
 // resonator and octaver: their controls in panels across the top, and below them a graph of
-// what the effect does with these settings. Also each one's controls and summary on the
-// routing tab's card.
+// what the effect does with these settings. Also each one's level and summary, for the strip's
+// hover texts and the synth page.
 //
 // The graphs follow dsp/FxExtra.cmajor, dsp/Space.cmajor, dsp/Convolve.cmajor and
 // dsp/Filter.cmajor closely enough to show what the knobs do; they are not measurements. The
@@ -50,7 +50,7 @@ let drawFlanger = (p: FxGraph.plot, get: string => float) => {
   FxGraph.note(
     p,
     `the comb at both ends of the sweep: ${Float.toFixed(dMin, ~digits=2)} ms (bright) to ${Float.toFixed(dMax, ~digits=2)} ms (dim), ${Float.toFixed(expValue(0.02, 20., get("Fl_Rate")), ~digits=2)} Hz` ++ (
-      track > 0. ? `; at middle C, the delay following each voice's note (at 3.82 ms it rings on the note)` : ""
+      track > 0. ? `; at middle C, the delay following the note (at 3.82 ms it rings on the note)` : ""
     ),
   )
 }
@@ -140,7 +140,8 @@ let drawSpace = (p: FxGraph.plot, get: string => float) => {
     (xOf(t), FxGraph.yOf(p, level(t), lo - 4., hi))
   })
   FxGraph.path(p.layer, ~cls="curve")->FxGraph.setPath(Plots.pathFrom(points))
-  FxGraph.note(p, `${reverbModelText(model)}; decays 60 dB in ${PorridgeParams.secondsText(decay)}`)
+  // (top right, clear of the tail, which starts at the top left)
+  FxGraph.note(p, ~x=p.right - 6., ~anchor="end", `${reverbModelText(model)}; decays 60 dB in ${PorridgeParams.secondsText(decay)}`)
 }
 
 //==============================================================================
@@ -391,7 +392,6 @@ let drawScene = (s, get: string => float, time: float) => {
     sceneCircle(s, ~cls="source", sx, sy, 5., ~opacity=1.)
     listeners(lx, ly, rh * 0.18)
   }
-  sceneText(s, ~cls="tick", 6., sh - 6., reverbModelText(model))
   ScenePool.finish(s.layer)
 }
 
@@ -725,8 +725,9 @@ let drawUtility = (p: FxGraph.plot, get: string => float) => {
     let (x, y) = at(v)
     FxGraph.line(p.layer, ~cls="grid", cxp, cyp, x, y)
   })
-  FxGraph.text(p.layer, ~anchor="middle", Pair.first(at((1., 0.))) - 10., Pair.second(at((1., 0.))) - 4., "L")
-  FxGraph.text(p.layer, ~anchor="middle", Pair.first(at((0., 1.))) + 10., Pair.second(at((0., 1.))) - 4., "R")
+  // (below the axes' ends, where the sounds' labels, above their dots, can't cover them)
+  FxGraph.text(p.layer, ~anchor="middle", Pair.first(at((1., 0.))), Pair.second(at((1., 0.))) + 16., "L")
+  FxGraph.text(p.layer, ~anchor="middle", Pair.first(at((0., 1.))), Pair.second(at((0., 1.))) + 16., "R")
   let (ll, lr, rl, rr) = utilityMatrix(get)
   [("left", 1., 0.), ("centre", 1., 1.), ("right", 0., 1.)]->Array.forEach(((label, l, rin)) => {
     let out = (ll * l + rl * rin, lr * l + rr * rin)
@@ -978,6 +979,18 @@ let sections = (k: FxRack.kind) =>
   | _ => []
   }
 
+// Controls that do something only per-voice (each note's random start) or only on the whole
+// sound (bass mono, which the voices' utility leaves out), shown only there.
+let perVoiceOnly = ["Ph_PhaseRand", "Fl_PhaseRand"]
+let wholeSoundOnly = ["Ut_BassMono"]
+let shows = (item, ~perVoice) =>
+  switch item {
+  | Knob(p, _) | List(p, _) | Switch(p, _) =>
+    let elsewhere = perVoice ? wholeSoundOnly : perVoiceOnly
+    !(elsewhere->Array.includes(p))
+  | Button(_) => true
+  }
+
 let graphTitle = (k: FxRack.kind) =>
   switch k {
   | #flanger | #phaser => "response"
@@ -996,11 +1009,17 @@ let graphTitle = (k: FxRack.kind) =>
 //==============================================================================
 // the tab
 
-let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
+// perVoice: whether it is in the voice lane (or the rack).
+let make = (ctx: Ctx.t, body, e: FxRack.effect, ~perVoice, ~w, ~h) => {
   let id = FxRack.id(e, ...)
   let model = ctx.model
   let get = x => model->ParamModel.get(id(x))
-  let secs = sections(e.kind)
+  let secs = sections(e.kind)->Array.filterMap(s =>
+    switch s.rows->Array.map(row => row->Array.filter(shows(_, ~perVoice)))->Array.filter(row => row != []) {
+    | [] => None
+    | rows => Some({...s, rows})
+    }
+  )
   let gap = Grid.gap
   let cols = s => s.rows->Array.reduce(1, (n, row) => Math.Int.max(n, Array.length(row)))
   let totalCols = secs->Array.reduce(0, (n, s) => n + cols(s))
@@ -1014,9 +1033,6 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
     let last = i == Array.length(secs) - 1
     let pw = last ? w - x.contents : Int.toFloat(cols(s)) * cw + frame
     let panel = Panel.make(body, ~title=s.title, ~x=x.contents, ~y=0., ~w=pw, ~h=topH)
-    if i == 0 {
-      panel->Panel.headerToggle(ctx, FxRack.switchId(e), ~label="on")
-    }
     let g = Grid.make(ctx, panel.el, ~cw)
     s.rows->Array.forEachWithIndex((row, r) =>
       row->Array.forEachWithIndex((item, c) =>
@@ -1033,8 +1049,13 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
 
   let gy = topH + gap
   let gh = h - gy
-  // the algo reverb shows its space beside its tail, the ambience its impulse beside its tone
-  let sceneW = e.kind == #space || e.kind == #ambience ? Math.round(w * 0.46) : 0.
+  // the algo reverb shows its space beside its tail (a picture, so the smaller), the ambience its
+  // impulse beside its tone
+  let sceneW = switch e.kind {
+  | #space => Math.round(w * 0.3)
+  | #ambience => Math.round(w * 0.46)
+  | _ => 0.
+  }
   let graphX = sceneW > 0. ? sceneW + gap : 0.
   let panel = Panel.make(body, ~title=graphTitle(e.kind), ~x=graphX, ~y=gy, ~w=w - graphX, ~h=gh)
   let graphBox = {x: 8., y: 25., w: w - graphX - 18., h: gh - 35.}
@@ -1141,30 +1162,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
 }
 
 //==============================================================================
-// the routing tab's card: a switch, a level, and a summary
-
-// The switch's label, and the level with its label.
-let cardControls = (k: FxRack.kind) =>
-  switch k {
-  | #chorus => ("mode", Some(("C_Mix", "mix")))
-  | #delay => ("on", Some(("D_Wet", "wet")))
-  | #reverb => ("on", Some(("R_Wet", "wet")))
-  | #eq => ("on", None)
-  | #distortion => ("type", Some(("Sat_Postgain", "postgain")))
-  | #flanger => ("on", Some(("Fl_Mix", "mix")))
-  | #phaser => ("on", Some(("Ph_Mix", "mix")))
-  | #compressor => ("on", Some(("Cp_Depth", "depth")))
-  | #space => ("on", Some(("Rv_Mix", "mix")))
-  | #convolve => ("on", Some(("Cv_Mix", "mix")))
-  | #bode => ("on", Some(("Bd_Mix", "mix")))
-  | #filter => ("on", Some(("Ff_Cutoff", "cutoff")))
-  | #utility => ("on", Some(("Ut_Gain", "gain")))
-  | #ambience => ("on", Some(("Am_Mix", "mix")))
-  | #air => ("on", Some(("Ai_Air", "air")))
-  | #shifter => ("on", Some(("Sh_Mix", "mix")))
-  | #resonator => ("on", Some(("Rs_Mix", "mix")))
-  | #octaver => ("on", Some(("Oc_Sub", "down")))
-  }
+// an effect in brief: a summary of its settings (for hover texts)
 
 let summary = (model, e: FxRack.effect) => {
   let id = FxRack.id(e, ...)

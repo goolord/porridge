@@ -66,12 +66,13 @@ let steppingRandom = wide([Line("M1 10 H5 V4 H9 V12 H13 V6 H17 V11 H21")])
 let flat = wide([Line("M1 8 H21")])
 let fmWave = wide([Line("M1 8 C2 3 3 3 4 8 S5.5 13 6.5 8 S9 3 10.5 8 S14 13 16 8 S19.5 3 21 8")])
 
+// (Oatmeal's aliasing waves look like the others)
 let waveformByName = name =>
   switch name {
   | "sine" => Some(sine)
-  | "saw" => Some(saw)
-  | "pulse" | "square" => Some(pulse)
-  | "triangle" => Some(triangle)
+  | "saw" | "oatmeal saw" => Some(saw)
+  | "pulse" | "square" | "oatmeal pulse" => Some(pulse)
+  | "triangle" | "oatmeal triangle" => Some(triangle)
   | "user" => Some(user)
   | "user pwm" => Some(userPwm)
   | "smooth random" => Some(smoothRandom)
@@ -366,7 +367,7 @@ let chorusModeByName = name =>
   }
 
 // The value lists with icons, and how each finds the icon of a value from its index and its
-// lower-case name (less " hq").
+// lower-case name.
 let ofList = (list: ValueList.t) =>
   switch list {
   | Waveform | LfoShape => Some((_, name) => waveformByName(name))
@@ -385,21 +386,13 @@ let ofList = (list: ValueList.t) =>
 let forList = (list: option<ValueList.t>) => list->Option.flatMap(ofList)
 
 // The icon for value `index` (named `name`) of a list (as forList finds it), and the text to
-// show beside it (the name, less anything the icon shows).
-let forValue = (find, index, name) => {
-  let lower = String.toLowerCase(name)
-  let hq = String.endsWith(lower, " hq")
-  let base = hq ? String.slice(lower, ~start=0, ~end=String.length(lower) - 3) : lower
-  find(index, base)
-  ->Option.map(icon => {
+// show beside it.
+let forValue = (find, index, name) =>
+  find(index, String.toLowerCase(name))->Option.map(icon => {
     let wrap = el("span", ~cls="icw")
     wrap->appendChild(render(icon))
-    if hq {
-      el("b", ~cls="hq", ~text="HQ", ~parent=wrap)->ignore
-    }
-    (wrap, hq ? String.slice(name, ~start=0, ~end=String.length(name) - 3) : name)
+    (wrap, name)
   })
-}
 
 //==============================================================================
 // arpeggiator step commands, in the synth's order; some are two marks side by side

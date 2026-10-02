@@ -385,21 +385,30 @@ let namesOf = (def: ParamDefs.t) =>
 // What the element of a list parameter does: a click opens the menu of items(), a right
 // click steps through the values (shift goes back), a middle or ctrl click picks the first.
 // Space and the arrow keys step (up goes back, unless upIsNext), Enter opens the menu.
-// Returns the step function.
+// Stepping and the first go by the menu's values, in its order: a list can leave a value out
+// (an effect's "off", which its light switches). Returns the step function.
 let listInput = (ctx: Ctx.t, e, id, ~items, ~upIsNext=false) => {
   let model = ctx.model
-  let count = Int.toFloat(Array.length(namesOf(model->ParamModel.def(id))))
   let current = () => model->ParamModel.get(id)
   let set = x => model->ParamModel.gestureSet(id, x)
-  let step = d => set(Float.mod(Float.mod(current() + d, count) + count, count))
+  let values = () => items()->Array.map((item: Menu.item) => Int.toFloat(item.value))
+  let step = d => {
+    let values = values()
+    let n = Array.length(values)
+    let i = values->Array.indexOf(current())
+    // (from a value left out, to the first or the last)
+    let next = i < 0 ? (d > 0. ? 0 : n - 1) : mod(mod(i + Float.toInt(d), n) + n, n)
+    values[next]->Option.forEach(set)
+  }
+  let first = () => values()[0]->Option.forEach(set)
   let openMenu = () =>
     ctx.menu->Menu.show(e, items(), Float.toInt(current()), i => set(Int.toFloat(i)))
 
   e->onPointer(#pointerdown, ev => {
     ev->preventDefault
     switch ev->button {
-    | 1 => set(0.)
-    | 0 if ev->commandKey => set(0.)
+    | 1 => first()
+    | 0 if ev->commandKey => first()
     | 0 => openMenu()
     | 2 => step(ev->shiftKey ? -1. : 1.)
     | _ => ()
@@ -442,8 +451,6 @@ let choice = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=76., ~label=?, ~names=?) => {
     let text = names[i]->Option.getOr(Float.toString(x))
     switch icon(i) {
     | Some((mark, _)) =>
-      // the short name, less what the icon shows (e.g. "HQ")
-      let text = String.endsWith(text, " HQ") ? String.slice(text, ~start=0, ~end=String.length(text) - 3) : text
       v->setTextContent("")
       v->appendChild(mark)
       el("span", ~text, ~parent=v)->ignore
@@ -567,10 +574,10 @@ let button = (ctx: Ctx.t, parent, text, ~x, ~y, ~w, ~h=?, ~cls="", ~icon=?, ~sta
 }
 
 // A small "?" button, size wide and high at (x, y), that shows text in a tooltip tipW wide while
-// the pointer is over it, right-aligned under it.
-let help = (parent, text, ~x, ~y, ~size, ~tipW) => {
+// the pointer is over it, right-aligned under it (left-aligned, near a left edge, with ~left).
+let help = (parent, text, ~x, ~y, ~size, ~tipW, ~left=false) => {
   let e = el("button", ~cls="btn help", ~text="?", ~parent)->place(x, y, ~w=size, ~h=size)
-  let tip = el("div", ~cls="tip", ~text, ~parent)->place(x + size - tipW, y + size + 4., ~w=tipW)
+  let tip = el("div", ~cls="tip", ~text, ~parent)->place(left ? x : x + size - tipW, y + size + 4., ~w=tipW)
   e->onMouse(#mouseenter, _ => tip->addClass("on"))
   e->onMouse(#mouseleave, _ => tip->removeClass("on"))
 }

@@ -49,7 +49,8 @@ type menu =
   | Plain
   // every value in order, with the heading where a group starts above it (but the first)
   | Headed(int => option<string>)
-  // in an order of its own, with the heading above the first of each group
+  // in an order of its own, with the heading above the first of each group (values left out
+  // aren't offered, but still show when set)
   | Ordered(array<(int, option<string>)>)
 
 type info = {
@@ -73,17 +74,29 @@ let filterAdded = {
 
 let info = list =>
   switch list {
+  // The HQ (anti-aliased) saw, pulse and triangle are the waves; Oatmeal's alias, and are there
+  // for its programs, which keep them (and an Oatmeal export makes the HQ ones Oatmeal's).
   | Waveform => {
-      names: None,
-      short: None,
+      names: Some(["Sine", "Oatmeal saw", "Oatmeal pulse", "Oatmeal triangle", "User", "User PWM"]),
+      short: Some(["Sine", "Oat saw", "Oat pulse", "Oat tri", "User", "User PWM"]),
       added: Some({
-        names: ["Saw HQ", "Pulse HQ", "Triangle HQ"],
-        short: ["Saw HQ", "Pulse HQ", "Triangle HQ"],
+        names: ["Saw", "Pulse", "Triangle"],
+        short: ["Saw", "Pulse", "Triangle"],
         // (saw, pulse, triangle)
         toOatmeal: k => k + 1,
-        exportNote: "the HQ waveforms (exported as the plain ones)",
+        exportNote: "the HQ waveforms (exported as Oatmeal's aliasing ones)",
       }),
-      menu: Plain,
+      menu: Ordered([
+        (0, None),
+        (6, None),
+        (7, None),
+        (8, None),
+        (4, None),
+        (5, None),
+        (1, Some("Oatmeal (aliasing)")),
+        (2, None),
+        (3, None),
+      ]),
     }
   | LfoShape => {names: None, short: None, added: None, menu: Plain}
   | FilterType => {
@@ -110,11 +123,12 @@ let info = list =>
         toOatmeal: _ => 2,
         exportNote: "Porridge's distortion types (exported as soft clipping)",
       }),
-      menu: Ordered(DistTypes.order),
+      // (off, Oatmeal's first value, is the effect's light on the FX page)
+      menu: Ordered(DistTypes.order->Array.filter(((v, _)) => v != 0)),
     }
   | DistMode => {
       names: None,
-      short: Some(["global", "voice, post-filter", "voice, pre-filter", "double"]),
+      short: Some(["whole sound", "per-voice, post-filter", "per-voice, pre-filter", "double"]),
       added: None,
       menu: Plain,
     }
@@ -145,7 +159,8 @@ let info = list =>
       menu: Plain,
     }
   | DelayReverse => {names: None, short: Some(["normal", "rev. out", "rev. fb"]), added: None, menu: Plain}
-  | ChorusMode => {names: None, short: None, added: None, menu: Plain}
+  // (off is the effect's light, as for the distortion)
+  | ChorusMode => {names: None, short: None, added: None, menu: Ordered([1, 2, 3, 4]->Array.map(v => (v, None)))}
   }
 
 // The list each of Oatmeal's list parameters shows, if it's one of these (Porridge's parameters

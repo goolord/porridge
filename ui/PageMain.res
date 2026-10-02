@@ -1,14 +1,28 @@
-// Synth page: the sound sources, filter and amp on top, modulation and voice settings
-// below. Panels with tabs keep one group of controls on screen at a time; envelopes are
-// edited by dragging their points.
+// Synth page: the voice, as a signal path. Its flow runs along the top (VoiceFlow); below it the
+// oscillators, the filter and the amp, then the modulation sources (each with what it moves, as
+// chips: Destinations) and the voice's settings. What a sound is made of shows; the rest waits in
+// tabs, each marked while what it holds is in use (Features), and controls that do nothing for
+// the current settings (pulse width without a pulse wave, a filter type's unused morph) stay
+// hidden. Graphs are the main controls of what they draw: drag their points.
 
 open! Web
 
 let hint = "Drag or scroll to change a value, shift for fine steps. Double-click to type, right-click to reset. Click a list to pick from it, right-click to step through it."
 
 let (margin, gap) = (6., Grid.gap)
-let columnWidth = 358.
-let rowHeight = (Style.pageHeight - 2. * margin - gap) / 2.
+let flowHeight = 30.
+let top = margin + flowHeight + gap
+let rowHeight = (Style.pageHeight - top - margin - gap) / 2.
+let (oscWidth, filterWidth) = (380., 400.)
+let lastWidth = Style.designWidth - 2. * margin - 2. * gap - oscWidth - filterWidth
+let modWidth = oscWidth + gap + filterWidth
+
+// the modulation panel's right column (a source's velocity, and what it moves), and the LFOs'
+// controls left of it
+let chipsWidth = 176.
+let chipsX = modWidth - 8. - chipsWidth
+let lfoColumn = 82.
+let lfoX = chipsX - 8. - 3. * lfoColumn
 
 let envelopeFields = (env: EnvEditor.envelope) => {
   let prefix = env.params.prefix
@@ -28,18 +42,37 @@ let envelopeFields = (env: EnvEditor.envelope) => {
 }
 
 // (each sounding note is marked where it is on the envelopes that have a clock)
-let envelope = (ctx, parent, env: EnvEditor.envelope, box: box) =>
+let envelope = (ctx, parent, env: EnvEditor.envelope, box: box, ~columns=?) =>
   EnvEditor.make(
     ctx,
     parent,
     box,
     EnvEditor.adsr(ctx, env, ~w=box.w, ~h=box.h),
     ~fields=envelopeFields(env),
+    ~columns?,
     ~name=env.title,
     ~clock=?env.clock,
   )
 
-// The button in the corner of a plot that opens its table on the Shapes page.
+// Controls on grid g that show only while shown() holds, because they do nothing otherwise: make
+// places them (on the grid it's given), and whether they show is checked again whenever one of
+// ids changes. Their cells stay theirs.
+let shownWhile = (ctx: Ctx.t, g: Grid.t, ids, shown, make: Grid.t => unit) => {
+  let wrap = el("div", ~parent=g.el)
+  make({...g, el: wrap})
+  let update = () => wrap->setStyle("display", shown() ? "" : "none")
+  ctx.model->ParamModel.listenEach(ids, update)
+  update()
+}
+
+// A "?" filling a grid cell's height at its right end, with text in a tooltip tipW wide (from
+// its left, with ~left).
+let help = (g: Grid.t, c, r, text, ~tipW=260., ~left=?) => {
+  let size = Style.controlHeight
+  g->Grid.at(c, r, "a help button", b => Controls.help(g.el, text, ~x=b.x + b.w - size, ~y=b.y, ~size, ~tipW, ~left?))
+}
+
+// The button in the corner of a plot that opens its table in the shapes editor.
 let drawButton = (ctx: Ctx.t, body, plot: box, ~status, table) =>
   Controls.button(
     ctx,
@@ -52,294 +85,95 @@ let drawButton = (ctx: Ctx.t, body, plot: box, ~status, table) =>
     () => ctx.openShape(table),
   )->ignore
 
-let oscillator = (ctx: Ctx.t, body, n) => {
-  let osc = Int.toString(n)
-  let prefix = `O${osc}_`
-  let plot = {x: 8., y: 27., w: 340., h: 110.}
-  Plots.wave(ctx, body, n - 1, plot)
-  drawButton(ctx, body, plot, ~status=`Draw oscillator ${osc}'s user waveform`, n == 1 ? Wave1 : Wave2)
-  let g = Grid.make(ctx, body, ~y=plot.y + plot.h + 8.)
-  g->Grid.choice(prefix ++ "Waveform", 0, 0, "waveform")
-  g->Grid.param(prefix ++ "Amp", 1, 0, "amp")
-  g->Grid.param(prefix ++ "PWM_W", 2, 0, "pulsewidth")
-  g->Grid.param(prefix ++ "Afterpitch", 3, 0, "touch > pitch")
-  g->Grid.param(prefix ++ "PWM_R", 0, 1, "pwm rate")
-  g->Grid.param(prefix ++ "PWM_D", 1, 1, "pwm depth")
-  if n == 2 {
-    g->Grid.param("Transpose", 2, 1, "transpose")
-    g->Grid.param("Detune", 3, 1, "detune")
-  }
-  g->Grid.choice("OscMix", 0, 2, "mix", ~span=2)
-  g->Grid.param("OscAftertouch", 2, 2, "touch > amp")
-  g->Grid.param("PM_Feedback", 3, 2, "pm feedback")
-  // its noise: the pitch roughened every sample
-  g->Grid.param(prefix ++ "Noise", 0, 3, "noise")
-  g->Grid.param(prefix ++ "NoiseColour", 1, 3, "noise colour")
-  if n == 2 {
-    g->Grid.param("O2_PairMix", 2, 3, "heard in pm")
-  }
-}
+//==============================================================================
+// the oscillators
 
-let modEnvelope = (ctx: Ctx.t, body, n, box) => {
-  let env = EnvEditor.modEnv(n)
-  let prefix = env.params.prefix
-  envelope(ctx, body, env, box)
-  let g = Grid.make(ctx, body, ~x=box.x + box.w + 10.)
-  g->Grid.param(prefix ++ "VeloSens", 0, 0, "velocity")
-  for k in 1 to 4 {
-    let slot = Int.toString(k)
-    g->Grid.choice(`${prefix}Target_${slot}`, 0, k, "target " ++ slot, ~span=2)
-    g->Grid.param(`${prefix}Depth_${slot}`, 2, k, "depth")
-  }
-}
+// the waves with a pulse width (Pulse, User PWM, Pulse HQ)
+let isPulse = wave => wave == 2. || wave == 5. || wave == 7.
 
-let lfo = (ctx: Ctx.t, body, n, box: box) => {
-  let lfo = Int.toString(n)
-  let prefix = `LFO_${lfo}_`
-  Plots.lfo(ctx, body, n - 1, box)
-  drawButton(ctx, body, box, ~status=`Draw LFO ${lfo}'s user shape`, n == 1 ? LfoShape1 : LfoShape2)
-  let g = Grid.make(ctx, body, ~x=box.x + box.w + 10.)
-  g->Grid.choice(prefix ++ "Shape", 0, 0, "shape")
-  g->Grid.at(1, 0, ~span=2, prefix ++ "Sync", b => Controls.lfoMode(ctx, body, prefix ++ "Sync", ~x=b.x, ~y=b.y, ~w=b.w))
-  g->Grid.choice(prefix ++ "Unit", 0, 1, "unit")
-  g->Grid.param(prefix ++ "Speed", 1, 1, "rate")
-  g->Grid.toggle(prefix ++ "Quantize", 2, 1, "quantize")
-  g->Grid.param(prefix ++ "Cutoff_1", 0, 2, "cut 1")
-  g->Grid.param(prefix ++ "Cutoff_2", 1, 2, "cut 2")
-  g->Grid.param(prefix ++ "Resonance", 2, 2, "res")
-  g->Grid.param(prefix ++ "Pitch", 0, 3, "pitch")
-  g->Grid.param(prefix ++ "Pan", 1, 3, "pan")
-  g->Grid.param(n == 1 ? "LFO_1_2" : "LFO_2_1", 2, 3, n == 1 ? "rate 2" : "rate 1")
-  g->Grid.param(prefix ++ "Delay", 0, 4, "delay")
-  g->Grid.param(prefix ++ "Fade", 1, 4, "fade in")
-  g->Grid.param(prefix ++ "Slew", 2, 4, "slew")
-  g->Grid.choice(prefix ++ "Steps", 0, 5, "s&h steps")
-  g->Grid.toggle(prefix ++ "OneShot", 1, 5, "one-shot")
-}
-
-// LFO 3, which only the modulation matrix reaches, and the wander source's rate.
-let lfo3 = (ctx: Ctx.t, body, box: box) => {
-  Plots.lfo3(ctx, body, box)
-  let g = Grid.make(ctx, body, ~x=box.x + box.w + 10.)
-  g->Grid.choice("LFO_3_Shape", 0, 0, "shape")
-  g->Grid.at(1, 0, ~span=2, "LFO_3_Mode", b => Controls.lfoMode(ctx, body, "LFO_3_Mode", ~x=b.x, ~y=b.y, ~w=b.w))
-  g->Grid.choice("LFO_3_Sync", 0, 1, "sync")
-  // (the rate is the sync's when it has one)
-  let rate = g->Grid.at(1, 1, "LFO_3_Rate", b =>
-    Controls.paramControl(ctx, body, "LFO_3_Rate", ~x=b.x, ~y=b.y, ~w=b.w, ~label="rate")
-  )
-  g->Grid.param("LFO_3_Phase", 0, 2, "phase")
-  g->Grid.param("LFO_3_PhaseRand", 1, 2, "random phase")
-  g->Grid.param("LFO_3_Delay", 0, 3, "delay")
-  g->Grid.param("LFO_3_Fade", 1, 3, "fade in")
-  g->Grid.param("Wander_Rate", 0, 4, "wander rate")
-  g->Grid.note("LFO 3 and wander move things through the Mod page's connections.", 1, 4, ~span=2, ~rows=2)->ignore
-  let dim = () => rate->toggleClass("dim", ctx.model->ParamModel.get("LFO_3_Sync") != 0.)
-  ctx.model->ParamModel.listen("LFO_3_Sync", dim)
-  dim()
-}
-
-// The voice lane (VoiceLane): the effects every voice runs its own copy of, in order with the
-// filter and the amp envelope, a row each. Drag a row by its name to move it; each effect's row
-// has its switch, its level, a button to open its tab and ×.
-let voiceFx = (ctx: Ctx.t, body) => {
-  let model = ctx.model
-  let get = id => model->ParamModel.get(id)
-  let hover = (e, text) => ctx.status->Status.hover(e, text)
-  let cw = Grid.fitColumns(columnWidth, 4)
-  let rowW = 4. * cw - Grid.columnGap
-  let row = (~cls="") => {
-    let r = el("div", ~cls="vrow " ++ cls, ~parent=body)->place(Grid.padX, 0., ~w=rowW, ~h=Style.controlHeight)
-    r
-  }
-  // the filter and the amp: fixed rows
-  let filterRow = row(~cls="node")
-  let filterText = el("span", ~cls="vname", ~parent=filterRow)
-  let ampRow = row(~cls="node")
-  el("span", ~cls="vname", ~text="amp envelope", ~parent=ampRow)->ignore
-  hover(filterRow, () => "The filter (and the distortion's places either side): drag it up or down among the voice's effects")
-  hover(ampRow, () =>
-    "The amp envelope: effects below it react to how each note swells and fades and ring on after it ends; those above it are shaped by it. Drag it up or down."
-  )
-
-  // an effect's row, made when it first comes into the lane
-  let rows = Map.make()
-  let rowOf = (e: FxRack.effect) =>
-    switch rows->Map.get(FxRack.value(e)) {
-    | Some(r) => r
-    | None =>
-      let r = row(~cls="fx")
-      let led = el("i", ~cls="led", ~parent=r)
-      led->onPointer(#pointerdown, ev =>
+// Both oscillators, a row each: a picture of the wave (click it to draw the user wave), the
+// wave, its level and osc 2's pitch, and the pulse width and its modulation under a pulse wave.
+// Then the mix, with osc 1's PM feedback and how much of osc 2 is heard for the modes that have
+// them.
+let oscillators = (ctx: Ctx.t, body) => {
+  let get = id => ctx.model->ParamModel.get(id)
+  let g = Grid.make(ctx, body, ~cw=Grid.fitColumns(oscWidth, 6))
+  [1, 2]->Array.forEach(n => {
+    let osc = Int.toString(n)
+    let prefix = `O${osc}_`
+    let r = 2 * (n - 1)
+    g->Grid.at(0, r, ~rows=2, "the wave", box => {
+      let plot = Plots.wave(ctx, body, n - 1, box, ~badge=false)
+      plot->addClass("thumb")
+      // a pencil in the corner
+      svgEl(
+        plot,
+        "path",
+        [
+          ("class", Str("pencil")),
+          ("d", Str(`M${Float.toString(box.w - 12.)} ${Float.toString(box.h - 3.)}l1-3 6-6 2 2-6 6z`)),
+        ],
+      )->ignore
+      plot->onPointer(#pointerdown, ev =>
         if ev->button == 0 {
-          ev->stopPropagation
           ev->preventDefault
-          let id = FxRack.switchId(e)
-          model->ParamModel.gestureSet(id, get(id) != 0. ? 0. : FxRack.onValue(e))
+          ctx.openShape(n == 1 ? Wave1 : Wave2)
         }
       )
-      let name = el("span", ~cls="vname", ~parent=r)
-      let (_, level) = FxPanels.cardControls(e.kind)
-      level->Option.forEach(((id, label)) =>
-        Controls.param(ctx, r, FxRack.id(e, id), ~x=1.5 * cw, ~y=0., ~w=1.5 * cw - Grid.columnGap, ~label)
-      )
-      let opener = Controls.button(ctx, r, "open", ~x=3. * cw, ~y=0., ~w=cw * 0.62, ~h=Style.controlHeight, ~cls="gc", ~status="Open its tab on the FX page", () => ctx.openEffect(e))
-      opener->ignore
-      let x = el("b", ~cls="vx", ~text="×", ~parent=r)
-      x->onPointer(#pointerdown, ev => {
-        ev->stopPropagation
-        ev->preventDefault
-        VoiceLane.remove(model, e)
-      })
-      hover(x, () => "Take it out of the voices (its settings stay)")
-      hover(name, () =>
-        `${VoiceLane.label(model, e)}: each voice runs its own (${FxPanels.summary(model, e)->String.replaceAll("\n", ", ")}). Drag to move it, right-click to duplicate it or move it to the whole sound`
-      )
-      let made = (r, name, led)
-      rows->Map.set(FxRack.value(e), made)
-      made
-    }
-  let itemEl = (item: VoiceLane.item) =>
-    switch item {
-    | Fx(e) =>
-      let (r, _, _) = rowOf(e)
-      r
-    | FilterNode => filterRow
-    | AmpNode => ampRow
-    }
-  let press = (item, ev) => VoiceLane.press(ctx, item, ev, ~itemEl, ~vertical=true, ~onClick=() => ())
-  filterText->onPointer(#pointerdown, ev => press(FilterNode, ev))
-  ampRow->onPointer(#pointerdown, ev => press(AmpNode, ev))
-  filterRow->suppressContextMenu
-  ampRow->suppressContextMenu
-  let hooked = Set.make()
-
-  let add = el("div", ~cls="addrow vadd", ~parent=body)
-  el("b", ~text="+", ~parent=add)->ignore
-  el("span", ~text="add a per-voice effect", ~parent=add)->ignore
-  add->onPointer(#pointerdown, ev => {
-    ev->preventDefault
-    if ev->button == 0 {
-      VoiceLane.addMenu(ctx, add, ~onAdded=_ => ())
-    }
-  })
-  hover(add, () => "Up to four: each voice runs its own copy, which its LFOs, envelopes and key move for that note alone")
-  let note = el(
-    "div",
-    ~cls="note wrap",
-    ~text="Each voice runs its own copy of these; the resonator, key shifter and octaver follow its pitch. The filter's comb, flanger, phaser, formant, ring mod, S&H, diffusor and reverb types are per-voice effects too.",
-    ~parent=body,
-  )
-
-  let layout = () => {
-    rows->Map.forEach(((r, _, _)) => r->setStyle("display", "none"))
-    let lane = FxRack.readLane(get)
-    let items = VoiceLane.items(get)
-    items->Array.forEachWithIndex((item, i) => {
-      let y = Grid.padTop + Int.toFloat(i) * Grid.rowHeight
-      switch item {
-      | Fx(e) =>
-        let (r, name, led) = rowOf(e)
-        if !(hooked->Set.has(FxRack.value(e))) {
-          hooked->Set.add(FxRack.value(e))
-          name->onPointer(#pointerdown, ev => press(Fx(e), ev))
-          r->suppressContextMenu
-          r->onMouse(#contextmenu, ev => ev->preventDefault)
-        }
-        r->setStyle("display", "")
-        r->place(Grid.padX, y)->ignore
-        name->setTextContent(FxRack.label(lane, e))
-        let on = FxRack.isOn(e, get)
-        led->toggleClass("lit", on)
-        r->toggleClass("off", !on)
-      | FilterNode =>
-        filterRow->place(Grid.padX, y)->ignore
-        filterText->setTextContent(`filter: ${model->ParamModel.shortText("Filter")}`)
-      | AmpNode => ampRow->place(Grid.padX, y)->ignore
-      }
+      ctx.status->Status.hover(plot, () => `Osc ${osc}'s wave: click to draw its user waveform`)
     })
-    let y = Grid.padTop + Int.toFloat(Array.length(items)) * Grid.rowHeight
-    let full = FxRack.laneFull(lane)
-    add->setStyle("display", full ? "none" : "flex")
-    add->place(Grid.padX, y, ~w=rowW, ~h=Style.controlHeight)->ignore
-    note->place(Grid.padX + 2., y + (full ? 0. : Grid.rowHeight) + 4., ~w=rowW - 4.)->ignore
-  }
-  let soon = perFrame(layout)
-  model->ParamModel.listenEach(
-    [...VoiceLane.ids, "Filter", ...FxRack.all->Array.map(FxRack.switchId)],
-    soon,
+    g->Grid.choice(prefix ++ "Waveform", 1, r, "osc " ++ osc, ~span=2)
+    g->Grid.param(prefix ++ "Amp", 3, r, "level")
+    if n == 2 {
+      g->Grid.param("Transpose", 4, r, "transpose")
+      g->Grid.param("Detune", 5, r, "detune")
+    }
+    shownWhile(ctx, g, [prefix ++ "Waveform"], () => isPulse(get(prefix ++ "Waveform")), g => {
+      g->Grid.param(prefix ++ "PWM_W", 1, r + 1, "pulse width")
+      g->Grid.param(prefix ++ "PWM_R", 2, r + 1, "pwm rate")
+      g->Grid.param(prefix ++ "PWM_D", 3, r + 1, "pwm depth")
+    })
+  })
+  g->Grid.choice("OscMix", 0, 4, "mix", ~span=3)
+  // (the modes: PatchGen's pm, pmFeedback, ring and am)
+  let mode = () => Float.toInt(get("OscMix"))
+  shownWhile(ctx, g, ["OscMix"], () => mode() == 3 || mode() == 4, g =>
+    g->Grid.param("PM_Feedback", 3, 4, "pm feedback")
   )
-  layout()
+  shownWhile(ctx, g, ["OscMix"], () => mode() == 3 || mode() == 5 || mode() == 6, g =>
+    g->Grid.param("O2_PairMix", 4, 4, "osc 2 heard")
+  )
 }
 
-// Microtuning: a Scala scale (and keyboard mapping) instead of the 12 notes above it.
-let scale = (ctx: Ctx.t, body, g: Grid.t) => {
-  el("div", ~cls="sep", ~parent=body)->place(g->Grid.cx(0) + 3., g->Grid.cy(4) - 1., ~w=4. * g.cw - 8.)->ignore
-  g->Grid.claim(0, 4, ~span=2, "the scale name")
-  let name = el("div", ~cls="scale", ~parent=body)->placeBox(g->Grid.cell(0, 4, ~span=2))
-  let pickScale = FilePicker.make(body, ~accept=Scala.extensions->Array.join(","), file =>
-    ctx.programs->ProgramStore.loadUserFile(file)->Promise.ignore
-  )
-  // the 12 note offsets don't apply while a scale is loaded
-  let notes = body->querySelectorAll(".p")->nodesToArray->Array.slice(~start=4)
-  g->Grid.button(
-    "load scale",
-    2,
-    4,
-    ~status="Load a Scala scale (.scl) or keyboard mapping (.kbm); they're saved with the program",
-    pickScale,
-  )
-  g->Grid.button(
-    "clear",
-    3,
-    4,
-    ~status="Back to the 12-note tuning above",
-    () => ctx.programs->ProgramStore.setTuning(None),
-  )
-  let help = g->Grid.note("", 0, 5, ~span=4, ~rows=2)
-  let update = () => {
-    let scaleName = ctx.programs->ProgramStore.tuningName
-    name->setTextContent(scaleName->Option.getOr("12 notes, as above"))
-    name->toggleClass("on", scaleName != None)
-    notes->Array.forEach(e => e->toggleClass("dim", scaleName != None))
-    help->setTextContent(
-      scaleName == None
-        ? "Load a Scala scale to retune every key. Tune still sets 440 Hz; the keyboard mapping (.kbm) sets which key plays which degree."
-        : "The scale replaces the 12 notes above. Tune still moves 440 Hz, so 440 Hz plays the scale as written.",
-    )
-  }
-  ctx.programs->ProgramStore.onChanged(update)
-  update()
-}
-
-let build = (ctx: Ctx.t, page) => {
-  let x0 = margin
-  let x1 = x0 + columnWidth + gap
-  let x2 = x1 + columnWidth + gap
-  let lastWidth = Style.designWidth - margin - x2
-  let y0 = margin
-  let y1 = y0 + rowHeight + gap
-
-  //==============================================================================
-  // sources
+let oscPanel = (ctx: Ctx.t, page) => {
+  let model = ctx.model
   let osc = Panel.make(
     page,
-    ~tabs=["osc 1", "osc 2", "noise", "unison", "phase", "osc envs"],
-    ~x=x0,
-    ~y=y0,
-    ~w=columnWidth,
+    ~tabs=["oscillators", "noise", "unison", "phase", "osc envs"],
+    ~x=margin,
+    ~y=top,
+    ~w=oscWidth,
     ~h=rowHeight,
   )
-  oscillator(ctx, osc->Panel.body(0), 1)
-  oscillator(ctx, osc->Panel.body(1), 2)
+  oscillators(ctx, osc->Panel.body(0))
+  osc->Panel.mark(model, 1, [Features.noise, Features.oscNoise])->ignore
+  osc->Panel.mark(model, 2, [Features.unison, Features.drift])->ignore
+  osc->Panel.mark(model, 3, [Features.oscPhase])->ignore
+  osc->Panel.mark(model, 4, [Features.oscEnv(1), Features.oscEnv(2)])->ignore
 
-  let noise = Grid.make(ctx, osc->Panel.body(2))
-  noise->Grid.param("N_Amp", 0, 0, "amp")
-  noise->Grid.param("N_Aftertouch", 1, 0, "touch > amp")
-  noise->Grid.param("N_Resonance", 2, 0, "resonance")
-  noise->Grid.param("N_Transpose", 3, 0, "transpose")
+  // the noise generator, and each oscillator's roughness (its pitch moved by noise)
+  let cw = Grid.fitColumns(oscWidth, 4)
+  let noise = Grid.make(ctx, osc->Panel.body(1), ~cw)
+  noise->Grid.param("N_Amp", 0, 0, "noise level")
+  noise->Grid.param("N_Resonance", 1, 0, "resonance")
+  noise->Grid.param("N_Transpose", 2, 0, "transpose")
+  noise->Grid.param("N_Aftertouch", 3, 0, "touch > level")
+  noise->Grid.param("O1_Noise", 0, 1, "osc 1 rough")
+  noise->Grid.param("O1_NoiseColour", 1, 1, "colour")
+  noise->Grid.param("O2_Noise", 2, 1, "osc 2 rough")
+  noise->Grid.param("O2_NoiseColour", 3, 1, "colour")
 
-  let unison = Grid.make(ctx, osc->Panel.body(3))
+  let unison = Grid.make(ctx, osc->Panel.body(2), ~cw)
   unison->Grid.param("U_Voices", 0, 0, "voices")
   unison->Grid.param("U_Detune", 1, 0, "detune")
   unison->Grid.param("U_Spread", 2, 0, "spread")
@@ -348,98 +182,81 @@ let build = (ctx: Ctx.t, page) => {
   unison->Grid.param("U_PanJitter", 1, 1, "pan jitter")
   unison->Grid.param("U_DetuneCurve", 2, 1, "detune curve")
   unison->Grid.toggle("U_RandomPhase", 3, 1, "rand phase")
-  // analog drift: slow random pitch (per unison copy) and cutoff (per voice)
+  // analog drift: slow random pitch, per unison copy (its cutoff drift is the filter's)
   unison->Grid.param("Drift_Pitch", 0, 2, "drift pitch")
-  unison->Grid.param("Drift_Cutoff", 1, 2, "drift cutoff")
-  unison->Grid.param("Drift_Rate", 2, 2, "drift rate")
+  unison->Grid.param("Drift_Rate", 1, 2, "drift rate")
 
-  // each oscillator's own envelope, beside its switch
-  let envs = osc->Panel.body(5)
-  let envGrid = Grid.make(ctx, envs)
-  let envHeight = (rowHeight - Grid.padTop - 10.) / 2.
-  [1, 2]->Array.forEach(n => {
-    let env = EnvEditor.oscEnv(n)
-    let name = `osc ${Int.toString(n)}`
-    let row = 4 * (n - 1)
-    env.switchId->Option.forEach(id => envGrid->Grid.toggle(id, 0, row, name ++ " env"))
-    envGrid
-    ->Grid.note(`${name}'s level follows it, under the amp envelope`, 0, row + 1, ~rows=2)
-    ->ignore
-    envelope(
-      ctx,
-      envs,
-      env,
-      {
-        x: envGrid->Grid.cx(1) + 4.,
-        y: envGrid->Grid.cy(row) + 2.,
-        w: columnWidth - Grid.columnWidth - 16.,
-        h: envHeight - 6.,
-      },
-    )
-  })
-
-  let phase = Grid.make(ctx, osc->Panel.body(4))
-  [("Osc", "osc"), ("PWM", "pwm"), ("LFO", "lfo")]->Array.forEachWithIndex(((id, label), r) => {
-    phase->Grid.param(id ++ "Phase", 0, r, label)
+  let phase = Grid.make(ctx, osc->Panel.body(3), ~cw)
+  [("Osc", "osc"), ("PWM", "pwm")]->Array.forEachWithIndex(((id, label), r) => {
+    phase->Grid.param(id ++ "Phase", 0, r, label ++ " phase")
     phase->Grid.param(id ++ "PhaseRand", 1, r, label ++ " rand")
     phase->Grid.toggle(id ++ "Retrig", 2, r, "retrigger")
   })
 
-  //==============================================================================
-  // filter
+  // each oscillator's own envelope, beside its switch
+  let envs = osc->Panel.body(4)
+  let envHeight = (rowHeight - Grid.padTop - 6.) / 2.
+  [1, 2]->Array.forEach(n => {
+    let env = EnvEditor.oscEnv(n)
+    let g = Grid.make(ctx, envs, ~y=Grid.padTop + Int.toFloat(n - 1) * envHeight, ~cw)
+    env.switchId->Option.forEach(id => g->Grid.toggle(id, 0, 0, `osc ${Int.toString(n)} env`))
+    envelope(ctx, envs, env, {x: g->Grid.cx(1) + 4., y: g->Grid.cy(0) + 2., w: oscWidth - cw - 16., h: envHeight - 6.})
+    if n == 1 {
+      help(
+        g,
+        0,
+        1,
+        "While its envelope is on, an oscillator's level follows it, under the amp envelope (which still ends the note).",
+        ~tipW=240.,
+        ~left=true,
+      )
+    }
+  })
+  osc
+}
+
+//==============================================================================
+// the filter
+
+let filterPanel = (ctx: Ctx.t, page) => {
+  let model = ctx.model
+  let get = id => model->ParamModel.get(id)
   let refreshResponse = ref(() => ())
-  let refreshPreview = ref(() => ())
-  let filterEl = ref(None)
   let filter = Panel.make(
     page,
-    ~tabs=["filter", "response", "dual filter", "key EQ", "voice fx"],
-    ~onSelect=i => {
-      // the response and the voice's effects cover the filter envelope
-      filterEl.contents->Option.forEach(e => e->Web.toggleClass("responding", i == 1 || i == 4))
-      switch i {
-      | 0 => refreshPreview.contents()
-      | 1 => refreshResponse.contents()
-      | _ => ()
-      }
-    },
-    ~x=x1,
-    ~y=y0,
-    ~w=columnWidth,
+    ~tabs=["filter", "dual filter", "key EQ"],
+    ~onSelect=i => i == 0 ? refreshResponse.contents() : (),
+    ~x=margin + oscWidth + gap,
+    ~y=top,
+    ~w=filterWidth,
     ~h=rowHeight,
   )
-  let main = Grid.make(ctx, filter->Panel.body(0))
+  filter->Panel.mark(model, 1, [Features.dualFilter])->ignore
+  filter->Panel.mark(model, 2, [Features.keyEq])->ignore
+
+  // what the filter is, and what moves its cutoff; morph and drive for the types that have them
+  let body = filter->Panel.body(0)
+  let main = Grid.make(ctx, body, ~cw=Grid.fitColumns(filterWidth, 6))
+  let filterType = () => Float.toInt(get("Filter"))
   main->Grid.choice("Filter", 0, 0, "type", ~span=2)
   main->Grid.param("Cutoff", 2, 0, "cutoff")
   main->Grid.param("Resonance", 3, 0, "reso")
+  shownWhile(ctx, main, ["Filter"], () => FilterTypes.morphText(filterType()) != None, g =>
+    g->Grid.param("F_Morph", 4, 0, "morph")
+  )
+  shownWhile(ctx, main, ["Filter"], () => FilterTypes.hasDrive(filterType()), g =>
+    g->Grid.param("F_Drive", 5, 0, "drive")
+  )
   main->Grid.param("F_Track", 0, 1, "track")
-  main->Grid.param("F_EnvMod", 1, 1, "env mod")
+  main->Grid.param("F_EnvMod", 1, 1, "env")
   main->Grid.param("F_VeloSens", 2, 1, "velocity")
   main->Grid.param("F_Aftertouch", 3, 1, "touch")
-  let knob = (id, c, label) =>
-    main->Grid.at(c, 2, id, b => Controls.paramControl(ctx, filter->Panel.body(0), id, ~x=b.x, ~y=b.y, ~w=b.w, ~label))
-  let morphKnob = knob("F_Morph", 0, "morph")
-  let driveKnob = knob("F_Drive", 1, "drive")
-  // morph and drive are dimmed for the types they do nothing for
-  let get = id => ctx.model->ParamModel.get(id)
-  let filterType = () => Float.toInt(get("Filter"))
-  let describe = () => {
-    let t = filterType()
-    morphKnob->Web.toggleClass("dim", FilterTypes.morphText(t) == None)
-    driveKnob->Web.toggleClass("dim", !FilterTypes.hasDrive(t))
-  }
-  ctx.model->ParamModel.listen("Filter", describe)
-  describe()
+  main->Grid.param("Drift_Cutoff", 4, 1, "drift")
 
-  // the response: the type with its cutoff and resonance, as a curve with a point to drag
-  // (covering the envelope while it shows), and a small picture of it beside morph and drive
-  filterEl := Some(filter.el)
-  let response = filter->Panel.body(1)
-  response->Web.addClass("cover")
-  let resp = Grid.make(ctx, response)
-  resp->Grid.choice("Filter", 0, 0, "type", ~span=2)
-  resp->Grid.param("Cutoff", 2, 0, "cutoff")
-  resp->Grid.param("Resonance", 3, 0, "reso")
-  let graphTop = Grid.padTop + Grid.rowHeight + 4.
+  // the response, with a point to drag for the cutoff and resonance, beside the envelope
+  let graphTop = main->Grid.cy(2) + 2.
+  let graphW = (filterWidth - 2. - 22.) / 2.
+  let graphH = rowHeight - graphTop - 10.
   let source: FilterGraph.source = {
     typeOf: filterType,
     cutoff: "Cutoff",
@@ -463,79 +280,52 @@ let build = (ctx: Ctx.t, page) => {
     },
     alsoIds: ["Filter", "Filter2", "F_Double", "F_Split"],
   }
-  refreshResponse :=
-    FilterGraph.make(
-      ctx,
-      response,
-      {x: 8., y: graphTop, w: columnWidth - 18., h: rowHeight - graphTop - 10.},
-      source,
-      ~voices=true,
-    )
-  refreshPreview :=
-    main->Grid.at(2, 2, ~span=2, "the filter preview", box =>
-      FilterGraph.mini(
-        ctx,
-        filter->Panel.body(0),
-        box,
-        source,
-        ~status=() => {
-          let t = filterType()
-          let morph = FilterTypes.morphText(t)->Option.mapOr("", m => " · morph: " ++ m)
-          `${ctx.model->ParamModel.shortText("Filter")}${morph}${FilterTypes.hasDrive(t)
-              ? ""
-              : " · no drive"}. Click for the response, to drag the cutoff and resonance.`
-        },
-        ~onClick=() => filter->Panel.select(1),
-      )
-    )
-  let dual = Grid.make(ctx, filter->Panel.body(2))
+  refreshResponse := FilterGraph.make(ctx, body, {x: 8., y: graphTop, w: graphW, h: graphH}, source, ~voices=true)
+  envelope(ctx, body, EnvEditor.filter, {x: 14. + graphW, y: graphTop, w: graphW, h: graphH}, ~columns=3)
+
+  let dual = Grid.make(ctx, filter->Panel.body(1), ~cw=Grid.fitColumns(filterWidth, 4))
   dual->Grid.choice("Filter2", 0, 0, "filter 2", ~span=2)
   dual->Grid.choice("F_Double", 2, 0, "double")
   dual->Grid.param("F_Split", 3, 0, "split")
   dual->Grid.param("F_Mix", 0, 1, "mix")
   dual->Grid.param("F_Speed", 1, 1, "speed ratio")
+
   // the key EQ: a band on each of the note's harmonics 1, 2, 4 ... 128
-  voiceFx(ctx, filter->Panel.body(4))
-  let keyEq = Grid.make(ctx, filter->Panel.body(3))
+  let keyEq = Grid.make(ctx, filter->Panel.body(2), ~cw=Grid.fitColumns(filterWidth, 4))
   keyEq->Grid.toggle("KEQ_On", 0, 0, "key EQ")
-  keyEq
-  ->Grid.note("A low shelf under the note, then octave-wide bands on its harmonics: they move with the key", 1, 0, ~span=3)
-  ->ignore
+  help(
+    keyEq,
+    3,
+    0,
+    "A low shelf under each note, then octave-wide bands on its harmonics: the curve moves with the key.",
+  )
   for k in 1 to PorridgeParams.keyEqBands {
     let label = k == 1 ? "low shelf" : Float.toString(PorridgeParams.keyEqHarmonic(k)) ++ "×"
     keyEq->Grid.param(PorridgeParams.keyEqGainId(k), mod(k - 1, 4), 1 + (k - 1) / 4, label)
   }
-  let top = Grid.padTop + 3. * Grid.rowHeight + 6.
-  envelope(ctx, filter.el, EnvEditor.filter, {x: 8., y: top, w: 340., h: rowHeight - top - 10.})
+  filter
+}
 
-  //==============================================================================
-  // amp
-  let amp = Panel.make(page, ~title="amp", ~x=x2, ~y=y0, ~w=lastWidth, ~h=rowHeight)
-  let ampBox = {x: 8., y: 25., w: lastWidth - 18., h: rowHeight - 25. - Grid.rowHeight - 16.}
-  envelope(ctx, amp.el, EnvEditor.amp, ampBox)
-  let ampGrid = Grid.make(ctx, amp.el, ~y=ampBox.y + ampBox.h + 4.)
-  ampGrid->Grid.param("Gain", 0, 0, "output gain")
-  ampGrid->Grid.param("VeloSens", 1, 0, "velocity")
-  ampGrid->Grid.param("FreqEnv", 2, 0, "freq > env")
+//==============================================================================
+// the modulation sources
 
-  //==============================================================================
-  // modulation
-  let modulation = Panel.make(
-    page,
-    ~tabs=["mod env 1", "mod env 2", "pitch env", "lfo 1", "lfo 2", "lfo 3"],
-    ~x=x0,
-    ~y=y1,
-    ~w=2. * columnWidth + gap,
-    ~h=rowHeight,
+let modEnvelope = (ctx: Ctx.t, body, n) => {
+  let env = EnvEditor.modEnv(n)
+  envelope(ctx, body, env, {x: 8., y: 27., w: chipsX - 16., h: rowHeight - 37.})
+  Controls.param(ctx, body, env.params.prefix ++ "VeloSens", ~x=chipsX, ~y=Grid.padTop, ~w=chipsWidth, ~label="velocity")
+  Destinations.make(
+    ctx,
+    body,
+    `modEnv${Int.toString(n)}`,
+    {x: chipsX, y: Grid.padTop + Grid.rowHeight, w: chipsWidth, h: rowHeight - Grid.padTop - Grid.rowHeight - 8.},
   )
-  let graph = {x: 8., y: 27., w: 430., h: rowHeight - 27. - 10.}
-  modEnvelope(ctx, modulation->Panel.body(0), 1, graph)
-  modEnvelope(ctx, modulation->Panel.body(1), 2, graph)
+}
 
-  let pitchBody = modulation->Panel.body(2)
+let pitchEnvelope = (ctx: Ctx.t, body) => {
+  let graph = {x: 8., y: 27., w: chipsX - 16., h: rowHeight - 37.}
   EnvEditor.make(
     ctx,
-    pitchBody,
+    body,
     graph,
     EnvEditor.pitch(ctx, ~w=graph.w, ~h=graph.h),
     ~fields=[
@@ -548,46 +338,160 @@ let build = (ctx: Ctx.t, page) => {
     ],
     ~name="Pitch envelope",
   )
-  let pitch = Grid.make(ctx, pitchBody, ~x=graph.x + graph.w + 10.)
-  pitch->Grid.toggle("PEnv_On", 0, 0, "on")
-  pitch->Grid.param("PEnv_VeloSens", 1, 0, "velocity")
+  let g = Grid.make(ctx, body, ~x=chipsX, ~cw=chipsWidth + Grid.columnGap)
+  g->Grid.toggle("PEnv_On", 0, 0, "on")
+  g->Grid.param("PEnv_VeloSens", 0, 1, "velocity")
+}
 
-  lfo(ctx, modulation->Panel.body(3), 1, graph)
-  lfo(ctx, modulation->Panel.body(4), 2, graph)
-  lfo3(ctx, modulation->Panel.body(5), graph)
+// The LFOs share a layout: their picture, then shape and mode, rate, delay and fade, and phase,
+// in that order as far as each has them, and what they move on the right.
+let lfoGraph = {x: 8., y: 27., w: lfoX - 16., h: rowHeight - 37.}
+let lfoGrid = (ctx, body) => Grid.make(ctx, body, ~x=lfoX, ~cw=lfoColumn)
+let lfoDestinations = (ctx, body, key) =>
+  Destinations.make(ctx, body, key, {x: chipsX, y: Grid.padTop, w: chipsWidth, h: rowHeight - Grid.padTop - 8.})
 
-  //==============================================================================
-  // voice
-  let voice = Panel.make(page, ~tabs=["voice", "tuning"], ~x=x2, ~y=y1, ~w=lastWidth, ~h=rowHeight)
-  let v = Grid.make(ctx, voice->Panel.body(0))
+let lfo = (ctx: Ctx.t, body, n) => {
+  let lfo = Int.toString(n)
+  let prefix = `LFO_${lfo}_`
+  Plots.lfo(ctx, body, n - 1, lfoGraph)
+  drawButton(ctx, body, lfoGraph, ~status=`Draw LFO ${lfo}'s user shape`, n == 1 ? LfoShape1 : LfoShape2)
+  let g = lfoGrid(ctx, body)
+  g->Grid.choice(prefix ++ "Shape", 0, 0, "shape")
+  g->Grid.at(1, 0, ~span=2, prefix ++ "Sync", b => Controls.lfoMode(ctx, body, prefix ++ "Sync", ~x=b.x, ~y=b.y, ~w=b.w))
+  g->Grid.choice(prefix ++ "Unit", 0, 1, "unit")
+  g->Grid.param(prefix ++ "Speed", 1, 1, "rate")
+  g->Grid.toggle(prefix ++ "Quantize", 2, 1, "quantize")
+  g->Grid.param(prefix ++ "Delay", 0, 2, "delay")
+  g->Grid.param(prefix ++ "Fade", 1, 2, "fade in")
+  g->Grid.param(prefix ++ "Slew", 2, 2, "slew")
+  // (one phase for both LFOs, as Oatmeal has it)
+  g->Grid.param("LFOPhase", 0, 3, "phase 1+2")
+  g->Grid.param("LFOPhaseRand", 1, 3, "rand 1+2")
+  g->Grid.toggle("LFORetrig", 2, 3, "retrig 1+2")
+  g->Grid.choice(prefix ++ "Steps", 0, 4, "s&h steps")
+  g->Grid.toggle(prefix ++ "OneShot", 1, 4, "one-shot")
+  lfoDestinations(ctx, body, "lfo" ++ lfo)
+}
+
+// LFO 3, and the wander source's rate.
+let lfo3 = (ctx: Ctx.t, body) => {
+  Plots.lfo3(ctx, body, lfoGraph)
+  let g = lfoGrid(ctx, body)
+  g->Grid.choice("LFO_3_Shape", 0, 0, "shape")
+  g->Grid.at(1, 0, ~span=2, "LFO_3_Mode", b => Controls.lfoMode(ctx, body, "LFO_3_Mode", ~x=b.x, ~y=b.y, ~w=b.w))
+  g->Grid.choice("LFO_3_Sync", 0, 1, "sync")
+  // (the rate is the sync's when it has one)
+  let rate = g->Grid.at(1, 1, "LFO_3_Rate", b =>
+    Controls.paramControl(ctx, body, "LFO_3_Rate", ~x=b.x, ~y=b.y, ~w=b.w, ~label="rate")
+  )
+  g->Grid.param("LFO_3_Delay", 0, 2, "delay")
+  g->Grid.param("LFO_3_Fade", 1, 2, "fade in")
+  g->Grid.param("LFO_3_Phase", 0, 3, "phase")
+  g->Grid.param("LFO_3_PhaseRand", 1, 3, "random phase")
+  g->Grid.param("Wander_Rate", 0, 4, "wander rate")
+  help(
+    g,
+    1,
+    4,
+    "Wander is a source of its own: a slow random drift each voice has, at this rate. Like LFO 3, it moves things through connections.",
+    ~tipW=250.,
+  )
+  let dim = () => rate->toggleClass("dim", ctx.model->ParamModel.get("LFO_3_Sync") != 0.)
+  ctx.model->ParamModel.listen("LFO_3_Sync", dim)
+  dim()
+  lfoDestinations(ctx, body, "lfo3")
+}
+
+//==============================================================================
+// the voice
+
+// Microtuning: a Scala scale (and keyboard mapping) instead of the 12 notes above it.
+let scale = (ctx: Ctx.t, body, g: Grid.t) => {
+  el("div", ~cls="sep", ~parent=body)->place(g->Grid.cx(0) + 3., g->Grid.cy(4) - 1., ~w=4. * g.cw - 8.)->ignore
+  // the scale's name, and a "?" at the end of its cells
+  g->Grid.claim(0, 4, ~span=2, "the scale name")
+  let cell = g->Grid.cell(0, 4, ~span=2)
+  let size = Style.controlHeight
+  let name = el("div", ~cls="scale", ~parent=body)->placeBox({...cell, w: cell.w - size - 4.})
+  Controls.help(
+    body,
+    "A Scala scale retunes every key in place of the 12 notes above (tune still sets 440 Hz); a keyboard mapping (.kbm) sets which key plays which degree.",
+    ~x=cell.x + cell.w - size,
+    ~y=cell.y,
+    ~size,
+    ~tipW=280.,
+  )
+  let pickScale = FilePicker.make(body, ~accept=Scala.extensions->Array.join(","), file =>
+    ctx.programs->ProgramStore.loadUserFile(file)->Promise.ignore
+  )
+  // the 12 note offsets don't apply while a scale is loaded
+  let notes = body->querySelectorAll(".p")->nodesToArray->Array.slice(~start=4)
+  g->Grid.button(
+    "load scale",
+    2,
+    4,
+    ~status="Load a Scala scale (.scl) or keyboard mapping (.kbm); they're saved with the program",
+    pickScale,
+  )
+  g->Grid.button(
+    "clear",
+    3,
+    4,
+    ~status="Back to the 12-note tuning above",
+    () => ctx.programs->ProgramStore.setTuning(None),
+  )
+  let update = () => {
+    let scaleName = ctx.programs->ProgramStore.tuningName
+    name->setTextContent(scaleName->Option.getOr("12 notes"))
+    name->toggleClass("on", scaleName != None)
+    notes->Array.forEach(e => e->toggleClass("dim", scaleName != None))
+  }
+  ctx.programs->ProgramStore.onChanged(update)
+  update()
+}
+
+let voicePanel = (ctx: Ctx.t, page) => {
+  let model = ctx.model
+  let voice = Panel.make(
+    page,
+    ~tabs=["voice", "touch", "random", "tuning"],
+    ~x=Style.designWidth - margin - lastWidth,
+    ~y=top + rowHeight + gap,
+    ~w=lastWidth,
+    ~h=rowHeight,
+  )
+  voice->Panel.mark(model, 1, [Features.touch])->ignore
+  voice->Panel.mark(model, 2, [Features.random])->ignore
+  let markTuning = voice->Panel.mark(model, 3, [Features.tuning], ~also=() =>
+    ctx.programs->ProgramStore.tuningName != None
+  )
+  ctx.programs->ProgramStore.onChanged(markTuning)
+
+  let cw = Grid.fitColumns(lastWidth, 3)
+  let v = Grid.make(ctx, voice->Panel.body(0), ~cw)
   v->Grid.choice("PolyMode", 0, 0, "voice mode", ~span=2)
   v->Grid.param("Voices", 2, 0, "polyphony")
-  v->Grid.param("BendRange", 3, 0, "bend range")
   v->Grid.param("Glide", 0, 1, "glide")
-  v->Grid.choice("GlideMode", 1, 1, "glide mode", ~span=2)
-  v->Grid.param("GlobalTranspose", 3, 1, "transpose")
-  v->Grid.param("RandomFreq", 0, 2, "random freq")
-  v->Grid.param("RandomPan", 1, 2, "random pan")
-  v->Grid.param("RandomAmp", 2, 2, "random amp")
-  v->Grid.param("FreqPan", 3, 2, "freq > pan")
-  v->Grid.choice("AftertouchMode", 0, 3, "touch")
-  // the switch, with a "?" at its end that explains it
-  v->Grid.at(1, 3, ~span=2, "Oat_Mode", b => {
-    let size = Style.controlHeight
-    Controls.toggle(ctx, v.el, "Oat_Mode", ~x=b.x, ~y=b.y, ~w=b.w - size - Grid.columnGap, ~label="Oat mode")
-    Controls.help(
-      v.el,
-      "Oat mode keeps Oatmeal's MIDI timing (notes, controllers and arpeggiator steps start on the next 64-sample block, not on their own sample) and its legato quirk: a stereo voice's right filter envelopes never start.",
-      ~x=b.x + b.w - size,
-      ~y=b.y,
-      ~size,
-      ~tipW=Grid.controlWidth(v, 3),
-    )
-  })
-  // the pitch and mod wheels, as on the Arp / XY page, side by side in the last column
-  v->Grid.at(3, 4, ~rows=4, "the wheels", box => Wheels.make(ctx, voice->Panel.body(0), box, ~gap=Grid.columnGap))
+  shownWhile(ctx, v, ["Glide"], () => model->ParamModel.get("Glide") > 0., g =>
+    g->Grid.choice("GlideMode", 1, 1, "glide mode", ~span=2)
+  )
+  v->Grid.param("BendRange", 0, 2, "bend range")
+  v->Grid.param("GlobalTranspose", 1, 2, "transpose")
 
-  let tuning = Grid.make(ctx, voice->Panel.body(1))
+  // what aftertouch does to the oscillators (the noise's and the filter's are theirs)
+  let touch = Grid.make(ctx, voice->Panel.body(1), ~cw)
+  touch->Grid.choice("AftertouchMode", 0, 0, "mode")
+  touch->Grid.param("OscAftertouch", 1, 0, "touch > level")
+  touch->Grid.param("O1_Afterpitch", 0, 1, "touch > osc 1")
+  touch->Grid.param("O2_Afterpitch", 1, 1, "touch > osc 2")
+
+  let random = Grid.make(ctx, voice->Panel.body(2), ~cw)
+  random->Grid.param("RandomFreq", 0, 0, "random freq")
+  random->Grid.param("RandomPan", 1, 0, "random pan")
+  random->Grid.param("RandomAmp", 2, 0, "random amp")
+  random->Grid.param("FreqPan", 0, 1, "freq > pan")
+
+  let tuning = Grid.make(ctx, voice->Panel.body(3), ~cw=Grid.fitColumns(lastWidth, 4))
   tuning->Grid.param("Tune_Main", 0, 0, "tune")
   tuning->Grid.param("Tune_Octave", 1, 0, "octave")
   tuning->Grid.param("Tune_CutReference", 2, 0, "cut ref")
@@ -606,5 +510,67 @@ let build = (ctx: Ctx.t, page) => {
     ("Tune_Bb", "a#"),
     ("Tune_B", "b"),
   ]->Array.forEachWithIndex(((id, label), i) => tuning->Grid.param(id, mod(i, 4), 1 + i / 4, label))
-  scale(ctx, voice->Panel.body(1), tuning)
+  scale(ctx, voice->Panel.body(3), tuning)
+}
+
+//==============================================================================
+
+// Draws the eye to a panel a flow node opened.
+let flash = (p: Panel.t) => {
+  p.el->removeClass("flash")
+  requestAnimationFrame(_ => p.el->addClass("flash"))
+  setTimeout(() => p.el->removeClass("flash"), 800)->ignore
+}
+
+let build = (ctx: Ctx.t, page) => {
+  let model = ctx.model
+  let osc = oscPanel(ctx, page)
+  let filter = filterPanel(ctx, page)
+
+  let ampX = margin + oscWidth + gap + filterWidth + gap
+  let amp = Panel.make(page, ~title="amp", ~x=ampX, ~y=top, ~w=lastWidth, ~h=rowHeight)
+  let ampBox = {x: 8., y: 25., w: lastWidth - 18., h: rowHeight - 25. - Grid.rowHeight - 12.}
+  envelope(ctx, amp.el, EnvEditor.amp, ampBox)
+  let ampGrid = Grid.make(ctx, amp.el, ~y=ampBox.y + ampBox.h + 4., ~cw=Grid.fitColumns(lastWidth, 3))
+  ampGrid->Grid.param("Gain", 0, 0, "output gain")
+  ampGrid->Grid.param("VeloSens", 1, 0, "velocity")
+  ampGrid->Grid.param("FreqEnv", 2, 0, "freq > env")
+
+  let modulation = Panel.make(
+    page,
+    ~tabs=["mod env 1", "mod env 2", "pitch env", "lfo 1", "lfo 2", "lfo 3"],
+    ~x=margin,
+    ~y=top + rowHeight + gap,
+    ~w=modWidth,
+    ~h=rowHeight,
+  )
+  [Features.modEnv1, Features.modEnv2, Features.pitchEnv, Features.lfo1, Features.lfo2, Features.lfo3]->Array.forEachWithIndex(
+    (f, i) => modulation->Panel.mark(model, i, [f])->ignore,
+  )
+  modEnvelope(ctx, modulation->Panel.body(0), 1)
+  modEnvelope(ctx, modulation->Panel.body(1), 2)
+  pitchEnvelope(ctx, modulation->Panel.body(2))
+  lfo(ctx, modulation->Panel.body(3), 1)
+  lfo(ctx, modulation->Panel.body(4), 2)
+  lfo3(ctx, modulation->Panel.body(5))
+
+  voicePanel(ctx, page)
+
+  VoiceFlow.make(
+    ctx,
+    page,
+    {x: margin, y: margin, w: Style.designWidth - 2. * margin, h: flowHeight},
+    ~show=block => {
+      let (panel, tab) = switch block {
+      | Oscillators => (osc, Some(0))
+      | Noise => (osc, Some(1))
+      | Unison => (osc, Some(2))
+      | Filter => (filter, Some(0))
+      | KeyEq => (filter, Some(2))
+      | Amp => (amp, None)
+      }
+      tab->Option.forEach(i => panel->Panel.select(i))
+      flash(panel)
+    },
+  )
 }

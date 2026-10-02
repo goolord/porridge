@@ -29,8 +29,8 @@ const author = "Porridge";
 
 // list values: short names here for the labels a parameter's list has (ParamDefs.choiceValue)
 const choices = (id, labels) => Object.fromEntries (Object.entries (labels).map (([k, label]) => [k, choiceValue (id, label)]));
-const wave = choices ("O1_Waveform", { sine: "Sine", saw: "Saw", pulse: "Pulse", tri: "Triangle", user: "User",
-                                       userPwm: "User PWM", sawHQ: "Saw HQ", pulseHQ: "Pulse HQ", triHQ: "Triangle HQ" });
+const wave = choices ("O1_Waveform", { sine: "Sine", saw: "Oatmeal saw", pulse: "Oatmeal pulse", tri: "Oatmeal triangle",
+                                       user: "User", userPwm: "User PWM", sawHQ: "Saw", pulseHQ: "Pulse", triHQ: "Triangle" });
 const mix = choices ("OscMix", { normal: "normal", sync: "hardsync", fm: "FM (1 -> 2, 1 silent)", pm: "PM 2 > 1",
                                  pmFeedback: "PM 1 feedback", ring: "ring 1 × 2", am: "AM 2 > 1" });
 const filter = Object.fromEntries (Object.entries ({
@@ -105,7 +105,7 @@ const delay = ({ unit, length, feedback, wet }) => {
 const mod = (source, target, amount, via) => via ? { source, target, amount, via } : { source, target, amount };
 
 // the effects rack, slot by slot, by the names in its menu; Oatmeal's chorus, delay, reverb and
-// EQ stay in their slots unless they're left out
+// EQ stay in their slots unless they're left out, or do nothing there (see the end)
 const rack = (...names) => Object.fromEntries (Array.from ({ length: PorridgeParams.rackSlots }, (_, i) =>
 {
     const k = names[i] === undefined ? 0 : PorridgeParams.rackNames.indexOf (names[i]);
@@ -2272,7 +2272,8 @@ const programs = [
         + "and a soft drive on each voice, ready for the macros and the modulation matrix.",
     macros: ["", "", "", ""],
     params: {
-        O1_Waveform: wave.sawHQ,
+        // (both oscillators, as Init sets them)
+        O1_Waveform: wave.sawHQ, O2_Waveform: wave.sawHQ,
         Filter: filter.ladder, Cutoff: 0.6, Resonance: 0.1, F_Track: 0.5,
         ...amp ({ a: 2, bp: 1, s: 1, r: 120 }),
         Sat_Type: dist.soft, Sat_Mode: distMode.voicePost, Sat_Pregain: 0,
@@ -2380,6 +2381,10 @@ parsed._0.presets.forEach ((p, i) =>
     const got = [...p.values].filter (([id, x]) => /^Mod\d+_Source$/.test (id) && x > 0).length;
     if (got !== want) throw new Error (`${p.meta.name}: ${want - got} modulations have an unknown source or target`);
 });
+
+// Oatmeal's chorus, delay, reverb and EQ leave the rack where they're switched off (the EQ: every
+// band off), as they do from an Oatmeal import, so that no program shows idle effects
+parsed._0.presets.forEach (p => Preset.withoutIdleEffects (p.values));
 
 const out = join (root, "presets", "vanilla.porridge");
 writeFileSync (out, Preset.writeBank (parsed._0.presets, "Vanilla"));

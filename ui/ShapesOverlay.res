@@ -1,10 +1,11 @@
-// Shapes page: the two user oscillator waveforms, with their harmonics, and the two user LFO
-// shapes. A sample dropped onto the window or picked with "sample…" becomes a waveform built
-// from its harmonics, or an LFO shape from its volume (WaveImport).
+// The shapes editor, over the pages: the two user oscillator waveforms, with their harmonics,
+// and the two user LFO shapes. The Synth page's "draw" buttons open it (Ctx.openShape), and a
+// sample dropped onto the window or picked with "sample…" becomes a waveform built from its
+// harmonics, or an LFO shape from its volume (WaveImport). It keeps its own undo while open.
 
 open! Web
 
-let hint = "Drag to draw, shift-click for a straight line, ctrl-drag to smooth. Right-click for tools. Click or drag the harmonics to set their levels and phases. Drop a sample to use its harmonics."
+let hint = "Drag to draw, shift-click for a straight line, ctrl-drag to smooth. Right-click for tools. Click or drag the harmonics to set their levels and phases. Drop a sample to use its harmonics. Esc closes the editor."
 
 type shape = {table: OatmealFormat.table, tab: string, bipolar: bool}
 
@@ -42,7 +43,9 @@ type t = {
   select: OatmealFormat.table => unit,
   // redraws from the program store
   refresh: unit => unit,
-  // makes a shape from a sample: the shape showing if the page is ('here'), else an
+  // takes back the last edit of the shape showing
+  undo: unit => unit,
+  // makes a shape from a sample: the shape showing if the editor is open ('here'), else an
   // oscillator waveform
   importSample: (file, ~here: bool) => unit,
   // what a sample dropped now would make, for the drop zone
@@ -70,7 +73,8 @@ let dragHasSample = (ev: Dom.dragEvent) =>
     ->Array.some(i => i->itemKind == "file" && i->itemType->String.startsWith("audio/"))
   )
 
-let build = (ctx: Ctx.t, page) => {
+// Builds it in page, a page-sized element; onClose closes it.
+let build = (ctx: Ctx.t, page, ~onClose) => {
   let selectRef = ref(_ => ())
   let panel = Panel.make(
     page,
@@ -84,6 +88,9 @@ let build = (ctx: Ctx.t, page) => {
   )
   let blk = panel.el
   let width = panel.w - 22.
+  let close = el("button", ~cls="btn xclose", ~text="close", ~parent=blk)
+  close->onMouse(#click, _ => onClose())
+  ctx.status->Status.hover(close, () => "Close the shapes editor (Esc)")
   let current = ref(0)
   let shape = () => shapes->Array.getUnsafe(current.contents)
 
@@ -284,6 +291,7 @@ let build = (ctx: Ctx.t, page) => {
   {
     select: table => select(Math.Int.max(0, shapes->Array.findIndex(s => s.table == table))),
     refresh: () => select(current.contents),
+    undo: () => editor->ShapeEditor.undo,
     importSample: (file, ~here) => importSample(file, ~here)->Promise.ignore,
     sampleDropText: (~here) => {
       let s = shapes->Array.getUnsafe(sampleTab(~here))

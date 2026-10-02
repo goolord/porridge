@@ -1,9 +1,14 @@
-// The patch view: pages on a fixed-size stage that is scaled to fit the window, a header
-// with the page tabs and the program and file controls, and a status line.
+// The patch view: pages on a fixed-size stage that is scaled to fit the window, a header with
+// the page tabs, the program and a menu of the file and program commands, the shapes editor
+// over the pages, and a status line. Undo and redo (ParamModel's history) are on ctrl+Z and
+// ctrl+shift+Z / ctrl+Y everywhere but in a text field.
 
 open! Web
 
-type page = [#main | #mod | #fx | #play | #shapes | #midi]
+type page = [#main | #mod | #fx | #play]
+
+// what showPage can show: a page, or the shapes editor over it
+type view = [page | #shapes]
 
 // A page: its tab's label and status text, its hint for the status line, and what builds it.
 type pageSpec = {
@@ -15,10 +20,15 @@ type pageSpec = {
 }
 
 type t = {
-  showPage: page => unit,
+  showPage: view => unit,
   // lets go of the patch connection
   dispose: unit => unit,
 }
+
+let oatModeHelp = "Oat mode keeps Oatmeal's MIDI timing (notes, controllers and arpeggiator steps start on the next 64-sample block, not on their own sample) and its legato quirk: a stereo voice's right filter envelopes never start. It is saved with the program."
+
+// two presses of Escape this close together stop every note
+let panicMs = 400.
 
 let make = (host, pc) => {
   // A scratch v38 program holding the current values, used as the context for status texts
@@ -73,14 +83,16 @@ let make = (host, pc) => {
   }
 
   let progName = el("div", ~cls="name")
+  let progText = el("span", ~parent=progName)
+  let pencil = el("span", ~cls="pen", ~text="✎", ~parent=progName)
+  el("span", ~cls="arrow", ~text="▾", ~parent=progName)->ignore
   let programs = ProgramStore.make(pc, model, ~onMessage=toast)
   let updateProgramBar = () =>
-    progName->setTextContent(
+    progText->setTextContent(
       ProgramStore.number(programs.current) ++ "  " ++ programs->ProgramStore.name(programs.current),
     )
   programs->ProgramStore.onChanged(updateProgramBar)
 
-  let shapesPage = ref(None)
   let pages = [
     {
       page: #main,
@@ -105,40 +117,46 @@ let make = (host, pc) => {
     },
     {
       page: #play,
-      label: "Arp / XY",
-      title: "Arpeggiator pattern and the XY pad",
+      label: "Play",
+      title: "Macros, the arpeggiator, the XY pad, the wheels and the MIDI input",
       hint: PagePlay.hint,
       build: PagePlay.build,
-    },
-    {
-      page: #shapes,
-      label: "Shapes",
-      title: "Draw oscillator waveforms and LFO shapes",
-      hint: PageShapes.hint,
-      build: (ctx, e) => shapesPage := Some(PageShapes.build(ctx, e)),
-    },
-    {
-      page: #midi,
-      label: "MIDI",
-      title: "MIDI channels, controllers, velocity and aftertouch curves",
-      hint: PageMidi.hint,
-      build: PageMidi.build,
     },
   ]
   let pageEls =
     pages->Array.map(p => (p, el("div", ~cls=p.page == #main ? "pv-page on" : "pv-page", ~parent=stage)))
   let pageButtons: array<(page, element)> = []
   let shownPage = ref((#main: page))
+  let pageHint = page => pages->Array.find(p => p.page == page)->Option.mapOr("", p => p.hint)
+
+  // the shapes editor, over the pages
+  let overlay = el("div", ~cls="pv-overlay", ~parent=stage)
+  let shapes = ref(None)
+  let shapesShown = ref(false)
+  let shapesOpen = () => shapesShown.contents
+  let closeShapes = () =>
+    if shapesOpen() {
+      shapesShown := false
+      overlay->removeClass("on")
+      status->Status.setIdle(pageHint(shownPage.contents))
+    }
+  // (opening it again would clear its undo, so it only redraws when it wasn't open)
+  let openShapes = () =>
+    if !shapesOpen() {
+      shapesShown := true
+      menu->Menu.close
+      overlay->addClass("on")
+      status->Status.setIdle(ShapesOverlay.hint)
+      shapes.contents->Option.forEach((s: ShapesOverlay.t) => s.refresh())
+    }
 
   let showPage = page => {
+    closeShapes()
     shownPage := page
     pageEls->Array.forEach(((p, e)) => e->toggleClass("on", p.page == page))
     pageButtons->Array.forEach(((p, b)) => b->toggleClass("on", p == page))
     menu->Menu.close
-    pages->Array.find(p => p.page == page)->Option.forEach(p => status->Status.setIdle(p.hint))
-    if page == #shapes {
-      shapesPage.contents->Option.forEach((s: PageShapes.t) => s.refresh())
-    }
+    status->Status.setIdle(pageHint(page))
   }
 
   let ctx: Ctx.t = {
@@ -154,13 +172,15 @@ let make = (host, pc) => {
       PageFx.openEffect.contents(e)
     },
     openShape: table => {
-      showPage(#shapes)
-      shapesPage.contents->Option.forEach((s: PageShapes.t) => s.select(table))
+      openShapes()
+      shapes.contents->Option.forEach((s: ShapesOverlay.t) => s.select(table))
     },
+    openPage: showPage,
     toast,
   }
 
   pageEls->Array.forEach(((p, e)) => p.build(ctx, e))
+  shapes := Some(ShapesOverlay.build(ctx, overlay, ~onClose=closeShapes))
   ModTray.make(ctx, stage)
 
   //==============================================================================
@@ -170,6 +190,12 @@ let make = (host, pc) => {
     let b = el("button", ~cls="btn", ~text, ~parent)
     b->onMouse(#click, _ => onClick())
     status->Status.hover(b, () => title)
+    b
+  }
+  let iconButton = (parent, icon, title, onClick) => {
+    let b = button(parent, "", title, onClick)
+    b->addClass("icon")
+    b->appendChild(Icons.render(icon))
     b
   }
 
@@ -192,33 +218,34 @@ let make = (host, pc) => {
       i => programs->ProgramStore.select(i),
     )
 
-  let renameProgram = () =>
+  let renameProgram = () => {
+    menu->Menu.close
     Controls.editInPlace(
       progName,
       programs->ProgramStore.name(programs.current),
       ~maxLength=Preset.maxNameLength,
       ~within=stage,
-      ~commit=name => programs->ProgramStore.rename(programs.current, name),
+      ~commit=name =>
+        if name != programs->ProgramStore.name(programs.current) {
+          programs->ProgramStore.rename(programs.current, name)
+        },
     )
+  }
 
   let prog = el("div", ~cls="prog", ~parent=head)
-  button(prog, "<", "Previous program", () =>
+  button(prog, "‹", "Previous program", () =>
     programs->ProgramStore.select(programs.current - 1)
   )->ignore
   prog->appendChild(progName)
   progName->onMouse(#click, _ => openProgramMenu())
   progName->onMouse(#dblclick, _ => renameProgram())
-  status->Status.hover(progName, () => "Click to pick a program, double-click to rename it")
-  button(prog, ">", "Next program", () =>
+  pencil->onMouse(#click, ev => {
+    ev->stopPropagation
+    renameProgram()
+  })
+  status->Status.hover(progName, () => "Click to pick a program of the bank; double-click (or the pencil) to rename it")
+  button(prog, "›", "Next program", () =>
     programs->ProgramStore.select(programs.current + 1)
-  )->ignore
-
-  let randomizer = RandomDrawer.make(ctx, stage, settings)
-  button(
-    head,
-    "Random",
-    "Make random patches, as wild as you like in each part, and variations of them or of this program",
-    () => randomizer.isOpen() ? randomizer.hide() : randomizer.show(),
   )->ignore
 
   let browser = PresetBrowser.make(ctx, stage, settings)
@@ -232,20 +259,20 @@ let make = (host, pc) => {
     "Search the bank, the bundled banks and files you open by name, category, tags and author (ctrl+F)",
     browse,
   )->ignore
-  let onShortcut = k =>
-    if k->commandKey && k->key->String.toLowerCase == "f" {
-      k->preventDefault
-      browse()
-    }
-  document->onDocumentKeyDown(onShortcut)
 
-  // a sample becomes a shape on the Shapes page (showing the page again would clear its undo)
+  let randomizer = RandomDrawer.make(ctx, stage, settings)
+  button(
+    head,
+    "Random",
+    "Make random patches, as wild as you like in each part, and variations of them or of this program",
+    () => randomizer.isOpen() ? randomizer.hide() : randomizer.show(),
+  )->ignore
+
+  // a sample becomes a shape in the shapes editor
   let importSample = file => {
-    let here = shownPage.contents == #shapes
-    if !here {
-      showPage(#shapes)
-    }
-    shapesPage.contents->Option.forEach((s: PageShapes.t) => s.importSample(file, ~here))
+    let here = shapesOpen()
+    openShapes()
+    shapes.contents->Option.forEach((s: ShapesOverlay.t) => s.importSample(file, ~here))
   }
   let loadFile = file =>
     AudioFile.isAudio(file->fileName)
@@ -253,71 +280,143 @@ let make = (host, pc) => {
       : programs->ProgramStore.loadUserFile(file)->Promise.ignore
   let pickFile = FilePicker.make(stage, ~accept=[...Preset.extensions, ...Scala.extensions]->Array.join(","), loadFile)
 
-  button(
-    head,
-    "Load",
-    "Load a Porridge preset or bank (.porridge), an Oatmeal program or bank (.omp, .omb, .fxp, .fxb, .dat), or a Scala tuning (.scl, .kbm). You can also drop the file onto the window.",
-    pickFile,
-  )->ignore
-  let save = ref(None)
-  let saveButton = button(head, "Save ▾", "Save this program or the whole bank, or export them for Oatmeal", () =>
-    save.contents->Option.forEach(open_ => open_())
-  )
-  save :=
-    Some(
-      () =>
-        menu->Menu.show(
-          saveButton,
-          [
-            {Menu.label: "Save program (.porridge)", value: 0},
-            {Menu.label: "Save bank, all 64 programs (.porridge)", value: 1},
-            {Menu.label: "Export program for Oatmeal (.omp)", value: 2},
-            {Menu.label: "Export bank for Oatmeal (.omb)", value: 3},
-          ],
-          -1,
-          i =>
-            switch i {
-            | 0 => programs->ProgramStore.downloadProgram
-            | 1 => programs->ProgramStore.downloadBank
-            | 2 => programs->ProgramStore.exportOatmealProgram
-            | _ => programs->ProgramStore.exportOatmealBank
-            },
+  let panic = () => programs->ProgramStore.panic
+  let panicTitle = "Panic: stop every note and clear the effects' tails (or press Escape twice)"
+  // (a square, as on a transport's stop button)
+  iconButton(head, {width: 14., marks: [Fill("M2.5 3.5 H11.5 V12.5 H2.5 Z")]}, panicTitle, panic)->addClass("panic")
+
+  let undo = () =>
+    if shapesOpen() {
+      shapes.contents->Option.forEach((s: ShapesOverlay.t) => s.undo())
+    } else {
+      switch model->ParamModel.undo {
+      | Some(label) => toast("Undid " ++ label)
+      | None => toast("Nothing to undo")
+      }
+    }
+  let redo = () =>
+    if !shapesOpen() {
+      switch model->ParamModel.redo {
+      | Some(label) => toast("Redid " ++ label)
+      | None => toast("Nothing to redo")
+      }
+    }
+
+  // the menu of everything else: files, the program, the bank, undo, Oat mode and panic
+  let menuButton = button(head, "≡", "Load and save, export for Oatmeal, program info, init, undo, Oat mode, panic", () => ())
+  menuButton->addClass("icon")
+  menuButton->addClass("menu-btn")
+  let oatMode = () => model->ParamModel.get("Oat_Mode") != 0.
+  menuButton->onMouse(#click, _ => {
+    let undoLabel = model->ParamModel.undoLabel
+    let redoLabel = model->ParamModel.redoLabel
+    // (every item has a place for a check mark, which Oat mode's takes)
+    let item = (label, value, ~rule=false, ~hint=?, ~keys=?, ~disabled=false, ~checked=false) => {
+      Menu.label,
+      value,
+      rule,
+      ?hint,
+      ?keys,
+      disabled,
+      checked,
+    }
+    menu->Menu.show(
+      menuButton,
+      [
+        item(
+          "Load…",
+          0,
+          ~hint="Load a Porridge preset or bank (.porridge), an Oatmeal program or bank (.omp, .omb, .fxp, .fxb, .dat), or a Scala tuning (.scl, .kbm). You can also drop the file onto the window.",
         ),
-    )
-  button(head, "Info", "Name, author, category, tags and description of this program", () =>
-    InfoDialog.show(ctx, stage)
-  )->ignore
-  let init = ref(None)
-  let initButton = button(head, "Init ▾", "Reset this program to the Init patch, or start a new bank of Init programs", () =>
-    init.contents->Option.forEach(open_ => open_())
-  )
-  init :=
-    Some(
-      () =>
-        menu->Menu.show(
-          initButton,
-          [
-            {Menu.label: "Init this program", value: 0},
-            {Menu.label: `New bank of ${Int.toString(OatmealFormat.bankPrograms)} Init programs…`, value: 1},
-          ],
-          -1,
-          i =>
-            switch i {
-            | 0 => programs->ProgramStore.initCurrent
-            | _ => NewBankDialog.show(ctx, stage)
-            },
+        item("Save program", 1, ~hint="Save this program as a .porridge file"),
+        item("Save bank", 2, ~hint=`Save the whole bank, all ${Int.toString(OatmealFormat.bankPrograms)} programs, as a .porridge file`),
+        item("Export program for Oatmeal", 3, ~hint="Save this program as an Oatmeal program (.omp); what Oatmeal can't store is left out"),
+        item("Export bank for Oatmeal", 4, ~hint="Save the bank as an Oatmeal bank (.omb); what Oatmeal can't store is left out"),
+        item("Program info…", 5, ~rule=true, ~hint="Name, author, category, tags and description of this program"),
+        item("Init program", 6, ~hint="Reset this program to the Init patch (undo takes it back)"),
+        item(
+          `New bank of ${Int.toString(OatmealFormat.bankPrograms)} Init programs…`,
+          7,
+          ~hint="Start a bank of your own: every program Init, with your name as their author",
         ),
+        item(
+          undoLabel->Option.mapOr("Undo", l => "Undo " ++ l),
+          8,
+          ~rule=true,
+          ~keys="ctrl+Z",
+          ~disabled=undoLabel == None,
+        ),
+        item(
+          redoLabel->Option.mapOr("Redo", l => "Redo " ++ l),
+          9,
+          ~keys="ctrl+shift+Z",
+          ~disabled=redoLabel == None,
+        ),
+        item("Oat mode", 10, ~rule=true, ~hint=oatModeHelp, ~checked=oatMode()),
+        item("Panic", 11, ~rule=true, ~keys="Esc Esc", ~hint=panicTitle),
+      ],
+      -1,
+      i =>
+        switch i {
+        | 0 => pickFile()
+        | 1 => programs->ProgramStore.downloadProgram
+        | 2 => programs->ProgramStore.downloadBank
+        | 3 => programs->ProgramStore.exportOatmealProgram
+        | 4 => programs->ProgramStore.exportOatmealBank
+        | 5 => InfoDialog.show(ctx, stage)
+        | 6 => programs->ProgramStore.initCurrent
+        | 7 => NewBankDialog.show(ctx, stage)
+        | 8 => undo()
+        | 9 => redo()
+        | 10 => model->ParamModel.gestureSet("Oat_Mode", oatMode() ? 0. : 1.)
+        | _ => panic()
+        },
     )
-  button(head, "Panic", "Stop all notes and clear effect tails", () =>
-    programs->ProgramStore.panic
-  )->ignore
-  let gear = button(head, "", "Settings: interface size, preset browser, bank folders", () =>
+  })
+
+  iconButton(head, Icons.gear, "Settings: interface size, preset browser, bank folders", () =>
     SettingsDialog.show(settings, browser.library, stage)
-  )
-  gear->addClass("icon")
-  gear->appendChild(Icons.render(Icons.gear))
+  )->ignore
 
   stage->appendChild(toastEl)
+
+  //==============================================================================
+  // keys
+
+  let lastEscape = ref(0.)
+  let onKey = k =>
+    if !BrowserChrome.inTextField(k) {
+      let key = k->key->String.toLowerCase
+      switch key {
+      | "f" if k->commandKey =>
+        k->preventDefault
+        browse()
+      | "z" if k->commandKey =>
+        k->preventDefault
+        k->shiftKey ? redo() : undo()
+      | "y" if k->commandKey =>
+        k->preventDefault
+        redo()
+      | "escape" =>
+        // (an Escape that closes something doesn't count towards a panic)
+        let now = Date.now()
+        if shapesOpen() {
+          closeShapes()
+          lastEscape := 0.
+        } else if menu.menu->Option.isSome {
+          menu->Menu.close
+          lastEscape := 0.
+        } else if now - lastEscape.contents < panicMs {
+          panic()
+          toast("Panic: every note stopped")
+          lastEscape := 0.
+        } else {
+          lastEscape := now
+        }
+      | _ => ()
+      }
+    }
+  document->onDocumentKeyDown(onKey)
 
   //==============================================================================
   // drop zone
@@ -328,8 +427,8 @@ let make = (host, pc) => {
     e->preventDefault
     depth := depth.contents + 1
     drop->setTextContent(
-      switch shapesPage.contents {
-      | Some(s) if PageShapes.dragHasSample(e) => s.sampleDropText(~here=shownPage.contents == #shapes)
+      switch shapes.contents {
+      | Some(s) if ShapesOverlay.dragHasSample(e) => s.sampleDropText(~here=shapesOpen())
       | _ =>
         browser->PresetBrowser.isOpen
           ? "Drop Porridge or Oatmeal banks to browse them"
@@ -356,7 +455,7 @@ let make = (host, pc) => {
     ->Option.forEach(d => {
       let files = d->transferredFiles->filesToArray
       let sample = files->Array.find(f => AudioFile.isAudio(f->fileName))
-      // a sample goes to the Shapes page; with the browser open, other files are added to it
+      // a sample goes to the shapes editor; with the browser open, other files are added to it
       // instead of replacing the bank
       if sample->Option.isSome {
         sample->Option.forEach(loadFile)
@@ -400,11 +499,15 @@ let make = (host, pc) => {
   )
 
   {
-    showPage,
+    showPage: v =>
+      switch v {
+      | #shapes => openShapes()
+      | #...page as page => showPage(page)
+      },
     dispose: () => {
       disposed := true
       resizeObserver->disconnect
-      document->offDocumentKeyDown(onShortcut)
+      document->offDocumentKeyDown(onKey)
       restoreBrowserChrome()
       fontFace->remove
       settings->Settings.dispose

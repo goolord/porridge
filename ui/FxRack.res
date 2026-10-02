@@ -1,5 +1,5 @@
 // The effects rack (PorridgeParams.rackKinds): up to eight effects on the whole sound, in the
-// order they run, each kind up to four times. The first chorus, delay, reverb and EQ are
+// order they run, each kind up to three times. The first chorus, delay, reverb and EQ are
 // Oatmeal's; the others are numbered copies with parameters of their own (D_Wet: D2_Wet ...).
 // Porridge's own effects (flanger, phaser, compressor, algo reverb, convolve, bode, filter,
 // utility, ambience, air) are numbered the same way from their first (Fl_Rate, Fl2_Rate ...).
@@ -71,23 +71,22 @@ let kindName = (k: kind) => spec(k).menuName->Option.getOr(key(k))
 // What it does, for the add menu's hover texts.
 let about = (k: kind) => spec(k).about
 
-// The add menu's groups, in order.
+// The add menus' groups, by what the kinds do, in order: the per-voice menu and the whole
+// sound's show the kinds each can take, in the same groups.
 let menuGroups: array<(string, array<kind>)> = [
   ("drive", [#distortion]),
-  ("modulation", [#chorus, #flanger, #phaser, #bode]),
-  ("echo & space", [#delay, #reverb, #space, #ambience, #convolve]),
-  ("tone & dynamics", [#eq, #filter, #air, #compressor, #utility]),
+  ("tone", [#eq, #filter, #air]),
+  ("movement", [#chorus, #flanger, #phaser]),
+  ("pitch", [#bode, #shifter, #octaver, #resonator]),
+  ("echo", [#delay]),
+  ("space", [#reverb, #space, #ambience, #convolve]),
+  ("dynamics", [#compressor]),
+  ("utility", [#utility]),
 ]
 
-// The kinds a voice can run, and the voice lane's add menu.
+// The kinds a voice can run.
 let laneKinds = kinds->Array.filter(k => spec(k).runsIn != Rack)
 let laneOnly = (k: kind) => spec(k).runsIn == LaneOnly
-let laneMenuGroups: array<(string, array<kind>)> = [
-  ("follows the key", [#resonator, #shifter, #octaver]),
-  ("tone & drive", [#filter, #distortion, #eq]),
-  ("movement", [#phaser, #flanger]),
-  ("level & place", [#utility]),
-]
 
 // Oatmeal's chorus, delay, reverb and EQ (and its distortion, before the rack): the kinds whose
 // first isn't one of the rack's own entries

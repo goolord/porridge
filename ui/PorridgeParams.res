@@ -14,7 +14,8 @@ type kind =
   // ... with a default of its own
   | LikeWithDefault(string, float)
 
-type spec = {id: string, name: string, kind: kind}
+// about: what it does, which its status text says after its value
+type spec = {id: string, name: string, kind: kind, about?: string}
 
 let firstSlot = 2600
 
@@ -109,7 +110,12 @@ let followSpecs = [
 let semitones = x => Float.toFixed(x, ~digits=1) ++ " st"
 
 let mpeSpecs = [
-  {id: "MPE_On", name: "MPE", kind: Choice({names: ["off", "on"], init: 0})},
+  {
+    id: "MPE_On",
+    name: "MPE",
+    kind: Choice({names: ["off", "on"], init: 0}),
+    about: "With MPE, controllers (bend, pressure, slide, CCs) move once per 64-sample block, smoothed; notes keep their own sample",
+  },
   {
     id: "MPE_BendRange",
     name: "MPE note bend range",
@@ -273,10 +279,15 @@ let shaperSpecs = [
 ]
 
 // The effects rack: up to eight effects on the whole sound, in any order, each of them up to
-// four times. The first chorus, delay, reverb and EQ are Oatmeal's; the others are copies, with
-// Oatmeal's parameters again under numbered ids (D_Wet: D2_Wet, D3_Wet, D4_Wet). The rack's
-// distortions are copies of Oatmeal's distortion (Sat2_ .. Sat5_), which itself stays in the
-// voices or before the rack.
+// three times. The first chorus, delay, reverb and EQ are Oatmeal's; the others are copies, with
+// Oatmeal's parameters again under numbered ids (D_Wet: D2_Wet, D3_Wet). The rack's distortions
+// are copies of Oatmeal's distortion (Sat2_ .. Sat4_), which itself stays in the voices or
+// before the rack.
+//
+// There were four of each (five distortions) until October 2026: every copy costs memory and
+// host parameters whether it's used or not. The fourth copies are retired: their parameters are
+// gone, but their rack values and modulation targets keep their places (presets and the DSP
+// know those by number), and a program that used one loads it onto a free copy (Preset).
 //
 // A rack slot holds one effect (rackEntries). Slots holding one of Oatmeal's four take them in
 // FX_Order's order, so FX_Order still orders them, and programs from before the rack, which
@@ -305,6 +316,8 @@ type rackKind = {
   params: array<(string, string)>,
   // the copies' numbers
   copies: array<int>,
+  // the copies it had once, after those: retired (see above)
+  retired?: array<int>,
   // Porridge's own effects: the first is in the rack too, as copy 1 (Oatmeal's chorus, delay,
   // reverb and EQ are the four FX_Order orders; its distortion sits before the rack)
   firstInRack: bool,
@@ -532,7 +545,8 @@ let newKinds = [
     about: "a flanger: a short swept delay",
     runsIn: Both,
     params: rackParams(flangerSpecs),
-    copies: [2, 3, 4],
+    copies: [2, 3],
+    retired: [4],
     firstInRack: true,
   },
   {
@@ -541,7 +555,8 @@ let newKinds = [
     about: "a phaser: swept notches",
     runsIn: Both,
     params: rackParams(phaserSpecs),
-    copies: [2, 3, 4],
+    copies: [2, 3],
+    retired: [4],
     firstInRack: true,
   },
   {
@@ -550,7 +565,8 @@ let newKinds = [
     about: "a compressor, one band or three (like OTT)",
     runsIn: Rack,
     params: rackParams(compressorSpecs),
-    copies: [2, 3, 4],
+    copies: [2, 3],
+    retired: [4],
     firstInRack: true,
   },
   {
@@ -560,7 +576,8 @@ let newKinds = [
     about: "an algorithmic reverb: hall, plate, nitrous, basin, vintage",
     runsIn: Rack,
     params: rackParams(spaceSpecs),
-    copies: [2, 3, 4],
+    copies: [2, 3],
+    retired: [4],
     firstInRack: true,
   },
   {
@@ -580,7 +597,8 @@ let newKinds = [
     about: "a frequency shifter (Bode), and a shifted delay",
     runsIn: Rack,
     params: rackParams(bodeSpecs),
-    copies: [2, 3, 4],
+    copies: [2, 3],
+    retired: [4],
     firstInRack: true,
   },
   {
@@ -589,7 +607,8 @@ let newKinds = [
     about: "a filter of any of the synth's types",
     runsIn: Both,
     params: rackParams(filterFxSpecs),
-    copies: [2, 3, 4],
+    copies: [2, 3],
+    retired: [4],
     firstInRack: true,
   },
   {
@@ -598,7 +617,8 @@ let newKinds = [
     about: "gain, pan, width, phase and bass mono",
     runsIn: Both,
     params: rackParams(utilitySpecs),
-    copies: [2, 3, 4],
+    copies: [2, 3],
+    retired: [4],
     firstInRack: true,
   },
   // (after the others: rack values and parameters added later go at the end)
@@ -608,7 +628,8 @@ let newKinds = [
     about: "a very small space: a little stereo and tone",
     runsIn: Rack,
     params: rackParams(ambienceSpecs),
-    copies: [2, 3, 4],
+    copies: [2, 3],
+    retired: [4],
     firstInRack: true,
   },
   {
@@ -617,7 +638,8 @@ let newKinds = [
     about: "air: lifts or tames the very top (Airwindows Air4)",
     runsIn: Rack,
     params: rackParams(airSpecs),
-    copies: [2, 3, 4],
+    copies: [2, 3],
+    retired: [4],
     firstInRack: true,
   },
 ]
@@ -755,7 +777,8 @@ let rackKinds = [
       ("C_Feedback", "feedback"),
       ("C_Mix", "mix"),
     ],
-    copies: [2, 3, 4],
+    copies: [2, 3],
+    retired: [4],
     firstInRack: false,
   },
   {
@@ -780,7 +803,8 @@ let rackKinds = [
       ("D_Dry", "dry out"),
       ("D_Wet", "wet out"),
     ],
-    copies: [2, 3, 4],
+    copies: [2, 3],
+    retired: [4],
     firstInRack: false,
   },
   {
@@ -803,7 +827,8 @@ let rackKinds = [
       ("R_Predelay", "predelay"),
       ("R_EarlyMix", "early mix"),
     ],
-    copies: [2, 3, 4],
+    copies: [2, 3],
+    retired: [4],
     firstInRack: false,
   },
   {
@@ -821,7 +846,8 @@ let rackKinds = [
         (`EQ_${n}_Type`, `band ${n} type`),
       ]
     })],
-    copies: [2, 3, 4],
+    copies: [2, 3],
+    retired: [4],
     firstInRack: false,
   },
   {
@@ -840,7 +866,8 @@ let rackKinds = [
       ...distModelParams,
       ...laterKindParams("distortion"),
     ],
-    copies: [2, 3, 4, 5],
+    copies: [2, 3, 4],
+    retired: [5],
     firstInRack: false,
   },
   // (the filter's note tracking came later: see filterTrackSpecs; and the phaser's and flanger's
@@ -859,24 +886,35 @@ let copyId = (id, n) =>
   | _ => id
   }
 
-// What a rack slot can hold, by value: nothing, Oatmeal's four, then every copy.
-let rackEntries: array<option<(string, int)>> = [
+let retiredOf = k => k.retired->Option.getOr([])
+let isRetired = ((key, n)) => rackKinds->Array.some(k => k.key == key && retiredOf(k)->Array.includes(n))
+
+// Every value a rack slot has had, by value: nothing, Oatmeal's four, then every copy (the
+// retired ones too, which keep their values).
+let rackHistory: array<option<(string, int)>> = [
   None,
   Some(("chorus", 1)),
   Some(("delay", 1)),
   Some(("reverb", 1)),
   Some(("eq", 1)),
   ...rackKinds->Array.flatMap(k =>
-    (k.firstInRack ? [1, ...k.copies] : k.copies)->Array.map(n => Some((k.key, n)))
+    [...(k.firstInRack ? [1] : []), ...k.copies, ...retiredOf(k)]->Array.map(n => Some((k.key, n)))
   ),
 ]
 
-let rackNames = rackEntries->Array.map(entry =>
+// What a rack slot can hold, by value (None: nothing, or a retired copy, which runs nothing).
+let rackEntries = rackHistory->Array.map(entry => entry->Option.filter(e => !isRetired(e)))
+
+// The retired copy a rack value was, if it was one.
+let retiredEntry = v => rackHistory[v]->Option.flatMap(e => e)->Option.filter(isRetired)
+
+let rackNames = rackHistory->Array.map(entry =>
   switch entry {
   | None => "empty"
-  | Some((key, n)) =>
+  | Some((key, n) as e) =>
     let name = rackKinds->Array.find(k => k.key == key)->Option.mapOr(key, k => k.name)
-    n == 1 ? name : `${name} ${Int.toString(n)}`
+    let name = n == 1 ? name : `${name} ${Int.toString(n)}`
+    isRetired(e) ? name ++ " (retired)" : name
   }
 )
 
@@ -892,9 +930,10 @@ let rackSpecs = Array.fromInitializer(~length=rackSlots, i => {
 // Oatmeal's EQ has no switch; Porridge's switches it (and its copies) off without losing its bands.
 let eqOnSpecs = [{id: "EQ_On", name: "EQ on", kind: Choice({names: onOff, init: 1})}]
 
-// (only: the parameters to copy)
+// (only: the parameters to copy; the retired copies' are in their places, for `endpoints`, and
+// left out of `all`)
 let copySpecsOf = (kinds, ~only=_ => true) => kinds->Array.flatMap(k =>
-  k.copies->Array.flatMap(n =>
+  [...k.copies, ...retiredOf(k)]->Array.flatMap(n =>
     k.params
     ->Array.filter(((id, _)) => only(id))
     ->Array.map(((id, label)) => {
@@ -1087,7 +1126,8 @@ let voiceExtraSpecs = [
   ...stepSpecs,
 ]
 
-let groups = [
+// (with the retired copies' parameters)
+let groupsAsAdded = [
   (Macros, macroSpecs),
   (Modulations, slotSpecs),
   (Mpe, mpeSpecs),
@@ -1124,6 +1164,19 @@ let groups = [
   (VoiceExtras, voiceExtraSpecs),
 ]
 
+// The retired copies' parameters: no longer the patch's, presets' or hosts'.
+let retiredIds = Set.fromArray(
+  rackKinds->Array.flatMap(k => retiredOf(k)->Array.flatMap(n => k.params->Array.map(((id, _)) => copyId(id, n)))),
+)
+let isRetiredId = id => retiredIds->Set.has(id)
+
+let groups = groupsAsAdded->Array.map(((f, specs)) => (f, specs->Array.filter(s => !isRetiredId(s.id))))
+
 let all = groups->Array.flatMap(((_, specs)) => specs)
+
+// Every parameter endpoint there has been, in order, and whether it's retired: the patch keeps a
+// retired one's place (as an endpoint that isn't a parameter), because CLAP hosts know
+// parameters by their endpoint's number, which counts the endpoints before it.
+let endpoints = groupsAsAdded->Array.flatMap(((_, specs)) => specs->Array.map(s => (s.id, isRetiredId(s.id))))
 
 let slotOf = i => firstSlot + i

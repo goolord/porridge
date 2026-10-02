@@ -53,6 +53,19 @@ let make = (parent, ~title="", ~tabs=[], ~bodies=true, ~onSelect=_ => (), ~x, ~y
 
 let body = (p, i) => p.bodies[i]->Option.getOr(p.el)
 
+// A dot on tab i while what it holds is in use, so that it shows without opening the tab.
+let setMark = (p, i, used) => p.tabs[i]->Option.forEach(tab => tab->toggleClass("used", used))
+
+// Marks tab i while any of these features is in use (Features), and again (at most once a
+// frame) whenever their parameters change; also, when given, while also() holds, which the
+// caller re-checks by calling the returned function.
+let mark = (p, model, i, features: array<Features.t>, ~also=() => false) => {
+  let update = () => setMark(p, i, also() || features->Array.some(Features.isOn(model, _)))
+  model->ParamModel.listenEach(features->Array.flatMap(f => f.ids), perFrame(update))
+  update()
+  update
+}
+
 let right = p => p.x + p.w + Grid.gap
 let bottom = p => p.y + p.h + Grid.gap
 

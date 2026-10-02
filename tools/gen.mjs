@@ -1,7 +1,8 @@
 // Generates the parameter plumbing from the parameter table (run `npm run res` first):
 //   dsp/ParamStore.cmajor  - the parameter endpoints: Oatmeal's 342 (named after the original skin
 //                            actions), then Porridge's own (ui/PorridgeParams.res), forwarding every
-//                            change to the synth as (slot, value)
+//                            change to the synth as (slot, value); hosts don't list the routing
+//                            and setup ones (ParamInfo: automatable: false)
 //   dsp/Slots.cmajor       - slot constants: index into the synth's mirror of the program struct,
 //                            every slot's default, and names for the choice values the DSP tests
 //   dsp/ModTables.cmajor   - the modulation matrix's sources and targets (ui/ModMatrix.res), with
@@ -18,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { all as fields } from "../ui/oatmeal/Fields.res.mjs";
 import { xyTargets, modEnvTargets, ccTargets } from "../ui/oatmeal/OatmealParams.res.mjs";
 import { paramInfo } from "../ui/ParamInfo.res.mjs";
-import { all as porridgeParams, slotOf as porridgeSlot, fxOrder, rackId, rackSlots, rackKinds, rackEntries, copyId } from "../ui/PorridgeParams.res.mjs";
+import { all as porridgeParams, endpoints as porridgeEndpoints, slotOf as porridgeSlot, fxOrder, rackId, rackSlots, rackKinds, rackEntries, copyId } from "../ui/PorridgeParams.res.mjs";
 import { makeDefs, choiceValue } from "../ui/ParamDefs.res.mjs";
 import { programSize, tableOffset } from "../ui/oatmeal/OatmealFormat.res.mjs";
 import * as ModMatrix from "../ui/ModMatrix.res.mjs";
@@ -70,6 +71,7 @@ function cf (x)
 const defs = new Map (makeDefs().map (d => [d.id, d]));
 const endpoints = [], handlers = [], slots = [], cfields = [];
 const slotDefaults = new Array (NUM_SLOTS).fill (0);
+let hostListed = 0;
 
 const all = [
     ...fields.map (f => ({ ...f, slot: slotOf (f) })),
@@ -89,6 +91,9 @@ for (const f of all)
     const info = paramInfo (index);
     const { isInt } = defs.get (id);
     const ann = [`name: ${cmajString (info.hostName)}`];
+    // (hosts list only automatable parameters: routing and setup stay out of their lists)
+    if (info.automatable) ++hostListed;
+    else ann.push ("automatable: false");
 
     if (isInt)
     {
@@ -113,6 +118,14 @@ for (const f of all)
                              : `    { "${id}", ${offset}, FieldType::${kind}, ${isInt} },`);
 }
 
+// Porridge's endpoints in the order they came, the retired ones (PorridgeParams.endpoints) in
+// their places as plain events that do nothing: hosts know a parameter by its endpoint's number.
+{
+    const live = new Map (endpoints.splice (fields.length).map ((line, i) => [porridgeParams[i].id, line]));
+    for (const [id, retired] of porridgeEndpoints)
+        endpoints.push (retired ? `    input event float ${id};    // retired` : live.get (id));
+}
+
 // A camelCase identifier from a menu label: "LFO 1 speed" -> lfo1Speed, "1 PWM rate" -> osc1PwmRate.
 function labelIdent (label)
 {
@@ -128,8 +141,8 @@ const targetConstants = (name, doc, labels) => ns (name, doc, labels.map ((l, i)
 // Choice values the DSP compares against, by their menu labels (which must exist).
 const choices = [
     { ns: "waveType", param: "O1_Waveform", doc: "Oscillator waveforms (O1_Waveform, O2_Waveform).",
-      values: { sine: "Sine", saw: "Saw", pulse: "Pulse", triangle: "Triangle", user: "User", userPwm: "User PWM",
-                sawHQ: "Saw HQ", pulseHQ: "Pulse HQ", triangleHQ: "Triangle HQ" } },
+      values: { sine: "Sine", saw: "Oatmeal saw", pulse: "Oatmeal pulse", triangle: "Oatmeal triangle", user: "User",
+                userPwm: "User PWM", sawHQ: "Saw", pulseHQ: "Pulse", triangleHQ: "Triangle" } },
     { ns: "oscMixMode", param: "OscMix", doc: "How the two oscillators combine (OscMix).",
       values: { normal: "normal", sync: "hardsync", fm: "FM (1 -> 2, 1 silent)", pm2to1: "PM 2 > 1",
                 pmFeedback: "PM 1 feedback", ring: "ring 1 × 2", am: "AM 2 > 1" } },
@@ -323,7 +336,8 @@ writeGenerated (join (root, "tools", "test", "PorridgeTest.cmajorpatch"), JSON.s
 
 const TABLE = 257;
 
-const kinds = { Knob: 1, Pitch: 2, Volume: 3, Pan: 4 };
+// (a retired copy's targets move nothing, like none's)
+const kinds = { Knob: 1, Pitch: 2, Volume: 3, Pan: 4, Retired: 0 };
 const targetKind = [], targetSlot = [], targetRow = [], targetScale = [], rows = [], rowNames = [];
 const rowOf = new Map();    // row text -> row index
 
@@ -413,4 +427,4 @@ ${ModMatrix.targets.map ((t, i) => `    let ${ident (t.key)} = ${i};`).join ("\n
 }
 `);
 
-console.log (`generated ${all.length} parameters, ${ModMatrix.targets.length} modulation targets`);
+console.log (`generated ${all.length} parameters (${hostListed} listed by hosts), ${ModMatrix.targets.length} modulation targets`);

@@ -91,14 +91,16 @@ let show = (t, id, ev) => {
 // Opens the menu on a double right-click on e, a control for the parameter id. The first click
 // has already done what a right-click does there (reset the value, step it...), so the second
 // puts back the value from before it, and the control never sees it. The menu opens with the
-// context menu event, which comes with the release on Windows, as menus do there.
+// context menu event, which comes with the release on Windows, as menus do there. (Hosts have
+// no menu for the routing and setup parameters, which they don't list: ParamInfo.isSetup.)
 let attach = (t, model, e, id) => {
+  let listed = !ParamInfo.isSetup(id)
   // the time of the last right press, and the value before it
   let last = ref(None)
   let armed = ref(false)
   e->onPointerCapture(#pointerdown, ev => {
     armed := false
-    if ev->button == 2 && t.available {
+    if ev->button == 2 && t.available && listed {
       let now = Date.now()
       switch last.contents {
       | Some((at, before)) if now - at <= doubleClickMs =>

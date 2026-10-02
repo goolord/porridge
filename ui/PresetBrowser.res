@@ -163,7 +163,13 @@ let readFiles = async (t, files: array<file>) => {
   for i in 0 to Array.length(files) - 1 {
     let file = files->Array.getUnsafe(i)
     let bytes = await readBytes(file)
-    switch (bytes, bytes->Result.flatMap(Preset.parseForLoading(_, file->fileName))) {
+    let parsed = bytes->Result.flatMap(Preset.parseForLoading(_, file->fileName))
+    // (what loading it couldn't keep)
+    switch parsed {
+    | Ok({warnings}) if warnings != [] => t.ctx.toast(warnings->Array.join("; "))
+    | _ => ()
+    }
+    switch (bytes, parsed) {
     | (Ok(bytes), Ok({presets})) if t.library.available =>
       let name = baseName(file->fileName)
       let id = t.library->BankLibrary.keep(~name, ~ext=keptExtension(file->fileName), bytes, presets)

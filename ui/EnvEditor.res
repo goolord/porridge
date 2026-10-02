@@ -349,11 +349,12 @@ let adsr = (ctx: Ctx.t, env, ~w, ~h): shape => {
       model->ParamModel.set(l, l == id("Breakpoint") && fractionAt(y) > 0.985 ? 1. : levelAt(y))
     )
 
+  // (what 0 means, where there's room for it)
   let depth =
     env.depth->Option.map(({id, label, atZero}) => (
       id,
       () =>
-        model->ParamModel.get(id) == 0.
+        model->ParamModel.get(id) == 0. && w >= 300.
           ? `${label} 0: ${atZero}`
           : `${label} ${model->ParamModel.shortText(id)}`,
     ))
@@ -508,7 +509,7 @@ let xOfClock = (times: array<stretch>, ms, ~released) => {
   }
 }
 
-// fields: the raw parameters shown by the "values" switch, four to a row; clock: where each
+// fields: the raw parameters shown by the "values" switch, this many to a row; clock: where each
 // sounding note is on this envelope (VoiceView), for a mark per note
 let make = (
   ctx: Ctx.t,
@@ -516,11 +517,12 @@ let make = (
   box: box,
   shape: shape,
   ~fields: array<(string, string)>,
+  ~columns=4,
   ~name,
   ~clock: option<VoiceView.voice => float>=?,
 ) => {
   let model = ctx.model
-  let ed = NodeEditor.make(ctx, parent, box, ~hint=hintFor(name), ~columns=4)
+  let ed = NodeEditor.make(ctx, parent, box, ~hint=hintFor(name), ~columns)
   let zero = ed.g.under->Plots.line(2., 0., box.w - 2., 0.)
   let fill = FxGraph.path(ed.g.under, ~cls="fill")
   let ticks = FxGraph.group(ed.g.under)
@@ -528,7 +530,7 @@ let make = (
   // the envelope at its depth: rising from the bottom, or for a negative depth hanging from the top
   let depthCurve = FxGraph.path(ed.g.under, ~cls="curve depth")
   let depthLabel = svgEl(ed.g.under, "text", [("class", Str("tick depth")), ("text-anchor", Str("end"))])
-  fields->Array.forEachWithIndex(((id, label), i) => ed.values->Grid.param(id, mod(i, 4), i / 4, label))
+  fields->Array.forEachWithIndex(((id, label), i) => ed.values->Grid.param(id, mod(i, columns), i / columns, label))
 
   let frame = ref(shape.fit())
   let handles = ref([])

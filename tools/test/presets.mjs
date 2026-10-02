@@ -6,7 +6,9 @@
 //     too, and bundle/factory-bank.json (from npm run build) is up to date;
 //   - a preset missing parameters and tables reads back with their defaults;
 //   - modulations, macro names and microtunings survive a round trip;
-//   - Porridge's extra list values export as Oatmeal's nearest, and are reported.
+//   - Porridge's extra list values export as Oatmeal's nearest, and are reported;
+//   - the retired fourth copies keep their numbers, and programs that used one load it onto a
+//     free copy, or without it and a warning.
 //
 // run: node tools/test/presets.mjs
 
@@ -17,6 +19,10 @@ import * as Bank from "../../ui/Bank.res.mjs";
 import * as OatmealFormat from "../../ui/oatmeal/OatmealFormat.res.mjs";
 import * as Scala from "../../ui/Scala.res.mjs";
 import * as FxRack from "../../ui/FxRack.res.mjs";
+import * as PorridgeParams from "../../ui/PorridgeParams.res.mjs";
+import * as ModMatrix from "../../ui/ModMatrix.res.mjs";
+import * as ParamDefs from "../../ui/ParamDefs.res.mjs";
+import * as ValueList from "../../ui/ValueList.res.mjs";
 import { root, checker } from "./lib.mjs";
 
 const { fail, done } = checker ();
@@ -157,6 +163,99 @@ else
     if (! near (t[72] - t[60], 12)) fail ("tuning: the mapping repeats an octave up");
     if (t[61] > -1000) fail ("tuning: C# is unmapped");
     if (Preset.make ("plain").tuning !== undefined) fail ("Init has a tuning");
+}
+
+// Init has the HQ saw while the waveforms' default stays Oatmeal's sine: an Init program goes
+// through the stored bank (which leaves defaults out) and back with its saw, a program stored
+// without waveforms reads back with sines, and Oatmeal programs keep their aliasing waves
+{
+    const hqSaw = ParamDefs.choiceValue ("O1_Waveform", "Saw");
+    const wave = p => [p.values.get ("O1_Waveform"), p.values.get ("O2_Waveform")].join ();
+    if (hqSaw !== 6 || ParamDefs.choiceValue ("O1_Waveform", "Oatmeal saw") !== 1) fail ("the waveforms' values moved");
+    const bank = Preset.fillBank ([Preset.make ("plain")]);
+    const back = Preset.decodeBank (Preset.encodeBank (bank));
+    if (wave (bank[1]) !== "6,6" || wave (Preset.init ("x")) !== "6,6") fail ("Init's waveforms: " + wave (bank[1]));
+    if (! back || ! back.every ((p, i) => sameValues (bank[i].values, p.values))) fail ("the stored bank changes Init's waveforms");
+    if (wave (back[0]) !== "0,0" || Preset.defaultValues ().get ("O1_Waveform") !== 0) fail ("the waveforms' default changed");
+    if (presets.some (p => p.values.get ("O1_Waveform") >= 6 || p.values.get ("O2_Waveform") >= 6)) fail ("an Oatmeal program has an HQ wave");
+    const v = Bank.programValues (Preset.toOatmeal (Preset.init ("x")));
+    if (v.get ("O1_Waveform") !== 1 || v.get ("O2_Waveform") !== 1) fail ("Init's HQ saws export as " + v.get ("O1_Waveform"));
+    const menu = ValueList.menu ("Waveform", 9).map (([v, heading]) => (heading ? `[${heading}] ` : "") + v).join ();
+    if (menu !== "0,6,7,8,4,5,[Oatmeal (aliasing)] 1,2,3") fail ("the waveform menu: " + menu);
+}
+
+// The rack's fourth copies (the fifth distortion) are retired: their rack values and modulation
+// targets keep their numbers and run or move nothing, and no menu offers them
+{
+    const retiredValues = [7, 10, 13, 16, 20, 24, 28, 32, 36, 42, 46, 50, 54, 58];
+    if (PorridgeParams.rackEntries.length !== 65) fail (`the rack has ${PorridgeParams.rackEntries.length} values, not 65`);
+    PorridgeParams.rackEntries.forEach ((e, v) =>
+    {
+        const retired = PorridgeParams.retiredEntry (v) !== undefined;
+        if (retired !== retiredValues.includes (v)) fail (`rack value ${v} (${PorridgeParams.rackNames[v]}) retired: ${retired}`);
+        if (retired && (e !== undefined || FxRack.ofValue (v) !== undefined)) fail (`retired rack value ${v} still runs`);
+    });
+    if (FxRack.all.some (e => e.copy > (e.kind === "distortion" ? 4 : 3))) fail ("the add menus offer a fourth copy");
+    // (their indices before they were retired)
+    const targets = { C4_Mix: 65, D4_Wet: 68, Sat5_Pregain: 75, D4_Rotation: 144, Ff4_Track: 449, Fl4_Track: 477 };
+    for (const [key, i] of Object.entries (targets))
+        if (ModMatrix.targetIndex (key) !== i || ModMatrix.targets[i].law !== "Retired") fail (`target ${key} isn't retired at ${i}`);
+    if (ModMatrix.targets.length !== 484) fail (`${ModMatrix.targets.length} targets, not 484`);
+    if (! ModMatrix.targets.every (t => (t.law === "Retired") === PorridgeParams.isRetiredId (t.key))) fail ("a retired copy's target moves something");
+    if (ParamDefs.makeDefs ().some (d => PorridgeParams.isRetiredId (d.id))) fail ("a retired copy keeps its parameters");
+}
+
+// a program that used a fourth copy loads it onto a free copy of its kind, with its parameters,
+// its connections and its place, or without it and a warning
+{
+    const value = (kind, copy) => FxRack.value ({ kind, copy });
+    const retired = name => PorridgeParams.rackNames.indexOf (`${name} (retired)`);
+    const load = (params, modulations = []) =>
+    {
+        const doc = { porridge: "preset", version: 1, name: "old", params, modulations };
+        const r = Preset.parseJson (JSON.stringify (doc))._0;
+        return { p: r.presets[0], warnings: r.warnings, get: id => r.presets[0].values.get (id) };
+    };
+    const target = key => ModMatrix.targetIndex (key);
+
+    // onto delay 2, whose old values go; the connection follows it
+    let r = load ({ FX_Rack_1: retired ("Delay 4"), D4_Wet: 0.8, D4_LengthL: 0.3, D2_Wet: 0.1, D2_Rotation: 0.6 },
+                  [{ source: "lfo1", target: "D4_Wet", amount: 0.5 }]);
+    if (r.get ("FX_Rack_1") !== value ("delay", 2) || r.get ("D2_Wet") !== Math.fround (0.8) || r.get ("D2_LengthL") !== Math.fround (0.3)
+        || r.get ("D2_Rotation") !== Preset.defaultValues ().get ("D2_Rotation") || r.warnings.length)
+        fail (`delay 4 loads as rack ${r.get ("FX_Rack_1")}, wet ${r.get ("D2_Wet")}: ${r.warnings}`);
+    if (r.get ("Mod1_Target") !== target ("D2_Wet") || r.get ("Mod1_Source") !== 1) fail ("delay 4's connection doesn't follow it");
+    const json = new TextDecoder ().decode (Preset.writePreset (r.p));
+    if (/D4_/.test (json)) fail ("a retired copy's parameters are written");
+
+    // with delay 2 in the rack and delay 3 modulated, it has nowhere to go
+    r = load ({ FX_Rack_1: value ("delay", 2), FX_Rack_2: retired ("Delay 4"), FX_Rack_3: value ("air", 1) },
+              [{ source: "lfo1", target: "D4_Wet", amount: 0.5 }, { source: "lfo2", target: "D3_Wet", amount: 0.2 }]);
+    if (r.get ("FX_Rack_2") !== 0 || r.get ("FX_Rack_3") !== value ("air", 1) || r.warnings.length !== 1 || ! r.warnings[0].includes ("Delay 4"))
+        fail (`delay 4 with no free delay: rack ${r.get ("FX_Rack_2")}, ${r.warnings}`);
+    if (r.get ("Mod1_Target") !== target ("D3_Wet") || r.get ("Mod2_Source") !== 0) fail ("delay 4's connection outlives it");
+
+    // the fifth distortion, in the voice lane after the filter, becomes the second
+    r = load ({ VL_1: value ("filter", 2), VL_2: retired ("Distortion 5"), VL_FilterAt: 1, VL_AmpAt: 2, Sat5_Type: 3, Sat5_X2: 0.25 });
+    if (r.get ("VL_2") !== value ("distortion", 2) || r.get ("Sat2_Type") !== 3 || r.get ("Sat2_X2") !== 0.25 || r.get ("VL_AmpAt") !== 2)
+        fail (`distortion 5 loads as lane ${r.get ("VL_2")}, type ${r.get ("Sat2_Type")}`);
+
+    // three flangers in use: the fourth leaves the lane, which closes up around the filter and amp
+    r = load ({ VL_1: value ("flanger", 1), VL_2: retired ("Flanger 4"), VL_3: value ("flanger", 2), VL_FilterAt: 2, VL_AmpAt: 3,
+                FX_Rack_1: value ("flanger", 3) });
+    const lane = [1, 2, 3, 4].map (k => r.get ("VL_" + k));
+    if (lane.join () !== [value ("flanger", 1), value ("flanger", 2), 0, 0].join () || r.get ("VL_FilterAt") !== 1 || r.get ("VL_AmpAt") !== 2
+        || r.warnings.length !== 1)
+        fail (`flanger 4 left out of the lane: ${lane}, filter at ${r.get ("VL_FilterAt")}, amp at ${r.get ("VL_AmpAt")}`);
+
+    // a connection to a fourth copy that no slot held moved nothing, and goes without a word
+    r = load ({}, [{ source: "lfo1", target: "Am4_Mix", amount: 0.5 }, { source: "lfo2", target: "Cutoff", amount: 0.2 }]);
+    if (r.get ("Mod1_Target") !== target ("Cutoff") || r.get ("Mod2_Source") !== 0 || r.warnings.length) fail ("a dead connection to a retired copy stays");
+
+    // the stored bank says what it couldn't keep too
+    const stored = Preset.decodeNamedBank (JSON.stringify ({ porridge: "bank", version: 1, name: "b", presets: [
+        { name: "full", params: { FX_Rack_1: value ("air", 1), FX_Rack_2: value ("air", 2), FX_Rack_3: value ("air", 3), FX_Rack_4: retired ("Air 4") } } ] }));
+    if (! stored || stored[2].length !== 1 || stored[1][0].values.get ("FX_Rack_4") !== 0) fail ("the stored bank's warnings");
 }
 
 done (`ok: ${programs.length} programs round-trip`);

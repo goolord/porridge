@@ -45,7 +45,12 @@ dsp/                    Cmajor DSP
                           multiples of a voice's note) and the air rack effect (Air4)
   Convolve.cmajor         the convolver: zero-latency partitioned convolution, built-in impulses
 ui/                     patch view (ReScript)
-  Index.res               entry point; View.res builds the pages
+  Index.res               entry point; View.res builds the header (pages, program, the ≡ menu),
+                          the four pages and the shapes editor over them (ShapesOverlay.res),
+                          and binds undo and redo: ParamModel.res records every edit, a
+                          gesture a step, and ProgramStore.res whole-program changes
+  PagePlay.res            the Play page: macros, arpeggiator, XY pad, wheels and the MIDI input
+                          (MidiInput.res); SlotRows.res shows target slots as used rows + "+"
   VoiceView.res           the sounding notes as the DSP reports them: a mark per note on the
                           envelopes, LFOs, the filter graph and the modulated controls
   Preset.res              Porridge's preset format; PorridgeParams.res and ModMatrix.res
@@ -57,7 +62,8 @@ ui/                     patch view (ReScript)
                           voice or on the whole sound, for PageMod.res (the Mod page);
                           Modulators.res says what moves each parameter (connections and
                           Oatmeal's own routings), which the parameter rows and the graphs'
-                          points show in the sources' colours;
+                          points show in the sources' colours, and what each source moves,
+                          which Destinations.res shows as chips on the source's panel;
                           ModEdit.res connects a source to a control, and ModTray.res is the
                           source tray (from the status line) whose chips drop onto any control
   PresetBrowser.res       the preset browser; Library.res searches and filters for it, and
@@ -72,8 +78,11 @@ ui/                     patch view (ReScript)
   NewBankDialog.res       starts a new bank of Init programs, for someone writing one
   VoiceLane.res           editing the voice lane (FxRack.res reads it beside the rack): its
                           effects in order with the filter and the amp, moving an effect between
-                          the voices and the whole sound; the FX page's "each note" tabs, the
-                          routing tab's voice row and the synth page's voice fx tab use it
+                          per-voice and the whole sound; the FX page's strip (PageFx.res: the
+                          signal path, a tab per effect) and the synth page use it
+  PageMain.res            the synth page: VoiceFlow.res draws the voice's signal flow along its
+                          top; Features.res says which features a patch uses, which the
+                          panels' tabs mark (Panel.res)
   FilterTypes.res         the filter types; FilterGraph.res their response pictures, with a
                           point to drag for cutoff and resonance
   FxPanels.res            the tabs of Porridge's own effects (CompEditor.res: the compressor's);
