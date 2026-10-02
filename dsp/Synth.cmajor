@@ -5,8 +5,9 @@
 //  MIDI timing: Oatmeal applies MIDI at the start of the next block, up to 64 samples late.
 //  Porridge applies each message on its own sample instead, one block later (a constant
 //  latency of 64 samples, which the plugin reports to the host): the voices render a block in
-//  pieces split at the messages and at arpeggiator steps. Oat mode keeps Oatmeal's timing,
-//  with the output delayed by a block so that the latency is the same.
+//  pieces split at the messages and at arpeggiator steps. With MPE on, only the notes split it:
+//  controllers (bend, pressure, slide, CCs) wait for the next piece (see nextSplit). Oat mode
+//  keeps Oatmeal's timing, with the output delayed by a block so that the latency is the same.
 
 namespace porridge
 {
@@ -1891,6 +1892,30 @@ namespace porridge
                 midiHead = 0;
                 midiCount = 0;
             }
+        }
+
+        /// Which of the next `due` queued messages the block next splits at (counted from
+        /// midiHead), or `due` for none. Every message splits it, except with MPE on: then only
+        /// the notes do (and the sustain pedal and all notes off, which end notes), and the
+        /// controllers wait for the next piece, at the latest the next block. A piece is the
+        /// voices' whole per-block work, so an MPE controller stream on every note would
+        /// otherwise multiply it; the controllers are smoothed per piece as ever.
+        int nextSplit (int due)
+        {
+            if (P[slot::MPE_On] == 0)
+                return 0;
+
+            for (int i = 0; i < due; ++i)
+            {
+                let m = midiQueue.at (midiHead + i).message;
+                let type = (m >> 16) & 0xf0;
+                let d1 = (m >> 8) & 0x7f;
+
+                if (type == 0x80 || type == 0x90 || (type == 0xb0 && (d1 == 64 || d1 >= 123)))
+                    return i;
+            }
+
+            return due;
         }
 
         /// Moves the messages not yet handled to the front of the queue, once per block.
@@ -3887,9 +3912,10 @@ namespace porridge
                         arpStart();
 
                     var end = min (blockSize, pos + arpSamplesToStep());
+                    let next = nextSplit (due);
 
-                    if (due > 0)
-                        end = min (end, max (int (midiTime.at (midiHead) - start), pos + 1));
+                    if (next < due)
+                        end = min (end, max (int (midiTime.at (midiHead + next) - start), pos + 1));
 
                     let n = end - pos;
                     active = renderPiece (pos, n) || active;

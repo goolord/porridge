@@ -14,7 +14,8 @@ type kind =
   // ... with a default of its own
   | LikeWithDefault(string, float)
 
-type spec = {id: string, name: string, kind: kind}
+// about: what it does, which its status text says after its value
+type spec = {id: string, name: string, kind: kind, about?: string}
 
 let firstSlot = 2600
 
@@ -109,7 +110,12 @@ let followSpecs = [
 let semitones = x => Float.toFixed(x, ~digits=1) ++ " st"
 
 let mpeSpecs = [
-  {id: "MPE_On", name: "MPE", kind: Choice({names: ["off", "on"], init: 0})},
+  {
+    id: "MPE_On",
+    name: "MPE",
+    kind: Choice({names: ["off", "on"], init: 0}),
+    about: "With MPE, controllers (bend, pressure, slide, CCs) move once per 64-sample block, smoothed; notes keep their own sample",
+  },
   {
     id: "MPE_BendRange",
     name: "MPE note bend range",

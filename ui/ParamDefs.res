@@ -167,6 +167,13 @@ let porridgeDef = (index, spec: PorridgeParams.spec, ~like: string => t) =>
     }
   }
 
+// A Porridge parameter's status text says what it does after its value, when its spec says.
+let withAbout = (d: t, spec: PorridgeParams.spec) =>
+  switch spec.about {
+  | Some(about) => {...d, longText: x => `${d.longText(x)}. ${about}`}
+  | None => d
+  }
+
 // A list with Porridge's values after Oatmeal's: Oatmeal's values read as before, the new
 // ones by name, and the knob steps through all of them evenly.
 let extend = (def, oatNames, added: ValueList.added) => {
@@ -350,7 +357,7 @@ let makeDefs = (~context=() => None) => {
     }
   oatmeal->Array.concat(
     PorridgeParams.all->Array.mapWithIndex((spec, i) => {
-      let d = porridgeDef(OatmealParams.paramCount + i, spec, ~like)
+      let d = porridgeDef(OatmealParams.paramCount + i, spec, ~like)->withAbout(spec)
       byId->Map.set(d.id, d)
       d
     }),
