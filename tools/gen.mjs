@@ -1,7 +1,8 @@
 // Generates the parameter plumbing from the parameter table (run `npm run res` first):
 //   dsp/ParamStore.cmajor  - the parameter endpoints: Oatmeal's 342 (named after the original skin
 //                            actions), then Porridge's own (ui/PorridgeParams.res), forwarding every
-//                            change to the synth as (slot, value)
+//                            change to the synth as (slot, value); hosts don't list the routing
+//                            and setup ones (ParamInfo: automatable: false)
 //   dsp/Slots.cmajor       - slot constants: index into the synth's mirror of the program struct,
 //                            every slot's default, and names for the choice values the DSP tests
 //   dsp/ModTables.cmajor   - the modulation matrix's sources and targets (ui/ModMatrix.res), with
@@ -70,6 +71,7 @@ function cf (x)
 const defs = new Map (makeDefs().map (d => [d.id, d]));
 const endpoints = [], handlers = [], slots = [], cfields = [];
 const slotDefaults = new Array (NUM_SLOTS).fill (0);
+let hostListed = 0;
 
 const all = [
     ...fields.map (f => ({ ...f, slot: slotOf (f) })),
@@ -89,6 +91,9 @@ for (const f of all)
     const info = paramInfo (index);
     const { isInt } = defs.get (id);
     const ann = [`name: ${cmajString (info.hostName)}`];
+    // (hosts list only automatable parameters: routing and setup stay out of their lists)
+    if (info.automatable) ++hostListed;
+    else ann.push ("automatable: false");
 
     if (isInt)
     {
@@ -413,4 +418,4 @@ ${ModMatrix.targets.map ((t, i) => `    let ${ident (t.key)} = ${i};`).join ("\n
 }
 `);
 
-console.log (`generated ${all.length} parameters, ${ModMatrix.targets.length} modulation targets`);
+console.log (`generated ${all.length} parameters (${hostListed} listed by hosts), ${ModMatrix.targets.length} modulation targets`);
