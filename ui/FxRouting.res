@@ -77,7 +77,7 @@ let make = (ctx: Ctx.t, body, ~w, ~h, ops) => {
   //==============================================================================
   // in every voice
 
-  label("in every voice: each note runs its own", 12., row1 - 22.)
+  label("per-voice: each voice runs its own", 12., row1 - 22.)
   node("oscillators", 12., row1, 86.)->ignore
   let filterNode = node("filter", 0., row1, 72.)
   let ampNode = node("amp", 0., row1, 60.)
@@ -165,7 +165,7 @@ let make = (ctx: Ctx.t, body, ~w, ~h, ops) => {
     }
 
   let laneAdd = el("div", ~cls="addcard", ~text="+", ~parent=root)
-  hover(laneAdd, () => "Add an effect to every voice (up to four): each note runs its own copy")
+  hover(laneAdd, () => "Add a per-voice effect (up to four): each voice runs its own copy")
   laneAdd->onPointer(#pointerdown, ev => {
     ev->preventDefault
     if ev->button == 0 {

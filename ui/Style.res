@@ -231,7 +231,7 @@ let css = `
 .vrow.drop-before { box-shadow: inset 0 0 0 1px var(--edge), 0 -3px 0 var(--signal); }
 .vrow.drop-after { box-shadow: inset 0 0 0 1px var(--edge), 0 3px 0 var(--signal); }
 .addrow.vadd { height: ${px(controlHeight)}; }
-/* the FX page's strip: which tabs are in each note, which on the whole sound */
+/* the FX page's strip: which tabs are per-voice, which on the whole sound */
 .fxgrp { font-size: 11px; font-weight: 700; color: var(--paper); opacity: 0.8; white-space: nowrap; padding: 0 2px; }
 .addcard {
     position: absolute; box-sizing: border-box; border: 1.5px dashed var(--edge); border-radius: 3px;
@@ -343,7 +343,7 @@ let css = `
 .hdr .tg { height: 18px; font-size: 11.5px; }
 .hdr .tg b { width: 9px; height: 9px; border-width: 1px; box-shadow: none; }
 
-/* two halves, one of them on (an LFO's mode: each note or shared), in a parameter's footprint */
+/* two halves, one of them on (an LFO's mode: per-voice or shared), in a parameter's footprint */
 .seg {
     position: absolute; box-sizing: border-box; height: ${px(controlHeight)}; display: flex; overflow: hidden;
     border-radius: 2px; background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge); font-size: 12px;
@@ -647,7 +647,7 @@ let css = `
 .mpop.on { display: block; }
 .mpop > .ttl { position: absolute; left: 6px; right: 6px; top: 3px; font-size: 12px; font-weight: 700;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* the target picker's two sections: in each voice, on the whole sound */
+/* the target picker's two sections: per-voice, on the whole sound */
 .psect { position: absolute; font-size: 12.5px; font-weight: 700; line-height: 20px; color: var(--ink);
     white-space: nowrap; text-transform: uppercase; letter-spacing: 0.06em; }
 .conn { position: absolute; left: 0; display: none; }

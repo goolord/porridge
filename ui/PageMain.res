@@ -195,7 +195,7 @@ let voiceFx = (ctx: Ctx.t, body) => {
       })
       hover(x, () => "Take it out of the voices (its settings stay)")
       hover(name, () =>
-        `${VoiceLane.label(model, e)}: each note runs its own (${FxPanels.summary(model, e)->String.replaceAll("\n", ", ")}). Drag to move it, right-click to duplicate it or move it to the whole sound`
+        `${VoiceLane.label(model, e)}: each voice runs its own (${FxPanels.summary(model, e)->String.replaceAll("\n", ", ")}). Drag to move it, right-click to duplicate it or move it to the whole sound`
       )
       let made = (r, name, led)
       rows->Map.set(FxRack.value(e), made)
@@ -232,18 +232,18 @@ let voiceFx = (ctx: Ctx.t, body) => {
 
   let add = el("div", ~cls="addrow vadd", ~parent=body)
   el("b", ~text="+", ~parent=add)->ignore
-  el("span", ~text="add an effect to every voice", ~parent=add)->ignore
+  el("span", ~text="add a per-voice effect", ~parent=add)->ignore
   add->onPointer(#pointerdown, ev => {
     ev->preventDefault
     if ev->button == 0 {
       VoiceLane.addMenu(ctx, add, ~onAdded=_ => ())
     }
   })
-  hover(add, () => "Up to four: each note runs its own copy, which its LFOs, envelopes and key move for that note alone")
+  hover(add, () => "Up to four: each voice runs its own copy, which its LFOs, envelopes and key move for that note alone")
   let note = el(
     "div",
     ~cls="note wrap",
-    ~text="Each note runs its own copy of these; the resonator and key shifter follow its pitch. The filter's comb, flanger, phaser, formant, ring mod, S&H, diffusor and reverb types are effects in each note too.",
+    ~text="Each voice runs its own copy of these; the resonator and key shifter follow its pitch. The filter's comb, flanger, phaser, formant, ring mod, S&H, diffusor and reverb types are per-voice effects too.",
     ~parent=body,
   )
 

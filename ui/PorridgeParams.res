@@ -557,9 +557,19 @@ let resonatorSpecs = [
   {id: "Rs_Mix", name: "Resonator mix", kind: unit(0., 1., 0.5)},
 ]
 
+// The resonator's gain (its ringing's level, apart from the mix) came later: its first and copy
+// are in a group of their own.
+let resonatorGainSpecs = [{id: "Rs_Gain", name: "Resonator gain", kind: decibels(-24., 24., 0.)}]
+
 let voiceKinds = [
   {key: "shifter", name: "Shifter", params: rackParams(shifterSpecs), copies: [2], firstInRack: true},
-  {key: "resonator", name: "Resonator", params: rackParams(resonatorSpecs), copies: [2], firstInRack: true},
+  {
+    key: "resonator",
+    name: "Resonator",
+    params: [...rackParams(resonatorSpecs), ...rackParams(resonatorGainSpecs)],
+    copies: [2],
+    firstInRack: true,
+  },
 ]
 
 // The FX filter's note tracking came later: its first and copies are in the voice lane's group.
@@ -791,13 +801,13 @@ let oscNoiseSpecs = [1, 2]->Array.flatMap(n => {
 // it, as Synplant's B does.
 let pairMixSpecs = [{id: "O2_PairMix", name: "Osc 2 heard", kind: Float({min: 0., max: 1., init: 0., text: percent})}]
 
-// LFO 3: a plain LFO that only the modulation matrix reaches. In each note (each voice its own,
+// LFO 3: a plain LFO that only the modulation matrix reaches. Per-voice (each voice its own,
 // from the note's start) or shared by every voice (restarted by each note, or running free),
 // at a rate in Hz or a length in beats, from a phase of its own, faded in after a delay. The
 // wander source's rate goes with it.
 let lfo3Shapes = ["sine", "triangle", "saw up", "saw down", "square", "sample & hold", "smooth random"]
 let lfo3Syncs = ["free", "4 bars", "2 bars", "1 bar", "1/2", "1/2 T", "1/4", "1/4 T", "1/8", "1/8 T", "1/16", "1/16 T", "1/32"]
-let lfoModes = ["each note", "shared, reset on note", "shared, free"]
+let lfoModes = ["per-voice", "shared, reset on note", "shared, free"]
 
 let lfo3Specs = [
   {id: "LFO_3_Shape", name: "LFO 3 shape", kind: Choice({names: lfo3Shapes, init: 0})},
@@ -840,6 +850,7 @@ type feature =
   | MoreModulations
   | Lfo3
   | VoiceLane
+  | ResonatorGain
 
 // The voice lane (dsp/VoiceFx.cmajor): up to laneSlots effects in every voice, which each note
 // runs its own copy of, holding the same values as the rack's slots (only the kinds that work in
@@ -866,7 +877,7 @@ let voiceLaneSpecs = Array.concat(
     Array.concat(filterTrackSpecs, copySpecsOf(rackKinds->Array.filter(k => k.key == "filter"), ~only=id => id == "Ff_Track")),
     Array.concat(
       Array.concat(shifterSpecs, resonatorSpecs),
-      copySpecsOf(rackKinds->Array.filter(k => k.key == "shifter" || k.key == "resonator")),
+      copySpecsOf(rackKinds->Array.filter(k => k.key == "shifter" || k.key == "resonator"), ~only=id => id != "Rs_Gain"),
     ),
   ),
 )
@@ -901,6 +912,10 @@ let groups = [
   (MoreModulations, Array.concat(moreSlotSpecs, Array.concat(slotOptionSpecs, followSpecs))),
   (Lfo3, lfo3Specs),
   (VoiceLane, voiceLaneSpecs),
+  (
+    ResonatorGain,
+    Array.concat(resonatorGainSpecs, copySpecsOf(rackKinds->Array.filter(k => k.key == "resonator"), ~only=id => id == "Rs_Gain")),
+  ),
 ]
 
 let all = groups->Array.flatMap(((_, specs)) => specs)

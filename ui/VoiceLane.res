@@ -66,11 +66,15 @@ let switchOn = (model, e: FxRack.effect) => {
   }
 }
 
-// Adds an effect of this kind at the end of the lane (after the amp), switched on. Returns it.
+// Adds an effect of this kind at the end of the lane (after the amp), switched on (a filter
+// following each note's key fully). Returns it.
 let add = (model, kind) =>
   FxRack.free(rack(model), ~lane=lane(model), ~forLane=true, kind)->Option.map(e => {
     write(model, [...items(get(model, ...)), Fx(e)])
     switchOn(model, e)
+    if kind == #filter {
+      model->ParamModel.gestureSet(FxRack.id(e, "Ff_Track"), 1.)
+    }
     e
   })
 
