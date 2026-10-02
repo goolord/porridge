@@ -332,6 +332,8 @@ let make = (ctx: Ctx.t, parent, box: box, src: source, ~voices=false) => {
   let model = ctx.model
   let get = id => model->ParamModel.get(id)
   let g = FxGraph.make(ctx, parent, box)
+  // (a small graph leaves its caption to the hint)
+  let narrow = box.w < 300.
   let layer = FxGraph.group(g.under)
   let voiceLayer = FxGraph.group(g.under)
   let (left, right, top) = (34., g.w - 10., 8.)
@@ -429,7 +431,7 @@ let make = (ctx: Ctx.t, parent, box: box, src: source, ~voices=false) => {
     let x = xOfHz(fc)
     FxGraph.line(layer, ~cls="mark", x, top, x, bottom)
     let text = caption(t)
-    if text != "" {
+    if text != "" && !narrow {
       FxGraph.text(layer, ~cls="tick", left + 6., impulse ? bottom - 6. : top + 10., text)
     }
   }
@@ -522,7 +524,12 @@ let make = (ctx: Ctx.t, parent, box: box, src: source, ~voices=false) => {
       (Int.toFloat(k) + (z(k) - y) / (z(k) - z(k + 1))) / Int.toFloat(steps)
     }
   }
-  let hint = "Drag the point: across for the cutoff, up and down for the resonance; scroll for fine resonance, shift for fine steps, right-click to reset"
+  let hint = () =>
+    "Drag the point: across for the cutoff, up and down for the resonance; scroll for fine resonance, shift for fine steps, right-click to reset" ++
+    switch caption(src.typeOf()) {
+    | text if narrow && text != "" => `. The picture is ${text}`
+    | _ => ""
+    }
   let ids = [src.cutoff, src.res]
   let point = FxGraph.handle(
     g,
@@ -535,7 +542,7 @@ let make = (ctx: Ctx.t, parent, box: box, src: source, ~voices=false) => {
       model->ParamModel.set(src.res, resonanceAt(heights(fc), y))
     },
     ~wheel=src.res,
-    ~hover=on => ctx.status->Status.show(on ? model->ParamModel.statusText(ids) : hint),
+    ~hover=on => ctx.status->Status.show(on ? model->ParamModel.statusText(ids) : hint()),
   )
   let place = () => {
     let fc = src.toHz(get(src.cutoff))
@@ -556,80 +563,4 @@ let make = (ctx: Ctx.t, parent, box: box, src: source, ~voices=false) => {
     redraw.request,
   )
   redraw.now
-}
-
-// A small picture of the same: the curve alone, without scales or a point, for beside the
-// controls. Clicking it calls onClick. Returns a redraw, for when it comes back into view.
-let mini = (ctx: Ctx.t, parent, box: box, src: source, ~status, ~onClick) => {
-  let model = ctx.model
-  let get = id => model->ParamModel.get(id)
-  let s = Plots.svg(parent, box)
-  s->addClass("mini")
-  Plots.background(s, box)
-  let layer = FxGraph.group(s)
-  let p: FxGraph.plot = {layer, left: 2., right: box.w - 2., top: 3., bottom: box.h - 3.}
-  let (lo, hi) = (-30., 18.)
-  let f1 = Float.toFixed(_, ~digits=1)
-
-  let drawView = (t, fc, ~cls) =>
-    switch view(t, ~fc, ~res=get(src.res), ~morph=get(src.morph)) {
-    | Magnitude(f) =>
-      let n = Float.toInt(p.right - p.left)
-      let points = Array.fromInitializer(~length=n + 1, k => {
-        let x = p.left + Int.toFloat(k)
-        (x, FxGraph.yOf(p, db(f(FxGraph.hzAt(p, x))), lo, hi))
-      })
-      FxGraph.path(layer, ~cls)->FxGraph.setPath(Plots.pathFrom(points))
-    | Lines(lines) =>
-      lines->Array.forEach(((hz, level, input)) =>
-        if hz >= 20. && hz <= 20000. && !input {
-          let x = FxGraph.xOfHz(p, hz)
-          FxGraph.line(layer, ~cls, x, p.bottom, x, FxGraph.yOf(p, level, lo, hi))
-        }
-      )
-    | Impulse(h) =>
-      // the impulse response's outline, from the middle
-      let h = h()
-      let n = Array.length(h)
-      let peak = h->Array.reduce(1e-9, (m, v) => Math.max(m, Math.abs(v)))
-      let mid = (p.top + p.bottom) / 2.
-      let half = (p.bottom - p.top) / 2.
-      let columns = Float.toInt(p.right - p.left)
-      let d = Array.fromInitializer(~length=columns, c => {
-        let (a, b) = (c * n / columns, Math.Int.max((c + 1) * n / columns, c * n / columns + 1))
-        let m = ref(0.)
-        for i in a to Math.Int.min(b, n) - 1 {
-          m := Math.max(m.contents, Math.abs(h->Array.getUnsafe(i)) / peak)
-        }
-        let x = p.left + Int.toFloat(c)
-        let y = Math.sqrt(m.contents) * half
-        `M${f1(x)} ${f1(mid - y)}V${f1(mid + y)}`
-      })->Array.join("")
-      FxGraph.path(layer, ~cls="impulse")->FxGraph.setPath(d)
-    }
-
-  let draw = () => {
-    layer->setTextContent("")
-    let t = src.typeOf()
-    let fc = src.toHz(get(src.cutoff))
-    src.second()->Option.forEach(((t2, fc2)) => drawView(t2, fc2, ~cls="curve dim"))
-    drawView(t, fc, ~cls="curve")
-    let x = FxGraph.xOfHz(p, fc)
-    FxGraph.line(layer, ~cls="mark", x, p.top, x, p.bottom)
-  }
-  // nothing while hidden (its tab's body has no offset parent; an svg never has one): the page
-  // redraws it when its tab comes back
-  let redraw = perFrame(() => if parent->offsetParent->Option.isSome {
-    draw()
-  })
-  model->ParamModel.listenEach([src.cutoff, src.res, src.morph, ...src.alsoIds], redraw)
-  ctx.status->Status.live(s, status)->ignore
-  s->onPointer(#pointerdown, ev =>
-    if ev->button == 0 {
-      ev->preventDefault
-      onClick()
-    }
-  )
-  draw()
-  draw
 }

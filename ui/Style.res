@@ -118,11 +118,15 @@ let css = `
 .ptab { background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge); }
 .ptab:hover { color: var(--ink); background: var(--panel-hi); }
 .ptab.on { color: var(--paper); background: var(--signal); }
+/* a tab whose feature is in use (Panel.mark) */
+.ptab.used::after { content: ""; display: inline-block; width: 5px; height: 5px; margin-left: 5px; border-radius: 50%;
+    background: var(--signal); vertical-align: 2px; }
+.ptab.on.used::after { background: var(--paper); }
 .pbody { position: absolute; inset: 0; display: none; }
 .pbody.on { display: block; }
-.pbody.cover { background: var(--panel); z-index: 1; border-radius: inherit; }
-.blk:has(> .pbody.cover.on) > .ptabs { z-index: 2; }
-.blk.responding > :not(.pbody):not(.ptabs) { visibility: hidden; }
+/* a panel the synth page's flow just opened */
+@keyframes pflash { from { box-shadow: 0 0 0 3px var(--signal); } to { box-shadow: 0 0 0 3px transparent; } }
+.blk.flash { animation: pflash 0.8s ease-out; }
 .blk > .hdr, .pbody > .hdr { position: absolute; right: 6px; top: 1px; width: 40px; height: 18px; }
 
 /* the FX page: the strip is the signal path, per-voice (tinted) then the whole sound, with a tab
@@ -174,26 +178,61 @@ let css = `
 .fxbody { position: absolute; display: none; }
 .fxbody.on { display: block; }
 
-/* the synth page's voice fx tab: a row per effect, and the filter's and amp's */
-.vrow { position: absolute; box-sizing: border-box; height: ${px(controlHeight)}; border-radius: 2px; }
-.vrow .vname { position: absolute; left: 0; top: 0; bottom: 0; width: 40%; box-sizing: border-box; padding-left: 22px;
-    line-height: ${px(controlHeight)}; font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; cursor: grab; }
-.vrow.node { background: var(--paper); box-shadow: inset 0 0 0 1px var(--edge); }
-.vrow.node .vname { width: 100%; padding-left: 10px; font-weight: 400; }
-.vrow.fx { background: var(--tile); box-shadow: inset 0 0 0 1px var(--signal); }
-.vrow.fx .vname:hover, .vrow.node .vname:hover { background: var(--panel-hi); }
-.vrow .led { position: absolute; left: 8px; top: 9px; width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box;
-    border: 1.5px solid var(--ink-faint); cursor: pointer; z-index: 1; }
-.vrow .led.lit { background: var(--signal); border-color: var(--signal); }
-.vrow .vx { position: absolute; right: 6px; top: 0; line-height: ${px(controlHeight)}; font-weight: 400; font-size: 15px;
-    color: var(--ink-faint); cursor: pointer; }
-.vrow .vx:hover { color: var(--ink); }
-.vrow.off .vname { opacity: 0.55; }
-.vrow.drag { z-index: 3; box-shadow: inset 0 0 0 1.5px var(--signal), 3px 3px 0 rgba(31,26,14,0.25); }
-.vrow.drop-before { box-shadow: inset 0 0 0 1px var(--edge), 0 -3px 0 var(--signal); }
-.vrow.drop-after { box-shadow: inset 0 0 0 1px var(--edge), 0 3px 0 var(--signal); }
-.addrow.vadd { height: ${px(controlHeight)}; }
+/* per-voice: what each voice runs its own of */
+.pervoice { background: repeating-linear-gradient(135deg, rgba(28,60,115,0.14) 0 5px, rgba(28,60,115,0.05) 5px 10px);
+    box-shadow: inset 0 0 0 1px rgba(28,60,115,0.4); }
+/* the synth page's flow: the voice's nodes in the order it runs them, then the whole sound's */
+.blk.flow { display: flex; align-items: center; gap: 6px; padding: 0 3px; }
+.fvoice { display: flex; align-items: center; gap: 4px; height: 24px; padding: 0 3px; border-radius: 2px; min-width: 0; flex: 0 1 auto; }
+.fwhole { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 1 1 0; }
+.fgrp { font-size: 10.5px; font-weight: 700; color: var(--signal); white-space: nowrap; padding: 0 2px; }
+.fnd {
+    position: relative; flex: 0 1 auto; min-width: 24px; height: 20px; line-height: 20px; padding: 0 7px; box-sizing: border-box;
+    border-radius: 2px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+    background: var(--paper); box-shadow: inset 0 0 0 1px var(--edge); color: var(--ink);
+}
+.fnd:hover { background: var(--panel-hi); }
+.fnd.grab { cursor: grab; }
+.fnd.lane { display: flex; align-items: center; gap: 5px; background: var(--tile); box-shadow: inset 0 0 0 1px var(--signal); font-weight: 700; }
+.fnd.lane > span { overflow: hidden; text-overflow: ellipsis; }
+.fnd.lane.off > span { opacity: 0.55; }
+.fnd .led { flex: none; width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--ink-faint);
+    cursor: pointer; position: relative; }
+.fnd .led::after { content: ""; position: absolute; inset: -5px; }
+.fnd .led.lit { background: var(--signal); border-color: var(--signal); }
+.fnd .x { font-weight: 400; font-size: 14px; color: var(--ink-faint); margin-right: -3px; display: none; }
+.fnd:hover .x { display: inline; }
+.fnd .x:hover { color: var(--ink); }
+.fnd.dist { box-shadow: inset 0 0 0 1px var(--signal); }
+.fnd.add { flex: none; background: transparent; box-shadow: none; border: 1.5px dashed var(--edge); font-size: 14px; line-height: 17px; }
+.fnd.fx { flex: 0 1 auto; }
+.fnd.fx.off { color: var(--ink-faint); }
+.fnd.drag { z-index: 3; cursor: grabbing; box-shadow: inset 0 0 0 1.5px var(--signal), 3px 3px 0 rgba(31,26,14,0.25); }
+.fnd.drop-before { box-shadow: inset 0 0 0 1px var(--edge), inset 3px 0 0 var(--signal); }
+.fnd.drop-after { box-shadow: inset 0 0 0 1px var(--edge), inset -3px 0 0 var(--signal); }
+.fsep { flex: none; font-size: 13px; color: var(--ink-soft); }
+.fsep.big { font-size: 16px; font-weight: 700; color: var(--ink); padding: 0 2px; }
+/* a source's destinations (Destinations): a chip per route in its colour, + for another */
+.dests { position: absolute; display: flex; flex-direction: column; gap: 3px; overflow-x: hidden; overflow-y: auto; }
+.dchip {
+    position: relative; flex: none; height: 22px; box-sizing: border-box; border-radius: 2px; padding: 0 19px 0 12px;
+    display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: ew-resize;
+    background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge);
+}
+.dchip:hover, .dchip.drag { background: var(--panel-hi); box-shadow: inset 0 0 0 1px var(--edge); }
+.dchip .sw { position: absolute; left: 4px; top: 4px; bottom: 4px; width: 4px; border-radius: 2px; }
+.dchip .dl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dchip .dv { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dchip .dt { position: absolute; left: 12px; right: 19px; bottom: 1px; height: 2px; background: rgba(31,26,14,0.12); }
+.dchip .dt i { position: absolute; top: 0; bottom: 0; }
+.dchip .dx { position: absolute; right: 6px; top: 0; line-height: 22px; font-weight: 400; font-size: 14px; color: var(--ink-faint); cursor: pointer; }
+.dchip .dx:hover { color: var(--ink); }
+.dchip.zero .dl, .dchip.zero .dv { opacity: 0.55; }
+.dchip.add { cursor: pointer; justify-content: center; padding: 0; background: transparent; box-shadow: none;
+    border: 1.5px dashed var(--edge); color: var(--ink-soft); }
+.dchip.add:hover { background: var(--panel-hi); color: var(--ink); }
+.dchip.add b { font-size: 15px; }
+.dchip:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
 .plot path.flow { fill: none; stroke: var(--ink-soft); stroke-width: 1.5; }
 .plot path.flowhead { fill: none; stroke: var(--ink-soft); stroke-width: 1.5; stroke-linejoin: round; }
 
@@ -342,11 +381,13 @@ let css = `
 .plot path.fill { fill: var(--signal-soft); stroke: none; }
 .plot path.axis, .plot line.axis { stroke: rgba(31,26,14,0.28); stroke-width: 1; fill: none; }
 .plot.off { opacity: 0.4; }
-.plot.mini { cursor: pointer; }
+/* an oscillator's wave beside its row: click to draw */
+.plot.thumb { cursor: pointer; }
+.plot.thumb:hover rect.bg { stroke: var(--signal); }
+.plot.thumb path.pencil { fill: var(--ink-faint); }
+.plot.thumb:hover path.pencil { fill: var(--signal); }
 .plot path.curve.depth { stroke: var(--mod); stroke-width: 1.2; stroke-dasharray: 4 3; }
 .plot text.tick.depth { fill: var(--mod); }
-.plot.mini line.mark { stroke-dasharray: 2 2; stroke-width: 1; }
-.plot.mini:hover rect.bg { stroke: var(--signal); }
 .plot rect.bg { fill: rgba(236, 227, 196, 0.35); stroke: var(--edge); stroke-width: 1; }
 .plot path.curve.faint { stroke-width: 1; stroke-dasharray: 3 2; opacity: 0.7; }
 .plot path.curve.dim { stroke-width: 1; opacity: 0.45; }

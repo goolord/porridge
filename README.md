@@ -62,7 +62,8 @@ ui/                     patch view (ReScript)
                           voice or on the whole sound, for PageMod.res (the Mod page);
                           Modulators.res says what moves each parameter (connections and
                           Oatmeal's own routings), which the parameter rows and the graphs'
-                          points show in the sources' colours;
+                          points show in the sources' colours, and what each source moves,
+                          which Destinations.res shows as chips on the source's panel;
                           ModEdit.res connects a source to a control, and ModTray.res is the
                           source tray (from the status line) whose chips drop onto any control
   PresetBrowser.res       the preset browser; Library.res searches and filters for it, and
@@ -79,6 +80,9 @@ ui/                     patch view (ReScript)
                           effects in order with the filter and the amp, moving an effect between
                           per-voice and the whole sound; the FX page's strip (PageFx.res: the
                           signal path, a tab per effect) and the synth page use it
+  PageMain.res            the synth page: VoiceFlow.res draws the voice's signal flow along its
+                          top; Features.res says which features a patch uses, which the
+                          panels' tabs mark (Panel.res)
   FilterTypes.res         the filter types; FilterGraph.res their response pictures, with a
                           point to drag for cutoff and resonance
   FxPanels.res            the tabs of Porridge's own effects (CompEditor.res: the compressor's);
