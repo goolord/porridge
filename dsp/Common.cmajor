@@ -62,6 +62,70 @@ namespace porridge
         return ((c3 * t + c2) * t + c1) * t + y1;
     }
 
+    //==============================================================================
+    // Delay lines laid out in one pool: the algorithmic reverb's (Space.cmajor) and the
+    // ambience's (Ambience.cmajor). Lines is a struct with the pool (`pool`, a float array),
+    // whether it is all zeros (`clean`), and per line its start in the pool (`base`), its
+    // capacity (`cap`) and its write index (`wp`).
+
+    /// Lays line j out at top (moved on past it), empty, with room for `capacity` samples.
+    void poolLine<Lines> (Lines& this, int j, int capacity, int& top)
+    {
+        this.base.at (j) = top;
+        this.cap.at (j) = capacity;
+        this.wp.at (j) = 0;
+        top += capacity;
+    }
+
+    /// Clears the lines just laid out (below top), unless the pool is still all zeros.
+    void clearPool<Lines> (Lines& this, int top)
+    {
+        if (! this.clean)
+            for (int i = 0; i < top; ++i)
+                this.pool.at (i) = 0;
+
+        this.clean = false;
+    }
+
+    /// Zeros the whole pool.
+    void resetPool<Lines> (Lines& this)
+    {
+        for (int i = 0; i < this.pool.size; ++i)
+            this.pool.at (i) = 0;
+
+        this.clean = true;
+    }
+
+    void poolWrite<Lines> (Lines& this, int j, float x)
+    {
+        this.pool.at (this.base.at (j) + this.wp.at (j)) = x;
+    }
+
+    /// Moves line j's write index on a sample.
+    void poolAdvance<Lines> (Lines& this, int j)
+    {
+        let w = this.wp.at (j) + 1;
+        this.wp.at (j) = w >= this.cap.at (j) ? 0 : w;
+    }
+
+    /// Line j `delay` samples back (>= 1 when read before the write), linearly interpolated.
+    float poolReadLin<Lines> (const Lines& this, int j, float64 delay)
+    {
+        let di = int (delay);
+        let f = float (delay - float64 (di));
+        let c = this.cap.at (j);
+        let b = this.base.at (j);
+        var i = this.wp.at (j) - di;
+        if (i < 0) i += c;
+        let newer = this.pool.at (b + i);
+        let older = this.pool.at (b + (i == 0 ? c - 1 : i - 1));
+        return newer + f * (older - newer);
+    }
+
+    /// The equal-power dry/wet mix's gains at mix 0..1 (the reverb's and the ambience's).
+    float mixDry (float mix)    { return float (cos (float64 (mix) * pi * 0.5)); }
+    float mixWet (float mix)    { return float (sin (float64 (mix) * pi * 0.5)); }
+
     /// The coefficient of a one-pole lowpass at hz (kept below 0.45 sr): y += a (x - y).
     float onePoleCoef (float64 hz, float64 sr)
     {

@@ -101,6 +101,86 @@ namespace porridge
         this.silentCount = 0;
     }
 
+    /// What the flanger's knobs ask for (the rack's and every voice's, VoiceFx.cmajor): the
+    /// shortest delay (samples, at most longest / 16), depth, feedback, mix, the LFO's step per
+    /// sample and the right side's phase offset (cycles).
+    struct FlangerTargets
+    {
+        float delay, depth, fb, mix;
+        float64 inc, offset;
+    }
+
+    FlangerTargets flangerTargets (const float[numSlots]& P, float64 sr, float longest)
+    {
+        FlangerTargets t;
+        t.delay = min (expKnob (0.1f, 20.0f, P[slot::Fl_Delay]) * 0.001f * float (sr), longest / 16.0f);
+        t.depth = clamp (P[slot::Fl_Depth], 0.0f, 1.0f);
+        t.fb = clamp (P[slot::Fl_Feedback], -1.0f, 1.0f) * 0.97f;
+        t.mix = clamp (P[slot::Fl_Mix], 0.0f, 1.0f);
+        t.inc = float64 (expKnob (0.02f, 20.0f, P[slot::Fl_Rate])) / sr;
+        t.offset = float64 (clamp (P[slot::Fl_Phase], 0.0f, 180.0f)) / 360.0;
+        return t;
+    }
+
+    /// The flanger's LFO and sweep through a block (the rack's and every voice's): a phasor
+    /// turned by the LFO's step from the phase at the block's start (the right side's turned
+    /// ahead by its offset), and each side's sweep factor exp (span lfo) moved on from the last
+    /// sample's by the exponential of the difference, which is small. That spares a cos and an
+    /// exp per sample and side; the block's first sample works the factors out afresh.
+    struct FlangerSweep
+    {
+        float64 c, s, rc, rs, oc, os;       // the phasor, its turn per sample, the right side's offset
+        float64 eL, eR;                     // the sweep factors
+        float xL, xR;                       // and their exponents
+        bool started;
+    }
+
+    FlangerSweep flangerSweep (float64 phase, float64 inc, float64 offset)
+    {
+        FlangerSweep w;
+        w.c = cos (twoPi * phase); w.s = sin (twoPi * phase);
+        w.rc = cos (twoPi * inc); w.rs = sin (twoPi * inc);
+        w.oc = cos (twoPi * offset); w.os = sin (twoPi * offset);
+        return w;
+    }
+
+    /// exp (x), from e = exp (x0): e times exp (x - x0), by its Taylor series while x - x0 is small.
+    float64 expFrom (float64 e, float x, float x0)
+    {
+        let d = float64 (x) - float64 (x0);
+
+        if (abs (d) > 0.03)
+            return exp (float64 (x));
+
+        return e * (1.0 + d * (1.0 + d * 0.5 * (1.0 + d * (1.0 / 3.0) * (1.0 + d * 0.25 * (1.0 + d * 0.2)))));
+    }
+
+    /// This sample's sweep factors per side: the delay is the shortest times these (span = 4 ln 2
+    /// depth, an lfo of 0..1). The phasor turns on.
+    float<2> next (FlangerSweep& this, float span)
+    {
+        let xL = span * (0.5f - 0.5f * float (this.c));
+        let xR = span * (0.5f - 0.5f * float (this.c * this.oc - this.s * this.os));
+
+        if (this.started)
+        {
+            this.eL = expFrom (this.eL, xL, this.xL);
+            this.eR = expFrom (this.eR, xR, this.xR);
+        }
+        else
+        {
+            this.eL = exp (float64 (xL));
+            this.eR = exp (float64 (xR));
+            this.started = true;
+        }
+
+        this.xL = xL; this.xR = xR;
+        let c1 = this.c * this.rc - this.s * this.rs;
+        this.s = this.s * this.rc + this.c * this.rs;
+        this.c = c1;
+        return float<2> (float (this.eL), float (this.eR));
+    }
+
     /// Channel ch of the line d samples back (d >= 2), cubic-interpolated.
     float flangerRead (const Flanger& this, float d, int ch)
     {
@@ -118,35 +198,30 @@ namespace porridge
             return false;
 
         let longest = float (flangerLineSize - 4);
-        let tDelay = min (expKnob (0.1f, 20.0f, P[slot::Fl_Delay]) * 0.001f * float (sr), longest / 16.0f);
-        let tDepth = clamp (P[slot::Fl_Depth], 0.0f, 1.0f);
-        let tFb = clamp (P[slot::Fl_Feedback], -1.0f, 1.0f) * 0.97f;
-        let tMix = clamp (P[slot::Fl_Mix], 0.0f, 1.0f);
-        let inc = float64 (expKnob (0.02f, 20.0f, P[slot::Fl_Rate])) / sr;
-        let offset = float64 (clamp (P[slot::Fl_Phase], 0.0f, 180.0f)) / 360.0;
+        let t = flangerTargets (P, sr, longest);
+        let inc = t.inc, offset = t.offset;
         let k = extraSmoothing (sr, 20.0, 1);
 
         if (this.fresh)
         {
             this.fresh = false;
-            this.delay = tDelay; this.depth = tDepth; this.fb = tFb; this.mix = tMix;
+            this.delay = t.delay; this.depth = t.depth; this.fb = t.fb; this.mix = t.mix;
         }
 
         float written = 0;
+        var sweep = flangerSweep (this.phase, inc, offset);
 
         for (wrap<blockSize> i)
         {
-            this.delay += (tDelay - this.delay) * k;
-            this.depth += (tDepth - this.depth) * k;
-            this.fb += (tFb - this.fb) * k;
-            this.mix += (tMix - this.mix) * k;
+            this.delay += (t.delay - this.delay) * k;
+            this.depth += (t.depth - this.depth) * k;
+            this.fb += (t.fb - this.fb) * k;
+            this.mix += (t.mix - this.mix) * k;
 
             // delay = shortest * 2^(4 depth lfo), lfo 0..1
-            let span = 4.0f * 0.693147181f * this.depth;
-            let lfoL = 0.5f - 0.5f * float (cos (twoPi * this.phase));
-            let lfoR = 0.5f - 0.5f * float (cos (twoPi * (this.phase + offset)));
-            let yL = this.flangerRead (clamp (this.delay * exp (span * lfoL), 2.0f, longest), 0);
-            let yR = this.flangerRead (clamp (this.delay * exp (span * lfoR), 2.0f, longest), 1);
+            let e = sweep.next (4.0f * 0.693147181f * this.depth);
+            let yL = this.flangerRead (clamp (this.delay * e[0], 2.0f, longest), 0);
+            let yR = this.flangerRead (clamp (this.delay * e[1], 2.0f, longest), 1);
             let y = float<2> (yL, yR);
             let x = buf[i];
 
@@ -215,24 +290,45 @@ namespace porridge
         return (t - 1.0f) / (t + 1.0f);
     }
 
+    /// What the phaser's knobs ask for (the rack's and every voice's, VoiceFx.cmajor): the
+    /// number of stages, ln (centre Hz) (following noteHz by Ph_Track when `track`), depth,
+    /// spread, feedback, mix, the LFO's rate (Hz) and the right side's phase offset (cycles).
+    struct PhaserTargets
+    {
+        int stages;
+        float centre, depth, spread, fb, mix, rate;
+        float64 offset;
+    }
+
+    PhaserTargets phaserTargets (const float[numSlots]& P, float noteHz, bool track)
+    {
+        PhaserTargets t;
+        t.stages = phaserStages (int (P[slot::Ph_Stages]));
+        var centre = float64 (expKnob (20.0f, 20000.0f, P[slot::Ph_Freq]));
+
+        if (track)
+            centre *= pow (float64 (noteHz) / 261.63, float64 (clamp (P[slot::Ph_Track], 0.0f, 1.0f)));
+
+        t.centre = float (log (clamp (centre, 1.0, 100000.0)));
+        t.depth = clamp (P[slot::Ph_Depth], 0.0f, 1.0f);
+        t.spread = clamp (P[slot::Ph_Spread], 0.0f, 1.0f);
+        t.fb = clamp (P[slot::Ph_Feedback], -1.0f, 1.0f) * 0.95f;
+        t.mix = clamp (P[slot::Ph_Mix], 0.0f, 1.0f);
+        t.rate = expKnob (0.02f, 20.0f, P[slot::Ph_Rate]);
+        t.offset = float64 (clamp (P[slot::Ph_Phase], 0.0f, 180.0f)) / 360.0;
+        return t;
+    }
+
     /// noteHz: the newest note's frequency (0 when none), for the frequency tracking.
     bool process (Phaser& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr, float noteHz)
     {
         if (! active && this.idle)
             return false;
 
-        let n = phaserStages (int (P[slot::Ph_Stages]));
-        var centre = float64 (expKnob (20.0f, 20000.0f, P[slot::Ph_Freq]));
-
-        if (noteHz > 0)
-            centre *= pow (float64 (noteHz) / 261.63, float64 (clamp (P[slot::Ph_Track], 0.0f, 1.0f)));
-
-        let tCentre = float (log (clamp (centre, 1.0, 100000.0)));
-        let tDepth = clamp (P[slot::Ph_Depth], 0.0f, 1.0f);
-        let tSpread = clamp (P[slot::Ph_Spread], 0.0f, 1.0f);
-        let tFb = clamp (P[slot::Ph_Feedback], -1.0f, 1.0f) * 0.95f;
-        let tMix = clamp (P[slot::Ph_Mix], 0.0f, 1.0f);
-        let offset = float64 (clamp (P[slot::Ph_Phase], 0.0f, 180.0f)) / 360.0;
+        let t = phaserTargets (P, noteHz, noteHz > 0);
+        let n = t.stages;
+        let tFb = t.fb, tMix = t.mix;
+        let offset = t.offset;
         let kb = extraSmoothing (sr, 20.0, blockSize);
         let k = extraSmoothing (sr, 20.0, 1);
         let fresh = this.fresh;
@@ -240,16 +336,16 @@ namespace porridge
         if (fresh)
         {
             this.fresh = false;
-            this.centre = tCentre; this.depth = tDepth; this.spread = tSpread;
+            this.centre = t.centre; this.depth = t.depth; this.spread = t.spread;
             this.fb = tFb; this.mix = tMix;
         }
 
-        this.centre += (tCentre - this.centre) * kb;
-        this.depth += (tDepth - this.depth) * kb;
-        this.spread += (tSpread - this.spread) * kb;
+        this.centre += (t.centre - this.centre) * kb;
+        this.depth += (t.depth - this.depth) * kb;
+        this.spread += (t.spread - this.spread) * kb;
 
         // the LFO at the end of this block sets the coefficients the block ramps to
-        this.phase += float64 (expKnob (0.02f, 20.0f, P[slot::Ph_Rate])) / sr * float64 (blockSize);
+        this.phase += float64 (t.rate) / sr * float64 (blockSize);
         this.phase -= floor (this.phase);
         let ln2 = 0.693147181;
         let sweepL = 3.0 * float64 (this.depth) * sin (twoPi * this.phase);
@@ -474,6 +570,13 @@ namespace porridge
 
         float written = 0;
 
+        // the oscillator: a phasor from the phase at the block's start, turned by the shift's
+        // step, which is worked out again only while the shift glides
+        var pc = cos (twoPi * this.phase), ps = sin (twoPi * this.phase);
+        float64 rc = 1.0, rs = 0.0;
+        var turnHz = 0.0f;
+        var turnSet = false;
+
         for (wrap<blockSize> i)
         {
             this.hz += (tHz - this.hz) * k;
@@ -506,10 +609,23 @@ namespace porridge
                 b = this.bodeSection (wrap<hilbertCoefs> (2 * j + 1), b);
             }
 
-            let cs = float (cos (twoPi * this.phase));
-            let sn = float (sin (twoPi * this.phase));
-            this.phase += float64 (this.hz) / sr;
+            let cs = float (pc);
+            let sn = float (ps);
+            let turn = float64 (this.hz) / sr;
+            this.phase += turn;
             this.phase -= floor (this.phase);
+
+            if (! turnSet || this.hz != turnHz)
+            {
+                turnSet = true;
+                turnHz = this.hz;
+                rc = cos (twoPi * turn);
+                rs = sin (twoPi * turn);
+            }
+
+            let c1 = pc * rc - ps * rs;
+            ps = ps * rc + pc * rs;
+            pc = c1;
 
             // up: b cos + a sin, down: b cos - a sin, ring: their mean (b cos); the mode's
             // sign glides so that switching modes doesn't click
@@ -553,21 +669,39 @@ namespace porridge
         this.silentCount = 0;
     }
 
+    /// What the utility's knobs ask for (the rack's and every voice's, VoiceFx.cmajor), apart
+    /// from bass mono: gain, each side's balance gain, width, each side's sign, the swap.
+    struct UtilityTargets
+    {
+        float gain, panL, panR, width, invL, invR;
+        bool swap;
+    }
+
+    UtilityTargets utilityTargets (const float[numSlots]& P)
+    {
+        UtilityTargets t;
+        let pan = clamp (P[slot::Ut_Pan], -1.0f, 1.0f);
+        t.panL = min (1.0f, 1.0f - pan);
+        t.panR = min (1.0f, 1.0f + pan);
+        t.gain = float (pow (10.0, float64 (clamp (P[slot::Ut_Gain], -48.0f, 24.0f)) * 0.05));
+        t.width = clamp (P[slot::Ut_Width], 0.0f, 2.0f);
+        t.invL = P[slot::Ut_InvL] != 0 ? -1.0f : 1.0f;
+        t.invR = P[slot::Ut_InvR] != 0 ? -1.0f : 1.0f;
+        t.swap = P[slot::Ut_Swap] != 0;
+        return t;
+    }
+
     bool process (Utility& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
     {
         if (! active && this.idle)
             return false;
 
-        let tSwap = P[slot::Ut_Swap] != 0 ? 1.0f : 0.0f;
-        let tInvL = P[slot::Ut_InvL] != 0 ? -1.0f : 1.0f;
-        let tInvR = P[slot::Ut_InvR] != 0 ? -1.0f : 1.0f;
-        let tWidth = clamp (P[slot::Ut_Width], 0.0f, 2.0f);
+        let t = utilityTargets (P);
+        let tSwap = t.swap ? 1.0f : 0.0f;
+        let tInvL = t.invL, tInvR = t.invR, tWidth = t.width;
         let bassV = P[slot::Ut_BassMono];
         let tBass = bassV > 0 ? 1.0f : 0.0f;
-        let pan = clamp (P[slot::Ut_Pan], -1.0f, 1.0f);
-        let tPanL = min (1.0f, 1.0f - pan);
-        let tPanR = min (1.0f, 1.0f + pan);
-        let tGain = float (pow (10.0, float64 (clamp (P[slot::Ut_Gain], -48.0f, 24.0f)) * 0.05));
+        let tPanL = t.panL, tPanR = t.panR, tGain = t.gain;
         let k = extraSmoothing (sr, 20.0, 1);
         let tHz = bassV > 0 ? float (log (float64 (expKnob (20.0f, 1000.0f, bassV)))) : this.hz;
 
