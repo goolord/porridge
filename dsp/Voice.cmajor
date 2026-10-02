@@ -67,8 +67,9 @@ namespace porridge
         bool[keyEqBands] live;
     }
 
-    /// Band k's coefficients for gain g dB at hz: an octave wide (RBJ peaking, Q = sqrt 2). A band
-    /// past 18 kHz sits there and fades out over the next octave.
+    /// Band k's coefficients for gain g dB at hz: an octave wide (RBJ peaking, Q = sqrt 2), or for
+    /// the first, a low shelf (RBJ, slope 1) half an octave under the note, for what lies under
+    /// it. A band past 18 kHz sits there and fades out over the next octave.
     void setKeyEqBand (KeyEq& this, int k, float g, float hz, float sampleRate)
     {
         let over = hz > 18000.0f ? float (log (float64 (hz) / 18000.0) / log (2.0)) : 0.0f;
@@ -78,11 +79,24 @@ namespace porridge
         if (! this.live.at (k))
             return;
 
-        let f = min (min (hz, 18000.0f), 0.45f * sampleRate);
+        let f = min (min (k == 0 ? hz * 0.70710678f : hz, 18000.0f), 0.45f * sampleRate);
         let w = twoPi * float64 (f) / float64 (sampleRate);
         let A = pow (10.0, float64 (gain) / 40.0);
-        let alpha = sin (w) / (2.0 * sqrt (2.0));
         let c = cos (w);
+
+        if (k == 0)
+        {
+            let beta = 2.0 * sqrt (A) * sin (w) / sqrt (2.0);
+            let s0 = (A + 1.0) + (A - 1.0) * c + beta;
+            this.b0.at (k) = float (A * ((A + 1.0) - (A - 1.0) * c + beta) / s0);
+            this.b1.at (k) = float (2.0 * A * ((A - 1.0) - (A + 1.0) * c) / s0);
+            this.b2.at (k) = float (A * ((A + 1.0) - (A - 1.0) * c - beta) / s0);
+            this.a1.at (k) = float (-2.0 * ((A - 1.0) + (A + 1.0) * c) / s0);
+            this.a2.at (k) = float (((A + 1.0) + (A - 1.0) * c - beta) / s0);
+            return;
+        }
+
+        let alpha = sin (w) / (2.0 * sqrt (2.0));
         let a0 = 1.0 + alpha / A;
         this.b0.at (k) = float ((1.0 + alpha * A) / a0);
         this.b1.at (k) = float (-2.0 * c / a0);

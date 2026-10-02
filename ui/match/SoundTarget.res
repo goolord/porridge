@@ -278,11 +278,22 @@ let pitchSweep = (x: Float32Array.t, ~hz) => {
 //   floor   what lies midway between the harmonics against them, dB (the median of the bins
 //           there, so that peaks between them, a second series' or modulation's, don't count:
 //           noise is a floor, modulation is peaks).
+//
+// A second series' ratio is its lowest partial's, which may be under the lowest off peak: a
+// peak standing out at a half or a third of it, off the main series, is where it starts (the
+// main series' partials beside the second's hide its lower ones from the neighbourhoods).
 type partials = {
   series: option<(float, bool, float)>,
   offset: float,
   ratios: array<float>,
   floor: float,
+  // the harmonics (1-based) whose neighbourhoods' peaks are off the main series: the partials
+  // there are the second series', not the main one's
+  replaced: array<int>,
+  // whether partials stand out at half `hz` and an odd multiple of it too: the sound's pitch
+  // is an octave under the period found (its odd harmonics are weak, so YIN takes the even
+  // ones' period)
+  under: bool,
 }
 
 // (frames before `from` seconds, where a sweep may smear the harmonics, are left out of the floor)
@@ -304,6 +315,30 @@ let partialsOf = (x: Float32Array.t, ~hz, ~from) => {
     }
   })
   let level = k => 10. * Math.log10(Math.max(power->get64(k), 1e-30))
+  // the highest peak (a bin over both its neighbours, not a louder one's skirt) within `width`
+  // (a fraction) of f, placed between bins: (frequency, dB, how far it stands over the median of
+  // the bins within half a harmonic of it)
+  let peakNear = (f, width) => {
+    let (a, b) = (Math.Int.max(2, Float.toInt(Math.ceil(f * (1. - width) / binHz))), Math.Int.min(half - 2, Float.toInt(Math.floor(f * (1. + width) / binHz))))
+    let best = ref(-1)
+    for j in a to b {
+      let p = power->get64(j)
+      if p >= power->get64(j - 1) && p >= power->get64(j + 1) && (best.contents < 0 || p > power->get64(best.contents)) {
+        best := j
+      }
+    }
+    if best.contents < 0 {
+      None
+    } else {
+      let j = best.contents
+      let (l, m, u) = (level(j - 1), level(j), level(j + 1))
+      let curve = l - 2. * m + u
+      let offset = curve < 0. ? 0.5 * (l - u) / curve : 0.
+      let (lo, hi) = (Math.Int.max(1, Float.toInt((f - 0.5 * hz) / binHz)), Math.Int.min(half, Float.toInt((f + 0.5 * hz) / binHz)))
+      let around = median(Array.fromInitializer(~length=hi - lo + 1, i => level(lo + i)))->Option.getOr(m)
+      Some(((Int.toFloat(j) + offset) * binHz, m, m - around))
+    }
+  }
   // each neighbourhood's peak: (harmonic, frequency, dB)
   let peaks = Array.fromInitializer(~length=12, i => {
     let k = Int.toFloat(i + 1)
@@ -328,7 +363,7 @@ let partialsOf = (x: Float32Array.t, ~hz, ~from) => {
   let heard = peaks->Array.filter(((_, _, l)) => l > loudest - 30.)
   let cents = ((k, f, _)) => 1200. * Math.log2(f / (k * hz))
   switch median(heard->Array.map(cents)) {
-  | None => {series: None, offset: 0., ratios: [], floor: Spectrum.gridFloor}
+  | None => {series: None, offset: 0., ratios: [], floor: Spectrum.gridFloor, replaced: [], under: false}
   | Some(main) =>
     let off = heard->Array.filter(p => Math.abs(cents(p) - main) >= 30.)
     let fundamental = hz * Math.pow(2., ~exp=main / 1200.)
@@ -336,16 +371,31 @@ let partialsOf = (x: Float32Array.t, ~hz, ~from) => {
     | [] => None
     | _ =>
       let (_, f, l) = off->Array.getUnsafe(0)
+      // (or a half or a third of it, if a peak stands out there off the main series)
+      let offMain = g => {
+        let k = Math.max(1., Math.round(g / fundamental))
+        Math.abs(1200. * Math.log2(g / (k * fundamental))) >= 30.
+      }
+      let f =
+        [3., 2.]
+        ->Array.filterMap(d =>
+          peakNear(f / d, 0.025)->Option.flatMap(((g, m, over)) =>
+            m > loudest - 30. && over > 8. && offMain(g) && g > 0.4 * fundamental ? Some(g) : None
+          )
+        )
+        ->Array.get(0)
+        ->Option.getOr(f)
       let ratio = f / fundamental
-      let odd = off->Array.some(((_, g, _)) => Math.abs(1200. * Math.log2(g / (3. * f))) < 40.)
+      let odd =
+        off->Array.some(((_, g, _)) => Math.abs(1200. * Math.log2(g / (3. * f))) < 40.) ||
+          peakNear(3. * f, 0.015)->Option.mapOr(false, ((_, m, over)) => m > loudest - 30. && over > 12.)
       // (two partials or more off the series, or one within 12 dB of the loudest)
       Array.length(off) >= 2 || l > loudest - 12. ? Some((ratio, odd, l - loudest)) : None
     }
     // the two loudest off peaks' ratios, and a harmonic or two under them
     let ratios = []
-    off
-    ->Array.toSorted(((_, _, a), (_, _, b)) => Float.compare(b, a))
-    ->Array.slice(~start=0, ~end=2)
+    let lowest = series->Option.mapOr([], ((ratio, _, l)) => [(0., ratio * fundamental, l)])
+    Array.concat(lowest, off->Array.toSorted(((_, _, a), (_, _, b)) => Float.compare(b, a))->Array.slice(~start=0, ~end=2))
     ->Array.forEach(((_, f, _)) => {
       let h = f / fundamental
       [h, h - 1., h - 2.]->Array.forEach(r =>
@@ -409,6 +459,14 @@ let partialsOf = (x: Float32Array.t, ~hz, ~from) => {
       offset: Math.abs(main) <= 30. ? main : 0.,
       ratios,
       floor: Math.max(Spectrum.gridFloor, floor),
+      replaced: series == None ? [] : off->Array.map(((k, _, _)) => Float.toInt(k)),
+      under: {
+        let stands = (k, within) =>
+          peakNear(k * fundamental, 0.03)->Option.mapOr(false, ((g, m, over)) =>
+            m > loudest - within && over > 12. && Math.abs(1200. * Math.log2(g / (k * fundamental))) < 40.
+          )
+        0.5 * fundamental >= 30. && stands(0.5, 24.) && (stands(1.5, 30.) || stands(2.5, 30.))
+      },
     }
   }
 }
@@ -674,8 +732,10 @@ let overviewOf = (x: Float32Array.t, ~points) => {
 // by power, with the phases of the loudest point. What lies between the harmonics lies on them
 // too: each harmonic's power is cut by the share of its band that is that (`between`, per
 // Spectrum grid band, as gridSummary gives it), so that a noisy sample's wave doesn't carry its
-// noise as harmonics and leaves the noise to the noise source.
-let fitWave = (x: Float32Array.t, env: Float64Array.t, ~hz, ~between: array<float>) => {
+// noise as harmonics and leaves the noise to the noise source. The harmonics a second series
+// stands in for (`replaced`) are left out: what the windows find there is the second series'
+// partial leaking in, and a wave with them would beat against osc 2 playing that series.
+let fitWave = (x: Float32Array.t, env: Float64Array.t, ~hz, ~between: array<float>, ~replaced: array<int>) => {
   let n = TypedArray.length(x)
   let period = sampleRate / hz
   let cycles = Math.Int.max(2, Math.Int.min(24, Float.toInt(Math.round(0.06 * sampleRate / period))))
@@ -720,7 +780,9 @@ let fitWave = (x: Float32Array.t, env: Float64Array.t, ~hz, ~between: array<floa
       Math.max(0., 1. - r)
     }
     WaveImport.synthesise({
-      amp: power->Array.mapWithIndex((p, k) => Math.sqrt(p / Int.toFloat(count) * share(k))),
+      amp: power->Array.mapWithIndex((p, k) =>
+        replaced->Array.includes(k + 1) ? 0. : Math.sqrt(p / Int.toFloat(count) * share(k))
+      ),
       phase: shape.phase,
     })
   }
@@ -784,6 +846,14 @@ let prepare = (~name, audio: AudioFile.t): result<t, string> => {
       // the main series' pitch, if it sits off the period found (a second series pulls YIN's
       // period towards it), the second series and the off peaks' ratios, and the noise floor
       let partials = hz->Option.map(hz => partialsOf(samples, ~hz, ~from=pitchTime))
+      // (an octave down, if half the period found has partials of its own)
+      let (hz, pitchDrop, pitchTime, wander, partials) = switch (hz, partials) {
+      | (Some(hz), Some({under: true})) =>
+        let hz = hz * 0.5
+        let (drop, time, wander) = pitchSweep(samples, ~hz)
+        (Some(hz), drop, time, wander, Some(partialsOf(samples, ~hz, ~from=time)))
+      | _ => (hz, pitchDrop, pitchTime, wander, partials)
+      }
       let series = partials->Option.flatMap(p => p.series)
       let ratios = partials->Option.mapOr([], p => p.ratios)
       let hz = hz->Option.map(hz => hz * Math.pow(2., ~exp=partials->Option.mapOr(0., p => p.offset) / 1200.))
@@ -823,7 +893,9 @@ let prepare = (~name, audio: AudioFile.t): result<t, string> => {
         loudness: Array.fromInitializer(~length=TypedArray.length(features.envelope), s =>
           Spectrum.db(features.envelope->get64(s))
         ),
-        wave: hz->Option.flatMap(hz => fitWave(samples, features.envelope, ~hz, ~between)),
+        wave: hz->Option.flatMap(hz =>
+          fitWave(samples, features.envelope, ~hz, ~between, ~replaced=partials->Option.mapOr([], p => p.replaced))
+        ),
       })
     }
   }

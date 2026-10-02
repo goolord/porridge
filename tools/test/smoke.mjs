@@ -165,6 +165,9 @@ for (const os of [0, 1, 2, 3])
     const flat = harmonicsDb ("keq_flat", { KEQ_On: 1 });
     const boost = harmonicsDb ("keq_boost", { KEQ_On: 1, KEQ_3_Gain: 12 });
     const cut = harmonicsDb ("keq_cut", { KEQ_On: 1, KEQ_5_Gain: -18 });
+    const shelf = harmonicsDb ("keq_shelf", { KEQ_On: 1, KEQ_1_Gain: 12 });
+    check (shelf[0] - off[0] > 1 && shelf[0] - off[0] < 8 && Math.abs (shelf[3] - off[3]) < 0.5,
+           `key EQ low shelf +12 dB  1x ${(shelf[0] - off[0]).toFixed (2)} dB (half an octave over its corner), 8x ${(shelf[3] - off[3]).toFixed (2)} dB`);
     const show = a => a.map (v => v.toFixed (1)).join (" ");
     check (flat.every ((v, i) => Math.abs (v - off[i]) < 0.01), `key EQ flat changes nothing  ${show (off)} | ${show (flat)}`);
     check (Math.abs (boost[2] - off[2] - 12) < 1 && Math.abs (boost[0] - off[0]) < 1.5,
@@ -198,6 +201,10 @@ for (const os of [0, 1, 2, 3])
     check (rough.gap - clean.gap > 15 && Math.abs (rough.level - clean.level) < 3,
            `osc noise fills the gaps  ${(rough.gap - clean.gap).toFixed (1)} dB between harmonics, level ${(rough.level - clean.level).toFixed (2)} dB`);
     sounds ("osc noise, unison, sync", { O1_Noise: 0.8, O2_Noise: 0.8, O2_NoiseColour: 1, U_Voices: 4, OscMix: 1 }, { tail: false });
+    // osc 2 heard in PM 2 > 1 (a sine a twelfth up): the sound gets louder by osc 2's own
+    const pm = between ({ OscMix: 3, O2_Amp: 0.5, Transpose: 19 / 12, O2_Waveform: 0 });
+    const heardPm = between ({ OscMix: 3, O2_Amp: 0.5, Transpose: 19 / 12, O2_Waveform: 0, O2_PairMix: 1 });
+    check (heardPm.level - pm.level > 0.5, `osc 2 heard in PM  level ${(heardPm.level - pm.level).toFixed (2)} dB`);
 }
 
 // the noise source, on the pitch and on the cutoff
