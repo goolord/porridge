@@ -1,18 +1,36 @@
-// The status bar message: hover texts, or a hint about the current page when idle.
+// The status bar message: hover texts, or a hint about the current page when idle. A text too
+// long for its line is set a little smaller, and if that isn't enough takes two lines, growing
+// the bar up over the pages' bottom margin rather than taking height from them.
 
 open! Web
 
 type t = {msg: element, mutable idle: string}
 
+@get external scrollWidth: element => float = "scrollWidth"
+
 let make = msg => {msg, idle: ""}
 
-let show = (t, text) => {
+let setText = (t, text) => {
+  let overflows = () => t.msg->scrollWidth > t.msg->clientWidth + 1.
   t.msg->setTextContent(text)
+  t.msg->removeClass("small")
+  t.msg->removeClass("two")
+  if overflows() {
+    t.msg->addClass("small")
+    if overflows() {
+      t.msg->removeClass("small")
+      t.msg->addClass("two")
+    }
+  }
+}
+
+let show = (t, text) => {
+  setText(t, text)
   t.msg->removeClass("idle")
 }
 
 let clear = t => {
-  t.msg->setTextContent(t.idle)
+  setText(t, t.idle)
   t.msg->addClass("idle")
 }
 

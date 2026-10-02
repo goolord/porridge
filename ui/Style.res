@@ -481,22 +481,40 @@ let css = `
 .pv-head .spacer { flex: 1; }
 .pv-head .prog { display: flex; align-items: center; gap: 3px; min-width: 0; }
 .pv-head .prog .name {
-    width: 200px; min-width: 0; height: 20px; line-height: 20px; padding: 0 6px; border: 1px solid var(--edge); background: var(--paper);
-    font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    width: 230px; min-width: 0; height: 20px; line-height: 20px; padding: 0 4px 0 6px; border: 1px solid var(--edge); background: var(--paper);
+    font-size: 13px; cursor: pointer; white-space: nowrap; display: flex; align-items: center; gap: 4px;
 }
-.pv-head .prog .btn { width: 22px; padding: 0; }
+.pv-head .prog .name > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+/* the pencil that renames, on hover, and the arrow that says the name opens a list */
+.pv-head .prog .name .pen { visibility: hidden; color: var(--ink-soft); font-size: 12px; padding: 0 2px; border-radius: 2px; }
+.pv-head .prog .name:hover .pen { visibility: visible; }
+.pv-head .prog .name .pen:hover { background: var(--signal); color: var(--paper); }
+.pv-head .prog .name .arrow { color: var(--ink-faint); font-size: 10px; }
+.pv-head .prog .btn { width: 22px; padding: 0; font-size: 15px; line-height: 17px; }
 .pv-head .btn.icon { width: 26px; padding: 0; font-size: 15px; line-height: 19px; }
 .pv-head .btn.icon .ic { height: 15px; margin: auto; }
+.pv-head .btn.menu-btn { font-size: 17px; line-height: 18px; }
+.pv-head .btn.panic { width: 22px; color: #8a2a1a; }
+.pv-head .btn.panic .ic { height: 13px; }
+.pv-head .btn.panic:active { color: var(--paper); }
 
 /* status line: hover texts, or a hint for the page */
 .pv-status {
-    position: absolute; left: 0; right: 0; bottom: 0; height: ${px(statusHeight)};
+    position: absolute; left: 0; right: 0; bottom: 0; height: ${px(statusHeight)}; z-index: 35;
     padding: 0 8px; box-sizing: border-box; line-height: ${px(statusHeight)};
     background: var(--panel); border-top: 1px solid var(--edge);
     font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .pv-status.idle { color: var(--ink-faint); font-size: 12px; }
 .pv-status { padding-right: 120px; }
+/* a text too long for a line: a little smaller, or two lines, growing up over the pages' bottom
+   margin (it ends in an ellipsis only past that; hovering the bar shows the rest) */
+.pv-status.small { font-size: 11.5px; }
+.pv-status.two {
+    height: auto; min-height: ${px(statusHeight)}; padding-top: 1px; padding-bottom: 1px; line-height: 12px; font-size: 11.5px;
+    white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+}
+.pv-status.two:hover { -webkit-line-clamp: unset; }
 
 /* the source tray: its switch at the end of the status line, and the chips over the page's bottom */
 .mtoggle { position: absolute; right: 6px; bottom: 3px; height: ${px(statusHeight - 6.)}; z-index: 41; box-sizing: border-box;
@@ -531,6 +549,13 @@ let css = `
 .menu div.mh { padding: 4px 12px 1px 10px; font-size: 11px; color: var(--ink-faint); cursor: default;
     text-transform: uppercase; letter-spacing: 0.06em; }
 .menu div.mh:hover { background: none; color: var(--ink-faint); }
+.menu hr { border: none; border-top: 1px solid var(--tile-edge); margin: 3px 0; }
+.menu.rich div { display: flex; align-items: center; }
+.menu .ck { width: 14px; flex: none; font-size: 11px; }
+.menu .keys { margin-left: auto; padding-left: 24px; font-size: 11px; color: var(--ink-faint); }
+.menu div:hover .keys { color: var(--paper); }
+.menu div.off { color: var(--ink-faint); cursor: default; }
+.menu div.off:hover { background: none; color: var(--ink-faint); }
 .menu.icons div { display: flex; align-items: center; }
 .menu.icons .icw { width: 38px; flex: none; }
 
@@ -681,6 +706,30 @@ let css = `
 .mempty .big { font-size: 17px; font-weight: 700; color: var(--ink); margin-bottom: 6px; }
 .msw { display: block; width: 12px; height: 12px; border-radius: 50%; }
 .menu.icons .icw:has(.msw) { width: 20px; }
+
+/* the shapes editor, over the pages */
+.pv-overlay { position: absolute; left: 0; right: 0; top: ${px(headerHeight)}; bottom: ${px(statusHeight)}; z-index: 30;
+    display: none; background: var(--ground); }
+.pv-overlay.on { display: block; }
+.pv-overlay .xclose { right: 6px; top: 2px; height: 18px; line-height: 16px; font-size: 12px; z-index: 2; }
+
+/* the play page: target slots shown as rows (SlotRows), with their "+" button; the controllers'
+   list; what a macro moves; a tab whose settings aren't Init's */
+.srow { position: absolute; left: 0; top: 0; }
+.slist { position: absolute; overflow-x: hidden; overflow-y: auto; }
+.slist::-webkit-scrollbar { width: 6px; }
+.slist::-webkit-scrollbar-thumb { background: rgba(111,95,54,0.45); border-radius: 3px; }
+.slist::-webkit-scrollbar-track { background: transparent; }
+.btn.add { background: transparent; border: 1.5px dashed var(--edge); color: var(--ink-soft); text-align: left; padding: 0 8px;
+    height: ${px(controlHeight)}; line-height: ${px(controlHeight - 3.)}; font-size: 12.5px; white-space: nowrap; }
+.btn.add:hover { background: var(--panel-hi); color: var(--ink); border-color: var(--ink); }
+.btn.add.off { opacity: 0.4; pointer-events: none; }
+.mdest { position: absolute; height: 14px; font-size: 11px; line-height: 14px; color: var(--ink-soft); cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mdest.none { color: var(--ink-faint); }
+.mdest:hover { color: var(--signal); }
+.ptab.mark::after { content: ""; display: inline-block; width: 5px; height: 5px; margin-left: 4px; vertical-align: 2px;
+    border-radius: 50%; background: var(--mod); }
 
 /* dialogs */
 .shade { position: absolute; inset: 0; z-index: 80; background: rgba(31,26,14,0.35); display: flex; align-items: center; justify-content: center; }

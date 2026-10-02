@@ -1,4 +1,4 @@
-// The sample a shape was made from, shown above the drawing on the Shapes page: its name,
+// The sample a shape was made from, shown above the drawing in the shapes editor: its name,
 // where the shape came from, and (for a recording or a wavetable) an overview of the sample
 // to click or drag along, which measures another part of it or picks another frame.
 
