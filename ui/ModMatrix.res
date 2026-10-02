@@ -474,6 +474,14 @@ let targets = [
   knob("LFO_3_Rate", "LFO 3 rate", "lfo"),
   knob("LFO_3_Fade", "LFO 3 fade-in", "lfo"),
   knob("Wander_Rate", "wander rate", "lfo"),
+  ...effectTargets("fxfilter", "FX filter", [2, 3, 4], [("Ff_Track", "tracking")]),
+  ...effectTargets("shifter", "shifter", [2], [("Sh_Ratio", "ratio"), ("Sh_Hz", "offset"), ("Sh_Mix", "mix")]),
+  ...effectTargets(
+    "resonator",
+    "resonator",
+    [2],
+    [("Rs_Pitch", "pitch"), ("Rs_Decay", "decay"), ("Rs_Bright", "brightness"), ("Rs_Mix", "mix")],
+  ),
 ]
 
 // The target groups, by the key in each target's group, with their titles.
@@ -498,6 +506,8 @@ let groups = [
   ("utility", "utility"),
   ("ambience", "ambience"),
   ("air", "air"),
+  ("shifter", "shifter"),
+  ("resonator", "resonator"),
 ]
 
 let sourceIndex = key => sources->Array.findIndex(s => s.key == key)

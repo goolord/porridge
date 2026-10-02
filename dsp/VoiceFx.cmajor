@@ -1,0 +1,731 @@
+//  The voice lane: up to laneSlots effects in every voice (VL_1 .. VL_4, the same values as the
+//  rack's slots), placed around the filter and the amp envelope (VL_FilterAt, VL_AmpAt). Each
+//  note runs its own copy of each, so its LFOs, envelopes and key move them for that note alone:
+//  the rack's filter, distortion, EQ, phaser, flanger and utility, and two that only work per
+//  note, a frequency shifter that follows the key and a resonator tuned to it.
+//
+//  The synth swaps a copy's parameters into its first's slots to run it, as the rack does, so
+//  the code here reads the first's. A voice renders in pieces of n samples (MIDI splits blocks),
+//  so everything here works on n; values glide from block to block. Both sides run only once
+//  something makes them differ (a stereo phase, a spread, a pan): until then the right side is
+//  the left's.
+
+namespace porridge
+{
+    let laneSlots = 4;
+    let laneFlangerLine = 2048;     // 42 ms at 48 kHz (21 ms at 96): the flanger's delays and depth
+
+    /// One lane slot's state in one voice, whichever kind it holds (only that kind's part is
+    /// used; a different value in the slot starts it afresh).
+    struct LaneFx
+    {
+        int fx;
+        bool fresh;
+
+        // filter: per side, and the cutoff (ln Hz), morph and mix, gliding per block
+        Filter[2] filt;
+        float fHz, fMorph, fMix;
+
+        // distortion, per side
+        Distortion[2] dist;
+
+        // EQ: each band's state per side
+        float[5] eqL1, eqL2, eqR1, eqR2;
+
+        // phaser: stages' states and coefficients per side, the chain's last output, the LFO,
+        // the gliding centre (ln Hz), depth, spread, feedback and mix
+        float[16] phSL, phSR, phAL, phAR;
+        float phLastL, phLastR;
+        float64 phPhase;
+        float phCentre, phDepth, phSpread, phFb, phMix;
+        int phStages;
+
+        // flanger: the line (both sides), its write position, the LFO, and the gliding delay,
+        // depth, feedback and mix
+        float<2>[laneFlangerLine] flLine;
+        int flPos;
+        float64 flPhase;
+        float flDelay, flDepth, flFb, flMix;
+
+        // utility: gliding gain, balance and width
+        float utGain, utPanL, utPanR, utWidth;
+
+        // shifter: the Hilbert pair's states per side (in z^-2), path B's delay, the
+        // oscillator, the gliding shift (Hz) and mix
+        float[16] hx1L, hx2L, hy1L, hy2L, hx1R, hx2R, hy1R, hy2R;
+        float hPrevL, hPrevR;
+        float64 shPhase;
+        float shHz, shMix;
+
+        // resonator: each mode's two outputs and inputs back, per side, and the gliding mix
+        float[4] rY1L, rY2L, rX1L, rX2L, rY1R, rY2R, rX1R, rX2R;
+        float rsMix;
+    }
+
+    //==============================================================================
+    // the Hilbert pair, shared by every voice's shifter: Bode's design (FxExtra.cmajor)
+
+    let hilbertCoefs = 16;
+
+    float[hilbertCoefs] hilbertDesign (float64 sr)
+    {
+        float[hilbertCoefs] c;
+        let transition = 20.0 / sr;
+        let order = float64 (hilbertCoefs * 2 + 1);
+        var kk = tan ((1.0 - transition * 2.0) * pi * 0.25);
+        kk *= kk;
+        let kksqrt = pow (1.0 - kk * kk, 0.25);
+        let e = 0.5 * (1.0 - kksqrt) / (1.0 + kksqrt);
+        let e4 = e * e * e * e;
+        let q = e * (1.0 + e4 * (2.0 + e4 * (15.0 + 150.0 * e4)));
+
+        for (wrap<hilbertCoefs> j)
+        {
+            let cj = float64 (j + 1);
+            float64 num = 0, den = 0, sign = 1;
+
+            for (int i = 0; i < 40; ++i)
+            {
+                let t = pow (q, float64 (i * (i + 1))) * sin (float64 (i * 2 + 1) * cj * pi / order) * sign;
+                num += t;
+                sign = -sign;
+                if (abs (t) < 1e-100) break;
+            }
+
+            sign = -1;
+
+            for (int i = 1; i < 40; ++i)
+            {
+                let t = pow (q, float64 (i * i)) * cos (float64 (i * 2) * cj * pi / order) * sign;
+                den += t;
+                sign = -sign;
+                if (abs (t) < 1e-100) break;
+            }
+
+            let ww = num * pow (q, 0.25) / (den + 0.5);
+            let wwsq = ww * ww;
+            let x = sqrt ((1.0 - wwsq * kk) * (1.0 - wwsq / kk)) / (1.0 + wwsq);
+            c[j] = float ((1.0 - x) / (1.0 + x));
+        }
+
+        return c;
+    }
+
+    //==============================================================================
+    /// The resonator's models (Rs_Model): each mode's frequency, relative to the note.
+    let resonatorRatios = float[24] (1.0f, 2.0f, 3.0f, 4.0f,             // harmonic
+                                     1.0f, 3.0f, 5.0f, 7.0f,             // odd
+                                     1.0f, 1.5f, 2.0f, 3.0f,             // fifths
+                                     1.0f, 2.756f, 5.404f, 8.933f,       // bar (free at both ends)
+                                     1.0f, 2.0f, 2.4f, 3.0f,             // bell (hum, prime, tierce, quint)
+                                     1.0f, 1.593f, 2.136f, 2.296f);      // membrane
+
+    /// A knob's glide per block of n samples: about 20 ms.
+    float laneGlide (int n, float64 sr)
+    {
+        return float (1.0 - exp (-float64 (n) / (0.02 * sr)));
+    }
+
+    /// Clears what this kind keeps, for a note that starts or a slot that changes.
+    void startLane (LaneFx& this, int kind)
+    {
+        this.fresh = true;
+
+        if (kind == rack::filterKind)
+        {
+            this.filt[0].clearState();
+            this.filt[1].clearState();
+        }
+        else if (kind == rack::distortionKind)
+        {
+            this.dist[0].clearState();
+            this.dist[1].clearState();
+        }
+        else if (kind == rack::eqKind)
+        {
+            this.eqL1 = float[5](); this.eqL2 = float[5](); this.eqR1 = float[5](); this.eqR2 = float[5]();
+        }
+        else if (kind == rack::phaserKind)
+        {
+            this.phSL = float[16](); this.phSR = float[16]();
+            this.phLastL = 0; this.phLastR = 0;
+            this.phPhase = 0;
+            this.phStages = 0;
+        }
+        else if (kind == rack::flangerKind)
+        {
+            for (wrap<laneFlangerLine> i)
+                this.flLine[i] = float<2> (0.0f, 0.0f);
+
+            this.flPos = 0;
+            this.flPhase = 0;
+        }
+        else if (kind == rack::shifterKind)
+        {
+            this.hx1L = float[16](); this.hx2L = float[16](); this.hy1L = float[16](); this.hy2L = float[16]();
+            this.hx1R = float[16](); this.hx2R = float[16](); this.hy1R = float[16](); this.hy2R = float[16]();
+            this.hPrevL = 0; this.hPrevR = 0;
+            this.shPhase = 0;
+        }
+        else if (kind == rack::resonatorKind)
+        {
+            this.rY1L = float[4](); this.rY2L = float[4](); this.rX1L = float[4](); this.rX2L = float[4]();
+            this.rY1R = float[4](); this.rY2R = float[4](); this.rX1R = float[4](); this.rX2R = float[4]();
+        }
+    }
+
+    /// Whether this kind, as it's set, makes the two sides differ.
+    bool laneSplits (int kind, const float[numSlots]& P)
+    {
+        if (kind == rack::filterKind)   return P[slot::Ff_Spread] != 0;
+        if (kind == rack::phaserKind)   return P[slot::Ph_Phase] != 0;
+        if (kind == rack::flangerKind)  return P[slot::Fl_Phase] != 0;
+        if (kind == rack::utilityKind)  return P[slot::Ut_Pan] != 0 || P[slot::Ut_InvL] != P[slot::Ut_InvR] || P[slot::Ut_Swap] != 0;
+        if (kind == rack::shifterKind)  return int (P[slot::Sh_Mode]) == bodeMode::stereo;
+        return false;
+    }
+
+    //==============================================================================
+    // filter
+
+    void laneFilter (LaneFx& this, const FxTables& tables, const float[numSlots]& P, float noteHz, float64 sr,
+                     float[blockSize]& l, float[blockSize]& r, bool both, int n)
+    {
+        let t = int (P[slot::Ff_Type]);
+
+        if (t <= filterType::off)
+            return;
+
+        var hz = float64 (expKnob (20.0f, 20000.0f, P[slot::Ff_Cutoff]));
+        hz *= pow (float64 (noteHz) / 261.63, float64 (clamp (P[slot::Ff_Track], 0.0f, 1.0f)));
+        let tHz = float (log (clamp (hz, 5.0, 40000.0)));
+        let tMix = clamp (P[slot::Ff_Mix], 0.0f, 1.0f);
+        let tMorph = clamp (P[slot::Ff_Morph], 0.0f, 1.0f);
+
+        if (this.fresh)
+        {
+            this.fHz = tHz; this.fMix = tMix; this.fMorph = tMorph;
+        }
+
+        let k = laneGlide (n, sr);
+        this.fHz += (tHz - this.fHz) * k;
+        this.fMorph += (tMorph - this.fMorph) * k;
+        let mix0 = this.fMix;
+        this.fMix += (tMix - this.fMix) * k;
+        let dm = (this.fMix - mix0) / float (n);
+
+        let spread = clamp (P[slot::Ff_Spread], -24.0f, 24.0f) * (0.693147181f / 24.0f);
+        let res = clamp (P[slot::Ff_Resonance], 0.0f, 1.0f);
+        let drive = clamp (P[slot::Ff_Drive], 0.0f, 1.0f);
+        float[blockSize] wet;
+
+        wet = l;
+        this.filt[0].process (tables, t, exp (this.fHz - spread), res, this.fMorph, drive, sr, wet, n);
+
+        for (int i = 0; i < n; ++i)
+            l.at (i) += (wet.at (i) - l.at (i)) * (mix0 + dm * float (i + 1));
+
+        if (both)
+        {
+            wet = r;
+            this.filt[1].process (tables, t, exp (this.fHz + spread), res, this.fMorph, drive, sr, wet, n);
+
+            for (int i = 0; i < n; ++i)
+                r.at (i) += (wet.at (i) - r.at (i)) * (mix0 + dm * float (i + 1));
+        }
+    }
+
+    //==============================================================================
+    // EQ: Oatmeal's five bands (Effects.cmajor's EQ), per side
+
+    void laneEq (LaneFx& this, const float[numSlots]& P, float64 sr, float[blockSize]& l, float[blockSize]& r, bool both, int n)
+    {
+        for (wrap<5> k)
+        {
+            let type = int (P.at (slot::EQ_1_Type + k));
+
+            if (type == 0)
+                continue;
+
+            let freq  = float64 (P.at (slot::EQ_1_Freq + k));
+            let amp   = P.at (slot::EQ_1_Amp + k);
+            let slope = float64 (P.at (slot::EQ_1_Slope + k));
+
+            let A = float (pow (10.0, float64 (amp * 0.025f)));
+            var w = float64 (piF) * freq * 2.0 / sr;
+            w = min (w, float64 (piF * 0.98f));
+            let sn = float (sin (w));
+            let cs = float (cos (w));
+            let alpha = float (sn / (2.0 * slope));
+            let beta = float (sqrt (float64 (A)) / slope * sn);
+            let Ad = float64 (A);
+
+            float64 b0, b1, b2, a0, a1, a2;
+
+            if (type == 1)
+            {
+                b0 = 1.0 + alpha * Ad;  b1 = -2.0 * cs;  b2 = 1.0 - alpha * Ad;
+                a0 = 1.0 + alpha / Ad;  a1 = -2.0 * cs;  a2 = 1.0 - alpha / Ad;
+            }
+            else if (type == 2)
+            {
+                b0 = Ad * ((Ad + 1) - (Ad - 1) * cs + beta);
+                b1 = 2.0 * Ad * ((Ad - 1) - (Ad + 1) * cs);
+                b2 = Ad * ((Ad + 1) - (Ad - 1) * cs - beta);
+                a0 = (Ad + 1) + (Ad - 1) * cs + beta;
+                a1 = -2.0 * ((Ad - 1) + (Ad + 1) * cs);
+                a2 = (Ad + 1) + (Ad - 1) * cs - beta;
+            }
+            else
+            {
+                b0 = Ad * ((Ad + 1) + (Ad - 1) * cs + beta);
+                b1 = -2.0 * Ad * ((Ad - 1) + (Ad + 1) * cs);
+                b2 = Ad * ((Ad + 1) + (Ad - 1) * cs - beta);
+                a0 = (Ad + 1) - (Ad - 1) * cs + beta;
+                a1 = 2.0 * ((Ad - 1) - (Ad + 1) * cs);
+                a2 = (Ad + 1) - (Ad - 1) * cs - beta;
+            }
+
+            let inv = 1.0 / a0;
+            let B0 = float (b0 * inv), B1 = float (b1 * inv), B2 = float (b2 * inv);
+            let A1 = float (-a1 * inv), A2 = float (-a2 * inv);
+
+            var s1 = this.eqL1[k], s2 = this.eqL2[k];
+
+            for (int i = 0; i < n; ++i)
+            {
+                let x = l.at (i) + 1e-18f;
+                let y = B0 * x + s1;
+                s1 = A1 * y + B1 * x + s2;
+                s2 = A2 * y + B2 * x;
+                l.at (i) = y;
+            }
+
+            this.eqL1[k] = s1; this.eqL2[k] = s2;
+
+            if (both)
+            {
+                s1 = this.eqR1[k]; s2 = this.eqR2[k];
+
+                for (int i = 0; i < n; ++i)
+                {
+                    let x = r.at (i) + 1e-18f;
+                    let y = B0 * x + s1;
+                    s1 = A1 * y + B1 * x + s2;
+                    s2 = A2 * y + B2 * x;
+                    r.at (i) = y;
+                }
+
+                this.eqR1[k] = s1; this.eqR2[k] = s2;
+            }
+        }
+    }
+
+    //==============================================================================
+    // phaser (FxExtra.cmajor's): the note's own LFO, from the note-on, and its tracking
+    // follows the voice's note
+
+    void lanePhaser (LaneFx& this, const float[numSlots]& P, float noteHz, float64 sr,
+                     float[blockSize]& l, float[blockSize]& r, bool both, int n)
+    {
+        let stages = phaserStages (int (P[slot::Ph_Stages]));
+        var centre = float64 (expKnob (20.0f, 20000.0f, P[slot::Ph_Freq]));
+        centre *= pow (float64 (noteHz) / 261.63, float64 (clamp (P[slot::Ph_Track], 0.0f, 1.0f)));
+        let tCentre = float (log (clamp (centre, 1.0, 100000.0)));
+        let tDepth = clamp (P[slot::Ph_Depth], 0.0f, 1.0f);
+        let tSpread = clamp (P[slot::Ph_Spread], 0.0f, 1.0f);
+        let tFb = clamp (P[slot::Ph_Feedback], -1.0f, 1.0f) * 0.95f;
+        let tMix = clamp (P[slot::Ph_Mix], 0.0f, 1.0f);
+        let offset = float64 (clamp (P[slot::Ph_Phase], 0.0f, 180.0f)) / 360.0;
+        let fresh = this.fresh;
+
+        if (fresh)
+        {
+            this.phCentre = tCentre; this.phDepth = tDepth; this.phSpread = tSpread;
+            this.phFb = tFb; this.phMix = tMix;
+        }
+
+        let k = laneGlide (n, sr);
+        this.phCentre += (tCentre - this.phCentre) * k;
+        this.phDepth += (tDepth - this.phDepth) * k;
+        this.phSpread += (tSpread - this.phSpread) * k;
+        let fb0 = this.phFb, mix0 = this.phMix;
+        this.phFb += (tFb - this.phFb) * k;
+        this.phMix += (tMix - this.phMix) * k;
+        let dfb = (this.phFb - fb0) / float (n), dmix = (this.phMix - mix0) / float (n);
+
+        // the LFO at the end of this piece sets the coefficients it ramps to
+        this.phPhase += float64 (expKnob (0.02f, 20.0f, P[slot::Ph_Rate])) / sr * float64 (n);
+        this.phPhase -= floor (this.phPhase);
+        let ln2 = 0.693147181;
+        let sweepL = 3.0 * float64 (this.phDepth) * sin (twoPi * this.phPhase);
+        let sweepR = 3.0 * float64 (this.phDepth) * sin (twoPi * (this.phPhase + offset));
+        float[16] daL, daR;
+
+        for (wrap<16> s)
+        {
+            if (s >= stages) break;
+
+            let oct = float64 (this.phSpread) * (2.0 * float64 (s) / float64 (stages - 1) - 1.0);
+            let aL = phaserCoef (exp (float64 (this.phCentre) + ln2 * (sweepL + oct)), sr);
+            let aR = phaserCoef (exp (float64 (this.phCentre) + ln2 * (sweepR + oct)), sr);
+
+            if (fresh || s >= this.phStages)
+            {
+                this.phAL[s] = aL; this.phAR[s] = aR;
+                this.phSL[s] = 0; this.phSR[s] = 0;
+            }
+
+            daL[s] = (aL - this.phAL[s]) / float (n);
+            daR[s] = (aR - this.phAR[s]) / float (n);
+        }
+
+        this.phStages = stages;
+
+        for (int i = 0; i < n; ++i)
+        {
+            let fb = fb0 + dfb * float (i + 1);
+            let mix = mix0 + dmix * float (i + 1);
+            let x = l.at (i);
+            let back = extraSoftClip (fb * this.phLastL);
+            var v = x + back + 1e-18f;
+
+            for (wrap<16> s)
+            {
+                if (s >= stages) break;
+
+                this.phAL[s] += daL[s];
+                let y = this.phAL[s] * v + this.phSL[s];
+                this.phSL[s] = v - this.phAL[s] * y;
+                v = y;
+            }
+
+            this.phLastL = v;
+            l.at (i) = (x + back * min (1.0f, 2.0f * mix)) * (1.0f - mix) + v * mix;
+        }
+
+        if (both)
+        {
+            for (int i = 0; i < n; ++i)
+            {
+                let fb = fb0 + dfb * float (i + 1);
+                let mix = mix0 + dmix * float (i + 1);
+                let x = r.at (i);
+                let back = extraSoftClip (fb * this.phLastR);
+                var v = x + back + 1e-18f;
+
+                for (wrap<16> s)
+                {
+                    if (s >= stages) break;
+
+                    this.phAR[s] += daR[s];
+                    let y = this.phAR[s] * v + this.phSR[s];
+                    this.phSR[s] = v - this.phAR[s] * y;
+                    v = y;
+                }
+
+                this.phLastR = v;
+                r.at (i) = (x + back * min (1.0f, 2.0f * mix)) * (1.0f - mix) + v * mix;
+            }
+        }
+        else
+        {
+            // the right side's coefficients keep up, for when it parts from the left
+            for (wrap<16> s)
+                if (s < stages) this.phAR[s] += daR[s] * float (n);
+        }
+    }
+
+    //==============================================================================
+    // flanger (FxExtra.cmajor's), on a shorter line: the note's own LFO, from the note-on
+
+    float laneFlangerRead (const LaneFx& this, float d, int ch)
+    {
+        let di = int (d);
+        let t = d - float (di);
+        let m = laneFlangerLine - 1;
+        let p = this.flPos - di;
+        return hermite (this.flLine.at ((p + 1) & m).at (ch), this.flLine.at (p & m).at (ch),
+                        this.flLine.at ((p - 1) & m).at (ch), this.flLine.at ((p - 2) & m).at (ch), t);
+    }
+
+    void laneFlanger (LaneFx& this, const float[numSlots]& P, float64 sr, float[blockSize]& l, float[blockSize]& r, bool both, int n)
+    {
+        let longest = float (laneFlangerLine - 4);
+        let tDelay = min (expKnob (0.1f, 20.0f, P[slot::Fl_Delay]) * 0.001f * float (sr), longest / 16.0f);
+        let tDepth = clamp (P[slot::Fl_Depth], 0.0f, 1.0f);
+        let tFb = clamp (P[slot::Fl_Feedback], -1.0f, 1.0f) * 0.97f;
+        let tMix = clamp (P[slot::Fl_Mix], 0.0f, 1.0f);
+        let inc = float64 (expKnob (0.02f, 20.0f, P[slot::Fl_Rate])) / sr;
+        let offset = float64 (clamp (P[slot::Fl_Phase], 0.0f, 180.0f)) / 360.0;
+
+        if (this.fresh)
+        {
+            this.flDelay = tDelay; this.flDepth = tDepth; this.flFb = tFb; this.flMix = tMix;
+        }
+
+        let k = laneGlide (n, sr);
+        let d0 = this.flDelay, dp0 = this.flDepth, fb0 = this.flFb, mix0 = this.flMix;
+        this.flDelay += (tDelay - this.flDelay) * k;
+        this.flDepth += (tDepth - this.flDepth) * k;
+        this.flFb += (tFb - this.flFb) * k;
+        this.flMix += (tMix - this.flMix) * k;
+        let step = 1.0f / float (n);
+
+        for (int i = 0; i < n; ++i)
+        {
+            let f = float (i + 1) * step;
+            let delay = d0 + (this.flDelay - d0) * f;
+            let depth = dp0 + (this.flDepth - dp0) * f;
+            let fb = fb0 + (this.flFb - fb0) * f;
+            let mix = mix0 + (this.flMix - mix0) * f;
+
+            let span = 4.0f * 0.693147181f * depth;
+            let lfoL = 0.5f - 0.5f * float (cos (twoPi * this.flPhase));
+            let lfoR = 0.5f - 0.5f * float (cos (twoPi * (this.flPhase + offset)));
+            let yL = this.laneFlangerRead (clamp (delay * exp (span * lfoL), 2.0f, longest), 0);
+            let yR = this.laneFlangerRead (clamp (delay * exp (span * lfoR), 2.0f, longest), 1);
+
+            let xL = l.at (i);
+            let xR = both ? r.at (i) : xL;
+            let backL = extraSoftClip (fb * yL);
+            let backR = extraSoftClip (fb * yR);
+            this.flLine.at (this.flPos) = float<2> (xL + backL + 1e-18f, xR + backR + 1e-18f);
+            this.flPos = (this.flPos + 1) & (laneFlangerLine - 1);
+
+            l.at (i) = (xL + backL * min (1.0f, 2.0f * mix)) * (1.0f - mix) + yL * mix;
+            if (both) r.at (i) = (xR + backR * min (1.0f, 2.0f * mix)) * (1.0f - mix) + yR * mix;
+
+            this.flPhase += inc;
+            if (this.flPhase >= 1.0) this.flPhase -= 1.0;
+        }
+    }
+
+    //==============================================================================
+    // utility: swap, inversion, width, balance and gain (FxExtra.cmajor's, without bass mono,
+    // which needs the whole sound)
+
+    void laneUtility (LaneFx& this, const float[numSlots]& P, float64 sr, float[blockSize]& l, float[blockSize]& r, bool both, int n)
+    {
+        let pan = clamp (P[slot::Ut_Pan], -1.0f, 1.0f);
+        let tPanL = min (1.0f, 1.0f - pan);
+        let tPanR = min (1.0f, 1.0f + pan);
+        let tGain = float (pow (10.0, float64 (clamp (P[slot::Ut_Gain], -48.0f, 24.0f)) * 0.05));
+        let tWidth = clamp (P[slot::Ut_Width], 0.0f, 2.0f);
+        let invL = P[slot::Ut_InvL] != 0 ? -1.0f : 1.0f;
+        let invR = P[slot::Ut_InvR] != 0 ? -1.0f : 1.0f;
+        let swap = P[slot::Ut_Swap] != 0;
+
+        if (this.fresh)
+        {
+            this.utGain = tGain; this.utPanL = tPanL; this.utPanR = tPanR; this.utWidth = tWidth;
+        }
+
+        let k = laneGlide (n, sr);
+        let g0 = this.utGain, pl0 = this.utPanL, pr0 = this.utPanR, w0 = this.utWidth;
+        this.utGain += (tGain - this.utGain) * k;
+        this.utPanL += (tPanL - this.utPanL) * k;
+        this.utPanR += (tPanR - this.utPanR) * k;
+        this.utWidth += (tWidth - this.utWidth) * k;
+        let step = 1.0f / float (n);
+
+        for (int i = 0; i < n; ++i)
+        {
+            let f = float (i + 1) * step;
+            let g = g0 + (this.utGain - g0) * f;
+
+            if (! both)
+            {
+                l.at (i) *= g * invL;
+                continue;
+            }
+
+            var a = l.at (i), b = r.at (i);
+            if (swap) { let t = a; a = b; b = t; }
+            a *= invL;
+            b *= invR;
+            let w = w0 + (this.utWidth - w0) * f;
+            let mid = 0.5f * (a + b);
+            let side = 0.5f * (a - b) * w;
+            l.at (i) = (mid + side) * (pl0 + (this.utPanL - pl0) * f) * g;
+            r.at (i) = (mid - side) * (pr0 + (this.utPanR - pr0) * f) * g;
+        }
+    }
+
+    //==============================================================================
+    // shifter: a frequency shift that follows the key. The Hilbert pair (shared coefficients)
+    // and a quadrature oscillator at Sh_Ratio of the note's frequency plus Sh_Hz, so that the
+    // shifted partials keep the same places relative to every note.
+
+    /// Sh_Ratio's knob (-1..1) as a fraction of the note: cubed, times 2.
+    float shifterRatio (float v)        { let x = clamp (v, -1.0f, 1.0f); return 2.0f * x * x * x; }
+    /// Sh_Hz's knob as Hz: cubed, times 1000.
+    float shifterHz (float v)           { let x = clamp (v, -1.0f, 1.0f); return 1000.0f * x * x * x; }
+
+    void laneShifter (LaneFx& this, const float[hilbertCoefs]& c, const float[numSlots]& P, float noteHz, float64 sr,
+                      float[blockSize]& l, float[blockSize]& r, bool both, int n)
+    {
+        let tHz = noteHz * shifterRatio (P[slot::Sh_Ratio]) + shifterHz (P[slot::Sh_Hz]);
+        let tMix = clamp (P[slot::Sh_Mix], 0.0f, 1.0f);
+        let mode = int (P[slot::Sh_Mode]);
+        let sideL = mode == bodeMode::down ? -1.0f : (mode == bodeMode::ring ? 0.0f : 1.0f);
+        let sideR = mode == bodeMode::down || mode == bodeMode::stereo ? -1.0f : (mode == bodeMode::ring ? 0.0f : 1.0f);
+
+        if (this.fresh)
+        {
+            this.shHz = tHz; this.shMix = tMix;
+        }
+
+        let k = laneGlide (n, sr);
+        let hz0 = this.shHz, mix0 = this.shMix;
+        this.shHz += (tHz - this.shHz) * k;
+        this.shMix += (tMix - this.shMix) * k;
+        let step = 1.0f / float (n);
+        let phase0 = this.shPhase;
+
+        for (int i = 0; i < n; ++i)
+        {
+            let f = float (i + 1) * step;
+            let mix = mix0 + (this.shMix - mix0) * f;
+            let x = l.at (i);
+            var a = x + 1e-18f;
+            var b = this.hPrevL;
+            this.hPrevL = a;
+
+            for (wrap<hilbertCoefs / 2> j)
+            {
+                let ja = wrap<hilbertCoefs> (2 * j), jb = wrap<hilbertCoefs> (2 * j + 1);
+                let ya = c[ja] * (a + this.hy2L[ja]) - this.hx2L[ja];
+                this.hx2L[ja] = this.hx1L[ja]; this.hx1L[ja] = a; this.hy2L[ja] = this.hy1L[ja]; this.hy1L[ja] = ya;
+                a = ya;
+                let yb = c[jb] * (b + this.hy2L[jb]) - this.hx2L[jb];
+                this.hx2L[jb] = this.hx1L[jb]; this.hx1L[jb] = b; this.hy2L[jb] = this.hy1L[jb]; this.hy1L[jb] = yb;
+                b = yb;
+            }
+
+            let cs = float (cos (twoPi * this.shPhase));
+            let sn = float (sin (twoPi * this.shPhase));
+            this.shPhase += float64 (hz0 + (this.shHz - hz0) * f) / sr;
+            this.shPhase -= floor (this.shPhase);
+            l.at (i) = x + (b * cs + a * sn * sideL - x) * mix;
+        }
+
+        if (! both)
+            return;
+
+        this.shPhase = phase0;
+
+        for (int i = 0; i < n; ++i)
+        {
+            let f = float (i + 1) * step;
+            let mix = mix0 + (this.shMix - mix0) * f;
+            let x = r.at (i);
+            var a = x + 1e-18f;
+            var b = this.hPrevR;
+            this.hPrevR = a;
+
+            for (wrap<hilbertCoefs / 2> j)
+            {
+                let ja = wrap<hilbertCoefs> (2 * j), jb = wrap<hilbertCoefs> (2 * j + 1);
+                let ya = c[ja] * (a + this.hy2R[ja]) - this.hx2R[ja];
+                this.hx2R[ja] = this.hx1R[ja]; this.hx1R[ja] = a; this.hy2R[ja] = this.hy1R[ja]; this.hy1R[ja] = ya;
+                a = ya;
+                let yb = c[jb] * (b + this.hy2R[jb]) - this.hx2R[jb];
+                this.hx2R[jb] = this.hx1R[jb]; this.hx1R[jb] = b; this.hy2R[jb] = this.hy1R[jb]; this.hy1R[jb] = yb;
+                b = yb;
+            }
+
+            let cs = float (cos (twoPi * this.shPhase));
+            let sn = float (sin (twoPi * this.shPhase));
+            this.shPhase += float64 (hz0 + (this.shHz - hz0) * f) / sr;
+            this.shPhase -= floor (this.shPhase);
+            r.at (i) = x + (b * cs + a * sn * sideR - x) * mix;
+        }
+    }
+
+    //==============================================================================
+    // resonator: four resonances at the model's ratios of the note (moved by Rs_Pitch), each
+    // ringing for Rs_Decay (the higher ones shorter), louder towards the top with Rs_Bright.
+
+    void laneResonator (LaneFx& this, const float[numSlots]& P, float noteHz, float64 sr,
+                        float[blockSize]& l, float[blockSize]& r, bool both, int n)
+    {
+        let model = clamp (int (P[slot::Rs_Model]), 0, 5);
+        let base = float64 (noteHz) * pow (2.0, float64 (clamp (P[slot::Rs_Pitch], -48.0f, 48.0f)) / 12.0);
+        let decay = float64 (expKnob (10.0f, 10000.0f, P[slot::Rs_Decay])) * 0.001;
+        let bright = float64 (clamp (P[slot::Rs_Bright], 0.0f, 1.0f));
+        let tMix = clamp (P[slot::Rs_Mix], 0.0f, 1.0f);
+
+        if (this.fresh)
+            this.rsMix = tMix;
+
+        let mix0 = this.rsMix;
+        this.rsMix += (tMix - this.rsMix) * laneGlide (n, sr);
+        let dmix = (this.rsMix - mix0) / float (n);
+
+        // each mode's gain (b0, at its peak 1 before the weights), feedback, and weight
+        float[4] g, a1, a2, wt;
+        float64 weights = 0;
+
+        for (wrap<4> m)
+        {
+            let ratio = float64 (resonatorRatios.at (model * 4 + m));
+            let hz = base * ratio;
+
+            if (hz <= 10.0 || hz >= 0.45 * sr)
+                continue;
+
+            let t = decay / sqrt (ratio);
+            let rr = exp (-6.907755 / (t * sr));
+            let w = twoPi * hz / sr;
+            a1[m] = float (2.0 * rr * cos (w));
+            a2[m] = float (-rr * rr);
+            g[m] = float ((1.0 - rr * rr) * 0.5);
+            let weight = pow (ratio, 2.0 * bright - 1.5);
+            wt[m] = float (weight);
+            weights += weight;
+        }
+
+        if (weights <= 0)
+            return;
+
+        let norm = float (1.0 / weights);
+
+        for (int i = 0; i < n; ++i)
+        {
+            let mix = mix0 + dmix * float (i + 1);
+            let x = l.at (i);
+            var wet = 0.0f;
+
+            for (wrap<4> m)
+            {
+                let y = g[m] * (x - this.rX2L[m]) + a1[m] * this.rY1L[m] + a2[m] * this.rY2L[m] + 1e-18f;
+                this.rX2L[m] = this.rX1L[m]; this.rX1L[m] = x;
+                this.rY2L[m] = this.rY1L[m]; this.rY1L[m] = y;
+                wet += wt[m] * y;
+            }
+
+            l.at (i) = x + (wet * norm * 2.0f - x) * mix;
+        }
+
+        if (! both)
+            return;
+
+        for (int i = 0; i < n; ++i)
+        {
+            let mix = mix0 + dmix * float (i + 1);
+            let x = r.at (i);
+            var wet = 0.0f;
+
+            for (wrap<4> m)
+            {
+                let y = g[m] * (x - this.rX2R[m]) + a1[m] * this.rY1R[m] + a2[m] * this.rY2R[m] + 1e-18f;
+                this.rX2R[m] = this.rX1R[m]; this.rX1R[m] = x;
+                this.rY2R[m] = this.rY1R[m]; this.rY1R[m] = y;
+                wet += wt[m] * y;
+            }
+
+            r.at (i) = x + (wet * norm * 2.0f - x) * mix;
+        }
+    }
+}

@@ -75,6 +75,12 @@ namespace porridge
         bool clockReleased;
         float viewCutoff;
         float[viewTargets] targetPos;
+
+        // the voice lane's slots (dsp/VoiceFx.cmajor), and the tail after the amp envelope ends
+        // while effects after it still ring: whether it's in one, and for how long
+        LaneFx[laneSlots] lane;
+        bool tailing;
+        int tailSamples;
     }
 
     let keyEqBands = 8;

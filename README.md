@@ -29,6 +29,11 @@ dsp/                    Cmajor DSP
                           note and bands on its harmonics; Oscillator.cmajor each oscillator's
                           roughness, noise in its phase)
   FxExtra.cmajor          Porridge's flanger, phaser, compressor, bode, rack filter and utility
+  VoiceFx.cmajor          the voice lane: up to four effects in every voice, around the filter
+                          and the amp envelope (the rack's filter, distortion, EQ, phaser,
+                          flanger and utility, and a key-tracked frequency shifter and a
+                          resonator tuned to each note); voices ring on past the amp while
+                          effects after it still sound
   Space.cmajor            the algo reverb (hall, plate, nitrous, basin, vintage)
   Ambience.cmajor         the ambience: very small spaces (room, and Airwindows' ClearCoat
                           and VerbTiny), for a little stereo and tone
@@ -105,7 +110,9 @@ tools/
                           locks, varying the banks, and their levels), modulation.mjs (the
                           matrix's hold, slew, curve, later sources and slots, and what
                           per-note sources follow on the whole sound, and the view's reports of
-                          the sounding notes, which the host writes with --voices); lib.mjs has what they
+                          the sounding notes, which the host writes with --voices), lane.mjs
+                          (the voice lane's effects, its key tracking, tails and amp place);
+                          lib.mjs has what they
                           share
   vanilla-bank.mjs        builds presets/vanilla.porridge
   re/                     comparisons against Oatmeal.dll (32-bit Python) and data checks

@@ -525,6 +525,46 @@ let distModelSpecs = [
 let distModelParams = [("Sat_Drive", "drive"), ("Sat_Tone", "tone"), ("Sat_Character", "character"), ("Sat_Mix", "mix")]
 let isDistModelParam = id => distModelParams->Array.some(((first, _)) => first == id)
 
+// Effects only the voice lane holds (dsp/VoiceFx.cmajor): they follow each note's key.
+// The shifter moves every partial by a fraction of the note's frequency (and some Hz); the
+// resonator rings at the model's ratios of the note.
+let shifterRatioText = v => {
+  let r = 2. * v * v * v
+  (r > 0. ? "+" : "") ++ Float.toFixed(r, ~digits=Math.abs(r) < 0.1 ? 3 : 2) ++ " × note"
+}
+let shifterHzText = v => {
+  let hz = 1000. * v * v * v
+  (hz > 0. ? "+" : "") ++ Float.toFixed(hz, ~digits=Math.abs(hz) < 10. ? 2 : 1) ++ " Hz"
+}
+let resonatorModels = ["harmonic", "odd", "fifths", "bar", "bell", "membrane"]
+
+let shifterSpecs = [
+  onSpec("Sh_On", "Shifter on"),
+  {id: "Sh_Ratio", name: "Shifter ratio", kind: Float({min: -1., max: 1., init: 0.5, text: shifterRatioText})},
+  {id: "Sh_Hz", name: "Shifter offset", kind: Float({min: -1., max: 1., init: 0., text: shifterHzText})},
+  {id: "Sh_Mode", name: "Shifter mode", kind: Choice({names: ["up", "down", "stereo (L up, R down)", "ring"], init: 0})},
+  {id: "Sh_Mix", name: "Shifter mix", kind: unit(0., 1., 0.5)},
+]
+
+let resonatorSpecs = [
+  onSpec("Rs_On", "Resonator on"),
+  {id: "Rs_Model", name: "Resonator model", kind: Choice({names: resonatorModels, init: 0})},
+  {id: "Rs_Pitch", name: "Resonator pitch", kind: Float({min: -24., max: 24., init: 0., text: semitones})},
+  {id: "Rs_Decay", name: "Resonator decay", kind: expKnob(~lo=10., ~hi=10000., ~init=400., ~text=msText)},
+  {id: "Rs_Bright", name: "Resonator brightness", kind: unit(0., 1., 0.5)},
+  {id: "Rs_Mix", name: "Resonator mix", kind: unit(0., 1., 0.5)},
+]
+
+let voiceKinds = [
+  {key: "shifter", name: "Shifter", params: rackParams(shifterSpecs), copies: [2], firstInRack: true},
+  {key: "resonator", name: "Resonator", params: rackParams(resonatorSpecs), copies: [2], firstInRack: true},
+]
+
+// The FX filter's note tracking came later: its first and copies are in the voice lane's group.
+let filterTrackSpecs = [
+  {id: "Ff_Track", name: "FX filter note tracking", kind: unit(0., 1., 0.)},
+]
+
 let rackKinds = [
   {
     key: "chorus",
@@ -616,7 +656,9 @@ let rackKinds = [
     copies: [2, 3, 4, 5],
     firstInRack: false,
   },
-  ...newKinds,
+  // (the filter's note tracking came later: see filterTrackSpecs)
+  ...newKinds->Array.map(k => k.key == "filter" ? {...k, params: [...k.params, ("Ff_Track", "note tracking")]} : k),
+  ...voiceKinds,
 ]
 
 // The id of copy n's parameter (D_Wet, 3: D3_Wet).
@@ -674,9 +716,13 @@ let copySpecsOf = (kinds, ~only=_ => true) => kinds->Array.flatMap(k =>
 
 // Oatmeal's effects' copies, and Porridge's own effects' copies (which come after them; the
 // ambience's, the distortion's model knobs' and the air's are in groups of their own)
-let laterKinds = ["ambience", "air"]
+let laterKinds = ["ambience", "air", "shifter", "resonator"]
+let laterParams = ["Ff_Track"]
 let copySpecs = copySpecsOf(rackKinds->Array.filter(k => !k.firstInRack), ~only=id => !isDistModelParam(id))
-let newCopySpecs = copySpecsOf(rackKinds->Array.filter(k => k.firstInRack && !(laterKinds->Array.includes(k.key))))
+let newCopySpecs = copySpecsOf(
+  rackKinds->Array.filter(k => k.firstInRack && !(laterKinds->Array.includes(k.key))),
+  ~only=id => !(laterParams->Array.includes(id)),
+)
 let ambienceCopySpecs = copySpecsOf(rackKinds->Array.filter(k => k.key == "ambience"))
 let distModelCopySpecs = copySpecsOf(rackKinds->Array.filter(k => k.key == "distortion"), ~only=isDistModelParam)
 let airCopySpecs = copySpecsOf(rackKinds->Array.filter(k => k.key == "air"))
@@ -791,6 +837,37 @@ type feature =
   | PairMix
   | MoreModulations
   | Lfo3
+  | VoiceLane
+
+// The voice lane (dsp/VoiceFx.cmajor): up to laneSlots effects in every voice, which each note
+// runs its own copy of, holding the same values as the rack's slots (only the kinds that work in
+// a voice: voiceLaneKinds); how many of them come before the filter, and before the amp
+// envelope (the rest come after it, and react to how each note swells and fades).
+let laneSlots = 4
+let laneId = k => `VL_${Int.toString(k)}`
+let voiceLaneKinds = ["filter", "distortion", "eq", "phaser", "flanger", "utility", "shifter", "resonator"]
+let lanePositions = ["0", "1", "2", "3", "4"]
+
+let laneSpecs = [
+  ...Array.fromInitializer(~length=laneSlots, i => {
+    id: laneId(i + 1),
+    name: `Voice FX slot ${Int.toString(i + 1)}`,
+    kind: Choice({names: rackNames, init: 0}),
+  }),
+  {id: "VL_FilterAt", name: "Voice FX before the filter", kind: Choice({names: lanePositions, init: 0})},
+  {id: "VL_AmpAt", name: "Voice FX before the amp", kind: Choice({names: lanePositions, init: 0})},
+]
+
+let voiceLaneSpecs = Array.concat(
+  laneSpecs,
+  Array.concat(
+    Array.concat(filterTrackSpecs, copySpecsOf(rackKinds->Array.filter(k => k.key == "filter"), ~only=id => id == "Ff_Track")),
+    Array.concat(
+      Array.concat(shifterSpecs, resonatorSpecs),
+      copySpecsOf(rackKinds->Array.filter(k => k.key == "shifter" || k.key == "resonator")),
+    ),
+  ),
+)
 
 let groups = [
   (Macros, macroSpecs),
@@ -821,6 +898,7 @@ let groups = [
   (PairMix, pairMixSpecs),
   (MoreModulations, Array.concat(moreSlotSpecs, Array.concat(slotOptionSpecs, followSpecs))),
   (Lfo3, lfo3Specs),
+  (VoiceLane, voiceLaneSpecs),
 ]
 
 let all = groups->Array.flatMap(((_, specs)) => specs)
