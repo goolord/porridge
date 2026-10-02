@@ -1,9 +1,19 @@
 // The patch view: pages on a fixed-size stage that is scaled to fit the window, a header with
 // the page tabs, the program (with its A/B versions) and a menu of the file and program
-// commands, the shapes editor over the pages, and a status line. Undo and redo (ParamModel's
-// history) are on ctrl+Z and ctrl+shift+Z / ctrl+Y everywhere but in a text field.
+// commands, the shapes editor over the pages, search (Palette) and a status line. Everywhere but
+// in a text field: undo and redo (ParamModel's history) on ctrl+Z and ctrl+shift+Z / ctrl+Y,
+// search on ctrl+K or "/", and the arrow keys, Enter and Delete go to the control under the
+// pointer when none has the keyboard.
 
 open! Web
+
+@send external onMouseOver: (element, @as("mouseover") _, Dom.mouseEvent => unit) => unit = "addEventListener"
+@new
+external keyboardEvent: (
+  string,
+  {"key": string, "shiftKey": bool, "ctrlKey": bool, "metaKey": bool, "altKey": bool},
+) => Dom.keyboardEvent = "KeyboardEvent"
+@send external dispatchKey: (element, Dom.keyboardEvent) => bool = "dispatchEvent"
 
 type page = [#main | #mod | #fx | #play]
 
@@ -158,6 +168,8 @@ let make = (host, pc) => {
     menu->Menu.close
     status->Status.setIdle(pageHint(page))
   }
+  // (search goes to a control on its page)
+  pageEls->Array.forEach(((p, e)) => Reach.place(e, p.label, () => showPage(p.page)))
 
   let ctx: Ctx.t = {
     model,
@@ -329,22 +341,53 @@ let make = (host, pc) => {
       }
     }
 
+  let oatMode = () => model->ParamModel.get("Oat_Mode") != 0.
+  let switchOatMode = () => model->ParamModel.gestureSet("Oat_Mode", oatMode() ? 0. : 1.)
+  let showSettings = () => SettingsDialog.show(settings, browser.library, stage)
   let compareLabels = () => {
     let live = programs->ProgramStore.slot
     let (a, b) = (ProgramStore.slotName(live), ProgramStore.slotName(ProgramStore.otherSlot(live)))
     (`Switch to ${b}`, `Copy ${a} to ${b}`)
   }
 
-  // the menu of everything else: files, the program, the bank, A/B, undo, Oat mode and panic
+  // search: the menu's commands and the header's, by name
+  let palette = Palette.make(ctx, stage, ~commands=() => {
+    let command = (label, ~words="", ~keys="", run) => {Palette.label, words, keys, run}
+    let (switchLabel, copyLabel) = compareLabels()
+    [
+      command("undo " ++ model->ParamModel.undoLabel->Option.getOr(""), ~keys="ctrl+Z", undo),
+      command("redo " ++ model->ParamModel.redoLabel->Option.getOr(""), ~keys="ctrl+shift+Z", redo),
+      command("init program", ~words="reset new patch", () => programs->ProgramStore.initCurrent),
+      command("random patches", ~words="randomize generate dice vary", () => randomizer.show()),
+      command("browse presets", ~words="browser bank programs find", ~keys="ctrl+F", browse),
+      command("load a file", ~words="open import preset bank tuning scala", pickFile),
+      command("save program", ~words="download preset", () => programs->ProgramStore.downloadProgram),
+      command("save bank", ~words="download", () => programs->ProgramStore.downloadBank),
+      command("export program for Oatmeal", ~words="omp", () => programs->ProgramStore.exportOatmealProgram),
+      command("export bank for Oatmeal", ~words="omb", () => programs->ProgramStore.exportOatmealBank),
+      command("program info", ~words="author category tags description", () => InfoDialog.show(ctx, stage)),
+      command("rename program", ~words="name", renameProgram),
+      command("new bank", ~words="init programs", () => NewBankDialog.show(ctx, stage)),
+      command("next program", () => programs->ProgramStore.select(programs.current + 1)),
+      command("previous program", () => programs->ProgramStore.select(programs.current - 1)),
+      command(switchLabel, ~words="compare a b ab version", () => programs->ProgramStore.switchSlot),
+      command(copyLabel, ~words="compare a b ab version", () => programs->ProgramStore.copyToOther),
+      command("shapes editor", ~words="draw user waveform wave lfo shape sample", openShapes),
+      command(oatMode() ? "Oat mode off" : "Oat mode on", ~words="oatmeal timing compatibility", switchOatMode),
+      command("panic", ~words="stop all notes", ~keys="Esc Esc", panic),
+      command("settings", ~words="preferences options interface size midi folders", showSettings),
+    ]
+  })
+
+  // the menu of everything else: files, the program, the bank, A/B, undo, search, Oat mode and panic
   let menuButton = button(
     head,
     "≡",
-    "Load and save, export for Oatmeal, program info, init, compare A/B, undo, Oat mode, panic",
+    "Load and save, export for Oatmeal, program info, init, compare A/B, undo, search, Oat mode, panic",
     () => (),
   )
   menuButton->addClass("icon")
   menuButton->addClass("menu-btn")
-  let oatMode = () => model->ParamModel.get("Oat_Mode") != 0.
   menuButton->onMouse(#click, _ => {
     let (switchLabel, copyLabel) = compareLabels()
     let undoLabel = model->ParamModel.undoLabel
@@ -393,6 +436,12 @@ let make = (host, pc) => {
           ~keys="ctrl+shift+Z",
           ~disabled=redoLabel == None,
         ),
+        item(
+          "Search…",
+          14,
+          ~keys="ctrl+K",
+          ~hint="Find any control, page or command by name, and go to it (or press / anywhere)",
+        ),
         item("Oat mode", 10, ~rule=true, ~hint=oatModeHelp, ~checked=oatMode()),
         item("Panic", 11, ~rule=true, ~keys="Esc Esc", ~hint=panicTitle),
       ],
@@ -409,28 +458,54 @@ let make = (host, pc) => {
         | 7 => NewBankDialog.show(ctx, stage)
         | 8 => undo()
         | 9 => redo()
-        | 10 => model->ParamModel.gestureSet("Oat_Mode", oatMode() ? 0. : 1.)
+        | 10 => switchOatMode()
         | 12 => programs->ProgramStore.switchSlot
         | 13 => programs->ProgramStore.copyToOther
+        | 14 => palette.show()
         | _ => panic()
         },
     )
   })
 
-  iconButton(head, Icons.gear, "Settings: interface size, preset browser, bank folders", () =>
-    SettingsDialog.show(settings, browser.library, stage)
-  )->ignore
+  iconButton(head, Icons.gear, "Settings: interface size, preset browser, bank folders", showSettings)->ignore
 
   stage->appendChild(toastEl)
 
   //==============================================================================
   // keys
 
+  // the control under the pointer, which the arrow keys, Enter and Delete go to while no control
+  // has the keyboard (Controls: nudge it, type its value, reset it)
+  let hovered = ref(None)
+  stage->onMouseOver(ev => hovered := Reach.controlAt(ev)->Option.map(Pair.first))
+  stage->onMouse(#mouseleave, _ => hovered := None)
+  let toHovered = k =>
+    switch hovered.contents {
+    | Some(e) if Reach.controlAt(k)->Option.isNone && Reach.isConnected(e) && Reach.isShown(e) =>
+      k->preventDefault
+      e
+      ->dispatchKey(
+        keyboardEvent(
+          "keydown",
+          {"key": k->key, "shiftKey": k->shiftKey, "ctrlKey": k->ctrlKey, "metaKey": k->metaKey, "altKey": k->altKey},
+        ),
+      )
+      ->ignore
+    | _ => ()
+    }
+
   let lastEscape = ref(0.)
   let onKey = k =>
     if !BrowserChrome.inTextField(k) {
       let key = k->key->String.toLowerCase
       switch key {
+      | "k" if k->commandKey =>
+        k->preventDefault
+        palette.show()
+      | "/" if !(k->commandKey) =>
+        k->preventDefault
+        palette.show()
+      | "arrowup" | "arrowdown" | "arrowleft" | "arrowright" | "enter" | "delete" | "backspace" => toHovered(k)
       | "f" if k->commandKey =>
         k->preventDefault
         browse()

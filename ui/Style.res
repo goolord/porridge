@@ -127,6 +127,8 @@ let css = `
 /* a panel the synth page's flow just opened */
 @keyframes pflash { from { box-shadow: 0 0 0 3px var(--signal); } to { box-shadow: 0 0 0 3px transparent; } }
 .blk.flash { animation: pflash 0.8s ease-out; }
+/* what search went to, or a summary line opened (Reach.flash) */
+.found { animation: pflash 0.6s ease-out 2; }
 .blk > .hdr, .pbody > .hdr { position: absolute; right: 6px; top: 1px; width: 40px; height: 18px; }
 
 /* the FX page: the strip is the signal path, per-voice (tinted) then the whole sound, with a tab
@@ -625,6 +627,24 @@ let css = `
     display: none; max-width: 80%;
 }
 .toast.on { display: block; }
+
+/* search (Palette): a box over the page, and what it finds */
+.pal { position: absolute; left: 270px; top: 40px; width: 560px; z-index: 75; display: none; box-sizing: border-box;
+    background: var(--paper); border: 1px solid var(--ink); box-shadow: 3px 3px 0 rgba(31,26,14,0.35); }
+.pal.on { display: block; }
+.pal-q { display: block; width: 100%; height: 32px; box-sizing: border-box; padding: 0 10px; border: none;
+    border-bottom: 1px solid var(--tile-edge); background: transparent; font: inherit; font-size: 15px; color: var(--ink); outline: none; }
+.pal-q::placeholder { color: var(--ink-faint); }
+.pal-list { max-height: 292px; overflow-y: auto; padding: 2px 0; }
+.pal-row { display: flex; align-items: baseline; gap: 10px; height: 24px; line-height: 24px; padding: 0 10px;
+    font-size: 13px; white-space: nowrap; cursor: pointer; }
+.pal-row .t { flex: none; max-width: 330px; overflow: hidden; text-overflow: ellipsis; }
+.pal-row .d { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; color: var(--ink-faint); }
+.pal-row .v { flex: none; font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.pal-row.on { background: var(--signal); color: var(--paper); }
+.pal-row.on .d, .pal-row.on .v { color: var(--paper); }
+.pal-none { padding: 4px 10px; font-size: 12.5px; color: var(--ink-faint); }
+.pal-foot { padding: 3px 10px 4px; border-top: 1px solid var(--tile-edge); font-size: 11px; color: var(--ink-faint); white-space: pre; }
 
 /* mod page: source chips (with a jack on the right), target chips (jack on the left) */
 .src, .tgt {

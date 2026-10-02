@@ -50,6 +50,9 @@ ui/                     patch view (ReScript)
                           them (ShapesOverlay.res), and binds undo and redo: ParamModel.res
                           records every edit, a gesture a step, and ProgramStore.res
                           whole-program changes (A/B switches too)
+  Palette.res             search (ctrl+K, /): any control, page, tab, effect or command by
+                          name, typed values, connections; Reach.res knows where each control
+                          lives (its page, tab, effect, values) and goes there
   PagePlay.res            the Play page: macros, arpeggiator, XY pad, wheels and the MIDI input
                           (MidiInput.res); SlotRows.res shows target slots as used rows + "+"
   VoiceView.res           the sounding notes as the DSP reports them: a mark per note on the
