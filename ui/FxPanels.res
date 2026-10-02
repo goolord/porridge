@@ -143,17 +143,99 @@ let drawSpace = (p: FxGraph.plot, get: string => float) => {
 // rounder with more damping, wobbling with the modulation; the listeners sit as far apart as
 // the width. Size scales the space.
 
-type scene = {sw: float, sh: float, layer: element}
+// The scene's elements are kept from frame to frame: each frame asks for them in drawing order,
+// and gets the element that had that place in the last frame when it has the same tag (so the
+// same attributes, all set again). One that isn't there is made (sooner ones of the tag than
+// the last frame's go), and the last frame's left over are removed when the frame ends.
+module ScenePool = {
+  type rec t = {parent: element, mutable items: array<item>, mutable next: int}
+  // (its attributes as last set)
+  and item = {tag: string, el: element, mutable inner: option<t>, set: Dict.t<attr>}
+
+  @send external insertBefore: (element, element, Nullable.t<element>) => unit = "insertBefore"
+
+  let make = parent => {parent, items: [], next: 0}
+
+  let takeItem = (p, tag, attrs) => {
+    let i = p.next
+    let n = Array.length(p.items)
+    let rec find = j => j >= n ? None : (p.items->Array.getUnsafe(j)).tag == tag ? Some(j) : find(j + 1)
+    let it = switch find(i) {
+    | Some(j) =>
+      // the ones before it aren't drawn any more
+      p.items->Array.slice(~start=i, ~end=j)->Array.forEach(it => it.el->remove)
+      p.items->Array.splice(~start=i, ~remove=j - i, ~insert=[])
+      p.items->Array.getUnsafe(i)
+    | None =>
+      let el = document->createElementNS(svgNamespace, tag)
+      p.parent->insertBefore(el, p.items[i]->Option.map(it => it.el)->Nullable.fromOption)
+      let it = {tag, el, inner: None, set: Dict.make()}
+      p.items->Array.splice(~start=i, ~remove=0, ~insert=[it])
+      it
+    }
+    attrs->Array.forEach(((name, value)) =>
+      // (undefined while unset)
+      if it.set->Dict.getUnsafe(name) !== value {
+        it.el->setAttribute(name, value)
+        it.set->Dict.set(name, value)
+      }
+    )
+    p.next = i + 1
+    it
+  }
+
+  // The next element, with these attributes.
+  let take = (p, tag, attrs) => takeItem(p, tag, attrs).el
+
+  // The next element, as the pool of the elements inside it.
+  let group = (p, tag, attrs) => {
+    let it = takeItem(p, tag, attrs)
+    switch it.inner {
+    | Some(inner) => inner
+    | None =>
+      let inner = make(it.el)
+      it.inner = Some(inner)
+      inner
+    }
+  }
+
+  // The frame is drawn: what it didn't ask for goes, and the next starts from the first again.
+  let rec finish = p => {
+    p.items->Array.slice(~start=p.next)->Array.forEach(it => it.el->remove)
+    p.items->Array.splice(~start=p.next, ~remove=Array.length(p.items) - p.next, ~insert=[])
+    p.items->Array.forEach(it => it.inner->Option.forEach(finish))
+    p.next = 0
+  }
+}
+
+@get external textContent: element => string = "textContent"
+
+type scene = {sw: float, sh: float, layer: ScenePool.t}
 
 let sceneCircle = (s, ~cls, x: float, y: float, r: float, ~opacity: float) =>
-  svgEl(
-    s.layer,
+  s.layer
+  ->ScenePool.take(
     "circle",
     [("class", Str(cls)), ("cx", Num(x)), ("cy", Num(y)), ("r", Num(Math.max(0.1, r))), ("opacity", Num(clamp(opacity, 0., 1.)))],
-  )->ignore
+  )
+  ->ignore
 
 let scenePath = (s, ~cls, ~opacity=1., d) =>
-  svgEl(s.layer, "path", [("class", Str(cls)), ("d", Str(d)), ("opacity", Num(clamp(opacity, 0., 1.)))])->ignore
+  s.layer->ScenePool.take("path", [("class", Str(cls)), ("d", Str(d)), ("opacity", Num(clamp(opacity, 0., 1.)))])->ignore
+
+// (as FxGraph.text draws it)
+let sceneText = (s, ~cls, x, y, text) => {
+  let e = s.layer->ScenePool.take("text", [("class", Str(cls)), ("x", Num(x)), ("y", Num(y)), ("text-anchor", Str("start"))])
+  if e->textContent != text {
+    e->setTextContent(text)
+  }
+}
+
+// A group clipped to the outline (a path), for drawing inside it.
+let clipped = (s, ~id, outline) => {
+  s.layer->ScenePool.group("clipPath", [("id", Str(id))])->ScenePool.take("path", [("d", Str(outline))])->ignore
+  {...s, layer: s.layer->ScenePool.group("g", [("clip-path", Str(`url(#${id})`))])}
+}
 
 // A wobbly ring: radius r around (x, y), squashed vertically by `squash`, wobbling with the
 // modulation.
@@ -212,9 +294,7 @@ let drawScene = (s, get: string => float, time: float) => {
       scenePath(s, ~cls="spring", `M${corner(x, y)} L${corner(x + (x < cx0 ? -14. : 14.), y + (y < cy0 ? -14. : 14.))}`)
     )
     scenePath(s, ~cls="plate", outline)
-    svgEl(s.layer, "clipPath", [("id", Str("plateclip"))])->(c => svgEl(c, "path", [("d", Str(outline))]))->ignore
-    let g = svgEl(s.layer, "g", [("clip-path", Str("url(#plateclip)"))])
-    let inner = {...s, layer: g}
+    let inner = clipped(s, ~id="plateclip", outline)
     let (dx, dy) = (x0 + pw * 0.3, y0 + ph * 0.45)
     fronts(inner, dx, dy, ~reach=pw * 1.1, ~travel=0.45, ~spacing=0.045, ~squash=0.75)
     sceneCircle(s, ~cls="source", dx, dy, 5., ~opacity=1.)
@@ -283,16 +363,14 @@ let drawScene = (s, get: string => float, time: float) => {
         `M${f(x)} ${f(dy + dh - 4. - hgt)} h${f((dw - 8.) / Int.toFloat(bars) - 2.)} v${f(hgt)} h${f(-.((dw - 8.) / Int.toFloat(bars) - 2.))} Z`,
       )
     }
-    FxGraph.text(s.layer, ~cls="lcd", dx + 8., dy + 18., `${Float.toFixed(decay, ~digits=1)} s  ${Float.toFixed(size * 100., ~digits=0)} %`)
+    sceneText(s, ~cls="lcd", dx + 8., dy + 18., `${Float.toFixed(decay, ~digits=1)} s  ${Float.toFixed(size * 100., ~digits=0)} %`)
   | _ =>
     // hall: a floor plan: the stage, the listeners, the first reflections and the wavefront
     let (rw, rh) = (sw * (0.5 + 0.45 * size), sh * (0.45 + 0.45 * size))
     let (x0, y0) = (cx0 - rw / 2., cy0 - rh / 2.)
     let outline = `M${f(x0)} ${f(y0)} h${f(rw)} v${f(rh)} h${f(-.rw)} Z`
     scenePath(s, ~cls="room", outline)
-    svgEl(s.layer, "clipPath", [("id", Str("hallclip"))])->(c => svgEl(c, "path", [("d", Str(outline))]))->ignore
-    let g = svgEl(s.layer, "g", [("clip-path", Str("url(#hallclip)"))])
-    let inner = {...s, layer: g}
+    let inner = clipped(s, ~id="hallclip", outline)
     let (sx, sy) = (x0 + rw * 0.15, cy0)
     let (lx, ly) = (x0 + rw * 0.72, cy0)
     // first reflections: off the walls, by the image sources
@@ -307,7 +385,8 @@ let drawScene = (s, get: string => float, time: float) => {
     sceneCircle(s, ~cls="source", sx, sy, 5., ~opacity=1.)
     listeners(lx, ly, rh * 0.18)
   }
-  FxGraph.text(s.layer, ~cls="tick", 6., sh - 6., reverbModelText(model))
+  sceneText(s, ~cls="tick", 6., sh - 6., reverbModelText(model))
+  ScenePool.finish(s.layer)
 }
 
 //==============================================================================
@@ -971,12 +1050,9 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
   let startScene = if e.kind == #space {
     let sp = Panel.make(body, ~title="space", ~x=0., ~y=gy, ~w=sceneW, ~h=gh)
     let sg = FxGraph.inPanel(ctx, sp)
-    let scene = {sw: sg.w, sh: sg.h, layer: FxGraph.group(sg.svg)}
+    let scene = {sw: sg.w, sh: sg.h, layer: ScenePool.make(FxGraph.group(sg.svg))}
     let origin = Date.now()
-    FxGraph.animate(sg, ~everyOther=true, _ => {
-      scene.layer->setTextContent("")
-      drawScene(scene, get, (Date.now() - origin) / 1000.)
-    })
+    FxGraph.animate(sg, ~everyOther=true, _ => drawScene(scene, get, (Date.now() - origin) / 1000.))
   } else {
     () => ()
   }
