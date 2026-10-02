@@ -680,8 +680,7 @@ let oscEnvSpecs = [1, 2]->Array.flatMap(n => {
 
 // The key EQ: eight bands at the end of each voice, an octave apart on the note's harmonics 1,
 // 2, 4 ... 128, so that its curve moves with the note: a low shelf half an octave under the note,
-// then peaks an octave wide (a band past 18 kHz fades out over the next octave). The sound
-// matcher fits it to a sample.
+// then peaks an octave wide (a band past 18 kHz fades out over the next octave).
 let keyEqBands = 8
 let keyEqGainId = k => `KEQ_${Int.toString(k)}_Gain`
 let keyEqHarmonic = k => Math.pow(2., ~exp=Int.toFloat(k - 1))

@@ -208,12 +208,12 @@ let make = (host, pc) => {
     programs->ProgramStore.select(programs.current + 1)
   )->ignore
 
-  let matcher = MatchDrawer.make(ctx, stage)
+  let randomizer = RandomDrawer.make(ctx, stage, settings)
   button(
     head,
-    "Match",
-    "Make patches that sound like a sample: drop one onto the window, or pick one here",
-    () => matcher.isOpen() ? matcher.hide() : matcher.show(),
+    "Random",
+    "Make random patches, as wild as you like in each part, and variations of them or of this program",
+    () => randomizer.isOpen() ? randomizer.hide() : randomizer.show(),
   )->ignore
 
   let browser = PresetBrowser.make(ctx, stage, settings)
@@ -313,43 +313,22 @@ let make = (host, pc) => {
   stage->appendChild(toastEl)
 
   //==============================================================================
-  // drop zone: a sample is matched (MatchDrawer) or made into a shape, by which half of the
-  // window it's dropped on (all of it is the matcher's while the drawer is open)
+  // drop zone
 
-  let drop = el("div", ~cls="drop", ~parent=stage)
-  let dropText = el("div", ~cls="dz only", ~parent=drop)
-  let matchZone = el("div", ~cls="dz", ~parent=drop)
-  let shapeZone = el("div", ~cls="dz", ~parent=drop)
-  let zone = (e, title, detail) => {
-    e->setTextContent("")
-    el("b", ~text=title, ~parent=e)->ignore
-    el("span", ~text=detail, ~parent=e)->ignore
-  }
+  let drop = el("div", ~cls="drop", ~text="Drop a Porridge or Oatmeal program or bank", ~parent=stage)
   let depth = ref(0)
-  let split = ref(false)
-  // whether the pointer is over the shapes' half
-  let overShapes = e => {
-    let r = stage->getBoundingClientRect
-    split.contents && e->dragX > r.left + r.width / 2.
-  }
   host->onDrag(#dragenter, e => {
     e->preventDefault
     depth := depth.contents + 1
-    let sample = PageShapes.dragHasSample(e)
-    split := sample && !matcher.isOpen()
-    drop->toggleClass("split", split.contents)
-    drop->toggleClass("sample", sample)
-    switch shapesPage.contents {
-    | Some(s) if sample =>
-      zone(matchZone, "Match this sound", "Make patches that sound like it")
-      zone(shapeZone, "Use it as a waveform", s.sampleDropText(~here=shownPage.contents == #shapes))
-    | _ =>
-      dropText->setTextContent(
+    drop->setTextContent(
+      switch shapesPage.contents {
+      | Some(s) if PageShapes.dragHasSample(e) => s.sampleDropText(~here=shownPage.contents == #shapes)
+      | _ =>
         browser->PresetBrowser.isOpen
           ? "Drop Porridge or Oatmeal banks to browse them"
-          : "Drop a Porridge or Oatmeal program or bank",
-      )
-    }
+          : "Drop a Porridge or Oatmeal program or bank"
+      },
+    )
     drop->addClass("on")
   })
   host->onDrag(#dragleave, e => {
@@ -360,12 +339,7 @@ let make = (host, pc) => {
       drop->removeClass("on")
     }
   })
-  host->onDrag(#dragover, e => {
-    e->preventDefault
-    let shapes = overShapes(e)
-    matchZone->toggleClass("hot", !shapes)
-    shapeZone->toggleClass("hot", shapes)
-  })
+  host->onDrag(#dragover, preventDefault)
   host->onDrag(#drop, e => {
     e->preventDefault
     depth := 0
@@ -375,10 +349,10 @@ let make = (host, pc) => {
     ->Option.forEach(d => {
       let files = d->transferredFiles->filesToArray
       let sample = files->Array.find(f => AudioFile.isAudio(f->fileName))
-      // a sample is matched or goes to the Shapes page; with the browser open, other files are
-      // added to it instead of replacing the bank
+      // a sample goes to the Shapes page; with the browser open, other files are added to it
+      // instead of replacing the bank
       if sample->Option.isSome {
-        sample->Option.forEach(overShapes(e) ? importSample : matcher.loadFile)
+        sample->Option.forEach(loadFile)
       } else if browser->PresetBrowser.isOpen {
         browser->PresetBrowser.addFiles(files)
       } else {
@@ -427,7 +401,7 @@ let make = (host, pc) => {
       restoreBrowserChrome()
       settings->Settings.dispose
       hostMenu->HostMenu.dispose
-      matcher.dispose()
+      randomizer.dispose()
       browser->PresetBrowser.dispose
       model->ParamModel.dispose
       programs->ProgramStore.dispose

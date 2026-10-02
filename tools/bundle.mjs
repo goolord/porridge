@@ -1,12 +1,12 @@
 // Bundles the compiled ReScript view and worker into the two self-contained ES modules
-// the patch manifest loads (Cmajor can't resolve the @rescript/runtime imports itself),
+// the patch manifest loads (Cmajor can't resolve the @rescript/runtime imports itself), and
 // encodes Oatmeal's factory bank as a new instance's stored state keeps it, which the worker
-// installs (worker/PatchWorker.res), and copies in the sound matcher's predictor.
+// installs (worker/PatchWorker.res).
 //
 // run: npm run build   (compiles the ReScript sources, then bundles)
 
 import { build } from "esbuild";
-import { readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -23,28 +23,6 @@ await build ({
     logLevel: "warning",
 });
 console.log ("ui/Index.res.mjs -> bundle/view.js, worker/PatchWorker.res.mjs -> bundle/worker.js");
-
-// The sound matcher's worker: a plain script, which the view runs after the engine's class
-// (bundle/match-engine.js, from tools/match-engine.mjs) in one blob (ui/match/MatchPool.res).
-await build ({
-    entryPoints: { "match-worker": join (root, "ui", "match", "MatchWorker.res.mjs") },
-    outdir: join (root, "bundle"),
-    bundle: true,
-    format: "iife",
-    platform: "browser",
-    target: "es2020",
-    legalComments: "none",
-    logLevel: "warning",
-});
-console.log ("ui/match/MatchWorker.res.mjs -> bundle/match-worker.js");
-
-// The sound matcher's predictor (tools/match-train.mjs trains it), read by its workers.
-const model = join (root, "ui", "match", "match-model.bin");
-if (existsSync (model))
-{
-    copyFileSync (model, join (root, "bundle", "match-model.bin"));
-    console.log ("ui/match/match-model.bin -> bundle/match-model.bin");
-}
 
 const Preset = await import (pathToFileURL (join (root, "ui", "Preset.res.mjs")).href);
 const factory = Preset.factoryBank (new Uint8Array (readFileSync (join (root, "presets", "oatmealprs.dat"))));

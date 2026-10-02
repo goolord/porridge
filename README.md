@@ -40,18 +40,12 @@ ui/                     patch view (ReScript)
                           list the parameters and modulation sources/targets Oatmeal doesn't have
   PresetBrowser.res       the preset browser; Library.res searches and filters for it, and
                           BankLibrary.res asks the plugin for the banks it keeps
-  match/                  the sound matcher: MatchDrawer.res (the drawer and its cards),
-                          SoundTarget.res (a sample made ready: pitch and its sweep,
-                          envelope, brightness, noise, width, fitted wave), Genome.res (what is
-                          searched, as parameter values), EnvelopeFit.res (the amp envelope
-                          that follows the sample), Spectrum.res and MatchLoss.res (how close
-                          a render is: spectra, loudness, the harmonic grid and fine spectrum,
-                          width), Cmaes.res (the optimizer), MatchModel.res and match-model.bin
-                          (the predictor),
-                          MatchSearch.res and MatchRun.res (the outline and the four searches,
-                          and the key EQ fitted to each candidate), MatchRefine.res (a
-                          card's refinement: effects and modulations added on top), MatchPool.res,
-                          MatchWorker.res and MatchEngine.res (the workers and their synth)
+  random/                 random patches: RandomDrawer.res (the drawer: the wildness knobs,
+                          the locks, four cards to play, keep or vary), PatchGen.res (making a
+                          patch of a kind with each area as wild as its knob, varying any
+                          patch, naming and describing one, and the output gain from an
+                          estimate of its level), LevelTables.res (what the estimate knows
+                          of the synth's levels, measured by tools/random-levels.mjs)
   NewBankDialog.res       starts a new bank of Init programs, for someone writing one
   FilterTypes.res         the filter types; FilterGraph.res their response pictures, with a
                           point to drag for cutoff and resonance
@@ -65,9 +59,7 @@ ui/                     patch view (ReScript)
   bindings/               Cmajor PatchConnection and browser API bindings
 worker/PatchWorker.res  restores shapes/curves and installs the factory bank
 bundle/                 view.js, worker.js and the factory bank as a new instance stores it
-                        (factory-bank.json), built by `npm run build`; match-worker.js, and
-                        match-engine.js and .wasm (the synth for the matcher, from
-                        tools/match-engine.mjs), match-model.bin (its predictor)
+                        (factory-bank.json), built by `npm run build`
 presets/oatmealprs.dat  Oatmeal's factory bank
 presets/vanilla.porridge  Porridge's own bank (built by tools/vanilla-bank.mjs)
 docs/internals/         reverse-engineering notes on the original
@@ -75,9 +67,9 @@ tools/
   gen.mjs                 regenerates ParamStore/Slots/ModTables from the parameter tables, and
                           the test host's field table and manifest
   bundle.mjs              bundles the compiled view and worker into bundle/
-  match-engine.mjs        builds the sound matcher's engine: the DSP with one of each rack
-                          effect, compiled to WebAssembly (cmaj generate --target=javascript)
-  match-train.mjs         trains the sound matcher's predictor on random patches it renders
+  random-levels.mjs       measures the synth's levels for the random patches' estimate
+                          (--tables writes ui/random/LevelTables.res) and fits the estimate's
+                          weights to renders of random patches (uses the test host)
   clap/                   the C++ clap-patch.mjs adds: PorridgeBridge.h (settings, the host's
                           menu, the view's requests), PorridgeLibrary.h (the bank library:
                           bank folders scanned and copied, files opened in the browser kept)
@@ -98,10 +90,9 @@ tools/
                           shelf; oscillator roughness; osc 2 heard in PM),
                           banklibrary.cpp (the plugin's bank library on real files), oneshot.mjs (one-shot LFOs hold their
                           end), levels.mjs (the Vanilla bank's gains, levels and motion),
-                          match.mjs (the sound matcher on programs from the banks and on
-                          random patches whose genes are known), match-speed.mjs (how fast it
-                          scores candidates, and how long a whole match takes);
-                          lib.mjs has what they share
+                          random.mjs (random patches: sound values, the wildness knobs, the
+                          locks, varying the banks, and their levels); lib.mjs has what they
+                          share
   vanilla-bank.mjs        builds presets/vanilla.porridge
   re/                     comparisons against Oatmeal.dll (32-bit Python) and data checks
   ui-preview/             runs the view in a browser with a mock PatchConnection
