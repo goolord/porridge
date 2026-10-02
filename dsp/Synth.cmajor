@@ -117,6 +117,14 @@ namespace porridge
         // voices: a pool with an explicit list, newest first
         Voice[maxVoices] voices;
         int[maxVoices] order;
+
+        // each voice's filters [4 * index + isF2 + 2 right], distortions [2 * index + right] and
+        // lane slots [laneSlots * index + slot] (Voice.index), cleared when the voice first uses
+        // them (readyFilter, readyDistortion, readyLane). Flat, as the C++ generator copies a
+        // whole row of a two-dimensional array of structs in and out to reach one element.
+        Filter[4 * maxVoices] voiceFilters;
+        Distortion[2 * maxVoices] voiceDistortions;
+        LaneFx[laneSlots * maxVoices] voiceLanes;
         int numActive;
 
         bool[256] keyReleased;
@@ -357,8 +365,8 @@ namespace porridge
             for (wrap<rack::convolveCount> k)  convolvers[k].prepare();
             clearCopies();
 
-            for (wrap<maxVoices> i)
-                constructVoice (voices[i]);
+            for (int i = 0; i < maxVoices; ++i)
+                constructVoice (i);
 
             numActive = 0;
             allNotesOff();
@@ -677,27 +685,60 @@ namespace porridge
         //==============================================================================
         // voice pool
 
-        /// A new voice: everything zeroed once, then the parts that don't start at zero.
-        void constructVoice (Voice& v)
+        /// A new voice (pool index vi): everything zeroed once, then the parts that don't start at
+        /// zero. Its filters, distortions and lane slots are cleared when it first uses them.
+        void constructVoice (int vi)
         {
-            v = Voice();
+            voices.at (vi) = Voice();
+            voices.at (vi).index = vi;
 
             for (wrap<maxUnison> k)
             {
-                v.osc1[k].initDefaults();
-                v.osc2[k].initDefaults();
+                voices.at (vi).osc1[k].initDefaults();
+                voices.at (vi).osc2[k].initDefaults();
             }
+        }
 
-            for (wrap<2> k) v.dist[k].initDefaults();
-            for (wrap<4> k) v.filt[k].initDefaults();
+        /// Filter k of voice v (see Voice.filtReady), cleared if it's the first use.
+        void readyFilter (Voice& v, int k)
+        {
+            if (! v.filtReady.at (k))
+            {
+                voiceFilters.at (4 * v.index + k).clearState();
+                v.filtReady.at (k) = true;
+            }
+        }
+
+        /// Distortion k of voice v, cleared if it's the first use.
+        void readyDistortion (Voice& v, int k)
+        {
+            if (! v.distReady.at (k))
+            {
+                voiceDistortions.at (2 * v.index + k).clearState();
+                v.distReady.at (k) = true;
+            }
+        }
+
+        /// Lane slot s of voice v, cleared if it's the first use.
+        void readyLane (Voice& v, int s)
+        {
+            if (! v.laneReady.at (s))
+            {
+                voiceLanes.at (laneSlots * v.index + s) = LaneFx();
+                v.laneReady.at (s) = true;
+            }
         }
 
         /// A stolen voice: its filters and distortion models are cleared, then it starts over as a
         /// new one does.
         void resetVoice (Voice& v)
         {
-            for (wrap<4> k) v.filt[k].clearState();
-            for (wrap<2> k) v.dist[k].clearModels();
+            v.filtReady = bool[4]();
+
+            for (wrap<2> k)
+                if (v.distReady[k])
+                    voiceDistortions.at (2 * v.index + k).clearModels();
+
             restartLane (v);
             prepareVoice (v);
         }
@@ -794,7 +835,7 @@ namespace porridge
             {
                 if (listPos (vi) < 0)
                 {
-                    constructVoice (voices.at (vi));
+                    constructVoice (vi);
                     prepareVoice (voices.at (vi));
 
                     for (int i = numActive; i > 0; --i)
@@ -3128,8 +3169,14 @@ namespace porridge
             if (withGain)
                 applyVelocityGain (v, smoothGain, stereo, n);
 
-            v.dist[0].processMono (distTables, shaperTables[0], P, distMod, sampleRate, bufM, n);
-            if (stereo) v.dist[1].processMono (distTables, shaperTables[0], P, distMod, sampleRate, bufR, n);
+            readyDistortion (v, 0);
+            voiceDistortions.at (2 * v.index).processMono (distTables, shaperTables[0], P, distMod, sampleRate, bufM, n);
+
+            if (stereo)
+            {
+                readyDistortion (v, 1);
+                voiceDistortions.at (2 * v.index + 1).processMono (distTables, shaperTables[0], P, distMod, sampleRate, bufR, n);
+            }
         }
 
         //==============================================================================
@@ -3169,12 +3216,13 @@ namespace porridge
 
                 if (kind >= 0)
                 {
-                    v.lane[s].startLane (kind);
-                    v.lane[s].fx = int (P.at (slot::VL_1 + int (s)));
+                    readyLane (v, s);
+                    voiceLanes.at (laneSlots * v.index + int (s)).startLane (kind);
+                    voiceLanes.at (laneSlots * v.index + int (s)).fx = int (P.at (slot::VL_1 + int (s)));
                 }
-                else
+                else if (v.laneReady[s])
                 {
-                    v.lane[s].fx = 0;
+                    voiceLanes.at (laneSlots * v.index + int (s)).fx = 0;
                 }
             }
         }
@@ -3199,10 +3247,12 @@ namespace porridge
                 // every kind's first parameter is its switch (the distortion's, its type)
                 if (P.at (rack::allFirst.at (rack::firstOffset.at (kind))) != 0)
                 {
-                    if (v.lane.at (s).fx != fx)
+                    readyLane (v, s);
+
+                    if (voiceLanes.at (laneSlots * v.index + s).fx != fx)
                     {
-                        v.lane.at (s).startLane (kind);
-                        v.lane.at (s).fx = fx;
+                        voiceLanes.at (laneSlots * v.index + s).startLane (kind);
+                        voiceLanes.at (laneSlots * v.index + s).fx = fx;
                     }
 
                     if (! split && laneSplits (kind, P))
@@ -3213,21 +3263,21 @@ namespace porridge
                         split = true;
                     }
 
-                    if (kind == rack::filterKind)          v.lane.at (s).laneFilter (fxTables, P, noteHz, sampleRate, bufM, bufR, split, n);
-                    else if (kind == rack::eqKind)         v.lane.at (s).laneEq (P, sampleRate, bufM, bufR, split, n);
-                    else if (kind == rack::phaserKind)     v.lane.at (s).lanePhaser (P, noteHz, sampleRate, bufM, bufR, split, n);
-                    else if (kind == rack::flangerKind)    v.lane.at (s).laneFlanger (P, sampleRate, bufM, bufR, split, n);
-                    else if (kind == rack::utilityKind)    v.lane.at (s).laneUtility (P, sampleRate, bufM, bufR, split, n);
-                    else if (kind == rack::shifterKind)    v.lane.at (s).laneShifter (hilbert, P, noteHz, sampleRate, bufM, bufR, split, n);
-                    else if (kind == rack::resonatorKind)  v.lane.at (s).laneResonator (P, noteHz, sampleRate, bufM, bufR, split, n);
+                    if (kind == rack::filterKind)          voiceLanes.at (laneSlots * v.index + s).laneFilter (fxTables, P, noteHz, sampleRate, bufM, bufR, split, n);
+                    else if (kind == rack::eqKind)         voiceLanes.at (laneSlots * v.index + s).laneEq (P, sampleRate, bufM, bufR, split, n);
+                    else if (kind == rack::phaserKind)     voiceLanes.at (laneSlots * v.index + s).lanePhaser (P, noteHz, sampleRate, bufM, bufR, split, n);
+                    else if (kind == rack::flangerKind)    voiceLanes.at (laneSlots * v.index + s).laneFlanger (P, sampleRate, bufM, bufR, split, n);
+                    else if (kind == rack::utilityKind)    voiceLanes.at (laneSlots * v.index + s).laneUtility (P, sampleRate, bufM, bufR, split, n);
+                    else if (kind == rack::shifterKind)    voiceLanes.at (laneSlots * v.index + s).laneShifter (hilbert, P, noteHz, sampleRate, bufM, bufR, split, n);
+                    else if (kind == rack::resonatorKind)  voiceLanes.at (laneSlots * v.index + s).laneResonator (P, noteHz, sampleRate, bufM, bufR, split, n);
                     else if (kind == rack::distortionKind)
                     {
                         useShaper (k + 1);
-                        v.lane.at (s).dist[0].processMono (distTables, shaperTables.at (k + 1), P, 0.0f, sampleRate, bufM, n);
-                        if (split) v.lane.at (s).dist[1].processMono (distTables, shaperTables.at (k + 1), P, 0.0f, sampleRate, bufR, n);
+                        voiceLanes.at (laneSlots * v.index + s).dist[0].processMono (distTables, shaperTables.at (k + 1), P, 0.0f, sampleRate, bufM, n);
+                        if (split) voiceLanes.at (laneSlots * v.index + s).dist[1].processMono (distTables, shaperTables.at (k + 1), P, 0.0f, sampleRate, bufR, n);
                     }
 
-                    v.lane.at (s).fresh = false;
+                    voiceLanes.at (laneSlots * v.index + s).fresh = false;
                 }
 
                 if (copy >= 0) swapKind (kind, copy);
@@ -3435,7 +3485,8 @@ namespace porridge
             let hz = cutoffHz (isF2, isZdfFilter (type), env, vel, at, keyFreq, Rg, X, Y, lfo1, lfo2, semisMod);
             if (f == 0) v.viewCutoff = hz;
             let morph = clamp (P[slot::F_Morph] + (morphGlide - morphKnob), 0.0f, 1.0f);
-            v.filt.at (f).process (fxTables, type, hz, res, morph, P[slot::F_Drive], sampleRate, buf, n);
+            readyFilter (v, f);
+            voiceFilters.at (4 * v.index + f).process (fxTables, type, hz, res, morph, P[slot::F_Drive], sampleRate, buf, n);
         }
 
         void filterChannel (Voice& v, bool right, float vel, float at, float keyFreq, float Rg, float X, float Y,
