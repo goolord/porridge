@@ -583,6 +583,11 @@ namespace porridge
         let step = 1.0f / float (n);
         let phase0 = this.shPhase;
 
+        // the oscillator turns by a fixed step through the piece (at its mean shift)
+        let turn = twoPi * float64 (0.5f * (hz0 + this.shHz)) / sr;
+        let rc = cos (turn), rs = sin (turn);
+        var pc = cos (twoPi * phase0), ps = sin (twoPi * phase0);
+
         for (int i = 0; i < n; ++i)
         {
             let f = float (i + 1) * step;
@@ -603,17 +608,21 @@ namespace porridge
                 b = yb;
             }
 
-            let cs = float (cos (twoPi * this.shPhase));
-            let sn = float (sin (twoPi * this.shPhase));
-            this.shPhase += float64 (hz0 + (this.shHz - hz0) * f) / sr;
-            this.shPhase -= floor (this.shPhase);
+            let cs = float (pc), sn = float (ps);
+            let c1 = pc * rc - ps * rs;
+            ps = ps * rc + pc * rs;
+            pc = c1;
             l.at (i) = x + (b * cs + a * sn * sideL - x) * mix;
         }
+
+        this.shPhase = phase0 + float64 (0.5f * (hz0 + this.shHz)) * float64 (n) / sr;
+        this.shPhase -= floor (this.shPhase);
 
         if (! both)
             return;
 
-        this.shPhase = phase0;
+        pc = cos (twoPi * phase0);
+        ps = sin (twoPi * phase0);
 
         for (int i = 0; i < n; ++i)
         {
@@ -635,10 +644,10 @@ namespace porridge
                 b = yb;
             }
 
-            let cs = float (cos (twoPi * this.shPhase));
-            let sn = float (sin (twoPi * this.shPhase));
-            this.shPhase += float64 (hz0 + (this.shHz - hz0) * f) / sr;
-            this.shPhase -= floor (this.shPhase);
+            let cs = float (pc), sn = float (ps);
+            let c1 = pc * rc - ps * rs;
+            ps = ps * rc + pc * rs;
+            pc = c1;
             r.at (i) = x + (b * cs + a * sn * sideR - x) * mix;
         }
     }
