@@ -182,6 +182,8 @@ namespace porridge
         int[mods::numSlots] liveSlot;
         bool[mods::numSlots] liveHold;
         float[mods::numSlots] liveSlew, liveCurve;
+        float[mods::numSlots] liveSlewStep;     // each one's slewStep over slewStepN samples, the
+        int slewStepN;                          // same for every voice (-1: not worked out yet)
         float[mods::numSlots] sharedSlew;
         int[mods::numSlots] sharedSlewFor;
 
@@ -193,6 +195,9 @@ namespace porridge
         float gLfo3Raw;
         Lcg extraRng;
         float[hilbertCoefs] hilbert;
+        float[blockSize + 1] laneGlides;        // laneGlide for pieces of 0 .. blockSize samples
+        float wanderKnob;                       // the last Wander_Rate a voice used, and its Hz
+        float64 wanderRate;
         int noteCount;
         float lastNoteHz;
         float heldNotes;
@@ -317,6 +322,12 @@ namespace porridge
             fxTables.build (sampleRate);
             distTables.build();
             hilbert = hilbertDesign (sampleRate);
+
+            for (int n = 0; n <= blockSize; ++n)
+                laneGlides.at (n) = laneGlide (n, sampleRate);
+
+            wanderKnob = 0;
+            wanderRate = wanderHz (wanderKnob);
             tables.buildStatic();
 
             // defaults until the patch sends its shapes: sine waves, sine LFO shapes, linear curves
@@ -2099,6 +2110,7 @@ namespace porridge
 
             numLive = 0;
             numLiveTargets = 0;
+            slewStepN = -1;
             noiseLive = false;
             lfo3Live = false;
             levelLive = false;
@@ -2235,6 +2247,12 @@ namespace porridge
             return held * liveAmt.at (i);
         }
 
+        /// The wander source's rate (Hz) at Wander_Rate's knob position.
+        float64 wanderHz (float knob)
+        {
+            return 0.02 * pow (500.0, float64 (clamp (knob, 0.0f, 1.0f)));
+        }
+
         /// How far a connection's slew moves towards its value over n samples.
         float slewStep (int i, int n)
         {
@@ -2252,6 +2270,16 @@ namespace porridge
 
             if (voiceIndex >= 0)
             {
+                // the slews' steps are the same for every voice: worked out once a piece
+                if (n != slewStepN)
+                {
+                    for (int i = 0; i < numLive; ++i)
+                        if (liveSlew.at (i) > 0)
+                            liveSlewStep.at (i) = slewStep (i, n);
+
+                    slewStepN = n;
+                }
+
                 for (int i = 0; i < numLive; ++i)
                 {
                     var m = connValue (i, voiceIndex);
@@ -2263,7 +2291,7 @@ namespace porridge
                         if (voices.at (voiceIndex).slewing.at (k))
                         {
                             let y = voices.at (voiceIndex).slewVal.at (k);
-                            m = y + (m - y) * slewStep (i, n);
+                            m = y + (m - y) * liveSlewStep.at (i);
                         }
 
                         voices.at (voiceIndex).slewVal.at (k) = m;
@@ -2586,8 +2614,14 @@ namespace porridge
 
             if (wanderLive)
             {
-                let hz = 0.02 * pow (500.0, float64 (clamp (P[slot::Wander_Rate], 0.0f, 1.0f)));
-                v.wander.phase += float (float64 (n) * hz / sampleRate) * v.wander.rate;
+                // (every voice's rate is the same unless a connection moves it)
+                if (P[slot::Wander_Rate] != wanderKnob)
+                {
+                    wanderKnob = P[slot::Wander_Rate];
+                    wanderRate = wanderHz (wanderKnob);
+                }
+
+                v.wander.phase += float (float64 (n) * wanderRate / sampleRate) * v.wander.rate;
 
                 if (v.wander.phase >= 1.0f)
                 {
@@ -3183,6 +3217,8 @@ namespace porridge
         /// swapped into its kind's first's slots. noteHz: the voice's note.
         void runLane (Voice& v, int from, int to, bool& split, float noteHz, int n)
         {
+            let glide = laneGlides.at (n);
+
             for (int s = from; s < to; ++s)
             {
                 let fx = int (P.at (slot::VL_1 + s));
@@ -3213,13 +3249,13 @@ namespace porridge
                         split = true;
                     }
 
-                    if (kind == rack::filterKind)          v.lane.at (s).laneFilter (fxTables, P, noteHz, sampleRate, bufM, bufR, split, n);
+                    if (kind == rack::filterKind)          v.lane.at (s).laneFilter (fxTables, P, noteHz, sampleRate, glide, bufM, bufR, split, n);
                     else if (kind == rack::eqKind)         v.lane.at (s).laneEq (P, sampleRate, bufM, bufR, split, n);
-                    else if (kind == rack::phaserKind)     v.lane.at (s).lanePhaser (P, noteHz, sampleRate, bufM, bufR, split, n);
-                    else if (kind == rack::flangerKind)    v.lane.at (s).laneFlanger (P, sampleRate, bufM, bufR, split, n);
-                    else if (kind == rack::utilityKind)    v.lane.at (s).laneUtility (P, sampleRate, bufM, bufR, split, n);
-                    else if (kind == rack::shifterKind)    v.lane.at (s).laneShifter (hilbert, P, noteHz, sampleRate, bufM, bufR, split, n);
-                    else if (kind == rack::resonatorKind)  v.lane.at (s).laneResonator (P, noteHz, sampleRate, bufM, bufR, split, n);
+                    else if (kind == rack::phaserKind)     v.lane.at (s).lanePhaser (P, noteHz, sampleRate, glide, bufM, bufR, split, n);
+                    else if (kind == rack::flangerKind)    v.lane.at (s).laneFlanger (P, sampleRate, glide, bufM, bufR, split, n);
+                    else if (kind == rack::utilityKind)    v.lane.at (s).laneUtility (P, sampleRate, glide, bufM, bufR, split, n);
+                    else if (kind == rack::shifterKind)    v.lane.at (s).laneShifter (hilbert, P, noteHz, sampleRate, glide, bufM, bufR, split, n);
+                    else if (kind == rack::resonatorKind)  v.lane.at (s).laneResonator (P, noteHz, sampleRate, glide, bufM, bufR, split, n);
                     else if (kind == rack::distortionKind)
                     {
                         useShaper (k + 1);

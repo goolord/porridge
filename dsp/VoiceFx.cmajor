@@ -29,8 +29,13 @@ namespace porridge
         // distortion, per side
         Distortion[2] dist;
 
-        // EQ: each band's state per side
+        // EQ: each band's state per side; its coefficients and what they were worked out from
+        // (eqType 0: not yet)
         float[5] eqL1, eqL2, eqR1, eqR2;
+        EQCoefs[5] eqC;
+        float[5] eqFreq, eqAmp, eqSlope;
+        int[5] eqType;
+        float64[5] eqRate;
 
         // phaser: stages' states and coefficients per side, the chain's last output, the LFO,
         // the gliding centre (ln Hz), depth, spread, feedback and mix
@@ -78,7 +83,8 @@ namespace porridge
                                      1.0f, 2.0f, 2.4f, 3.0f,             // bell (hum, prime, tierce, quint)
                                      1.0f, 1.593f, 2.136f, 2.296f);      // membrane
 
-    /// A knob's glide per block of n samples: about 20 ms.
+    /// A knob's glide per block of n samples: about 20 ms (the synth keeps it for every n,
+    /// laneGlides, and passes it to the kinds below as glide).
     float laneGlide (int n, float64 sr)
     {
         return float (1.0 - exp (-float64 (n) / (0.02 * sr)));
@@ -147,7 +153,7 @@ namespace porridge
     //==============================================================================
     // filter
 
-    void laneFilter (LaneFx& this, const FxTables& tables, const float[numSlots]& P, float noteHz, float64 sr,
+    void laneFilter (LaneFx& this, const FxTables& tables, const float[numSlots]& P, float noteHz, float64 sr, float glide,
                      float[blockSize]& l, float[blockSize]& r, bool both, int n)
     {
         let t = int (P[slot::Ff_Type]);
@@ -166,7 +172,7 @@ namespace porridge
             this.fHz = tHz; this.fMix = tMix; this.fMorph = tMorph;
         }
 
-        let k = laneGlide (n, sr);
+        let k = glide;
         this.fHz += (tHz - this.fHz) * k;
         this.fMorph += (tMorph - this.fMorph) * k;
         let mix0 = this.fMix;
@@ -206,8 +212,17 @@ namespace porridge
             if (type == 0)
                 continue;
 
-            let c = eqBandCoefs (P, k, type, sr);
+            // the same for every voice unless a connection moves them: worked out again only
+            // when what they come from changes
+            let freq = P.at (slot::EQ_1_Freq + k), amp = P.at (slot::EQ_1_Amp + k), slope = P.at (slot::EQ_1_Slope + k);
 
+            if (type != this.eqType[k] || freq != this.eqFreq[k] || amp != this.eqAmp[k] || slope != this.eqSlope[k] || sr != this.eqRate[k])
+            {
+                this.eqC[k] = eqBandCoefs (P, k, type, sr);
+                this.eqType[k] = type; this.eqFreq[k] = freq; this.eqAmp[k] = amp; this.eqSlope[k] = slope; this.eqRate[k] = sr;
+            }
+
+            let c = this.eqC[k];
             var s1 = this.eqL1[k], s2 = this.eqL2[k];
 
             for (int i = 0; i < n; ++i)
@@ -243,7 +258,7 @@ namespace porridge
     // phaser (FxExtra.cmajor's): the note's own LFO, from the note-on, and its tracking
     // follows the voice's note
 
-    void lanePhaser (LaneFx& this, const float[numSlots]& P, float noteHz, float64 sr,
+    void lanePhaser (LaneFx& this, const float[numSlots]& P, float noteHz, float64 sr, float glide,
                      float[blockSize]& l, float[blockSize]& r, bool both, int n)
     {
         let t = phaserTargets (P, noteHz, true);
@@ -257,7 +272,7 @@ namespace porridge
             this.phFb = t.fb; this.phMix = t.mix;
         }
 
-        let k = laneGlide (n, sr);
+        let k = glide;
         this.phCentre += (t.centre - this.phCentre) * k;
         this.phDepth += (t.depth - this.phDepth) * k;
         this.phSpread += (t.spread - this.phSpread) * k;
@@ -361,7 +376,7 @@ namespace porridge
                         this.flLine.at ((p - 1) & m).at (ch), this.flLine.at ((p - 2) & m).at (ch), t);
     }
 
-    void laneFlanger (LaneFx& this, const float[numSlots]& P, float64 sr, float[blockSize]& l, float[blockSize]& r, bool both, int n)
+    void laneFlanger (LaneFx& this, const float[numSlots]& P, float64 sr, float glide, float[blockSize]& l, float[blockSize]& r, bool both, int n)
     {
         let longest = float (laneFlangerLine - 4);
         let t = flangerTargets (P, sr, longest);
@@ -372,7 +387,7 @@ namespace porridge
             this.flDelay = t.delay; this.flDepth = t.depth; this.flFb = t.fb; this.flMix = t.mix;
         }
 
-        let k = laneGlide (n, sr);
+        let k = glide;
         let d0 = this.flDelay, dp0 = this.flDepth, fb0 = this.flFb, mix0 = this.flMix;
         this.flDelay += (t.delay - this.flDelay) * k;
         this.flDepth += (t.depth - this.flDepth) * k;
@@ -413,7 +428,7 @@ namespace porridge
     // utility: swap, inversion, width, balance and gain (FxExtra.cmajor's, without bass mono,
     // which needs the whole sound)
 
-    void laneUtility (LaneFx& this, const float[numSlots]& P, float64 sr, float[blockSize]& l, float[blockSize]& r, bool both, int n)
+    void laneUtility (LaneFx& this, const float[numSlots]& P, float64 sr, float glide, float[blockSize]& l, float[blockSize]& r, bool both, int n)
     {
         let t = utilityTargets (P);
         let invL = t.invL, invR = t.invR, swap = t.swap;
@@ -423,7 +438,7 @@ namespace porridge
             this.utGain = t.gain; this.utPanL = t.panL; this.utPanR = t.panR; this.utWidth = t.width;
         }
 
-        let k = laneGlide (n, sr);
+        let k = glide;
         let g0 = this.utGain, pl0 = this.utPanL, pr0 = this.utPanR, w0 = this.utWidth;
         this.utGain += (t.gain - this.utGain) * k;
         this.utPanL += (t.panL - this.utPanL) * k;
@@ -464,7 +479,7 @@ namespace porridge
     /// Sh_Hz's knob as Hz: cubed, times 1000.
     float shifterHz (float v)           { let x = clamp (v, -1.0f, 1.0f); return 1000.0f * x * x * x; }
 
-    void laneShifter (LaneFx& this, const float[hilbertCoefs]& c, const float[numSlots]& P, float noteHz, float64 sr,
+    void laneShifter (LaneFx& this, const float[hilbertCoefs]& c, const float[numSlots]& P, float noteHz, float64 sr, float glide,
                       float[blockSize]& l, float[blockSize]& r, bool both, int n)
     {
         let tHz = noteHz * shifterRatio (P[slot::Sh_Ratio]) + shifterHz (P[slot::Sh_Hz]);
@@ -478,7 +493,7 @@ namespace porridge
             this.shHz = tHz; this.shMix = tMix;
         }
 
-        let k = laneGlide (n, sr);
+        let k = glide;
         let hz0 = this.shHz, mix0 = this.shMix;
         this.shHz += (tHz - this.shHz) * k;
         this.shMix += (tMix - this.shMix) * k;
@@ -559,7 +574,7 @@ namespace porridge
     // ringing for Rs_Decay (the higher ones shorter), louder towards the top with Rs_Bright, at
     // Rs_Gain (the ringing's level, before the mix with the dry sound).
 
-    void laneResonator (LaneFx& this, const float[numSlots]& P, float noteHz, float64 sr,
+    void laneResonator (LaneFx& this, const float[numSlots]& P, float noteHz, float64 sr, float glide,
                         float[blockSize]& l, float[blockSize]& r, bool both, int n)
     {
         let model = clamp (int (P[slot::Rs_Model]), 0, 5);
@@ -575,7 +590,7 @@ namespace porridge
         }
 
         let mix0 = this.rsMix, gain0 = this.rsGain;
-        let k = laneGlide (n, sr);
+        let k = glide;
         this.rsMix += (tMix - this.rsMix) * k;
         this.rsGain += (tGain - this.rsGain) * k;
         let dmix = (this.rsMix - mix0) / float (n);
