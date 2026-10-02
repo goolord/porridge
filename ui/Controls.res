@@ -484,15 +484,15 @@ let toggle = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=?, ~label=?) => {
   bind(c, update)
 }
 
-// An LFO's mode (LFO_n_Sync, LFO_3_Mode: each note 0, shared and restarted by each note 1,
-// shared and free 2) as two halves: each note, or shared. Clicking shared again switches
+// An LFO's mode (LFO_n_Sync, LFO_3_Mode: per-voice 0, shared and restarted by each note 1,
+// shared and free 2) as two halves: per-voice, or shared. Clicking shared again switches
 // between restarting with each note and running free.
 let lfoMode = (ctx: Ctx.t, parent, id, ~x, ~y, ~w) => {
   let model = ctx.model
   let def = model->ParamModel.def(id)
   let e = el("div", ~cls="seg", ~parent)->place(x, y, ~w)
   e->setTabIndex(0)
-  let each = el("span", ~text="each note", ~parent=e)
+  let each = el("span", ~text="per-voice", ~parent=e)
   let shared = el("span", ~parent=e)
   let c = {
     ctx,
@@ -500,9 +500,9 @@ let lfoMode = (ctx: Ctx.t, parent, id, ~x, ~y, ~w) => {
     def,
     status: ctx.status->Status.live(e, () =>
       switch model->ParamModel.get(id) {
-      | 0. => "Each note has its own: it starts with the note. Click shared for one that every note follows."
-      | 1. => "Shared by every note, restarted by each new one. Click again to let it run free; click each note for one per note."
-      | _ => "Shared by every note, running free. Click again to restart it with each note; click each note for one per note."
+      | 0. => "Per-voice: each voice has its own, starting with its note. Click shared for one that every voice follows."
+      | 1. => "Shared by every note, restarted by each new one. Click again to let it run free; click per-voice for one in each voice."
+      | _ => "Shared by every note, running free. Click again to restart it with each note; click per-voice for one in each voice."
       }
     ),
   }

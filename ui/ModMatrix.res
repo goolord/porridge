@@ -482,6 +482,7 @@ let targets = [
     [2],
     [("Rs_Pitch", "pitch"), ("Rs_Decay", "decay"), ("Rs_Bright", "brightness"), ("Rs_Mix", "mix")],
   ),
+  ...effectTargets("resonator", "resonator", [2], [("Rs_Gain", "gain")]),
 ]
 
 // The target groups, by the key in each target's group, with their titles.

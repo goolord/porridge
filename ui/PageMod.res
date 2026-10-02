@@ -1,10 +1,10 @@
 // Mod page: the modulation matrix, led by the connections that exist.
 //
-// Left, the sources: those each note has its own of, then those every note shares (the macro
+// Left, the sources: the per-voice ones (each voice its own), then those every voice shares (the macro
 // knobs and controllers among them); an LFO moves between the two with its mode. Right, the
 // connections, one row each: source, cable, target, amount, "via" source, options (hold, slew,
 // curve), remove. Grabbing a source (or "add connection") brings up the targets over the list,
-// those in each voice apart from those on the whole sound: drop the cable on one, or click it,
+// the per-voice ones apart from those on the whole sound: drop the cable on one, or click it,
 // or search for one. A row's source or target can be changed in place. A per-note source on
 // the whole sound follows the newest note, or every note by its level (the setting below the
 // list); its cable says which.
@@ -86,7 +86,7 @@ let targetGroups = ModMatrix.groups->Array.map(((key, title)) => (
 
 // the picker's two sections
 let sections: array<(string, ModMatrix.scope, string)> = [
-  ("in each voice", EachNote, "Each note moves these its own way"),
+  ("per-voice", EachNote, "Each voice moves these its own way"),
   ("on the whole sound", Shared, "These have one value: a per-note source gives them the newest note's, or every note's by level (below the connections)"),
 ]
 
@@ -269,7 +269,7 @@ let build = (ctx: Ctx.t, page) => {
     e->hover(() => help)
     e
   }
-  let eachHeading = heading("each note", "Sources each note has its own of: on something in the voice, every note moves it its own way")
+  let eachHeading = heading("per-voice", "Sources each voice has its own of: on something in the voice, every voice moves it its own way")
   let sharedHeading = heading("shared", "Sources every note shares (an LFO is here while its mode is shared)")
   let macroHeading = heading("macros", "Knobs to turn, automate or map: shared by every note")
   let ccHeading = heading("controllers", "The MIDI page's assignable controllers: shared by every note")

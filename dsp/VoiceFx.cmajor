@@ -59,7 +59,7 @@ namespace porridge
 
         // resonator: each mode's two outputs and inputs back, per side, and the gliding mix
         float[4] rY1L, rY2L, rX1L, rX2L, rY1R, rY2R, rX1R, rX2R;
-        float rsMix;
+        float rsMix, rsGain;
     }
 
     //==============================================================================
@@ -654,7 +654,8 @@ namespace porridge
 
     //==============================================================================
     // resonator: four resonances at the model's ratios of the note (moved by Rs_Pitch), each
-    // ringing for Rs_Decay (the higher ones shorter), louder towards the top with Rs_Bright.
+    // ringing for Rs_Decay (the higher ones shorter), louder towards the top with Rs_Bright, at
+    // Rs_Gain (the ringing's level, before the mix with the dry sound).
 
     void laneResonator (LaneFx& this, const float[numSlots]& P, float noteHz, float64 sr,
                         float[blockSize]& l, float[blockSize]& r, bool both, int n)
@@ -665,12 +666,20 @@ namespace porridge
         let bright = float64 (clamp (P[slot::Rs_Bright], 0.0f, 1.0f));
         let tMix = clamp (P[slot::Rs_Mix], 0.0f, 1.0f);
 
-        if (this.fresh)
-            this.rsMix = tMix;
+        let tGain = float (pow (10.0, float64 (clamp (P[slot::Rs_Gain], -24.0f, 24.0f)) * 0.05));
 
-        let mix0 = this.rsMix;
-        this.rsMix += (tMix - this.rsMix) * laneGlide (n, sr);
+        if (this.fresh)
+        {
+            this.rsMix = tMix;
+            this.rsGain = tGain;
+        }
+
+        let mix0 = this.rsMix, gain0 = this.rsGain;
+        let k = laneGlide (n, sr);
+        this.rsMix += (tMix - this.rsMix) * k;
+        this.rsGain += (tGain - this.rsGain) * k;
         let dmix = (this.rsMix - mix0) / float (n);
+        let dgain = (this.rsGain - gain0) / float (n);
 
         // each mode's gain (b0, at its peak 1 before the weights), feedback, and weight
         float[4] g, a1, a2, wt;
@@ -714,7 +723,7 @@ namespace porridge
                 wet += wt[m] * y;
             }
 
-            l.at (i) = x + (wet * norm * 2.0f - x) * mix;
+            l.at (i) = x + (wet * norm * 2.0f * (gain0 + dgain * float (i + 1)) - x) * mix;
         }
 
         if (! both)
@@ -734,7 +743,7 @@ namespace porridge
                 wet += wt[m] * y;
             }
 
-            r.at (i) = x + (wet * norm * 2.0f - x) * mix;
+            r.at (i) = x + (wet * norm * 2.0f * (gain0 + dgain * float (i + 1)) - x) * mix;
         }
     }
 }

@@ -130,4 +130,12 @@ for (const [name, value, sets] of kinds)
     check (Math.abs (l1 / l0 - 1) > 0.1, `the amp after a lane distortion changes its release: ${l1.toFixed (4)} vs ${l0.toFixed (4)}`);
 }
 
+// the resonator's gain sets its ringing's level apart from the mix: +12 dB is four times as loud
+{
+    const res = { VL_1: entry ("resonator"), Rs_On: 1, Rs_Mix: 1 };
+    const flat = rms (play ([[0, 57, 0.5]], res, 0.5), 0.1, 0.4);
+    const loud = rms (play ([[0, 57, 0.5]], { ...res, Rs_Gain: 12 }, 0.5), 0.1, 0.4);
+    check (Math.abs (20 * Math.log10 (loud / flat) - 12) < 0.3, `resonator gain +12 dB: ${(20 * Math.log10 (loud / flat)).toFixed (2)} dB louder`);
+}
+
 done ("voice lane ok");

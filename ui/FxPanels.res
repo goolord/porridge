@@ -522,6 +522,7 @@ let drawResonator = (p: FxGraph.plot, get: string => float) => {
   let base = 220. * Math.pow(2., ~exp=get("Rs_Pitch") / 12.)
   let decay = expValue(10., 10000., get("Rs_Decay")) / 1000.
   let bright = get("Rs_Bright")
+  let gain = Math.pow(10., ~exp=get("Rs_Gain") / 20.)
   let ratios = resonatorRatios[Float.toInt(get("Rs_Model"))]->Option.getOr([1., 2., 3., 4.])
   let sr = 48000.
   // each mode as the DSP makes it: a two-pole resonance of this decay, weighted
@@ -554,7 +555,7 @@ let drawResonator = (p: FxGraph.plot, get: string => float) => {
         let z2 = Complex.expj(-2. * w)
         let num = Complex.scale(Complex.add(Complex.one, Complex.scale(z2, -1.)), (1. - r * r) / 2.)
         let den = Complex.add(Complex.add(Complex.one, Complex.scale(z1, -2. * r * Math.cos(wm))), Complex.scale(z2, r * r))
-        Complex.add(sum, Complex.scale(Complex.div(num, den), weight / total * 2.))
+        Complex.add(sum, Complex.scale(Complex.div(num, den), weight / total * 2. * gain))
       }
     )
     (x, FxGraph.yOf(p, Math.max(-36., db(Complex.abs(wet))), -36., 6.))
@@ -826,7 +827,8 @@ let sections = (k: FxRack.kind) =>
       {title: "key shifter", rows: [[Knob("Sh_Ratio", "ratio of the note"), Knob("Sh_Hz", "offset"), List("Sh_Mode", "mode")], [Knob("Sh_Mix", "mix")]]},
     ]
   | #resonator => [
-      {title: "resonator", rows: [[List("Rs_Model", "model"), Knob("Rs_Pitch", "pitch"), Knob("Rs_Decay", "decay")], [Knob("Rs_Bright", "brightness"), Knob("Rs_Mix", "mix")]]},
+      {title: "resonator", rows: [[List("Rs_Model", "model"), Knob("Rs_Pitch", "pitch"), Knob("Rs_Decay", "decay")], [Knob("Rs_Bright", "brightness")]]},
+      {title: "level", rows: [[Knob("Rs_Gain", "gain")], [Knob("Rs_Mix", "mix")]]},
     ]
   | #utility => [
       {title: "utility", rows: [[Knob("Ut_Gain", "gain"), Knob("Ut_Pan", "pan"), Knob("Ut_Width", "width")], [Switch("Ut_InvL", "invert L"), Switch("Ut_InvR", "invert R"), Switch("Ut_Swap", "swap L/R")]]},

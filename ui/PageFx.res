@@ -4,7 +4,7 @@
 //
 // The tabs after Oatmeal's distortion are the rack (FxRack): up to eight effects, each kind up to
 // four times. Drag a tab sideways to move that effect, × takes it out, right-click duplicates it,
-// + adds one. Before them, under "each note", the voice lane's (VoiceLane): the effects every
+// + adds one. Before them, under "per-voice", the voice lane's (VoiceLane): the effects every
 // voice runs its own copy of; right-click moves one between the lane and the rack.
 
 open! Web
@@ -303,7 +303,7 @@ let build = (ctx: Ctx.t, page) => {
         ~onToggle=() => toggle(e),
         ~onRemove=() => VoiceLane.remove(model, e),
         ~title=() =>
-          `${VoiceLane.label(model, e)} in every voice (${FxRack.hostName(e)}'s parameters): each note runs its own. Click to open, drag sideways to move it, right-click to duplicate it or move it to the whole sound, × takes it out`,
+          `${VoiceLane.label(model, e)} in every voice (${FxRack.hostName(e)}'s parameters): each voice runs its own. Click to open, drag sideways to move it, right-click to duplicate it or move it to the whole sound, × takes it out`,
         (ev, t) =>
           switch ev->button {
           | 0 =>
@@ -330,7 +330,7 @@ let build = (ctx: Ctx.t, page) => {
     }
   let laneAdd = el("div", ~cls="fxtab add", ~text="+")
   ctx.status->Status.hover(laneAdd, () =>
-    "Add an effect to every voice: each note runs its own copy, which its LFOs, envelopes and key move for that note alone"
+    "Add a per-voice effect: each voice runs its own copy, which its LFOs, envelopes and key move for that note alone"
   )
   laneAdd->onPointer(#pointerdown, ev => {
     ev->preventDefault
@@ -343,7 +343,7 @@ let build = (ctx: Ctx.t, page) => {
     ctx.status->Status.hover(e, () => help)
     e
   }
-  let eachLabel = groupLabel("each note", "The voice lane: effects in every voice, which each note runs its own copy of")
+  let eachLabel = groupLabel("per-voice", "The voice lane: effects in every voice, which each voice runs its own copy of")
   let wholeLabel = groupLabel("whole sound", "Oatmeal's distortion and the rack: effects on the sound of every voice together")
 
   let addTab = el("div", ~cls="fxtab add", ~text="+")
