@@ -258,11 +258,17 @@ let decodeTable = (s, length) => {
 let str = s => JSON.String(s)
 let num = x => JSON.Number(x)
 
-let toJson = (p, ~header=true) => {
+// ~sparse leaves out the parameters that read back as their default (a missing parameter has
+// its default value), which shrinks the bank in the stored state to a fraction of its size
+let toJson = (p, ~header=true, ~sparse=false) => {
   let params = Lazy.get(defs)->Array.filterMap(d =>
     ModMatrix.isSlotParam(d.id)
       ? None
-      : p.values->Map.get(d.id)->Option.map(x => (d.id, num(shortNumber(d, x))))
+      : p.values
+        ->Map.get(d.id)
+        ->Option.map(x => (d.id, shortNumber(d, x)))
+        ->Option.filter(((id, x)) => !sparse || loadValue(id, x) != Some(d.init))
+        ->Option.map(((id, x)) => (id, num(x)))
   )
 
   let modulations = ModMatrix.slotNumbers->Array.filterMap(k => {
@@ -531,7 +537,7 @@ let encodePreset = p =>
   switch encoded->WeakMap.get(p) {
   | Some(json) => json
   | None =>
-    let json = JSON.stringify(toJson(p, ~header=false))
+    let json = JSON.stringify(toJson(p, ~header=false, ~sparse=true))
     encoded->WeakMap.set(p, json)->ignore
     json
   }
