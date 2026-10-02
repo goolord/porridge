@@ -358,7 +358,17 @@ let makeDefs = (~context=() => None) => {
 }
 
 // Every definition, made once without a context program (for names, ranges and laws).
-let all = Lazy.make(() => makeDefs())
+// The view's definitions when it has given them (useDefs), so that they aren't made twice: what
+// presets, the tools and choiceValue read of them (ids, defaults, ranges, names) doesn't depend on
+// the program their status texts read from.
+let viewDefs = ref(None)
+let useDefs = defs => viewDefs := Some(defs)
+let all = Lazy.make(() =>
+  switch viewDefs.contents {
+  | Some(defs) => defs
+  | None => makeDefs()
+  }
+)
 let byId = Lazy.make(() => Lazy.get(all)->Array.map(d => (d.id, d))->Map.fromArray)
 
 // A list parameter's value by its name, which it must have: choiceValue("Sat_Type", "soft clip")

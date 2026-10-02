@@ -25,6 +25,7 @@ let make = (host, pc) => {
   // (several texts depend on other fields: octave size, tuning, breakpoint, targets...).
   let context = OatmealFormat.makeDefaultProgram("Init")
   let defs = ParamDefs.makeDefs(~context=() => Some(context))
+  Preset.useDefs(defs)
   let model = ParamModel.make(pc, defs)
   Bank.writeValues(context, model.values)
   // a change also refreshes the readouts that depend on the parameter

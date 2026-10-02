@@ -191,8 +191,8 @@ let lfo3 = (ctx: Ctx.t, parent, box) => {
   }
   // a mark per sounding note, where its LFO 3 is in its first cycle (the plot starts at the
   // start phase)
-  VoiceView.get(ctx.pc)->VoiceView.listen(() => {
-    let voices = parent->offsetParent->Option.isSome ? VoiceView.get(ctx.pc).voices : []
+  VoiceView.get(ctx.pc)->VoiceView.listen(parent, shown => {
+    let voices = shown ? VoiceView.get(ctx.pc).voices : []
     let start = get("LFO_3_Phase")
     notes->VoiceView.show(
       voices->Array.map(v => {
@@ -244,8 +244,8 @@ let lfo = (ctx: Ctx.t, parent, lfo, box) => {
   }
 
   // a mark per sounding note, where its LFO is in the first cycle
-  VoiceView.get(ctx.pc)->VoiceView.listen(() => {
-    let voices = parent->offsetParent->Option.isSome ? VoiceView.get(ctx.pc).voices : []
+  VoiceView.get(ctx.pc)->VoiceView.listen(parent, shown => {
+    let voices = shown ? VoiceView.get(ctx.pc).voices : []
     notes->VoiceView.show(
       voices->Array.map(v => {
         let phase = lfo == 0 ? v.lfo1 : v.lfo2
