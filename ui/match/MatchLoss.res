@@ -54,8 +54,15 @@ let standard = {envelope: 0.5, early: 1., treble: 1., resolutions: [1., 1., 1.]}
 
 let earlySeconds = 0.15
 let detailWeight = 0.1
-let gridWeight = 0.2
-let fineWeight = 0.6
+// The broad spectrum counts for half, and the harmonics' grid and fine structure for more:
+// the key EQ fitted to every candidate makes the broad balance easy to get right, so that a
+// patch with the wrong partials (a second oscillator's, or the sidebands that blend two) could
+// otherwise win on it; ears hear the partials first. (Synplant's own patch for a two-oscillator
+// sample, against matches that got its balance closer and its partials less so, ranks as heard
+// only with these.)
+let spectralWeight = 0.5
+let gridWeight = 0.6
+let fineWeight = 1.2
 let widthWeight = 0.4
 // a difference in the grid counts at most this many dB
 let gridCap = 30.
@@ -244,7 +251,7 @@ let terms = (w, target: Spectrum.features, c: Spectrum.features) =>
       weight.contents > 0. ? sum.contents / weight.contents : 0.
     | (None, _) => 0.
     }
-    (spectral, w.envelope * envelope, gridWeight * grid, fineWeight * fine, widthWeight * width)
+    (spectralWeight * spectral, w.envelope * envelope, gridWeight * grid, fineWeight * fine, widthWeight * width)
   }
 
 let compare = (w, target, c) => {
@@ -254,7 +261,7 @@ let compare = (w, target, c) => {
 
 // A loss as the percentage the cards show: two takes of one plucked string come out near 85%,
 // a string against a filtered saw near 60%, a string against a noise burst near 35%.
-let scale = 1.
+let scale = 1.3
 
 let similarity = loss => 100. * Math.exp(-.loss / scale)
 

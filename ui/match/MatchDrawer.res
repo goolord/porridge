@@ -229,7 +229,7 @@ let make = (ctx: Ctx.t, stage): t => {
   let targetInfo = el("div", ~cls="mt-tinfo", ~parent=names)
   status->Status.hover(targetBox, () => "Click to match another sample (or drop one on the window)")
 
-  let playSample = button(head, "▶ sample", () => "Play the sample (through this computer's own audio output)")
+  let playSample = button(head, "▶ sample", () => "Play the sample, as loud as the cards play (through this computer's own audio output)")
   el("div", ~cls="spacer", ~parent=head)->ignore
   let lockLabel = el("div", ~cls="mt-locklabel", ~text="lock", ~parent=head)
   let lockRow = el("div", ~cls="mt-locks", ~parent=head)
@@ -828,7 +828,10 @@ let make = (ctx: Ctx.t, stage): t => {
         player->SamplePlayer.stop
       } else {
         noteOff()
-        player->SamplePlayer.play([l.target.samples], ~sampleRate=SoundTarget.sampleRate)
+        // (at the level the cards are set to, so that they can be told apart by ear for what
+        // they are, not for how loud)
+        let gain = MatchSearch.levelChange(l.target.samples)
+        player->SamplePlayer.play([l.target.samples->TypedArray.map(v => v * gain)], ~sampleRate=SoundTarget.sampleRate)
       }
     )
   )

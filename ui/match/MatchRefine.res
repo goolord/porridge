@@ -40,7 +40,7 @@ let knob = (~lo=0., ~hi=1., ~init=?, ids: array<string>) => {
 let knobAt = (~lo=0., ~hi=1., ids: array<string>, value) =>
   knob(~lo, ~hi, ~init=def(ids->Array.getUnsafe(0)).toNorm(value), ids)
 
-let addCost = 0.01
+let addCost = 0.013
 let maxAdditions = 3
 let tuneCount = 3
 let tuneGenerations = 8

@@ -107,8 +107,8 @@ let islands = [
 // noise over three times that (between the harmonics, a little noise can stand in for partials
 // that modulation or a roughened oscillator would put there, which are the likelier sound, and a
 // hiss the sample hasn't is heard more than the loss hears it)
-let partCost = 0.006
-let noiseCost = 0.014
+let partCost = 0.008
+let noiseCost = 0.018
 
 //==============================================================================
 // Rendering and scoring a candidate (in a worker)
@@ -230,7 +230,8 @@ let renderGenes = (ctx, ~frames=?, x) => {
 let targetDb = -24.
 let peakCeiling = -3.
 
-let levelGain = (ctx, y: Float32Array.t) => {
+// how much y changes to stand at that level
+let levelChange = (y: Float32Array.t) => {
   let n = TypedArray.length(y)
   let window = Math.Int.min(n, 13230)
   let power = ref(0.)
@@ -245,9 +246,11 @@ let levelGain = (ctx, y: Float32Array.t) => {
   }
   y->TypedArray.forEach(v => peak := Math.max(peak.contents, Math.abs(v)))
   let rmsDb = Spectrum.db(Math.sqrt(loudest.contents / Int.toFloat(Math.Int.max(1, window))))
-  let change = Math.min(targetDb - rmsDb, peakCeiling - Spectrum.db(peak.contents))
-  Math.max(0.001, Math.min(31.6, ctx.baseGain * Math.pow(10., ~exp=change / 20.)))
+  Math.pow(10., ~exp=Math.min(targetDb - rmsDb, peakCeiling - Spectrum.db(peak.contents)) / 20.)
 }
+
+let levelGain = (ctx, y: Float32Array.t) =>
+  Math.max(0.001, Math.min(31.6, ctx.baseGain * levelChange(y)))
 
 // A candidate, as the drawer shows it.
 type candidate = {
@@ -888,9 +891,9 @@ let distinct = (xs: array<Float64Array.t>) =>
 // away it is, nothing from this far; and what having the same structure (Genome.structure) as
 // a rival's best costs (about 8%), so that cards differ in what they are made of, not just in
 // their knobs
-let nicheCost = 0.15
+let nicheCost = 0.2
 let nicheReach = 0.1
-let structureCost = 0.08
+let structureCost = 0.1
 
 // A gene-at-a-time polish of a point: each free continuous gene tried a step either side;
 // a gene's step halves when neither side helps. Each round also tries all of the last round's
@@ -1084,7 +1087,14 @@ let branch = (outline: search, islandIndex, ~fitted, ~locks, ~reference, ~budget
     ->Array.filterMap(((_, x)) => within(x) ? Some(x) : None)
     ->distinct
     ->Array.slice(~start=0, ~end=branchScreened)
-  let starts = distinct([start, ...outline.archive->Array.map(e => clampInto(e.genes, lo, hi)), ...screened])
+  // (and the outline's own start, the sample's seed: in a narrow island the outline's best,
+  // squeezed into it, can be further off than the seed squeezed into it)
+  let starts = distinct([
+    start,
+    clampInto(outline.start, lo, hi),
+    ...outline.archive->Array.map(e => clampInto(e.genes, lo, hi)),
+    ...screened,
+  ])
   let sigma = 0.6 * outline.sigma
   {
     islandIndex,
