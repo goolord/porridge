@@ -115,18 +115,39 @@ namespace porridge
         this.nzGain = src.nzGain;
     }
 
+    /// The oscillator noise's lowpass coefficient and gain for a colour (see setNoise), the
+    /// same for every voice: worked out once, and again only when the colour changes.
+    struct NoiseCoefs
+    {
+        bool valid;
+        float colour, coef, gain;
+    }
+
+    void update (NoiseCoefs& this, float colour, float64 sampleRate)
+    {
+        if (this.valid && colour == this.colour)
+            return;
+
+        let fc = 50.0 * pow (2.0, 9.0 * float64 (colour));
+        let c = 1.0 - exp (-2.0 * pi * min (fc, 0.45 * sampleRate) / sampleRate);
+        this.valid = true;
+        this.colour = colour;
+        this.coef = float (c);
+        this.gain = float (sqrt (3.0 * (2.0 - c) / c));
+    }
+
     /// The oscillator's noise for depth 0..1 (deviation up to half the frequency, as RMS, on a
-    /// square law) and colour 0..1 (the noise lowpassed at 50 Hz .. 25.6 kHz).
-    void setNoise (Osc& this, float depth, float colour, float64 sampleRate)
+    /// square law) and colour 0..1 (the noise lowpassed at 50 Hz .. 25.6 kHz). coefs: the
+    /// colour's, by the sample rate (NoiseCoefs.update), updated here when the noise is on.
+    void setNoise (Osc& this, float depth, float colour, NoiseCoefs& coefs, float64 sampleRate)
     {
         this.nzDepth = 0.5f * depth * depth;
 
         if (this.nzDepth > 0)
         {
-            let fc = 50.0 * pow (2.0, 9.0 * float64 (colour));
-            let c = 1.0 - exp (-2.0 * pi * min (fc, 0.45 * sampleRate) / sampleRate);
-            this.nzCoef = float (c);
-            this.nzGain = float (sqrt (3.0 * (2.0 - c) / c));
+            coefs.update (colour, sampleRate);
+            this.nzCoef = coefs.coef;
+            this.nzGain = coefs.gain;
         }
     }
 
