@@ -140,7 +140,7 @@ let fittedWave = 4
 // osc 2's pitch against osc 1: a continuous gene that holds still at these intervals for half
 // of the way between each two (so that the search lands on them exactly) and slides through
 // the ratios between them for the rest
-let o2Anchors = [-12., -5., 0., 5., 7., 12., 19., 24.]
+let o2Anchors = [-12., -5., 0., 5., 7., 12., 19., 24., 31., 36.]
 let o2Hold = 0.25
 let o2Semitones = v => {
   let n = Array.length(o2Anchors)
@@ -519,7 +519,7 @@ let seed = (t: SoundTarget.t) => {
   set("o2Detune", 0.3)
   set("o1Rough", 0.)
   set("o2Rough", 0.)
-  set("roughColour", 0.7)
+  set("roughColour", 0.4)
   set("o2Heard", 0.)
   setChoice("oscMix", 0)
   set("feedback", 0.)

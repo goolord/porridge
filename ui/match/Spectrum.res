@@ -484,9 +484,120 @@ let gridRatioAt = (ratios: array<float>, f) => {
   ratios[b.contents]->Option.getOr(0.)
 }
 
+// How much the strongest partials' pitches move, in cents: over the first second, every 256
+// samples, each of the (up to) eight strongest peaks of the average spectrum from 300 Hz to
+// 8 kHz followed within two bins and placed between them; the spread (standard deviation) of
+// each one's pitch over the frames where it is within 20 dB of its loudest, averaged over the
+// peaks by their level (none: 0). What a wandering pitch, a rough oscillator or a slow beat does to the
+// partials, and a plain oscillator doesn't: a spectrum averaged over time can't tell a partial
+// that wavers from a steady one beside a little noise.
+let movementPeaks = 8
+let movementHop = 256
+
+let movement = (x: Float32Array.t) => {
+  let r = gridResolution(2048)
+  let half = r.size / 2
+  let binHz = sampleRate / Int.toFloat(r.size)
+  let n = Math.Int.min(TypedArray.length(x), Float.toInt(sampleRate))
+  let frames = Math.Int.max(0, (n - r.size) / movementHop + 1)
+  if frames < 4 {
+    0.
+  } else {
+    let lo = Float.toInt(300. / binHz)
+    let hi = Math.Int.min(half - 3, Float.toInt(8000. / binHz))
+    let powers = Array.fromInitializer(~length=frames, _ => Float64Array.fromLength(half + 1))
+    // (where an unpaired last frame's partner goes)
+    let mean0 = Float64Array.fromLength(half + 1)
+    let t = ref(0)
+    while t.contents < frames {
+      let pair = t.contents + 1 < frames
+      let centre = i => r.size / 2 + i * movementHop
+      transform(r, x, centre(t.contents), pair ? centre(t.contents + 1) : -2 * r.size)
+      let (a, b) = (powers->Array.getUnsafe(t.contents), pair ? powers->Array.getUnsafe(t.contents + 1) : mean0)
+      for k in 0 to half {
+        a->set64(k, r.powerA->get64(k))
+        b->set64(k, r.powerB->get64(k))
+      }
+      t := t.contents + 2
+    }
+    let mean = Float64Array.fromLength(half + 1)
+    powers->Array.forEach(p =>
+      for k in 0 to half {
+        mean->set64(k, mean->get64(k) + p->get64(k))
+      }
+    )
+    let loudest = ref(0.)
+    for k in lo to hi {
+      loudest := Math.max(loudest.contents, mean->get64(k))
+    }
+    // the peaks: bins over their three neighbours either side, within 30 dB of the loudest and
+    // 12 dB over the median of the 25 bins around them (partials, not a noise's chance peaks,
+    // whose movement is anything at all)
+    let around = Float64Array.fromLength(25)
+    let peaks = []
+    for k in Math.Int.max(lo, 12) to Math.Int.min(hi, half - 13) {
+      let m = mean->get64(k)
+      let over = ref(m > loudest.contents * 0.001)
+      for j in k - 3 to k + 3 {
+        if j != k && mean->get64(j) > m {
+          over := false
+        }
+      }
+      if over.contents {
+        for j in 0 to 24 {
+          around->set64(j, mean->get64(k - 12 + j))
+        }
+        around->TypedArray.sort((a, b) => a < b ? -1. : a > b ? 1. : 0.)->ignore
+        if m > 16. * around->get64(12) {
+          peaks->Array.push(k)
+        }
+      }
+    }
+    let peaks =
+      peaks
+      ->Array.toSorted((a, b) => Float.compare(mean->get64(b), mean->get64(a)))
+      ->Array.slice(~start=0, ~end=movementPeaks)
+    let (sum, weight) = (ref(0.), ref(0.))
+    peaks->Array.forEach(k0 => {
+      let top = ref(0.)
+      powers->Array.forEach(p => top := Math.max(top.contents, p->get64(k0)))
+      let (fs, ws) = ([], [])
+      powers->Array.forEach(p => {
+        let k = ref(k0 - 2)
+        for j in k0 - 2 to k0 + 2 {
+          if p->get64(j) > p->get64(k.contents) {
+            k := j
+          }
+        }
+        let k = k.contents
+        let m = p->get64(k)
+        if m > top.contents * 0.01 {
+          let l = j => Math.log(Math.max(p->get64(j), 1e-30))
+          let (a, b, c) = (l(k - 1), l(k), l(k + 1))
+          let curve = a - 2. * b + c
+          let offset = curve < 0. ? Math.max(-1., Math.min(1., 0.5 * (a - c) / curve)) : 0.
+          fs->Array.push(1200. * Math.log2((Int.toFloat(k) + offset) * binHz))
+          ws->Array.push(m)
+        }
+      })
+      let w = ws->Array.reduce(0., (s, v) => s + v)
+      if Array.length(fs) >= 4 && w > 0. {
+        let mu = fs->Array.reduceWithIndex(0., (s, f, i) => s + f * ws->Array.getUnsafe(i)) / w
+        let var = fs->Array.reduceWithIndex(0., (s, f, i) => s + (f - mu) * (f - mu) * ws->Array.getUnsafe(i)) / w
+        let level = Math.sqrt(mean->get64(k0))
+        sum := sum.contents + level * Math.sqrt(var)
+        weight := weight.contents + level
+      }
+    })
+    weight.contents > 0. ? sum.contents / weight.contents : 0.
+  }
+}
+
 type features = {
   length: int,
   energy: float,
+  // the partials' movement (cents, `movement`)
+  movement: float,
   // per resolution: band levels, pooled frames × bands, and how many frames each pools
   spectra: array<Float64Array.t>,
   pools: array<int>,
@@ -508,6 +619,7 @@ let measure = (x: Float32Array.t, ~period, ~gridHz=?, ~axisHz=?, ~side=?): featu
   {
     length: TypedArray.length(x),
     energy: energy.contents,
+    movement: movement(x),
     spectra: resolutions->Array.mapWithIndex((r, i) => bandLevels(r, x, ~pool=pools->Array.getUnsafe(i))),
     pools,
     envelope: envelope(x),

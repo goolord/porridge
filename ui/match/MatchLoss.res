@@ -61,6 +61,9 @@ let detailWeight = 0.1
 // sample, against matches that got its balance closer and its partials less so, ranks as heard
 // only with these.)
 let spectralWeight = 0.5
+// how much the partials' movement counts (Spectrum.movement): its log ratio, with 2 cents added
+// to both so that a steady sound against a steadier one doesn't count
+let movementWeight = 0.2
 let gridWeight = 0.6
 let fineWeight = 1.2
 let widthWeight = 0.4
@@ -81,10 +84,10 @@ let maxOf = (a: Float64Array.t) => {
   m.contents
 }
 
-// The loss's terms, each weighted: (spectral, envelope, grid, fine, width).
+// The loss's terms, each weighted: (spectral, envelope, grid, fine, width, movement).
 let terms = (w, target: Spectrum.features, c: Spectrum.features) =>
   if c.energy <= 1e-12 || target.energy <= 0. {
-    (silence, 0., 0., 0., 0.)
+    (silence, 0., 0., 0., 0., 0.)
   } else {
     let gain = Math.sqrt(target.energy / c.energy)
     let total = ref(0.)
@@ -251,12 +254,22 @@ let terms = (w, target: Spectrum.features, c: Spectrum.features) =>
       weight.contents > 0. ? sum.contents / weight.contents : 0.
     | (None, _) => 0.
     }
-    (spectralWeight * spectral, w.envelope * envelope, gridWeight * grid, fineWeight * fine, widthWeight * width)
+    // (for a pitched sound: one with a grid)
+    let movement =
+      target.grid == None ? 0. : Math.abs(Math.log((c.movement + 2.) / (target.movement + 2.)))
+    (
+      spectralWeight * spectral,
+      w.envelope * envelope,
+      gridWeight * grid,
+      fineWeight * fine,
+      widthWeight * width,
+      movementWeight * movement,
+    )
   }
 
 let compare = (w, target, c) => {
-  let (spectral, envelope, grid, fine, width) = terms(w, target, c)
-  spectral + envelope + grid + fine + width
+  let (spectral, envelope, grid, fine, width, movement) = terms(w, target, c)
+  spectral + envelope + grid + fine + width + movement
 }
 
 // A loss as the percentage the cards show: two takes of one plucked string come out near 85%,
