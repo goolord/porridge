@@ -889,8 +889,8 @@ let tell = (s, pending, results: array<result>) => {
       s.stage = startPolish(s)
     } else if generations > 1 && runs->Array.some(es => es.sigma >= settled) {
       s.stage = Rounds(runs, generations - 1)
-    } else if Array.length(runs) > 1 {
-      // the better half goes on
+    } else if Array.length(runs) > 2 {
+      // the better half goes on, down to two (which between them keep the workers busy)
       let kept =
         runs->Array.toSorted((a, b) => Float.compare(runBest(a), runBest(b)))->Array.slice(~start=0, ~end=Math.Int.max(1, Array.length(runs) / 2))
       let round = roundRuns / Array.length(runs)
