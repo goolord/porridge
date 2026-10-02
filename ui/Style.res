@@ -125,9 +125,13 @@ let css = `
 .blk.responding > :not(.pbody):not(.ptabs) { visibility: hidden; }
 .blk > .hdr, .pbody > .hdr { position: absolute; right: 6px; top: 1px; width: 40px; height: 18px; }
 
-/* the FX page: a tab per effect in the order they run (the rack's are dragged sideways), and a
-   page per tab */
-.fxstrip { position: absolute; display: flex; align-items: center; gap: 3px; }
+/* the FX page: the strip is the signal path, per-voice (tinted) then the whole sound, with a tab
+   per effect; an effect that is off shrinks to its icon, and so do the closed ones while the
+   strip is full. A page per tab. */
+.fxstrip { position: absolute; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.fxzone { display: flex; align-items: center; gap: 3px; height: 26px; padding: 0 3px 0 4px; border-radius: 3px; }
+.fxzone.voice { background: rgba(${signalRgb}, 0.14); box-shadow: inset 0 0 0 1px rgba(${signalRgb}, 0.4); }
+.fxgrp { font-size: 11px; font-weight: 700; color: var(--paper); opacity: 0.85; padding: 0 3px 0 2px; }
 .fxtab {
     position: relative; display: flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 2px;
     font-size: 13px; font-weight: 700; white-space: nowrap; color: var(--ink-soft); cursor: pointer;
@@ -135,82 +139,41 @@ let css = `
 }
 .fxtab:hover { color: var(--ink); background: var(--panel-hi); }
 .fxtab.on { color: var(--paper); background: var(--signal); box-shadow: none; }
-.fxtab .led { width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--ink-faint); }
+.fxtab .led { width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--ink-faint);
+    cursor: pointer; position: relative; flex: none; }
+.fxtab .led::after { content: ""; position: absolute; inset: -5px; }
+.fxtab .led:hover { box-shadow: 0 0 0 2px var(--panel-hi), 0 0 0 3px var(--ink-soft); }
 .fxtab .led.lit { background: var(--signal); border-color: var(--signal); }
-.fxtab .led, .card .led { cursor: pointer; position: relative; }
-.fxtab .led::after, .card .led::after { content: ""; position: absolute; inset: -5px; }
-.fxtab .led:hover, .card .led:hover { box-shadow: 0 0 0 2px var(--panel-hi), 0 0 0 3px var(--ink-soft); }
 .fxtab.on .led { border-color: var(--paper); }
 .fxtab.on .led.lit { background: var(--paper); }
+.fxtab .fxic { display: none; }
 .fxtab .x { font-weight: 400; font-size: 14px; margin: 0 -4px 0 1px; opacity: 0; }
 .fxtab:hover .x { opacity: 0.6; }
 .fxtab .x:hover { opacity: 1; }
+.fxtab.idle:not(.on) { background: transparent; box-shadow: inset 0 0 0 1px var(--tile-edge); color: var(--ink-faint); }
+.fxtab.idle:not(.on):hover { background: var(--panel-hi); color: var(--ink-soft); }
+.fxtab.idle:not(.on), .fxstrip.tight .fxtab:not(.on):not(.add) { padding: 0 6px; }
+.fxtab.idle:not(.on) .fxic, .fxstrip.tight .fxtab:not(.on) .fxic { display: block; }
+.fxtab.idle:not(.on) .fxname, .fxstrip.tight .fxtab:not(.on) .fxname,
+.fxtab.idle:not(.on) .x, .fxstrip.tight .fxtab:not(.on) .x { display: none; }
+/* Oatmeal's distortion's second place, when it is "double" */
+.fxtab.echo { background: transparent; box-shadow: none; border: 1px dashed var(--edge); height: 20px; }
+.fxtab.echo.on { background: var(--signal); border-color: var(--signal); }
 .fxtab.add { padding: 0 8px; font-size: 15px; background: transparent; box-shadow: none; border: 1.5px dashed var(--edge); height: 19px; }
 .fxtab.add:hover { background: var(--panel-hi); }
-.fxtab.drag { z-index: 2; cursor: grabbing; color: var(--paper); background: var(--signal); }
-.fxtab.drop-before, .card.drop-before { box-shadow: inset 0 0 0 1px var(--edge), -4px 0 0 var(--signal); }
-.fxtab.drop-after, .card.drop-after { box-shadow: inset 0 0 0 1px var(--edge), 4px 0 0 var(--signal); }
+.fxtab.drag, .fxnode.drag { z-index: 2; cursor: grabbing; color: var(--paper); background: var(--signal); }
+/* the filter and the amp envelope, among the per-voice effects */
+.fxnode { height: 20px; line-height: 20px; padding: 0 7px; border-radius: 10px; font-size: 12px; color: var(--ink-soft);
+    background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge); cursor: grab; }
+.fxnode:hover { color: var(--ink); background: var(--panel-hi); }
+.fxtab.drop-before, .fxnode.drop-before { box-shadow: inset 0 0 0 1px var(--edge), -4px 0 0 var(--signal); }
+.fxtab.drop-after, .fxnode.drop-after, .fxgrp.drop-after { box-shadow: inset 0 0 0 1px var(--edge), 4px 0 0 var(--signal); }
 .fxsep { font-weight: 700; color: var(--paper); font-size: 15px; }
-.fxgap { width: 10px; }
+.fxsep.into { font-size: 18px; }
+.fxsep.out { font-size: 13px; }
 .fxbody { position: absolute; display: none; }
 .fxbody.on { display: block; }
 
-/* the routing tab: nodes, the distortion's places, and the rack's cards */
-.flowsvg { left: 0; top: 0; pointer-events: none; }
-.fnode, .fslot {
-    position: absolute; box-sizing: border-box; border-radius: 2px; font-size: 13px; text-align: center;
-    line-height: 28px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.fnode { background: var(--paper); border: 1px solid var(--edge); color: var(--ink); }
-.fnode.out { line-height: normal; text-align: left; background: var(--tile); }
-.fnode.end { background: transparent; border: none; font-weight: 700; text-align: left; padding-left: 4px; }
-.fnode .olabel { position: absolute; left: 7px; top: 3px; font-weight: 700; font-size: 13px; }
-.fslot { border: 1.5px dashed var(--edge); color: var(--ink-faint); cursor: pointer; }
-.fslot:hover { background: var(--panel-hi); }
-.fslot:empty::after { content: "distortion here?"; opacity: 0; }
-.fslot:empty:hover::after { opacity: 1; }
-.fslot.on { border: 1px solid var(--signal); background: var(--signal); color: var(--paper); font-weight: 700; }
-.fslot.idle { border-style: solid; color: var(--ink-soft); }
-.card {
-    position: absolute; box-sizing: border-box; border-radius: 3px; background: var(--tile);
-    box-shadow: inset 0 0 0 1px var(--edge);
-}
-.card.drag { z-index: 3; box-shadow: inset 0 0 0 1.5px var(--signal), 3px 3px 0 rgba(31,26,14,0.25); background: var(--panel-hi); }
-.card .chead {
-    position: absolute; left: 0; right: 0; top: 0; height: 26px; display: flex; align-items: center; gap: 6px;
-    padding: 0 6px; box-sizing: border-box; cursor: grab; border-bottom: 1px solid var(--tile-edge);
-}
-.card .chead:hover { background: var(--panel-hi); }
-.card .ctitle { flex: 1; font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.card .led { flex: none; width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--ink-faint); }
-.card .led.lit { background: var(--signal); border-color: var(--signal); }
-.card .cx { font-weight: 400; font-size: 15px; color: var(--ink-faint); cursor: pointer; }
-.card .cx:hover { color: var(--ink); }
-.card .cctl { position: absolute; left: 6px; right: 6px; top: 32px; height: 56px; }
-.card .csum { position: absolute; left: 7px; right: 6px; top: 92px; font-size: 11.5px; line-height: 1.4;
-    color: var(--ink-soft); white-space: pre-line; overflow: hidden; }
-.card.off .csum { opacity: 0.55; }
-.card.compact .cctl { display: none; }
-.card.compact .csum { top: 34px; }
-/* a voice lane card: one line, a light, the name and × */
-.lcard {
-    position: absolute; box-sizing: border-box; border-radius: 3px; background: var(--tile);
-    box-shadow: inset 0 0 0 1px var(--signal); display: flex; align-items: center; gap: 6px; padding: 0 6px;
-    cursor: grab; font-size: 13px;
-}
-.lcard:hover { background: var(--panel-hi); }
-.lcard .ctitle { flex: 1; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lcard .led { flex: none; width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--ink-faint);
-    cursor: pointer; position: relative; }
-.lcard .led::after { content: ""; position: absolute; inset: -5px; }
-.lcard .led.lit { background: var(--signal); border-color: var(--signal); }
-.lcard .cx { font-weight: 400; font-size: 15px; color: var(--ink-faint); cursor: pointer; }
-.lcard .cx:hover { color: var(--ink); }
-.lcard.off .ctitle { opacity: 0.55; }
-.lcard.drag, .fnode.drag { z-index: 3; box-shadow: inset 0 0 0 1.5px var(--signal), 3px 3px 0 rgba(31,26,14,0.25); background: var(--panel-hi); }
-.lcard.drop-before, .fnode.drop-before { box-shadow: inset 0 0 0 1px var(--edge), -4px 0 0 var(--signal); }
-.lcard.drop-after, .fnode.drop-after { box-shadow: inset 0 0 0 1px var(--edge), 4px 0 0 var(--signal); }
-.fnode.grab { cursor: grab; }
 /* the synth page's voice fx tab: a row per effect, and the filter's and amp's */
 .vrow { position: absolute; box-sizing: border-box; height: ${px(controlHeight)}; border-radius: 2px; }
 .vrow .vname { position: absolute; left: 0; top: 0; bottom: 0; width: 40%; box-sizing: border-box; padding-left: 22px;
@@ -231,13 +194,6 @@ let css = `
 .vrow.drop-before { box-shadow: inset 0 0 0 1px var(--edge), 0 -3px 0 var(--signal); }
 .vrow.drop-after { box-shadow: inset 0 0 0 1px var(--edge), 0 3px 0 var(--signal); }
 .addrow.vadd { height: ${px(controlHeight)}; }
-/* the FX page's strip: which tabs are per-voice, which on the whole sound */
-.fxgrp { font-size: 11px; font-weight: 700; color: var(--paper); opacity: 0.8; white-space: nowrap; padding: 0 2px; }
-.addcard {
-    position: absolute; box-sizing: border-box; border: 1.5px dashed var(--edge); border-radius: 3px;
-    display: flex; align-items: center; justify-content: center; font-size: 20px; color: var(--ink-soft); cursor: pointer;
-}
-.addcard:hover { background: var(--panel-hi); color: var(--ink); }
 .plot path.flow { fill: none; stroke: var(--ink-soft); stroke-width: 1.5; }
 .plot path.flowhead { fill: none; stroke: var(--ink-soft); stroke-width: 1.5; stroke-linejoin: round; }
 

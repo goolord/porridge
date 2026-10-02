@@ -12,9 +12,10 @@
 // a point, click between them to add one, right-click one to take it out, and drag the small
 // point in the middle of a segment up or down to bend it. The drive moves the sound across it.
 //
-// Oatmeal's distortion also says where it sits (in every voice, or on the whole sound before the
-// rack); the others run in the rack or the voice lane. In a voice, the lo-fi sampler can hold its
-// samples on multiples of the note (Sat_Track), so that its aliases fall on the note's harmonics.
+// Oatmeal's distortion also says where it sits (per-voice, or on the whole sound before the
+// rack); the others run in the rack or the voice lane. Per-voice, the lo-fi sampler can hold its
+// samples on multiples of the note (Sat_Track), so that its aliases fall on the note's harmonics:
+// that switch shows only there.
 
 open! Web
 
@@ -29,8 +30,8 @@ let modelHz = 110.
 let modelRate = 48000.
 
 // `id` maps Oatmeal's distortion's parameters to this one's; `placement` shows where Oatmeal's
-// sits.
-let make = (ctx: Ctx.t, body, ~id: string => string, ~placement, ~w, ~h) => {
+// sits; perVoice says whether it runs in the voices.
+let make = (ctx: Ctx.t, body, ~id: string => string, ~placement, ~perVoice: unit => bool, ~w, ~h) => {
   let model = ctx.model
   let get = x => model->ParamModel.get(id(x))
   let gap = Grid.gap
@@ -399,18 +400,19 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement, ~w, ~h) => {
   model->ParamModel.listen(id("Sat_Type"), showReset)
   showReset()
 
+  // (the copies have no "where", and on the whole sound no "on note")
+  let first = placement ? 4 : 2
+  let tracks = placement || perVoice()
   let settings = Panel.make(body, ~x=0., ~y=graphHeight + gap, ~w, ~h=settingsHeight)
-  let s = Grid.make(ctx, settings.el, ~y=Grid.padBottom, ~cw=Grid.fitColumns(w, 13))
+  let s = Grid.make(ctx, settings.el, ~y=Grid.padBottom, ~cw=Grid.fitColumns(w, first + (tracks ? 9 : 8)))
   s->Grid.choice(id("Sat_Type"), 0, 0, "type", ~span=2)
   if placement {
     s->Grid.choice("Sat_Mode", 2, 0, "where", ~span=2)
-  } else {
-    s->Grid.note("on the whole sound, where it is in the rack", 2, 0, ~span=2)->ignore
   }
-  s->Grid.choice(id("Sat_Oversample"), 4, 0, "oversample")
-  s->Grid.param(id("Sat_Pregain"), 5, 0, "pregain")
-  s->Grid.param(id("Sat_Limit"), 6, 0, "limit")
-  s->Grid.param(id("Sat_Postgain"), 7, 0, "postgain")
+  s->Grid.choice(id("Sat_Oversample"), first, 0, "oversample")
+  s->Grid.param(id("Sat_Pregain"), first + 1, 0, "pregain")
+  s->Grid.param(id("Sat_Limit"), first + 2, 0, "limit")
+  s->Grid.param(id("Sat_Postgain"), first + 3, 0, "postgain")
   // the model's knobs, named for the type (dimmed where it has no such control), and the mix
   let modelKnob = (knob: DistTypes.knob, c, name) => {
     let e = s->Grid.at(c, 0, id(name), b =>
@@ -418,10 +420,24 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement, ~w, ~h) => {
     )
     (knob, e)
   }
-  let knobs = [modelKnob(#drive, 8, "Sat_Drive"), modelKnob(#tone, 9, "Sat_Tone"), modelKnob(#character, 10, "Sat_Character")]
-  s->Grid.param(id("Sat_Mix"), 11, 0, "mix")
-  // the lo-fi sampler's rates on multiples of each voice's note (in a voice only)
-  s->Grid.toggle(id("Sat_Track"), 12, 0, "on note")
+  let knobs = [
+    modelKnob(#drive, first + 4, "Sat_Drive"),
+    modelKnob(#tone, first + 5, "Sat_Tone"),
+    modelKnob(#character, first + 6, "Sat_Character"),
+  ]
+  s->Grid.param(id("Sat_Mix"), first + 7, 0, "mix")
+  // the lo-fi sampler's rates on multiples of each voice's note (per-voice only: Oatmeal's shows
+  // it while it runs in the voices)
+  if tracks {
+    let onNote = s->Grid.at(first + 8, 0, id("Sat_Track"), b => {
+      let holder = el("div", ~parent=settings.el)
+      Controls.toggle(ctx, holder, id("Sat_Track"), ~x=b.x, ~y=b.y, ~w=b.w, ~label="on note")
+      holder
+    })
+    let showOnNote = () => onNote->setStyle("display", perVoice() ? "" : "none")
+    model->ParamModel.listen("Sat_Mode", showOnNote)
+    showOnNote()
+  }
   let nameKnobs = () =>
     knobs->Array.forEach(((knob, e)) => {
       let label = DistTypes.knobLabel(kind(), knob)

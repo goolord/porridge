@@ -105,7 +105,7 @@ const delay = ({ unit, length, feedback, wet }) => {
 const mod = (source, target, amount, via) => via ? { source, target, amount, via } : { source, target, amount };
 
 // the effects rack, slot by slot, by the names in its menu; Oatmeal's chorus, delay, reverb and
-// EQ stay in their slots unless they're left out
+// EQ stay in their slots unless they're left out, or do nothing there (see the end)
 const rack = (...names) => Object.fromEntries (Array.from ({ length: PorridgeParams.rackSlots }, (_, i) =>
 {
     const k = names[i] === undefined ? 0 : PorridgeParams.rackNames.indexOf (names[i]);
@@ -2380,6 +2380,10 @@ parsed._0.presets.forEach ((p, i) =>
     const got = [...p.values].filter (([id, x]) => /^Mod\d+_Source$/.test (id) && x > 0).length;
     if (got !== want) throw new Error (`${p.meta.name}: ${want - got} modulations have an unknown source or target`);
 });
+
+// Oatmeal's chorus, delay, reverb and EQ leave the rack where they're switched off (the EQ: every
+// band off), as they do from an Oatmeal import, so that no program shows idle effects
+parsed._0.presets.forEach (p => Preset.withoutIdleEffects (p.values));
 
 const out = join (root, "presets", "vanilla.porridge");
 writeFileSync (out, Preset.writeBank (parsed._0.presets, "Vanilla"));
