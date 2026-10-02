@@ -763,7 +763,8 @@ let evaluate = (ctx, x, ~weights, ~threshold, ~fit: fitting, ~short) => {
     let side = flatSide->Option.map(s => shapedSamples(s, power))
     // (the spectra as `shaped` puts the envelope on them; the rest measured on the shaped
     // samples, as a level that falls within a 10 ms step or a long window can't be put on a
-    // measurement: a whole evaluation's energy, loudness and side, and the harmonic grid)
+    // measurement: a whole evaluation's energy, loudness and side, the harmonic grid, and the
+    // partials' movement, whose frames the envelope weighs)
     // (with the EQ fitted, all of it is measured again on the render with the EQ: finish)
     let f = shaped(flatF, power)
     let grid = fit.eq
@@ -774,7 +775,14 @@ let evaluate = (ctx, x, ~weights, ~threshold, ~fit: fitting, ~short) => {
       : {
           let energy = ref(0.)
           y->TypedArray.forEach(v => energy := energy.contents + v * v)
-          {...f, grid, energy: energy.contents, envelope: Spectrum.envelope(y), side: side->Option.map(Spectrum.envelope)}
+          {
+            ...f,
+            grid,
+            energy: energy.contents,
+            envelope: Spectrum.envelope(y),
+            side: side->Option.map(Spectrum.envelope),
+            movement: Spectrum.movement(y),
+          }
         }
     finish(x, note, () => y, () => side, f)
   }
@@ -1015,7 +1023,8 @@ let gridOf = (starts: array<Float64Array.t>, lo, hi, ~o2Pitches) => {
             ("o2Pitch", Genome.o2PitchGene(st)),
             ("o2Wave", w),
             ("o2Level", 0.6),
-            ("o2Rough", Genome.roughGeneOf(0.5)),
+            ("o2Rough", Genome.roughGeneOf(0.3)),
+            ("roughColour", 0.4),
             ("noise", 0.),
             ("oscMix", Genome.valueOfChoice(0, 7)),
             ("width", 0.),
@@ -1033,15 +1042,39 @@ let gridOf = (starts: array<Float64Array.t>, lo, hi, ~o2Pitches) => {
     y->set64(Genome.indexOf("feedback"), 0.)
     y
   })
-  [starts, structures, octaves, series, heard]->Array.flat->Array.map(x => clampInto(x, lo, hi))
+  // (and at the other pitches the partials suggest, a sine or a saw there beside osc 1, through
+  // the plainest filter: a second oscillator whose loudest partial isn't its first, as
+  // Synplant's B often is, is a sine at that partial more nearly than at its root)
+  let others = o2Pitches->Array.slice(~start=1, ~end=4)->Array.flatMap(st =>
+    seriesWaves->Array.flatMap(w1 =>
+      [0, 1]->Array.map(w =>
+        variant([
+          ("o1Wave", w1),
+          ("o2Pitch", Genome.o2PitchGene(st)),
+          ("o2Wave", Genome.valueOfChoice(w, Genome.gene(Genome.indexOf("o2Wave")).options)),
+          ("o2Level", 0.6),
+          ("o2Rough", Genome.roughGeneOf(0.3)),
+          ("roughColour", 0.4),
+          ("noise", 0.),
+          ("oscMix", Genome.valueOfChoice(0, 7)),
+          ("filterType", filters->Array.getUnsafe(0)),
+        ])
+      )
+    )
+  )
+  [starts, structures, octaves, series, heard, others]->Array.flat->Array.map(x => clampInto(x, lo, hi))
 }
 
 // The outline: `starts` (the seed, or what the predictor suggests, best guess first) within
 // the bounds the locks leave.
 let offInterval = x => Genome.secondOscSounds(x) && !Genome.o2OnAnchor(Genome.get(x, "o2Pitch"))
+// (osc 2's off-interval pitches in the starts, heard or modulating)
 let o2PitchesOf = (starts: array<Float64Array.t>) =>
   starts
-  ->Array.filter(offInterval)
+  ->Array.filter(x =>
+    (Genome.secondOscSounds(x) || Genome.modulates(Genome.choice(x, "oscMix"))) &&
+      !Genome.o2OnAnchor(Genome.get(x, "o2Pitch"))
+  )
   ->Array.map(x => Genome.o2Semitones(Genome.get(x, "o2Pitch")))
   ->Array.reduce([], (kept, st) => kept->Array.some(k => Math.abs(k - st) < 0.1) ? kept : Array.concat(kept, [st]))
 
@@ -1158,7 +1191,7 @@ let secondScreen = (x: Float64Array.t, lo, hi, ~o2Pitches) => {
     ->Array.flatMap(u => [0.35, 0.7]->Array.map(d => variant([("unison", u), ("unisonDetune", d)])))
   let noise = [0., 0.45, 0.75]->Array.map(n => variant([("noise", n), ("noiseColour", 0.1)]))
   // (and osc 1 roughened by its own noise, which a noise floor would otherwise stand in for)
-  let rough = [0.35, 0.6]->Array.map(d => variant([("o1Rough", Genome.roughGeneOf(d)), ("roughColour", 0.7)]))
+  let rough = [0.2, 0.35]->Array.map(d => variant([("o1Rough", Genome.roughGeneOf(d)), ("roughColour", 0.4)]))
   let doubled =
     allowed("filterDouble", lo, hi)
     ->Array.filter(v => Genome.choiceOf(v, 3) != 0)
