@@ -18,7 +18,8 @@ cmaj play Porridge.cmajorpatch
 Porridge.cmajorpatch    manifest
 dsp/                    Cmajor DSP
   Porridge.cmajor         top-level graph
-  ParamStore.cmajor       the parameter endpoints: Oatmeal's 342, then Porridge's own (generated)
+  ParamStore.cmajor       the parameter endpoints: Oatmeal's 342, then Porridge's own, and the
+                          custom shapes' points as one event per distortion (generated)
   param-ids.txt           every parameter's CLAP id, for good: hosts keep automation by these, so
                           endpoints can come and go in any order (gen.mjs adds new parameters;
                           tools/param-ids.mjs says how, and how branches' additions merge)
@@ -64,6 +65,10 @@ ui/                     patch view (ReScript)
                           input (MidiInput.res); SlotRows.res shows target slots as used rows + "+"
   VoiceView.res           the sounding notes as the DSP reports them: a mark per note on the
                           envelopes, LFOs, the filter graph and the modulated controls
+  StoredParams.res        the parameters that aren't endpoints (the custom shapes' points): the
+                          view and presets treat them as parameters, but they reach the DSP in
+                          one shaperIn event per distortion and the host saves them in the
+                          stored state ("params"), not as host parameters
   Preset.res              Porridge's preset format; PorridgeParams.res and ModMatrix.res
                           list the parameters and modulation sources/targets Oatmeal doesn't have
                           (32 connections, each with hold, slew, curve and steps; per-note
@@ -113,7 +118,8 @@ ui/                     patch view (ReScript)
                           Airwindows models on a sine (and the air on sines) for their graphs
   oatmeal/                file formats, parameter table, value texts
   bindings/               Cmajor PatchConnection and browser API bindings
-worker/PatchWorker.res  restores shapes/curves and installs the factory bank
+worker/PatchWorker.res  restores shapes/curves and the custom shapes' points, and installs the
+                          factory bank
 bundle/                 view.js, worker.js and the factory bank as a new instance stores it
                         (factory-bank.json), built by `npm run build`
 presets/oatmealprs.dat  Oatmeal's factory bank
@@ -154,6 +160,8 @@ tools/
                           host.cpp's --time prints the render's own CPU time, for benchmarks
                           (--timefrom skips the attacks; an events file can also set
                           parameters at given frames);
+                          stored.mjs (the view's custom shape points: shaperIn events, the
+                          stored state, undo, a host's state),
                           claphost.cpp (a minimal CLAP host: parameters, values, state) and
                           clap-ids.mjs (a build keeps an earlier build's parameter ids, and
                           loads its state),

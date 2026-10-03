@@ -1,6 +1,7 @@
 // Runs whenever the patch is created, with or without the GUI open.
-// Parameters are restored by the host, but the user waveforms, LFO shapes, response curves
-// and the convolvers' impulses live in the patch's stored state and must be pushed into the DSP here.
+// Parameters are restored by the host, but the user waveforms, LFO shapes, response curves,
+// the convolvers' impulses and the custom shapes' points (StoredParams) live in the patch's
+// stored state and must be pushed into the DSP here.
 // On a fresh instance it installs the factory bank and loads its first program, like
 // Oatmeal does when it starts.
 
@@ -24,13 +25,32 @@ let shapeSender = pc => {
     })
 }
 
+// Sends the stored parameters (StoredParams) from a stored-state value, skipping the
+// distortions whose points the patch was last sent already.
+let storedSender = pc => {
+  let sent = Map.make()
+  value => {
+    let values = StoredParams.decode(value)
+    let get = id => values->Map.get(id)->Option.getOr(StoredParams.init(id))
+    StoredParams.groups->Array.forEachWithIndex((_, k) => {
+      let data = StoredParams.groupValues(k, get)
+      if sent->Map.get(k) != Some(data) {
+        sent->Map.set(k, data)
+        StoredParams.send(pc, k, get)
+      }
+    })
+  }
+}
+
 // A new instance: install the factory bank, as Oatmeal does.
 let installFactoryBank = async (pc, sendShapes) =>
   switch await Resources.readText(pc, factoryBankPath) {
   | Some(bank) =>
     switch Preset.decodeFirst(bank) {
     | Some(first) =>
-      Bank.sendValues(pc, first.values)
+      StoredParams.sendProgram(pc, first.values)
+      let get = id => first.values->Map.get(id)->Option.getOr(StoredParams.init(id))
+      StoredState.send(pc, Params, StoredParams.encode(get))
       sendShapes(first.tables)
       StoredState.send(pc, Shapes, Bank.encodeShapes(first.tables))
       StoredState.send(pc, Program, 0)
@@ -43,6 +63,7 @@ let installFactoryBank = async (pc, sendShapes) =>
 let default = pc => {
   let checkedBank = ref(false)
   let sendShapes = shapeSender(pc)
+  let sendStored = storedSender(pc)
 
   pc->addStoredStateValueListener(({key, value}) => {
     switch (StoredState.keyOf(key), value) {
@@ -50,6 +71,8 @@ let default = pc => {
     | (Some(Tuning), String(tuning)) => Bank.sendTuning(pc, Bank.decodeTuning(tuning))
     | (Some(Impulses), String(s)) =>
       Impulse.decode(s)->Array.forEachWithIndex((imp, which) => Impulse.send(pc, which, imp))
+    // (none: a state without custom shapes, whose points are at their defaults)
+    | (Some(Params), value) => sendStored(value)
     // The patch answers the request below even when there is no bank, which is a new
     // instance. (A host restores a session before the worker starts, or later, replacing
     // the factory bank.)
@@ -65,5 +88,5 @@ let default = pc => {
     | _ => ()
     }
   })
-  [StoredState.Bank, Shapes, Tuning, Impulses]->Array.forEach(StoredState.request(pc, _))
+  [StoredState.Bank, Shapes, Tuning, Impulses, Params]->Array.forEach(StoredState.request(pc, _))
 }

@@ -38,6 +38,13 @@ type t = {
   anyListeners: array<string => unit>,
   onParam: PatchConnection.parameterEvent => unit,
   history: history,
+  // the stored parameters (StoredParams): the distortions whose points changed since they were
+  // last sent, and the stored-state values this view sent whose echoes haven't come back yet
+  storedDirty: Set.t<int>,
+  mutable storedFlushing: bool,
+  storedSent: array<string>,
+  // the stored-state value as the patch has it, as far as the view knows
+  mutable storedValue: option<string>,
 }
 
 let notifyListeners = (listeners, anyListeners, id) => {
@@ -81,6 +88,10 @@ let make = (pc, defs: array<ParamDefs.t>) => {
       quiet: 0,
       floor: None,
     },
+    storedDirty: Set.make(),
+    storedFlushing: false,
+    storedSent: [],
+    storedValue: None,
   }
 }
 
@@ -290,6 +301,67 @@ let undoLabel = t => {
 let redoLabel = t => t.history.redo->Array.at(-1)->Option.map(s => s.label)
 
 //==============================================================================
+// the stored parameters: not endpoints, but a shaperIn event per distortion and the stored
+// state (StoredParams)
+
+// how many of the view's own stored-state values to wait for the echoes of
+let storedEchoes = 8
+
+// Sends the distortions whose points changed, and stores the values.
+let flushStored = t => {
+  t.storedFlushing = false
+  t.storedDirty->Set.forEach(k => StoredParams.send(t.pc, k, get(t, _)))
+  t.storedDirty->Set.clear
+  let s = StoredParams.encode(get(t, _))
+  // (the patch echoes a value only when it changes it)
+  if t.storedValue != Some(s) {
+    t.storedValue = Some(s)
+    t.storedSent->Array.push(s)
+    if Array.length(t.storedSent) > storedEchoes {
+      t.storedSent->Array.shift->ignore
+    }
+    StoredState.send(t.pc, StoredState.Params, s)
+  }
+}
+
+// (once the event that changed them is over: a click may set several points)
+let storedChanged = (t, id) =>
+  StoredParams.groupOf(id)->Option.forEach(k => {
+    t.storedDirty->Set.add(k)
+    if !t.storedFlushing {
+      t.storedFlushing = true
+      Promise.resolve()->Promise.thenResolve(() => flushStored(t))->ignore
+    }
+  })
+
+// The stored parameters from the patch's stored state (a host's state, or another view's
+// edit): set, not sent back, not recorded. The patch echoes what this view stored, in order:
+// those are skipped.
+let loadStored = (t, value: JSON.t) =>
+  switch value {
+  | String(s) if t.storedSent[0] == Some(s) => t.storedSent->Array.shift->ignore
+  | _ =>
+    t.storedSent->Array.splice(~start=0, ~remove=Array.length(t.storedSent), ~insert=[])
+    t.storedValue = switch value {
+    | String(s) => Some(s)
+    | _ => None
+    }
+    let changed = []
+    StoredParams.decode(value)->Map.forEachWithKey((x, id) =>
+      t.defs
+      ->Map.get(id)
+      ->Option.forEach(d => {
+        let x = d.load(x)
+        if get(t, id) != x {
+          t.values->Map.set(id, x)
+          changed->Array.push(id)
+        }
+      })
+    )
+    t->quietly(() => changed->Array.forEach(id => notify(t, id)))
+  }
+
+//==============================================================================
 // setting values
 
 let set = (t, id, x) =>
@@ -301,7 +373,11 @@ let set = (t, id, x) =>
     if before != x {
       recordParam(t, id, before, x)
       t.values->Map.set(id, x)
-      t.pc->PatchConnection.sendEventOrValue(id, x)
+      if StoredParams.isStored(id) {
+        storedChanged(t, id)
+      } else {
+        t.pc->PatchConnection.sendEventOrValue(id, x)
+      }
       notify(t, id)
     }
   })
@@ -310,11 +386,15 @@ let beginGesture = (t, id) => {
   if t.history.quiet == 0 {
     t.history.gestures->Set.add(id)
   }
-  t.pc->PatchConnection.sendParameterGestureStart(id)
+  if !StoredParams.isStored(id) {
+    t.pc->PatchConnection.sendParameterGestureStart(id)
+  }
 }
 
 let endGesture = (t, id) => {
-  t.pc->PatchConnection.sendParameterGestureEnd(id)
+  if !StoredParams.isStored(id) {
+    t.pc->PatchConnection.sendParameterGestureEnd(id)
+  }
   if t.history.gestures->Set.delete(id) && t.history.gestures->Set.size == 0 {
     sealSoon(t)
   }
@@ -384,8 +464,15 @@ let setAll = (t, values: Bank.values) => {
         changed->Array.push(id)
       }
       t.values->Map.set(id, x)
-      t.pc->PatchConnection.sendEventOrValueNow(id, x)
+      switch StoredParams.groupOf(id) {
+      | Some(k) => t.storedDirty->Set.add(k)
+      | None => t.pc->PatchConnection.sendEventOrValueNow(id, x)
+      }
     })
   )
+  // (the stored ones now too, each distortion's in one event)
+  if t.storedDirty->Set.size > 0 {
+    flushStored(t)
+  }
   t->quietly(() => changed->Array.forEach(id => notify(t, id)))
 }

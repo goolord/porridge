@@ -23,7 +23,8 @@
 // and initialising it took.
 //
 // events.txt: one event per line: "frame status data1 data2" (decimal), or "frame Endpoint value"
-// to set a parameter at that frame (the rack's slots moving while effects ring, say).
+// to set a parameter at that frame (the rack's slots moving while effects ring, say). --set and
+// the events file take the stored parameters (the custom shapes' points) by id too.
 // Output format (same as tools/re/vsthost.py write_f32): int32 channels, int32 frames,
 // then channel-major float32 samples.
 
@@ -77,8 +78,20 @@ static std::vector<uint8_t> readFile (const std::string& path)
     return std::vector<uint8_t> ((std::istreambuf_iterator<char> (f)), std::istreambuf_iterator<char>());
 }
 
-// a MIDI message, or a parameter's handle (non-zero) and its value's 4 bytes
-struct Event { long frame; int status, d1, d2; uint32_t param; unsigned char value[4]; };
+// a MIDI message, or a parameter's handle (non-zero) and its value's 4 bytes, or a stored
+// parameter (its storedFields index, from 0) and its value
+struct Event { long frame; int status, d1, d2; uint32_t param; unsigned char value[4]; int stored = -1; float storedValue = 0; };
+
+// The stored parameters (the custom shapes' points, ui/StoredParams.res) aren't endpoints: the
+// host keeps them, and sends a distortion's all at once in a shaperIn event when one changes.
+static float shapers[numShapers][shaperSize];
+
+static int storedIndex (const std::string& id)
+{
+    for (int k = 0; k < (int) (sizeof (storedFields) / sizeof (storedFields[0])); ++k)
+        if (id == storedFields[k].id) return k;
+    return -1;
+}
 
 // sends a float or an int32
 template <typename T>
@@ -98,6 +111,14 @@ static void sendShape (Patch& p, const char* endpoint, int which, const float* d
     memcpy (buf.data(), &which, 4);
     memcpy (buf.data() + 4, data, 4 * n);
     p.addEvent (h, 0, buf.data());
+}
+
+// sets a stored parameter, and sends its distortion's points
+static void setStored (Patch& p, int k, float value)
+{
+    const auto& f = storedFields[k];
+    shapers[f.which][f.index] = value;
+    sendShape (p, "shaperIn", f.which, shapers[f.which], shaperSize);
 }
 
 int main (int argc, char** argv)
@@ -193,8 +214,12 @@ int main (int argc, char** argv)
         memcpy (bytes, isInt ? (const void*) &i : (const void*) &x, 4);
     };
 
+    for (auto& f : storedFields)
+        shapers[f.which][f.index] = f.init;
+
     for (auto& [id, val] : overrides)
     {
+        if (auto k = storedIndex (id); k >= 0) { setStored (*patch, k, (float) atof (val.c_str())); continue; }
         unsigned char b[4];
         encode (id, val, b);
         if (auto h = Patch::getEndpointHandleForName (id.c_str())) patch->addEvent (h, 0, b);
@@ -232,6 +257,7 @@ int main (int argc, char** argv)
             else if (std::string v; ss >> v)
             {
                 // resolved here, so that the render loop times the patch, not the lookup
+                if (auto k = storedIndex (a); k >= 0) { e.stored = k; e.storedValue = (float) atof (v.c_str()); events.push_back (e); continue; }
                 e.param = Patch::getEndpointHandleForName (a.c_str());
                 encode (a, v, e.value);
                 if (e.param != 0) events.push_back (e);
@@ -275,6 +301,7 @@ int main (int argc, char** argv)
         if (! clockStarted && pos >= timeFrom) { clock.start(); clockStarted = true; }
         while (ei < events.size() && events[ei].frame <= pos)
         {
+            if (events[ei].stored >= 0) { setStored (*patch, events[ei].stored, events[ei].storedValue); ++ei; continue; }
             if (events[ei].param != 0) { patch->addEvent (events[ei].param, 0, events[ei].value); ++ei; continue; }
             int32_t msg = (events[ei].status << 16) | (events[ei].d1 << 8) | events[ei].d2;
             unsigned char b[4]; memcpy (b, &msg, 4);

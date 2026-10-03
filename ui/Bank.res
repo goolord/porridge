@@ -74,9 +74,6 @@ let decodeTuning = s =>
   | exception _ => None
   }
 
-let sendValues = (pc, values: values) =>
-  values->Map.forEachWithKey((x, id) => pc->PatchConnection.sendEventOrValueNow(id, x))
-
 //==============================================================================
 // State encoding (base64 without relying on btoa/atob, which the worker may not have)
 

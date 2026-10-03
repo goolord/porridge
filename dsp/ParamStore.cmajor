@@ -3,6 +3,7 @@
 /// Every parameter of the original, in the original order, as an endpoint named after the
 /// original skin action, then Porridge's own parameters. Values are the internal values
 /// stored in an Oatmeal preset. Each change is forwarded to the synth as (slot, value).
+/// (Hosts know them by their ids in dsp/param-ids.txt, so the order doesn't matter to them.)
 processor ParamStore
 {
     output event porridge::ParamChange paramOut;
@@ -460,55 +461,6 @@ processor ParamStore
     input event int FX_Rack_7 [[ name: "FX slot 7", automatable: false, min: 0, max: 64, init: 0, text: "empty|Chorus|Delay|Reverb|EQ|Chorus 2|Chorus 3|Chorus 4 (retired)|Delay 2|Delay 3|Delay 4 (retired)|Reverb 2|Reverb 3|Reverb 4 (retired)|EQ 2|EQ 3|EQ 4 (retired)|Distortion 2|Distortion 3|Distortion 4|Distortion 5 (retired)|Flanger|Flanger 2|Flanger 3|Flanger 4 (retired)|Phaser|Phaser 2|Phaser 3|Phaser 4 (retired)|Compressor|Compressor 2|Compressor 3|Compressor 4 (retired)|Algo reverb|Algo reverb 2|Algo reverb 3|Algo reverb 4 (retired)|Convolve|Convolve 2|Bode|Bode 2|Bode 3|Bode 4 (retired)|Filter|Filter 2|Filter 3|Filter 4 (retired)|Utility|Utility 2|Utility 3|Utility 4 (retired)|Ambience|Ambience 2|Ambience 3|Ambience 4 (retired)|Air|Air 2|Air 3|Air 4 (retired)|Shifter|Shifter 2|Resonator|Resonator 2|Octaver|Octaver 2" ]];
     input event int FX_Rack_8 [[ name: "FX slot 8", automatable: false, min: 0, max: 64, init: 0, text: "empty|Chorus|Delay|Reverb|EQ|Chorus 2|Chorus 3|Chorus 4 (retired)|Delay 2|Delay 3|Delay 4 (retired)|Reverb 2|Reverb 3|Reverb 4 (retired)|EQ 2|EQ 3|EQ 4 (retired)|Distortion 2|Distortion 3|Distortion 4|Distortion 5 (retired)|Flanger|Flanger 2|Flanger 3|Flanger 4 (retired)|Phaser|Phaser 2|Phaser 3|Phaser 4 (retired)|Compressor|Compressor 2|Compressor 3|Compressor 4 (retired)|Algo reverb|Algo reverb 2|Algo reverb 3|Algo reverb 4 (retired)|Convolve|Convolve 2|Bode|Bode 2|Bode 3|Bode 4 (retired)|Filter|Filter 2|Filter 3|Filter 4 (retired)|Utility|Utility 2|Utility 3|Utility 4 (retired)|Ambience|Ambience 2|Ambience 3|Ambience 4 (retired)|Air|Air 2|Air 3|Air 4 (retired)|Shifter|Shifter 2|Resonator|Resonator 2|Octaver|Octaver 2" ]];
     input event int EQ_On [[ name: "EQ on", min: 0, max: 1, init: 1, text: "off|on" ]];
-    input event int Sat_Points [[ name: "Dist shape points", automatable: false, min: 0, max: 14, init: 0, text: "2|3|4|5|6|7|8|9|10|11|12|13|14|15|16" ]];
-    input event float Sat_X1 [[ name: "Dist shape point 1 in", automatable: false, min: -1, max: 1, init: -1 ]];
-    input event float Sat_Y1 [[ name: "Dist shape point 1 out", automatable: false, min: -1, max: 1, init: -1 ]];
-    input event float Sat_C1 [[ name: "Dist shape point 1 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat_X2 [[ name: "Dist shape point 2 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_Y2 [[ name: "Dist shape point 2 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_C2 [[ name: "Dist shape point 2 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat_X3 [[ name: "Dist shape point 3 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_Y3 [[ name: "Dist shape point 3 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_C3 [[ name: "Dist shape point 3 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat_X4 [[ name: "Dist shape point 4 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_Y4 [[ name: "Dist shape point 4 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_C4 [[ name: "Dist shape point 4 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat_X5 [[ name: "Dist shape point 5 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_Y5 [[ name: "Dist shape point 5 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_C5 [[ name: "Dist shape point 5 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat_X6 [[ name: "Dist shape point 6 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_Y6 [[ name: "Dist shape point 6 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_C6 [[ name: "Dist shape point 6 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat_X7 [[ name: "Dist shape point 7 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_Y7 [[ name: "Dist shape point 7 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_C7 [[ name: "Dist shape point 7 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat_X8 [[ name: "Dist shape point 8 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_Y8 [[ name: "Dist shape point 8 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_C8 [[ name: "Dist shape point 8 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat_X9 [[ name: "Dist shape point 9 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_Y9 [[ name: "Dist shape point 9 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_C9 [[ name: "Dist shape point 9 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat_X10 [[ name: "Dist shape point 10 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_Y10 [[ name: "Dist shape point 10 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_C10 [[ name: "Dist shape point 10 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat_X11 [[ name: "Dist shape point 11 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_Y11 [[ name: "Dist shape point 11 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_C11 [[ name: "Dist shape point 11 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat_X12 [[ name: "Dist shape point 12 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_Y12 [[ name: "Dist shape point 12 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_C12 [[ name: "Dist shape point 12 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat_X13 [[ name: "Dist shape point 13 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_Y13 [[ name: "Dist shape point 13 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_C13 [[ name: "Dist shape point 13 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat_X14 [[ name: "Dist shape point 14 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_Y14 [[ name: "Dist shape point 14 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_C14 [[ name: "Dist shape point 14 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat_X15 [[ name: "Dist shape point 15 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_Y15 [[ name: "Dist shape point 15 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_C15 [[ name: "Dist shape point 15 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat_X16 [[ name: "Dist shape point 16 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_Y16 [[ name: "Dist shape point 16 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat_C16 [[ name: "Dist shape point 16 bend", automatable: false, min: -1, max: 1, init: 0 ]];
     input event int C2_Mode [[ name: "Chorus 2 mode", min: 0, max: 4, init: 0, text: "off|sine|ramp|FM|irregular" ]];
     input event int C2_Stereo [[ name: "Chorus 2 stereo", min: 0, max: 2, init: 0, text: "mono|stereo 1|stereo 2" ]];
     input event int C2_Voices [[ name: "Chorus 2 voices", min: 1, max: 16, init: 4, step: 1 ]];
@@ -628,163 +580,16 @@ processor ParamStore
     input event float Sat2_Pregain [[ name: "Distortion 2 pregain", min: -60, max: 60, init: 0, unit: "dB" ]];
     input event float Sat2_Limit [[ name: "Distortion 2 limit", min: -30, max: 30, init: 0, unit: "dB" ]];
     input event float Sat2_Postgain [[ name: "Distortion 2 postgain", min: -60, max: 60, init: 0, unit: "dB" ]];
-    input event int Sat2_Points [[ name: "Distortion 2 points", automatable: false, min: 0, max: 14, init: 0, text: "2|3|4|5|6|7|8|9|10|11|12|13|14|15|16" ]];
-    input event float Sat2_X1 [[ name: "Distortion 2 point 1 in", automatable: false, min: -1, max: 1, init: -1 ]];
-    input event float Sat2_Y1 [[ name: "Distortion 2 point 1 out", automatable: false, min: -1, max: 1, init: -1 ]];
-    input event float Sat2_C1 [[ name: "Distortion 2 point 1 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat2_X2 [[ name: "Distortion 2 point 2 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_Y2 [[ name: "Distortion 2 point 2 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_C2 [[ name: "Distortion 2 point 2 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat2_X3 [[ name: "Distortion 2 point 3 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_Y3 [[ name: "Distortion 2 point 3 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_C3 [[ name: "Distortion 2 point 3 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat2_X4 [[ name: "Distortion 2 point 4 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_Y4 [[ name: "Distortion 2 point 4 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_C4 [[ name: "Distortion 2 point 4 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat2_X5 [[ name: "Distortion 2 point 5 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_Y5 [[ name: "Distortion 2 point 5 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_C5 [[ name: "Distortion 2 point 5 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat2_X6 [[ name: "Distortion 2 point 6 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_Y6 [[ name: "Distortion 2 point 6 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_C6 [[ name: "Distortion 2 point 6 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat2_X7 [[ name: "Distortion 2 point 7 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_Y7 [[ name: "Distortion 2 point 7 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_C7 [[ name: "Distortion 2 point 7 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat2_X8 [[ name: "Distortion 2 point 8 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_Y8 [[ name: "Distortion 2 point 8 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_C8 [[ name: "Distortion 2 point 8 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat2_X9 [[ name: "Distortion 2 point 9 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_Y9 [[ name: "Distortion 2 point 9 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_C9 [[ name: "Distortion 2 point 9 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat2_X10 [[ name: "Distortion 2 point 10 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_Y10 [[ name: "Distortion 2 point 10 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_C10 [[ name: "Distortion 2 point 10 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat2_X11 [[ name: "Distortion 2 point 11 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_Y11 [[ name: "Distortion 2 point 11 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_C11 [[ name: "Distortion 2 point 11 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat2_X12 [[ name: "Distortion 2 point 12 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_Y12 [[ name: "Distortion 2 point 12 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_C12 [[ name: "Distortion 2 point 12 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat2_X13 [[ name: "Distortion 2 point 13 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_Y13 [[ name: "Distortion 2 point 13 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_C13 [[ name: "Distortion 2 point 13 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat2_X14 [[ name: "Distortion 2 point 14 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_Y14 [[ name: "Distortion 2 point 14 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_C14 [[ name: "Distortion 2 point 14 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat2_X15 [[ name: "Distortion 2 point 15 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_Y15 [[ name: "Distortion 2 point 15 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_C15 [[ name: "Distortion 2 point 15 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat2_X16 [[ name: "Distortion 2 point 16 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_Y16 [[ name: "Distortion 2 point 16 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat2_C16 [[ name: "Distortion 2 point 16 bend", automatable: false, min: -1, max: 1, init: 0 ]];
     input event int Sat3_Type [[ name: "Distortion 3 type", min: 0, max: 16, init: 0, text: "off|hard clip|soft clip|sine|asymmetric|custom shape|tube|tape|saturate|mixer drive|7-stage clip|multiband|wavefold|bass amp|guitar amp|bitcrush|lo-fi sampler" ]];
     input event int Sat3_Oversample [[ name: "Distortion 3 oversample", min: 0, max: 3, init: 0, text: "off|2x|4x|8x" ]];
     input event float Sat3_Pregain [[ name: "Distortion 3 pregain", min: -60, max: 60, init: 0, unit: "dB" ]];
     input event float Sat3_Limit [[ name: "Distortion 3 limit", min: -30, max: 30, init: 0, unit: "dB" ]];
     input event float Sat3_Postgain [[ name: "Distortion 3 postgain", min: -60, max: 60, init: 0, unit: "dB" ]];
-    input event int Sat3_Points [[ name: "Distortion 3 points", automatable: false, min: 0, max: 14, init: 0, text: "2|3|4|5|6|7|8|9|10|11|12|13|14|15|16" ]];
-    input event float Sat3_X1 [[ name: "Distortion 3 point 1 in", automatable: false, min: -1, max: 1, init: -1 ]];
-    input event float Sat3_Y1 [[ name: "Distortion 3 point 1 out", automatable: false, min: -1, max: 1, init: -1 ]];
-    input event float Sat3_C1 [[ name: "Distortion 3 point 1 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat3_X2 [[ name: "Distortion 3 point 2 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_Y2 [[ name: "Distortion 3 point 2 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_C2 [[ name: "Distortion 3 point 2 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat3_X3 [[ name: "Distortion 3 point 3 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_Y3 [[ name: "Distortion 3 point 3 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_C3 [[ name: "Distortion 3 point 3 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat3_X4 [[ name: "Distortion 3 point 4 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_Y4 [[ name: "Distortion 3 point 4 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_C4 [[ name: "Distortion 3 point 4 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat3_X5 [[ name: "Distortion 3 point 5 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_Y5 [[ name: "Distortion 3 point 5 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_C5 [[ name: "Distortion 3 point 5 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat3_X6 [[ name: "Distortion 3 point 6 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_Y6 [[ name: "Distortion 3 point 6 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_C6 [[ name: "Distortion 3 point 6 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat3_X7 [[ name: "Distortion 3 point 7 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_Y7 [[ name: "Distortion 3 point 7 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_C7 [[ name: "Distortion 3 point 7 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat3_X8 [[ name: "Distortion 3 point 8 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_Y8 [[ name: "Distortion 3 point 8 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_C8 [[ name: "Distortion 3 point 8 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat3_X9 [[ name: "Distortion 3 point 9 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_Y9 [[ name: "Distortion 3 point 9 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_C9 [[ name: "Distortion 3 point 9 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat3_X10 [[ name: "Distortion 3 point 10 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_Y10 [[ name: "Distortion 3 point 10 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_C10 [[ name: "Distortion 3 point 10 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat3_X11 [[ name: "Distortion 3 point 11 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_Y11 [[ name: "Distortion 3 point 11 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_C11 [[ name: "Distortion 3 point 11 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat3_X12 [[ name: "Distortion 3 point 12 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_Y12 [[ name: "Distortion 3 point 12 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_C12 [[ name: "Distortion 3 point 12 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat3_X13 [[ name: "Distortion 3 point 13 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_Y13 [[ name: "Distortion 3 point 13 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_C13 [[ name: "Distortion 3 point 13 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat3_X14 [[ name: "Distortion 3 point 14 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_Y14 [[ name: "Distortion 3 point 14 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_C14 [[ name: "Distortion 3 point 14 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat3_X15 [[ name: "Distortion 3 point 15 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_Y15 [[ name: "Distortion 3 point 15 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_C15 [[ name: "Distortion 3 point 15 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat3_X16 [[ name: "Distortion 3 point 16 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_Y16 [[ name: "Distortion 3 point 16 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat3_C16 [[ name: "Distortion 3 point 16 bend", automatable: false, min: -1, max: 1, init: 0 ]];
     input event int Sat4_Type [[ name: "Distortion 4 type", min: 0, max: 16, init: 0, text: "off|hard clip|soft clip|sine|asymmetric|custom shape|tube|tape|saturate|mixer drive|7-stage clip|multiband|wavefold|bass amp|guitar amp|bitcrush|lo-fi sampler" ]];
     input event int Sat4_Oversample [[ name: "Distortion 4 oversample", min: 0, max: 3, init: 0, text: "off|2x|4x|8x" ]];
     input event float Sat4_Pregain [[ name: "Distortion 4 pregain", min: -60, max: 60, init: 0, unit: "dB" ]];
     input event float Sat4_Limit [[ name: "Distortion 4 limit", min: -30, max: 30, init: 0, unit: "dB" ]];
     input event float Sat4_Postgain [[ name: "Distortion 4 postgain", min: -60, max: 60, init: 0, unit: "dB" ]];
-    input event int Sat4_Points [[ name: "Distortion 4 points", automatable: false, min: 0, max: 14, init: 0, text: "2|3|4|5|6|7|8|9|10|11|12|13|14|15|16" ]];
-    input event float Sat4_X1 [[ name: "Distortion 4 point 1 in", automatable: false, min: -1, max: 1, init: -1 ]];
-    input event float Sat4_Y1 [[ name: "Distortion 4 point 1 out", automatable: false, min: -1, max: 1, init: -1 ]];
-    input event float Sat4_C1 [[ name: "Distortion 4 point 1 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat4_X2 [[ name: "Distortion 4 point 2 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_Y2 [[ name: "Distortion 4 point 2 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_C2 [[ name: "Distortion 4 point 2 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat4_X3 [[ name: "Distortion 4 point 3 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_Y3 [[ name: "Distortion 4 point 3 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_C3 [[ name: "Distortion 4 point 3 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat4_X4 [[ name: "Distortion 4 point 4 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_Y4 [[ name: "Distortion 4 point 4 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_C4 [[ name: "Distortion 4 point 4 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat4_X5 [[ name: "Distortion 4 point 5 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_Y5 [[ name: "Distortion 4 point 5 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_C5 [[ name: "Distortion 4 point 5 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat4_X6 [[ name: "Distortion 4 point 6 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_Y6 [[ name: "Distortion 4 point 6 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_C6 [[ name: "Distortion 4 point 6 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat4_X7 [[ name: "Distortion 4 point 7 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_Y7 [[ name: "Distortion 4 point 7 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_C7 [[ name: "Distortion 4 point 7 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat4_X8 [[ name: "Distortion 4 point 8 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_Y8 [[ name: "Distortion 4 point 8 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_C8 [[ name: "Distortion 4 point 8 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat4_X9 [[ name: "Distortion 4 point 9 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_Y9 [[ name: "Distortion 4 point 9 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_C9 [[ name: "Distortion 4 point 9 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat4_X10 [[ name: "Distortion 4 point 10 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_Y10 [[ name: "Distortion 4 point 10 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_C10 [[ name: "Distortion 4 point 10 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat4_X11 [[ name: "Distortion 4 point 11 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_Y11 [[ name: "Distortion 4 point 11 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_C11 [[ name: "Distortion 4 point 11 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat4_X12 [[ name: "Distortion 4 point 12 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_Y12 [[ name: "Distortion 4 point 12 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_C12 [[ name: "Distortion 4 point 12 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat4_X13 [[ name: "Distortion 4 point 13 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_Y13 [[ name: "Distortion 4 point 13 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_C13 [[ name: "Distortion 4 point 13 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat4_X14 [[ name: "Distortion 4 point 14 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_Y14 [[ name: "Distortion 4 point 14 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_C14 [[ name: "Distortion 4 point 14 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat4_X15 [[ name: "Distortion 4 point 15 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_Y15 [[ name: "Distortion 4 point 15 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_C15 [[ name: "Distortion 4 point 15 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat4_X16 [[ name: "Distortion 4 point 16 in", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_Y16 [[ name: "Distortion 4 point 16 out", automatable: false, min: -1, max: 1, init: 1 ]];
-    input event float Sat4_C16 [[ name: "Distortion 4 point 16 bend", automatable: false, min: -1, max: 1, init: 0 ]];
     input event float F_Drive [[ name: "Filter drive", min: 0, max: 1, init: 0 ]];
     input event int Fl_On [[ name: "Flanger on", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event float Fl_Rate [[ name: "Flanger rate", min: 0, max: 1, init: 0.39203041791915894 ]];
@@ -1418,6 +1223,9 @@ processor ParamStore
     input event int O2_MorphTo [[ name: "Osc 2 morph wave", min: 0, max: 5, init: 0, text: "Sine|Saw|Square|Triangle|Osc 1 user|Osc 2 user" ]];
     input event float O2_PD [[ name: "Osc 2 phase distortion", min: 0, max: 1, init: 0 ]];
 
+    /// the custom shapes' points, which are stored state rather than endpoints (ui/StoredParams.res)
+    input event porridge::ShaperPoints shaperIn;
+
     event O1_Waveform (int v) { paramOut <- porridge::ParamChange (2117, float (v)); }
     event O1_Amp (float v) { paramOut <- porridge::ParamChange (2127, v); }
     event O1_Afterpitch (float v) { paramOut <- porridge::ParamChange (2119, v); }
@@ -1871,55 +1679,6 @@ processor ParamStore
     event FX_Rack_7 (int v) { paramOut <- porridge::ParamChange (2708, float (v)); }
     event FX_Rack_8 (int v) { paramOut <- porridge::ParamChange (2709, float (v)); }
     event EQ_On (int v) { paramOut <- porridge::ParamChange (2710, float (v)); }
-    event Sat_Points (int v) { paramOut <- porridge::ParamChange (2711, float (v)); }
-    event Sat_X1 (float v) { paramOut <- porridge::ParamChange (2712, v); }
-    event Sat_Y1 (float v) { paramOut <- porridge::ParamChange (2713, v); }
-    event Sat_C1 (float v) { paramOut <- porridge::ParamChange (2714, v); }
-    event Sat_X2 (float v) { paramOut <- porridge::ParamChange (2715, v); }
-    event Sat_Y2 (float v) { paramOut <- porridge::ParamChange (2716, v); }
-    event Sat_C2 (float v) { paramOut <- porridge::ParamChange (2717, v); }
-    event Sat_X3 (float v) { paramOut <- porridge::ParamChange (2718, v); }
-    event Sat_Y3 (float v) { paramOut <- porridge::ParamChange (2719, v); }
-    event Sat_C3 (float v) { paramOut <- porridge::ParamChange (2720, v); }
-    event Sat_X4 (float v) { paramOut <- porridge::ParamChange (2721, v); }
-    event Sat_Y4 (float v) { paramOut <- porridge::ParamChange (2722, v); }
-    event Sat_C4 (float v) { paramOut <- porridge::ParamChange (2723, v); }
-    event Sat_X5 (float v) { paramOut <- porridge::ParamChange (2724, v); }
-    event Sat_Y5 (float v) { paramOut <- porridge::ParamChange (2725, v); }
-    event Sat_C5 (float v) { paramOut <- porridge::ParamChange (2726, v); }
-    event Sat_X6 (float v) { paramOut <- porridge::ParamChange (2727, v); }
-    event Sat_Y6 (float v) { paramOut <- porridge::ParamChange (2728, v); }
-    event Sat_C6 (float v) { paramOut <- porridge::ParamChange (2729, v); }
-    event Sat_X7 (float v) { paramOut <- porridge::ParamChange (2730, v); }
-    event Sat_Y7 (float v) { paramOut <- porridge::ParamChange (2731, v); }
-    event Sat_C7 (float v) { paramOut <- porridge::ParamChange (2732, v); }
-    event Sat_X8 (float v) { paramOut <- porridge::ParamChange (2733, v); }
-    event Sat_Y8 (float v) { paramOut <- porridge::ParamChange (2734, v); }
-    event Sat_C8 (float v) { paramOut <- porridge::ParamChange (2735, v); }
-    event Sat_X9 (float v) { paramOut <- porridge::ParamChange (2736, v); }
-    event Sat_Y9 (float v) { paramOut <- porridge::ParamChange (2737, v); }
-    event Sat_C9 (float v) { paramOut <- porridge::ParamChange (2738, v); }
-    event Sat_X10 (float v) { paramOut <- porridge::ParamChange (2739, v); }
-    event Sat_Y10 (float v) { paramOut <- porridge::ParamChange (2740, v); }
-    event Sat_C10 (float v) { paramOut <- porridge::ParamChange (2741, v); }
-    event Sat_X11 (float v) { paramOut <- porridge::ParamChange (2742, v); }
-    event Sat_Y11 (float v) { paramOut <- porridge::ParamChange (2743, v); }
-    event Sat_C11 (float v) { paramOut <- porridge::ParamChange (2744, v); }
-    event Sat_X12 (float v) { paramOut <- porridge::ParamChange (2745, v); }
-    event Sat_Y12 (float v) { paramOut <- porridge::ParamChange (2746, v); }
-    event Sat_C12 (float v) { paramOut <- porridge::ParamChange (2747, v); }
-    event Sat_X13 (float v) { paramOut <- porridge::ParamChange (2748, v); }
-    event Sat_Y13 (float v) { paramOut <- porridge::ParamChange (2749, v); }
-    event Sat_C13 (float v) { paramOut <- porridge::ParamChange (2750, v); }
-    event Sat_X14 (float v) { paramOut <- porridge::ParamChange (2751, v); }
-    event Sat_Y14 (float v) { paramOut <- porridge::ParamChange (2752, v); }
-    event Sat_C14 (float v) { paramOut <- porridge::ParamChange (2753, v); }
-    event Sat_X15 (float v) { paramOut <- porridge::ParamChange (2754, v); }
-    event Sat_Y15 (float v) { paramOut <- porridge::ParamChange (2755, v); }
-    event Sat_C15 (float v) { paramOut <- porridge::ParamChange (2756, v); }
-    event Sat_X16 (float v) { paramOut <- porridge::ParamChange (2757, v); }
-    event Sat_Y16 (float v) { paramOut <- porridge::ParamChange (2758, v); }
-    event Sat_C16 (float v) { paramOut <- porridge::ParamChange (2759, v); }
     event C2_Mode (int v) { paramOut <- porridge::ParamChange (2760, float (v)); }
     event C2_Stereo (int v) { paramOut <- porridge::ParamChange (2761, float (v)); }
     event C2_Voices (int v) { paramOut <- porridge::ParamChange (2762, float (v)); }
@@ -2039,163 +1798,16 @@ processor ParamStore
     event Sat2_Pregain (float v) { paramOut <- porridge::ParamChange (2876, v); }
     event Sat2_Limit (float v) { paramOut <- porridge::ParamChange (2877, v); }
     event Sat2_Postgain (float v) { paramOut <- porridge::ParamChange (2878, v); }
-    event Sat2_Points (int v) { paramOut <- porridge::ParamChange (2879, float (v)); }
-    event Sat2_X1 (float v) { paramOut <- porridge::ParamChange (2880, v); }
-    event Sat2_Y1 (float v) { paramOut <- porridge::ParamChange (2881, v); }
-    event Sat2_C1 (float v) { paramOut <- porridge::ParamChange (2882, v); }
-    event Sat2_X2 (float v) { paramOut <- porridge::ParamChange (2883, v); }
-    event Sat2_Y2 (float v) { paramOut <- porridge::ParamChange (2884, v); }
-    event Sat2_C2 (float v) { paramOut <- porridge::ParamChange (2885, v); }
-    event Sat2_X3 (float v) { paramOut <- porridge::ParamChange (2886, v); }
-    event Sat2_Y3 (float v) { paramOut <- porridge::ParamChange (2887, v); }
-    event Sat2_C3 (float v) { paramOut <- porridge::ParamChange (2888, v); }
-    event Sat2_X4 (float v) { paramOut <- porridge::ParamChange (2889, v); }
-    event Sat2_Y4 (float v) { paramOut <- porridge::ParamChange (2890, v); }
-    event Sat2_C4 (float v) { paramOut <- porridge::ParamChange (2891, v); }
-    event Sat2_X5 (float v) { paramOut <- porridge::ParamChange (2892, v); }
-    event Sat2_Y5 (float v) { paramOut <- porridge::ParamChange (2893, v); }
-    event Sat2_C5 (float v) { paramOut <- porridge::ParamChange (2894, v); }
-    event Sat2_X6 (float v) { paramOut <- porridge::ParamChange (2895, v); }
-    event Sat2_Y6 (float v) { paramOut <- porridge::ParamChange (2896, v); }
-    event Sat2_C6 (float v) { paramOut <- porridge::ParamChange (2897, v); }
-    event Sat2_X7 (float v) { paramOut <- porridge::ParamChange (2898, v); }
-    event Sat2_Y7 (float v) { paramOut <- porridge::ParamChange (2899, v); }
-    event Sat2_C7 (float v) { paramOut <- porridge::ParamChange (2900, v); }
-    event Sat2_X8 (float v) { paramOut <- porridge::ParamChange (2901, v); }
-    event Sat2_Y8 (float v) { paramOut <- porridge::ParamChange (2902, v); }
-    event Sat2_C8 (float v) { paramOut <- porridge::ParamChange (2903, v); }
-    event Sat2_X9 (float v) { paramOut <- porridge::ParamChange (2904, v); }
-    event Sat2_Y9 (float v) { paramOut <- porridge::ParamChange (2905, v); }
-    event Sat2_C9 (float v) { paramOut <- porridge::ParamChange (2906, v); }
-    event Sat2_X10 (float v) { paramOut <- porridge::ParamChange (2907, v); }
-    event Sat2_Y10 (float v) { paramOut <- porridge::ParamChange (2908, v); }
-    event Sat2_C10 (float v) { paramOut <- porridge::ParamChange (2909, v); }
-    event Sat2_X11 (float v) { paramOut <- porridge::ParamChange (2910, v); }
-    event Sat2_Y11 (float v) { paramOut <- porridge::ParamChange (2911, v); }
-    event Sat2_C11 (float v) { paramOut <- porridge::ParamChange (2912, v); }
-    event Sat2_X12 (float v) { paramOut <- porridge::ParamChange (2913, v); }
-    event Sat2_Y12 (float v) { paramOut <- porridge::ParamChange (2914, v); }
-    event Sat2_C12 (float v) { paramOut <- porridge::ParamChange (2915, v); }
-    event Sat2_X13 (float v) { paramOut <- porridge::ParamChange (2916, v); }
-    event Sat2_Y13 (float v) { paramOut <- porridge::ParamChange (2917, v); }
-    event Sat2_C13 (float v) { paramOut <- porridge::ParamChange (2918, v); }
-    event Sat2_X14 (float v) { paramOut <- porridge::ParamChange (2919, v); }
-    event Sat2_Y14 (float v) { paramOut <- porridge::ParamChange (2920, v); }
-    event Sat2_C14 (float v) { paramOut <- porridge::ParamChange (2921, v); }
-    event Sat2_X15 (float v) { paramOut <- porridge::ParamChange (2922, v); }
-    event Sat2_Y15 (float v) { paramOut <- porridge::ParamChange (2923, v); }
-    event Sat2_C15 (float v) { paramOut <- porridge::ParamChange (2924, v); }
-    event Sat2_X16 (float v) { paramOut <- porridge::ParamChange (2925, v); }
-    event Sat2_Y16 (float v) { paramOut <- porridge::ParamChange (2926, v); }
-    event Sat2_C16 (float v) { paramOut <- porridge::ParamChange (2927, v); }
     event Sat3_Type (int v) { paramOut <- porridge::ParamChange (2928, float (v)); }
     event Sat3_Oversample (int v) { paramOut <- porridge::ParamChange (2929, float (v)); }
     event Sat3_Pregain (float v) { paramOut <- porridge::ParamChange (2930, v); }
     event Sat3_Limit (float v) { paramOut <- porridge::ParamChange (2931, v); }
     event Sat3_Postgain (float v) { paramOut <- porridge::ParamChange (2932, v); }
-    event Sat3_Points (int v) { paramOut <- porridge::ParamChange (2933, float (v)); }
-    event Sat3_X1 (float v) { paramOut <- porridge::ParamChange (2934, v); }
-    event Sat3_Y1 (float v) { paramOut <- porridge::ParamChange (2935, v); }
-    event Sat3_C1 (float v) { paramOut <- porridge::ParamChange (2936, v); }
-    event Sat3_X2 (float v) { paramOut <- porridge::ParamChange (2937, v); }
-    event Sat3_Y2 (float v) { paramOut <- porridge::ParamChange (2938, v); }
-    event Sat3_C2 (float v) { paramOut <- porridge::ParamChange (2939, v); }
-    event Sat3_X3 (float v) { paramOut <- porridge::ParamChange (2940, v); }
-    event Sat3_Y3 (float v) { paramOut <- porridge::ParamChange (2941, v); }
-    event Sat3_C3 (float v) { paramOut <- porridge::ParamChange (2942, v); }
-    event Sat3_X4 (float v) { paramOut <- porridge::ParamChange (2943, v); }
-    event Sat3_Y4 (float v) { paramOut <- porridge::ParamChange (2944, v); }
-    event Sat3_C4 (float v) { paramOut <- porridge::ParamChange (2945, v); }
-    event Sat3_X5 (float v) { paramOut <- porridge::ParamChange (2946, v); }
-    event Sat3_Y5 (float v) { paramOut <- porridge::ParamChange (2947, v); }
-    event Sat3_C5 (float v) { paramOut <- porridge::ParamChange (2948, v); }
-    event Sat3_X6 (float v) { paramOut <- porridge::ParamChange (2949, v); }
-    event Sat3_Y6 (float v) { paramOut <- porridge::ParamChange (2950, v); }
-    event Sat3_C6 (float v) { paramOut <- porridge::ParamChange (2951, v); }
-    event Sat3_X7 (float v) { paramOut <- porridge::ParamChange (2952, v); }
-    event Sat3_Y7 (float v) { paramOut <- porridge::ParamChange (2953, v); }
-    event Sat3_C7 (float v) { paramOut <- porridge::ParamChange (2954, v); }
-    event Sat3_X8 (float v) { paramOut <- porridge::ParamChange (2955, v); }
-    event Sat3_Y8 (float v) { paramOut <- porridge::ParamChange (2956, v); }
-    event Sat3_C8 (float v) { paramOut <- porridge::ParamChange (2957, v); }
-    event Sat3_X9 (float v) { paramOut <- porridge::ParamChange (2958, v); }
-    event Sat3_Y9 (float v) { paramOut <- porridge::ParamChange (2959, v); }
-    event Sat3_C9 (float v) { paramOut <- porridge::ParamChange (2960, v); }
-    event Sat3_X10 (float v) { paramOut <- porridge::ParamChange (2961, v); }
-    event Sat3_Y10 (float v) { paramOut <- porridge::ParamChange (2962, v); }
-    event Sat3_C10 (float v) { paramOut <- porridge::ParamChange (2963, v); }
-    event Sat3_X11 (float v) { paramOut <- porridge::ParamChange (2964, v); }
-    event Sat3_Y11 (float v) { paramOut <- porridge::ParamChange (2965, v); }
-    event Sat3_C11 (float v) { paramOut <- porridge::ParamChange (2966, v); }
-    event Sat3_X12 (float v) { paramOut <- porridge::ParamChange (2967, v); }
-    event Sat3_Y12 (float v) { paramOut <- porridge::ParamChange (2968, v); }
-    event Sat3_C12 (float v) { paramOut <- porridge::ParamChange (2969, v); }
-    event Sat3_X13 (float v) { paramOut <- porridge::ParamChange (2970, v); }
-    event Sat3_Y13 (float v) { paramOut <- porridge::ParamChange (2971, v); }
-    event Sat3_C13 (float v) { paramOut <- porridge::ParamChange (2972, v); }
-    event Sat3_X14 (float v) { paramOut <- porridge::ParamChange (2973, v); }
-    event Sat3_Y14 (float v) { paramOut <- porridge::ParamChange (2974, v); }
-    event Sat3_C14 (float v) { paramOut <- porridge::ParamChange (2975, v); }
-    event Sat3_X15 (float v) { paramOut <- porridge::ParamChange (2976, v); }
-    event Sat3_Y15 (float v) { paramOut <- porridge::ParamChange (2977, v); }
-    event Sat3_C15 (float v) { paramOut <- porridge::ParamChange (2978, v); }
-    event Sat3_X16 (float v) { paramOut <- porridge::ParamChange (2979, v); }
-    event Sat3_Y16 (float v) { paramOut <- porridge::ParamChange (2980, v); }
-    event Sat3_C16 (float v) { paramOut <- porridge::ParamChange (2981, v); }
     event Sat4_Type (int v) { paramOut <- porridge::ParamChange (2982, float (v)); }
     event Sat4_Oversample (int v) { paramOut <- porridge::ParamChange (2983, float (v)); }
     event Sat4_Pregain (float v) { paramOut <- porridge::ParamChange (2984, v); }
     event Sat4_Limit (float v) { paramOut <- porridge::ParamChange (2985, v); }
     event Sat4_Postgain (float v) { paramOut <- porridge::ParamChange (2986, v); }
-    event Sat4_Points (int v) { paramOut <- porridge::ParamChange (2987, float (v)); }
-    event Sat4_X1 (float v) { paramOut <- porridge::ParamChange (2988, v); }
-    event Sat4_Y1 (float v) { paramOut <- porridge::ParamChange (2989, v); }
-    event Sat4_C1 (float v) { paramOut <- porridge::ParamChange (2990, v); }
-    event Sat4_X2 (float v) { paramOut <- porridge::ParamChange (2991, v); }
-    event Sat4_Y2 (float v) { paramOut <- porridge::ParamChange (2992, v); }
-    event Sat4_C2 (float v) { paramOut <- porridge::ParamChange (2993, v); }
-    event Sat4_X3 (float v) { paramOut <- porridge::ParamChange (2994, v); }
-    event Sat4_Y3 (float v) { paramOut <- porridge::ParamChange (2995, v); }
-    event Sat4_C3 (float v) { paramOut <- porridge::ParamChange (2996, v); }
-    event Sat4_X4 (float v) { paramOut <- porridge::ParamChange (2997, v); }
-    event Sat4_Y4 (float v) { paramOut <- porridge::ParamChange (2998, v); }
-    event Sat4_C4 (float v) { paramOut <- porridge::ParamChange (2999, v); }
-    event Sat4_X5 (float v) { paramOut <- porridge::ParamChange (3000, v); }
-    event Sat4_Y5 (float v) { paramOut <- porridge::ParamChange (3001, v); }
-    event Sat4_C5 (float v) { paramOut <- porridge::ParamChange (3002, v); }
-    event Sat4_X6 (float v) { paramOut <- porridge::ParamChange (3003, v); }
-    event Sat4_Y6 (float v) { paramOut <- porridge::ParamChange (3004, v); }
-    event Sat4_C6 (float v) { paramOut <- porridge::ParamChange (3005, v); }
-    event Sat4_X7 (float v) { paramOut <- porridge::ParamChange (3006, v); }
-    event Sat4_Y7 (float v) { paramOut <- porridge::ParamChange (3007, v); }
-    event Sat4_C7 (float v) { paramOut <- porridge::ParamChange (3008, v); }
-    event Sat4_X8 (float v) { paramOut <- porridge::ParamChange (3009, v); }
-    event Sat4_Y8 (float v) { paramOut <- porridge::ParamChange (3010, v); }
-    event Sat4_C8 (float v) { paramOut <- porridge::ParamChange (3011, v); }
-    event Sat4_X9 (float v) { paramOut <- porridge::ParamChange (3012, v); }
-    event Sat4_Y9 (float v) { paramOut <- porridge::ParamChange (3013, v); }
-    event Sat4_C9 (float v) { paramOut <- porridge::ParamChange (3014, v); }
-    event Sat4_X10 (float v) { paramOut <- porridge::ParamChange (3015, v); }
-    event Sat4_Y10 (float v) { paramOut <- porridge::ParamChange (3016, v); }
-    event Sat4_C10 (float v) { paramOut <- porridge::ParamChange (3017, v); }
-    event Sat4_X11 (float v) { paramOut <- porridge::ParamChange (3018, v); }
-    event Sat4_Y11 (float v) { paramOut <- porridge::ParamChange (3019, v); }
-    event Sat4_C11 (float v) { paramOut <- porridge::ParamChange (3020, v); }
-    event Sat4_X12 (float v) { paramOut <- porridge::ParamChange (3021, v); }
-    event Sat4_Y12 (float v) { paramOut <- porridge::ParamChange (3022, v); }
-    event Sat4_C12 (float v) { paramOut <- porridge::ParamChange (3023, v); }
-    event Sat4_X13 (float v) { paramOut <- porridge::ParamChange (3024, v); }
-    event Sat4_Y13 (float v) { paramOut <- porridge::ParamChange (3025, v); }
-    event Sat4_C13 (float v) { paramOut <- porridge::ParamChange (3026, v); }
-    event Sat4_X14 (float v) { paramOut <- porridge::ParamChange (3027, v); }
-    event Sat4_Y14 (float v) { paramOut <- porridge::ParamChange (3028, v); }
-    event Sat4_C14 (float v) { paramOut <- porridge::ParamChange (3029, v); }
-    event Sat4_X15 (float v) { paramOut <- porridge::ParamChange (3030, v); }
-    event Sat4_Y15 (float v) { paramOut <- porridge::ParamChange (3031, v); }
-    event Sat4_C15 (float v) { paramOut <- porridge::ParamChange (3032, v); }
-    event Sat4_X16 (float v) { paramOut <- porridge::ParamChange (3033, v); }
-    event Sat4_Y16 (float v) { paramOut <- porridge::ParamChange (3034, v); }
-    event Sat4_C16 (float v) { paramOut <- porridge::ParamChange (3035, v); }
     event F_Drive (float v) { paramOut <- porridge::ParamChange (3036, v); }
     event Fl_On (int v) { paramOut <- porridge::ParamChange (3037, float (v)); }
     event Fl_Rate (float v) { paramOut <- porridge::ParamChange (3038, v); }
@@ -2828,4 +2440,11 @@ processor ParamStore
     event O2_Morph (float v) { paramOut <- porridge::ParamChange (3665, v); }
     event O2_MorphTo (int v) { paramOut <- porridge::ParamChange (3666, float (v)); }
     event O2_PD (float v) { paramOut <- porridge::ParamChange (3667, v); }
+
+    event shaperIn (porridge::ShaperPoints s)
+    {
+        if (s.which >= 0 && s.which < porridge::numShapers)
+            for (wrap<49> i)
+                paramOut <- porridge::ParamChange (porridge::shaperSlots.at (s.which * 49 + int (i)), s.values[i]);
+    }
 }

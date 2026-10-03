@@ -2,7 +2,9 @@
 //   dsp/ParamStore.cmajor  - the parameter endpoints: Oatmeal's 342 (named after the original skin
 //                            actions), then Porridge's own (ui/PorridgeParams.res), forwarding every
 //                            change to the synth as (slot, value); hosts don't list the routing
-//                            and setup ones (ParamInfo: automatable: false)
+//                            and setup ones (ParamInfo: automatable: false); the stored parameters
+//                            (ui/StoredParams.res: the custom shapes' points) have slots but no
+//                            endpoints, and come in one shaperIn event per distortion
 //   dsp/param-ids.txt      - every parameter's CLAP id, kept for good (tools/param-ids.mjs): new
 //                            parameters are added to it
 //   dsp/Slots.cmajor       - slot constants: index into the synth's mirror of the program struct,
@@ -25,6 +27,7 @@ import { all as porridgeParams, slotOf as porridgeSlot, fxOrder, rackId, rackSlo
 import { makeDefs, choiceValue } from "../ui/ParamDefs.res.mjs";
 import { programSize, tableOffset } from "../ui/oatmeal/OatmealFormat.res.mjs";
 import * as ModMatrix from "../ui/ModMatrix.res.mjs";
+import { groups as storedGroups, isStored } from "../ui/StoredParams.res.mjs";
 import { readIds, assignIds, idsText } from "./param-ids.mjs";
 
 const root = join (dirname (fileURLToPath (import.meta.url)), "..");
@@ -93,9 +96,11 @@ for (const f of all)
     const { index, id, offset, kind, slot } = f;
     const info = paramInfo (index);
     const { isInt } = defs.get (id);
+    // (the stored parameters have slots but no endpoints: they come in shaperIn, below)
+    const endpoint = ! isStored (id);
     const ann = [`name: ${cmajString (info.hostName)}`];
     // (hosts list only automatable parameters: routing and setup stay out of their lists)
-    if (info.automatable) ++hostListed;
+    if (info.automatable && endpoint) ++hostListed;
     else ann.push ("automatable: false");
 
     if (isInt)
@@ -103,30 +108,44 @@ for (const f of all)
         ann.push (`min: ${info.min | 0}`, `max: ${info.max | 0}`, `init: ${Math.round (info.init)}`);
         if (info.names) ann.push (`text: ${cmajString (info.names.join ("|"))}`);
         else ann.push (`step: 1`);
-        endpoints.push (`    input event int ${id} [[ ${ann.join (", ")} ]];`);
-        handlers.push (`    event ${id} (int v) { paramOut <- porridge::ParamChange (${slot}, float (v)); }`);
+        if (endpoint)
+        {
+            endpoints.push (`    input event int ${id} [[ ${ann.join (", ")} ]];`);
+            handlers.push (`    event ${id} (int v) { paramOut <- porridge::ParamChange (${slot}, float (v)); }`);
+        }
         slotDefaults[slot] = Math.round (info.init);
     }
     else
     {
         ann.push (`min: ${num (info.min)}`, `max: ${num (info.max)}`, `init: ${num (info.init)}`);
         if (info.unit) ann.push (`unit: ${cmajString (info.unit)}`);
-        endpoints.push (`    input event float ${id} [[ ${ann.join (", ")} ]];`);
-        handlers.push (`    event ${id} (float v) { paramOut <- porridge::ParamChange (${slot}, v); }`);
+        if (endpoint)
+        {
+            endpoints.push (`    input event float ${id} [[ ${ann.join (", ")} ]];`);
+            handlers.push (`    event ${id} (float v) { paramOut <- porridge::ParamChange (${slot}, v); }`);
+        }
         slotDefaults[slot] = info.init;
     }
 
     slots.push (`    let ${id} = ${slot};`);
-    cfields.push (f.porridge ? `    { "${id}", -1, FieldType::${isInt ? "i32" : "f32"}, ${isInt} },`
-                             : `    { "${id}", ${offset}, FieldType::${kind}, ${isInt} },`);
+    if (endpoint)
+        cfields.push (f.porridge ? `    { "${id}", -1, FieldType::${isInt ? "i32" : "f32"}, ${isInt} },`
+                                 : `    { "${id}", ${offset}, FieldType::${kind}, ${isInt} },`);
 }
+
+// The stored parameters (ui/StoredParams.res: the custom shapes' points) reach the DSP as one
+// shaperIn event per distortion, which ParamStore passes on to their slots one by one.
+const groupSize = storedGroups[0].length;
+if (storedGroups.some (g => g.length !== groupSize)) throw new Error ("the stored parameters' groups differ in size");
+const shaperSlots = storedGroups.flat().map (slotById);
+const storedFields = storedGroups.flatMap ((g, k) => g.map ((id, i) => `    { "${id}", ${k}, ${i}, ${cf (slotDefaults[slotById (id)])} },`));
 
 // Hosts know a parameter by its CLAP id, which dsp/param-ids.txt keeps for every endpoint there
 // has been (tools/param-ids.mjs): a new parameter gets one here, and the endpoints' order and
 // number don't matter to hosts.
 const idsPath = join (root, "dsp", "param-ids.txt");
 const clapIds = readIds (idsPath);
-const newIds = assignIds (clapIds, all.map (f => f.id));
+const newIds = assignIds (clapIds, all.filter (f => ! isStored (f.id)).map (f => f.id));
 writeGenerated (idsPath, idsText (clapIds));
 if (newIds.length) console.log (`new CLAP ids (dsp/param-ids.txt): ${newIds.join (", ")}`);
 
@@ -255,13 +274,24 @@ writeGenerated (join (root, "dsp", "ParamStore.cmajor"), header +
 `/// Every parameter of the original, in the original order, as an endpoint named after the
 /// original skin action, then Porridge's own parameters. Values are the internal values
 /// stored in an Oatmeal preset. Each change is forwarded to the synth as (slot, value).
+/// (Hosts know them by their ids in dsp/param-ids.txt, so the order doesn't matter to them.)
 processor ParamStore
 {
     output event porridge::ParamChange paramOut;
 
 ${endpoints.join ("\n")}
 
+    /// the custom shapes' points, which are stored state rather than endpoints (ui/StoredParams.res)
+    input event porridge::ShaperPoints shaperIn;
+
 ${handlers.join ("\n")}
+
+    event shaperIn (porridge::ShaperPoints s)
+    {
+        if (s.which >= 0 && s.which < porridge::numShapers)
+            for (wrap<${groupSize}> i)
+                paramOut <- porridge::ParamChange (porridge::shaperSlots.at (s.which * ${groupSize} + int (i)), s.values[i]);
+    }
 }
 `);
 
@@ -283,6 +313,20 @@ writeGenerated (join (root, "dsp", "Slots.cmajor"), header +
 
     /// FX_Order's effect orders (0 chorus, 1 delay, 2 reverb, 3 EQ), four per value
     let fxOrders = int[${fxOrders.length * 4}] (${fxOrders.flat().join (", ")});
+
+    /// The custom shape's points of distortion \`which\` (0: Oatmeal's, then the rack's copies),
+    /// as the view sends them (ui/StoredParams.res): the count less 2, then each point's in, out
+    /// and bend. They are stored state, not parameter endpoints.
+    struct ShaperPoints
+    {
+        int which;
+        float[${groupSize}] values;
+    }
+
+    let numShapers = ${storedGroups.length};
+
+    /// each distortion's points' slots, in ShaperPoints' order
+    let shaperSlots = int[${shaperSlots.length}] (${shaperSlots.join (", ")});
 }
 
 /// Index of every parameter in the synth's mirror of the program struct.
@@ -319,6 +363,14 @@ static const PorridgeField porridgeFields[] =
 {
 ${cfields.join ("\n")}
 };
+// the stored parameters (ui/StoredParams.res): which shaperIn event (distortion) carries each,
+// where in it, and its default
+struct StoredField { const char* id; int which; int index; float init; };
+static const StoredField storedFields[] =
+{
+${storedFields.join ("\n")}
+};
+static const int numShapers = ${storedGroups.length}, shaperSize = ${groupSize};
 static const int programSize = ${programSize};
 static const int waveOffsets[4] = { ${["Wave1", "Wave2", "LfoShape1", "LfoShape2"].map (tableOffset).join (", ")} };
 static const int curveOffsets[2] = { ${["VelocityCurve", "AftertouchCurve"].map (tableOffset).join (", ")} };
@@ -431,4 +483,4 @@ ${ModMatrix.targets.map ((t, i) => `    let ${ident (t.key)} = ${i};`).join ("\n
 }
 `);
 
-console.log (`generated ${all.length} parameters (${hostListed} listed by hosts), ${ModMatrix.targets.length} modulation targets`);
+console.log (`generated ${endpoints.length} parameter endpoints (${hostListed} listed by hosts) and ${all.length - endpoints.length} stored parameters, ${ModMatrix.targets.length} modulation targets`);

@@ -55,6 +55,7 @@ let unitFor = (d: ParamDefs.t) =>
 // slot goes and what it hears, which effect a rack or voice slot holds, the custom shape's
 // points, MIDI setup, tuning, Oat mode): hosts don't list them (automatable: false). The patch
 // still has them, so presets, the plugin's saved state and the view set and read them as before.
+// (The custom shapes' points aren't even endpoints: see StoredParams.)
 let oatmealSetup = /^(M[12]_Target_\d|XY_[HV]_(Target_\d|CC)|CC\d(_Target_\d)?|MIDI_Channel_\d+|Tune_\w+)$/
 
 let porridgeSetup = Lazy.make(() => {

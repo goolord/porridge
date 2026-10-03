@@ -123,6 +123,8 @@ let onState = (t, {key, value}: PatchConnection.storedStateEvent) =>
       t.shapesKnown = true
       fireShapes(t)
     })
+  // the parameters that aren't endpoints (none: a state without custom shapes)
+  | (Some(StoredState.Params), value) => t.model->ParamModel.loadStored(value)
   | _ => ()
   }
 

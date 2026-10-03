@@ -37,7 +37,7 @@ settings Oatmeal has.
 | `porridge` | `"preset"` or `"bank"` |
 | `version` | format version. It goes up only for changes an older reader can't skip safely |
 | `name`, `author`, `category`, `tags`, `description` | program info (Info button). Names can be up to 64 characters |
-| `params` | parameter values by endpoint id (the ids in `dsp/ParamStore.cmajor`). The values are the internal values the patch's endpoints take: Oatmeal's stored value for Oatmeal parameters, except that pulse widths are 0..1 fractions. Lists are stored as the item's index |
+| `params` | parameter values by endpoint id (the ids in `dsp/ParamStore.cmajor`, and the custom shapes' points, which the plugin keeps as stored state rather than endpoints: `ui/StoredParams.res`). The values are the internal values the patch's endpoints take: Oatmeal's stored value for Oatmeal parameters, except that pulse widths are 0..1 fractions. Lists are stored as the item's index |
 | `modulations` | the modulation matrix's connections, in slot order: `source` and `target` keys from `ui/ModMatrix.res` (a parameter target's key is its endpoint id), `amount` (-1..1), and an optional `via` source that scales the amount. The slot parameters (`Mod1_Source` ...) aren't written to `params` |
 | `macros` | the four macro knobs' names (their values are the `Macro_1`..`Macro_4` parameters) |
 | `tuning` | a microtuning: the text of a Scala scale (`scl`) and keyboard mapping (`kbm`, empty for the default: middle C is degree 0, A above it is 440 Hz). Left out for Oatmeal's 12-note tuning. An empty `scl` with a `kbm` maps 12-tone equal temperament |
@@ -74,7 +74,7 @@ the macros `Macro_1`..`Macro_4`, then four per modulation slot (`ModN_Source`, `
 | `U_DetuneCurve`, `U_RandomPhase`, `U_Width` | unison detune curve, random phase per copy, stereo width |
 | `FX_Rack_1` ... `FX_Rack_8` | the effects rack, in the order it runs: each slot holds `empty`, one of Oatmeal's chorus, delay, reverb or EQ, a copy (`chorus 2`..`3`, `delay 2`..`3`, `reverb 2`..`3`, `EQ 2`..`3`, `distortion 2`..`4`), or one of Porridge's own effects (`Flanger`..`Flanger 3`, `Phaser`.., `Compressor`.., `Algo reverb`.., `Convolve`, `Convolve 2`, `Bode`.., `Filter`.., `Utility`.., `Ambience`.., `Air`..). Slots holding one of Oatmeal's four take them in `FX_Order`'s order; the default is Oatmeal's chain. The fourth copies (`delay 4`, `distortion 5` ...) were retired in October 2026: their values still mean them, and a program that holds one loads it onto a free copy of its kind (its parameters and connections too), or without it and a warning |
 | `EQ_On` | switches Oatmeal's EQ (on by default) |
-| `Sat_Points`, `Sat_X1`..`Sat_X16`, `Sat_Y1`..`Sat_Y16`, `Sat_C1`..`Sat_C16` | the distortion's custom shape (type `custom shape`): the number of points less 2, then each point's input and output (-1..1) and the bend of the segment ending at it |
+| `Sat_Points`, `Sat_X1`..`Sat_X16`, `Sat_Y1`..`Sat_Y16`, `Sat_C1`..`Sat_C16` | the distortion's custom shape (type `custom shape`): the number of points less 2, then each point's input and output (-1..1) and the bend of the segment ending at it (the rack's distortions' too: `Sat2_Points`...; not host parameters) |
 | `C2_Mode` ... `Sat4_C16` | the rack's copies: each of Oatmeal's chorus (`C_`), delay (`D_`), reverb (`R_`), EQ (`EQ_`, with `EQ_On`) and distortion (`Sat_`, without `Sat_Mode`) parameters again, numbered (`D3_Wet` is delay copy 3's wet level) |
 | `F_Drive` | input drive into the analog filter types (`MG low` .. `PZ SVF`), 0..1 = 0 .. +24 dB |
 | `Fl_`, `Ph_`, `Cp_`, `Rv_`, `Cv_`, `Bd_`, `Ff_`, `Ut_` | Porridge's own rack effects, each with an `_On` switch: flanger, phaser, compressor (OTT-style, 1 or 3 bands), algo reverb (hall, plate, nitrous, basin, vintage), convolve (built-in impulses or a file), bode (frequency shifter and shifted delay), filter (any filter type) and utility (gain, pan, width, phase, bass mono). `Am_` is the ambience (very small spaces: room, clear coat, verb tiny), after the others Frequencies, rates and times hold their knob position 0..1 (the value is lo·(hi/lo)^v; the ranges are in `ui/PorridgeParams.res`) |
@@ -111,4 +111,6 @@ of the rack or off.
 
 The plugin keeps its bank in the host session as a bank document, under the stored-state key
 `bank`. Sessions saved by earlier builds stored base64 Oatmeal chunks there; they are converted
-when loaded.
+when loaded. The current program's custom shapes' points are under `params` (a JSON object of
+the values that differ from Init); sessions saved while they were host parameters have them
+moved there when loaded.
