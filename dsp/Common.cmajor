@@ -64,14 +64,15 @@ namespace porridge
     }
 
     //==============================================================================
-    // The rack's pool: the memory of the effects with the longest lines (Oatmeal's delay and
-    // reverb and their copies, the algo reverbs, the convolvers' tails and predelays, the
+    // The rack's pool: the memory of the effects with long lines (Oatmeal's chorus, delay and
+    // reverb and the slots' ones, the algo reverbs, the convolver's tail and predelay, the
     // ambiences, the Bode shifters and the flangers), which each borrows while it is in the rack
-    // (Synth's claimPool). The rack has eight slots, so at most eight of these 20 run at once:
-    // the pool holds the eight largest together (8,048 blocks: Oatmeal's delay, both convolvers,
-    // the other two delays and three algo reverbs) instead of all 20 (12,026 blocks), 16 MB less
-    // per instance. It is made of blocks of 1024 floats, so that a sample's place is one shift
-    // and two masks away, and a convolver's spectrum half is a whole block, whose
+    // (Synth's claimPool), as much as its settings need now: a delay its lines at their lengths,
+    // a reverb its lines at its size and the rate, an algo reverb or an ambience its model's lines
+    // at the rate. So the rack can hold any number of each (eight delays at their longest, 10 s
+    // a side, take 6,896 blocks); a rack that asks for more than the pool has runs an effect dry,
+    // and the view marks it. It is made of blocks of 1024 floats, so that a sample's place is one
+    // shift and two masks away, and a convolver's spectrum half is a whole block, whose
     // multiply-accumulates run as before. An effect's `fxAt` is its first block (-1: none); a
     // mono region runs through its blocks in turn, a stereo line alternates a block of each side.
 

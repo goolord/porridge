@@ -164,8 +164,8 @@ let onValue = e => ParamDefs.choiceValue(switchId(e), spec(e.kind).onLabel->Opti
 // The kind a rack or lane value holds.
 let kindOfValue = v => PorridgeParams.entryKind(v)->Option.flatMap(k => kindOfKey(k.key))
 
-// The rack's effects in the order they run, read like the DSP reads it.
-let read = (get: string => float): array<effect> => {
+// The rack's effects in the order they run, read like the DSP reads it, with the slots they're in.
+let readSlots = (get: string => float): array<(effect, int)> => {
   let order = PorridgeParams.fxOrder(Float.toInt(get("FX_Order")))
   let taken = ref(0)
   let seen = Set.make()
@@ -174,15 +174,20 @@ let read = (get: string => float): array<effect> => {
     if v >= 1 && v <= 4 {
       let fx = order[taken.contents]->Option.flatMap(i => firsts[i])
       taken := taken.contents + 1
-      fx
+      fx->Option.map(e => (e, n))
     } else if v > 4 && !(seen->Set.has(v)) {
       seen->Set.add(v)
-      kindOfValue(v)->Option.filter(k => !laneOnly(k))->Option.map(kind => {kind, place: Rack(n)})
+      kindOfValue(v)->Option.filter(k => !laneOnly(k))->Option.map(kind => ({kind, place: Rack(n)}, n))
     } else {
       None
     }
   )
 }
+
+let read = get => readSlots(get)->Array.map(Pair.first)
+
+// The rack slot an effect in the rack is in (Oatmeal's four: where FX_Order puts them).
+let rackSlotOf = (get, e) => readSlots(get)->Array.find(((x, _)) => x == e)->Option.map(Pair.second)
 
 // Whether the rack holds it (effects are records: compared by value).
 let holds = (rack: array<effect>, e) => rack->Array.some(x => x == e)

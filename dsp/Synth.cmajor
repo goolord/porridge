@@ -36,6 +36,7 @@ namespace porridge
         output event ImpulseView impulseViewOut;
         output event float levelOut;
         output event VoiceView voiceViewOut;
+        output event int poolOut;           // the rack's slots whose effects the pool has no room for, a bit each
 
         // MIDI is applied a block late (see the top of this file)
         processor.latency = blockSize;
@@ -100,11 +101,16 @@ namespace porridge
         int[rack::convolveCount] viewSent;          // the impulse each convolver last showed the view
 
         // the rack's pool (Common.cmajor's FxPool), and the first block of each effect that keeps
-        // its lines there (-1: none, it isn't in the rack), by pool id: Oatmeal's delay and the
-        // other delays, Oatmeal's reverb and the other reverbs, then the algo reverbs,
-        // convolvers, Bode shifters, ambiences and flangers
+        // its lines there (-1: none, it isn't in the rack) and how many it has, by pool id:
+        // Oatmeal's delay and the slots' delays, Oatmeal's reverb and the slots' reverbs, then
+        // the algo reverbs, the convolver, Bode shifters, ambiences and flangers, and Oatmeal's
+        // chorus and the slots' choruses; which slots the pool has no room for (poolOut); and the
+        // blocks the algo reverb's and the ambience's models take at this rate (by model)
         FxPool fxPool;
-        int[numPooled] poolAt;
+        int[numPooled] poolAt, poolSize;
+        int poolMarks;
+        int[5] spaceBlocks;
+        int[3] ambBlocks;
 
         let pooledReverbs = 1 + rack::delayCount;
         let pooledSpaces = pooledReverbs + 1 + rack::reverbCount;
@@ -112,7 +118,8 @@ namespace porridge
         let pooledBodes = pooledConvolvers + rack::convolveCount;
         let pooledAmbiences = pooledBodes + rack::bodeCount;
         let pooledFlangers = pooledAmbiences + rack::ambienceCount;
-        let numPooled = pooledFlangers + rack::flangerCount;
+        let pooledChoruses = pooledFlangers + rack::flangerCount;
+        let numPooled = pooledChoruses + 1 + rack::chorusCount;
 
         // the level meter the view asks for (levelRequestIn): readings still to send, and the
         // K-weighted power summed since the last one; the weighting's shelf and highpass, per
@@ -415,6 +422,26 @@ namespace porridge
             for (int id = 0; id < numPooled; ++id)
                 setPoolAt (id, -1);
 
+            // the algo reverb's and the ambience's models' lines at this rate (the ambience's
+            // clear coat: its largest room's)
+            {
+                Space s;
+                Ambience a;
+
+                for (wrap<5> m)
+                    spaceBlocks[m] = monoBlocks (s.spaceLayout (int (m), sampleRate, 0.5f));
+
+                for (wrap<3> m)
+                {
+                    int most = 0;
+
+                    for (int room = 0; room < (m == ambienceModel::clearCoat ? 17 : 1); ++room)
+                        most = max (most, a.ambLayout (int (m), room, sampleRate, 0.5f));
+
+                    ambBlocks[m] = monoBlocks (most);
+                }
+            }
+
             delay.capacity = delayMax;
 
             for (wrap<rack::delayCount> k)
@@ -428,7 +455,7 @@ namespace porridge
             // the chorus is set up while the program mirror is still all zero, so its
             // irregular mode starts from zero delays and speeds (the reference renders rely on
             // it); then every parameter gets its default
-            chorus.clearState (rng, P, sampleRate);
+            chorus.clearState (fxPool, rng, P, sampleRate);
             P = slotDefaults;
 
             for (wrap<rack::chorusCount> k)
@@ -458,7 +485,7 @@ namespace porridge
         void resetEffects()
         {
             globalDist.clearState();
-            chorus.clearState (rng, P, sampleRate);
+            chorus.clearState (fxPool, rng, P, sampleRate);
             delay.clearState (fxPool);
             reverb.clearState (fxPool);
             eq.clearState();
@@ -471,7 +498,7 @@ namespace porridge
         void clearCopies()
         {
             for (wrap<rack::chorusCount> k)
-                choruses[k].clearState (chorusRngs[k], P, sampleRate);
+                choruses[k].clearState (fxPool, chorusRngs[k], P, sampleRate);
 
             for (wrap<rack::eqCount> k)          eqs[k].clearState();
             for (wrap<rack::distortionCount> k)  distortions[k].clearState();
@@ -570,7 +597,7 @@ namespace porridge
         /// Runs one of Oatmeal's four effects (0 chorus, 1 delay, 2 reverb, 3 EQ).
         bool runFirst (int fx, bool active)
         {
-            if (fx == 0) return P[slot::C_Mode] != 0 ? chorus.process (fxTables, rng, mix, active, P, sampleRate) : active;
+            if (fx == 0) return P[slot::C_Mode] != 0 ? chorus.process (fxPool, fxTables, rng, mix, active, P, sampleRate) : active;
             if (fx == 1) return P[slot::D_On] != 0 && delay.fxAt >= 0 ? delay.process (fxPool, fxTables, mix, active, P, sampleRate, samplesPerBeat) : active;
             if (fx == 2) return P[slot::R_On] != 0 && reverb.fxAt >= 0 ? reverb.process (fxPool, mix, active, P, sampleRate) : active;
             return P[slot::EQ_On] != 0 ? eq.process (mix, active, P, sampleRate) : active;
@@ -631,7 +658,7 @@ namespace porridge
         /// Runs instance k of a rack kind for slot g, the slot's values in the kind's working slots.
         bool runKind (int kind, int k, int g, bool active)
         {
-            if (kind == rack::chorusKind)   return choruses.at (k).process (fxTables, chorusRngs.at (k), mix, active, P, sampleRate);
+            if (kind == rack::chorusKind)   return choruses.at (k).process (fxPool, fxTables, chorusRngs.at (k), mix, active, P, sampleRate);
             if (kind == rack::delayKind)    return delays.at (k).process (fxPool, fxTables, mix, active, P, sampleRate, samplesPerBeat);
             if (kind == rack::reverbKind)   return reverbs.at (k).process (fxPool, mix, active, P, sampleRate);
             if (kind == rack::eqKind)       return eqs.at (k).process (mix, active, P, sampleRate);
@@ -688,26 +715,48 @@ namespace porridge
             if (kind == rack::bodeKind)     return pooledBodes + k;
             if (kind == rack::ambienceKind) return pooledAmbiences + k;
             if (kind == rack::flangerKind)  return pooledFlangers + k;
+            if (kind == rack::chorusKind)   return pooledChoruses + 1 + k;
             return -1;
         }
 
-        /// How many blocks an effect keeps in the pool.
-        int poolBlocks (int id)
+        /// How many blocks an effect needs now, its parameters in the working slots: a delay its
+        /// lines at their lengths, a reverb its lines at their size and the rate, an algo reverb
+        /// or ambience its model's lines at the rate (the one it runs, and one it is fading over
+        /// to), the others what they always need.
+        int poolNeeds (int id)
         {
-            if (id == 0)                return stereoBlocks (delayMax);
-            if (id < pooledReverbs)     return stereoBlocks (rackDelayMax);
-            if (id < pooledSpaces)      return reverbBlocks;
-            if (id < pooledConvolvers)  return monoBlocks (spacePoolSize);
-            if (id < pooledBodes)       return convBlocks;
-            if (id < pooledAmbiences)   return stereoBlocks (bodeLineSize);
-            if (id < pooledFlangers)    return monoBlocks (ambPoolSize);
-            return stereoBlocks (flangerLineSize);
+            if (id == 0)                    return delay.needs (P, sampleRate, samplesPerBeat);
+            if (id < pooledReverbs)         return delays.at (id - 1).needs (P, sampleRate, samplesPerBeat);
+            if (id < pooledSpaces)          return reverbNeeds (P, sampleRate);
+
+            if (id < pooledConvolvers)
+            {
+                let now = spaces.at (id - pooledSpaces).model;
+                let want = spaceBlocks.at (clamp (int (P[slot::Rv_Model]), 0, 4));
+                return now >= 0 ? max (want, spaceBlocks.at (clamp (now, 0, 4))) : want;
+            }
+
+            if (id < pooledBodes)           return convBlocks;
+            if (id < pooledAmbiences)       return stereoBlocks (bodeLineSize);
+
+            if (id < pooledFlangers)
+            {
+                let now = ambiences.at (id - pooledAmbiences).model;
+                let want = ambBlocks.at (clamp (int (P[slot::Am_Model]), 0, 2));
+                return now >= 0 ? max (want, ambBlocks.at (clamp (now, 0, 2))) : want;
+            }
+
+            if (id < pooledChoruses)        return stereoBlocks (flangerLineSize);
+            return chorusBlocks;
         }
 
         /// Gives an effect its blocks from `at` (-1: takes them back).
         void setPoolAt (int id, int at)
         {
             poolAt.at (id) = at;
+
+            if (at < 0)
+                poolSize.at (id) = 0;
 
             if (id == 0)                    delay.fxAt = at;
             else if (id < pooledReverbs)    delays.at (id - 1).fxAt = at;
@@ -717,7 +766,9 @@ namespace porridge
             else if (id < pooledBodes)      convolvers.at (id - pooledConvolvers).fxAt = at;
             else if (id < pooledAmbiences)  bodes.at (id - pooledBodes).fxAt = at;
             else if (id < pooledFlangers)   ambiences.at (id - pooledAmbiences).fxAt = at;
-            else                            flangers.at (id - pooledFlangers).fxAt = at;
+            else if (id < pooledChoruses)   flangers.at (id - pooledFlangers).fxAt = at;
+            else if (id == pooledChoruses)  chorus.fxAt = at;
+            else                            choruses.at (id - pooledChoruses - 1).fxAt = at;
         }
 
         /// Starts an effect afresh in blocks it has just been given, whatever they held.
@@ -731,11 +782,30 @@ namespace porridge
             else if (id < pooledBodes)      convolvers.at (id - pooledConvolvers).prepare (fxPool);
             else if (id < pooledAmbiences)  bodes.at (id - pooledBodes).clearState (fxPool);
             else if (id < pooledFlangers)   ambiences.at (id - pooledAmbiences).clearState();
-            else                            flangers.at (id - pooledFlangers).clearState (fxPool);
+            else if (id < pooledChoruses)   flangers.at (id - pooledFlangers).clearState (fxPool);
+            else if (id == pooledChoruses)  chorus.clearLine (fxPool);
+            else                            choruses.at (id - pooledChoruses - 1).clearLine (fxPool);
         }
 
-        /// The first block of n free ones (-1: no run of n is free).
-        int freeBlocks (int n)
+        /// Whether blocks from .. from + n - 1 are inside the pool and no effect's but `except`'s.
+        bool poolFree (int from, int n, int except)
+        {
+            if (from < 0 || from + n > fxPoolBlocks)
+                return false;
+
+            for (int id = 0; id < numPooled; ++id)
+            {
+                let a = poolAt.at (id);
+
+                if (id != except && a >= 0 && a < from + n && from < a + poolSize.at (id))
+                    return false;
+            }
+
+            return true;
+        }
+
+        /// The first block of n free ones (-1: no run of n is free), not counting `except`'s.
+        int freeBlocks (int n, int except)
         {
             var at = 0;
 
@@ -748,9 +818,9 @@ namespace porridge
                 {
                     let a = poolAt.at (id);
 
-                    if (a >= 0 && a < at + n && at < a + poolBlocks (id))
+                    if (id != except && a >= 0 && a < at + n && at < a + poolSize.at (id))
                     {
-                        at = a + poolBlocks (id);
+                        at = a + poolSize.at (id);
                         moved = true;
                     }
                 }
@@ -760,6 +830,17 @@ namespace porridge
             }
 
             return -1;
+        }
+
+        /// Moves n blocks from one place to another (the places may overlap).
+        void moveBlocks (int from, int to, int n)
+        {
+            if (to < from)
+                for (int p = 0; p < n; ++p)
+                    fxPool.at (to + p) = fxPool.at (from + p);
+            else if (to > from)
+                for (int p = n - 1; p >= 0; --p)
+                    fxPool.at (to + p) = fxPool.at (from + p);
         }
 
         /// Slides every effect's blocks down to the start of the pool, in order, so that the free
@@ -781,28 +862,84 @@ namespace porridge
                     return;
 
                 let from = poolAt.at (id);
-                let n = poolBlocks (id);
+                let n = poolSize.at (id);
 
                 if (from > next)
                 {
-                    for (int p = 0; p < n; ++p)
-                        fxPool.at (next + p) = fxPool.at (from + p);
-
+                    moveBlocks (from, next, n);
                     setPoolAt (id, next);
+                    poolSize.at (id) = n;
                 }
 
                 next += n;
             }
         }
 
-        /// Before the rack runs: takes the blocks back from the effects that have left it, and
-        /// gives blocks to those that have come in, which start afresh (silent, as a new one). An
-        /// effect keeps its blocks while it stays in the rack, switched off or moved. The eight
-        /// largest fit together (see FxPool), so a request only fails, and its effect doesn't
-        /// run, if the pool's size is wrong.
+        /// Gives an effect that has blocks n of them, keeping what its blocks hold (its lines grow
+        /// at their ends, or move with what they hold): false if the pool has no room.
+        bool resizePooled (int id, int n)
+        {
+            let size = poolSize.at (id);
+
+            if (n <= size || poolFree (poolAt.at (id) + size, n - size, id))
+            {
+                poolSize.at (id) = n;
+                return true;
+            }
+
+            var to = freeBlocks (n, id);
+
+            if (to < 0)
+            {
+                compactPool();
+
+                if (poolFree (poolAt.at (id) + size, n - size, id))
+                {
+                    poolSize.at (id) = n;
+                    return true;
+                }
+
+                to = freeBlocks (n, id);
+            }
+
+            if (to < 0)
+                return false;
+
+            moveBlocks (poolAt.at (id), to, size);
+            setPoolAt (id, to);
+            poolSize.at (id) = n;
+            return true;
+        }
+
+        /// Gives an effect n blocks it hasn't had: false if the pool has no room.
+        bool claimPooled (int id, int n)
+        {
+            var at = freeBlocks (n, -1);
+
+            if (at < 0)
+            {
+                compactPool();
+                at = freeBlocks (n, -1);
+            }
+
+            if (at < 0)
+                return false;
+
+            setPoolAt (id, at);
+            poolSize.at (id) = n;
+            startPooled (id);
+            return true;
+        }
+
+        /// Before the rack runs: takes the blocks back from the effects that have left it, gives
+        /// those that stay what their settings need now (a delay's lengths, a reverb's size and
+        /// model: their contents kept), and gives blocks to those that have come in, which start
+        /// afresh (silent, as a new one). An effect keeps its blocks while it stays in the rack,
+        /// switched off or moved. One whose blocks don't fit runs dry, and the view hears which
+        /// slots those are (poolOut: a bit per slot).
         void claimPool()
         {
-            bool[numPooled] wanted;
+            int[numPooled] need, slotOf;
             let order = clamp (int (P[slot::FX_Order]), 0, fxOrders.size / 4 - 1);
             int numFirsts = 0;
 
@@ -816,40 +953,57 @@ namespace porridge
                     if (numFirsts < 4)
                     {
                         let first = fxOrders.at (order * 4 + numFirsts);
-                        if (first == 1) wanted[0] = true;
-                        if (first == 2) wanted.at (pooledReverbs) = true;
+                        let id = first == 0 ? pooledChoruses : (first == 1 ? 0 : (first == 2 ? pooledReverbs : -1));
+
+                        if (id >= 0)
+                        {
+                            need.at (id) = poolNeeds (id);
+                            slotOf.at (id) = int (k);
+                        }
+
                         ++numFirsts;
                     }
                 }
                 else
                 {
                     let id = pooledId (fx);
-                    if (id >= 0) wanted.at (id) = true;
+
+                    if (id >= 0 && need.at (id) == 0)
+                    {
+                        let kind = rack::kindOf.at (fx);
+                        swapSlot (int (k), kind);
+                        need.at (id) = max (1, poolNeeds (id));
+                        swapSlot (int (k), kind);
+                        slotOf.at (id) = int (k);
+                    }
                 }
             }
 
             for (int id = 0; id < numPooled; ++id)
-                if (poolAt.at (id) >= 0 && ! wanted.at (id))
+                if (poolAt.at (id) >= 0 && need.at (id) == 0)
                     setPoolAt (id, -1);
+
+            // (those that need less first, which makes room for those that need more)
+            for (int id = 0; id < numPooled; ++id)
+                if (poolAt.at (id) >= 0 && need.at (id) < poolSize.at (id))
+                    poolSize.at (id) = need.at (id);
+
+            for (int id = 0; id < numPooled; ++id)
+                if (poolAt.at (id) >= 0 && need.at (id) > poolSize.at (id) && ! resizePooled (id, need.at (id)))
+                    setPoolAt (id, -1);
+
+            int outOfMemory = 0;
 
             for (int id = 0; id < numPooled; ++id)
             {
-                if (wanted.at (id) && poolAt.at (id) < 0)
-                {
-                    var at = freeBlocks (poolBlocks (id));
+                if (need.at (id) > 0 && poolAt.at (id) < 0 && ! claimPooled (id, need.at (id)))
+                    outOfMemory |= 1 << slotOf.at (id);
+            }
 
-                    if (at < 0)
-                    {
-                        compactPool();
-                        at = freeBlocks (poolBlocks (id));
-                    }
-
-                    if (at >= 0)
-                    {
-                        setPoolAt (id, at);
-                        startPooled (id);
-                    }
-                }
+            if (outOfMemory != poolMarks)
+            {
+                poolMarks = outOfMemory;
+                poolOut <- outOfMemory;
             }
         }
 

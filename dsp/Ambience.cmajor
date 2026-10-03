@@ -160,8 +160,8 @@ namespace porridge
         return clamp (int (floor (sr / 44100.0)), 1, 4);
     }
 
-    /// Lays the model out in the pool (silent).
-    void ambSetup (Ambience& this, FxPool& pool, int model, int room, float64 sr, float size, float predelayMs)
+    /// Lays the model's lines out (where in its region each goes): how many floats they take.
+    int ambLayout (Ambience& this, int model, int room, float64 sr, float size)
     {
         this.model = model;
         this.room = room;
@@ -207,6 +207,13 @@ namespace porridge
             }
         }
 
+        return top;
+    }
+
+    /// Lays the model out in the pool (silent).
+    void ambSetup (Ambience& this, FxPool& pool, int model, int room, float64 sr, float size, float predelayMs)
+    {
+        let top = this.ambLayout (model, room, sr, size);
         this.d[0] = max (1.0, float64 (predelayMs) * sr * 0.001);
 
         this.clearPool (pool, top);

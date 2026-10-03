@@ -4,7 +4,7 @@
 //
 //   host --program prog.bin --events events.txt --frames 88200 --rate 44100 --out out.f32
 //        [--tempo 120] [--set Endpoint=value ...] [--input in.f32] [--preroll n] [--latency n]
-//        [--voices voices.txt] [--time] [--timefrom n] [--impulse which:rate:file.f32 ...]
+//        [--voices voices.txt] [--time] [--timefrom n] [--impulse which:rate:file.f32 ...] [--pool pool.txt]
 //
 // --input feeds a recorded signal to the effects instead of the voices. --preroll renders n
 // frames before frame 0 and drops them (the DLL harness renders 128 after loading a program).
@@ -14,8 +14,10 @@
 // --voices asks for the view's reports of the sounding notes (VoiceView) and writes one line per
 // report: the frame, then the struct's 450 words as it's laid out (ints, bools as ints, floats);
 // "--voices -" asks for them and drops them (what the open view costs).
+// --pool writes a line "<frame> <mask>" each time the slots the rack's pool has no room for
+// change (poolOut: a bit per rack slot).
 // --impulse sends a file's audio (the output format below) at `rate` as an ImpulseChunk's
-// `which`, as the view does: a convolver's (0, 1) impulse, or the noise's sample (2).
+// `which`, as the view does: the convolver's (0) impulse, or the noise's sample (2).
 // --time renders 64 frames a call and prints how long the render loop took ("render_seconds
 // 0.123"), every call slower than 120 µs ("slow_block <frame> <µs>"; a 64-frame block has 1333 µs
 // at 48 kHz) and the slowest ("render_worst_us"), for CPU measurements: on
@@ -125,7 +127,7 @@ static void setStored (Patch& p, int k, float value)
 
 int main (int argc, char** argv)
 {
-    std::string programPath, eventsPath, inputPath, tuningPath, voicesPath, outPath = "out.f32";
+    std::string programPath, eventsPath, inputPath, tuningPath, voicesPath, poolPath, outPath = "out.f32";
     std::vector<std::string> impulses;
     bool timing = false;
     double worst = 0;
@@ -145,6 +147,7 @@ int main (int argc, char** argv)
         else if (a == "--tempo") tempo = atof (next().c_str());
         else if (a == "--input") inputPath = next();
         else if (a == "--voices") voicesPath = next();
+        else if (a == "--pool") poolPath = next();
         else if (a == "--time") timing = true;
         else if (a == "--timefrom") timeFrom = atol (next().c_str());
         else if (a == "--preroll") preroll = atol (next().c_str());
@@ -313,6 +316,8 @@ int main (int argc, char** argv)
     const auto outHandle = Patch::getEndpointHandleForName ("out");
     const auto midiHandle = Patch::getEndpointHandleForName ("midiIn");
     const auto voicesHandle = Patch::getEndpointHandleForName ("voiceViewOut");
+    const auto poolHandle = Patch::getEndpointHandleForName ("poolOut");
+    FILE* pool = poolPath.empty() ? nullptr : fopen (poolPath.c_str(), "w");
     const bool voicesQuiet = voicesPath == "-";
     FILE* voices = voicesPath.empty() || voicesQuiet ? nullptr : fopen (voicesPath.c_str(), "w");
     if (voices || voicesQuiet) send (*patch, "voiceView", (int32_t) 1);
@@ -384,6 +389,14 @@ int main (int argc, char** argv)
                 patch->readOutputEvent (voicesHandle, e, data);
             patch->resetOutputEventCount (voicesHandle);
         }
+        // the slots the rack's pool has no room for, when that changes: "frame mask"
+        for (uint32_t e = 0; e < patch->getNumOutputEvents (poolHandle); ++e)
+        {
+            int32_t mask;
+            patch->readOutputEvent (poolHandle, e, (unsigned char*) &mask);
+            if (pool) fprintf (pool, "%ld %d%c", pos + n, mask, 10);
+        }
+        patch->resetOutputEventCount (poolHandle);
         for (long k = 0; k < n; ++k) { L[pos + k] = block[2 * k]; R[pos + k] = block[2 * k + 1]; }
         pos += n;
     }

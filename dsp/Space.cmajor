@@ -280,9 +280,9 @@ namespace porridge
         this.numLines = j + 1;
     }
 
-    /// Lays the model's lines out in the pool (silent), shrinking the largest sizes if the pool
-    /// can't hold them at this rate.
-    void spaceSetup (Space& this, FxPool& pool, int model, float64 sr, float size, float predelayMs)
+    /// Lays the model's lines out (where in its region each goes), shrinking the largest sizes
+    /// if a region of spacePoolSize floats can't hold them at this rate: how many floats they take.
+    int spaceLayout (Space& this, int model, float64 sr, float size)
     {
         this.model = model;
         this.sr = sr;
@@ -387,6 +387,13 @@ namespace porridge
             this.rndLeft.at (j) = 0;
         }
 
+        return top;
+    }
+
+    /// Lays the model's lines out in the pool (silent).
+    void spaceSetup (Space& this, FxPool& pool, int model, float64 sr, float size, float predelayMs)
+    {
+        let top = this.spaceLayout (model, sr, size);
         this.pdTarget = max (4.0, float64 (predelayMs) * sr * 0.001);
         this.d[0] = this.pdTarget;
 

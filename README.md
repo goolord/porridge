@@ -197,6 +197,9 @@ tools/
                           per-note sources follow on the whole sound, and the view's reports of
                           the sounding notes, which the host writes with --voices), lane.mjs
                           (the voice lane's effects, its key tracking, tails and amp place),
+                          pool.mjs (the rack's pool: what effects claim follows their
+                          settings, a rack that asks too much runs one dry and says which,
+                          a growing line keeps what it holds),
                           extras.mjs (chord position, gap, legato, pitch, steps, the random
                           starts, rate and delay tracking, the lo-fi tracking, the octaver);
                           lib.mjs has what they

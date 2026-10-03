@@ -57,6 +57,14 @@ let build = (ctx: Ctx.t, page) => {
     }
 
   let inLane = e => VoiceLane.holds(model, e)
+
+  //==============================================================================
+  // the rack's slots whose effects the pool has no room for (the plugin says: poolOut, a bit
+  // per slot), which run dry until there is
+
+  let outOfMemory = ref(0)
+  let isOutOfMemory = e =>
+    FxRack.rackSlotOf(get, e)->Option.mapOr(false, n => Int.bitwiseAnd(outOfMemory.contents, Int.shiftLeft(1, n)) != 0)
   let current = ref(Distortion)
   // each tab's editor, made when it is first shown: the element and its refresh, by destKey (an
   // effect has one editor per-voice and one on the whole sound, as their controls differ)
@@ -322,7 +330,8 @@ let build = (ctx: Ctx.t, page) => {
         ~title=() =>
           inLane(e)
             ? `${VoiceLane.label(model, e)}, per-voice (${FxRack.hostName(e)}'s parameters): ${summary(e)}. Drag it sideways to move it, right-click to duplicate it or move it to the whole sound.`
-            : `${FxRack.label(rack(), e)}, whole sound (${FxRack.hostName(e)}'s parameters): ${summary(e)}. Drag it sideways to move it, right-click to duplicate it or move it to per-voice.`,
+            : `${FxRack.label(rack(), e)}, whole sound (${FxRack.hostName(e)}'s parameters): ${summary(e)}. Drag it sideways to move it, right-click to duplicate it or move it to per-voice.` ++
+              (isOutOfMemory(e) ? " Out of memory: the rack's other effects' lines fill the plugin's pool, so this one runs dry until there's room (shorter delays, or fewer long ones)." : ""),
         (ev, t) =>
           if inLane(e) {
             pressItem(Fx(e), ev)
@@ -496,6 +505,7 @@ let build = (ctx: Ctx.t, page) => {
           let (t, _, label) = made
           label->setTextContent(FxRack.label(list, e))
           showState(made, FxRack.isOn(e, get))
+          t->toggleClass("oom", isOutOfMemory(e))
           t
         }),
       ],
@@ -539,6 +549,15 @@ let build = (ctx: Ctx.t, page) => {
   model->ParamModel.listenEach(
     [...rackIds, "FX_Order", modeId, ...VoiceLane.ids, ...[dist, ...FxRack.all]->Array.map(FxRack.switchId)],
     changed,
+  )
+
+  ctx.pc->PatchConnection.addEndpointListener("poolOut", j =>
+    switch j {
+    | Number(x) =>
+      outOfMemory := Float.toInt(x)
+      changed()
+    | _ => ()
+    }
   )
 
   layoutStrip()
