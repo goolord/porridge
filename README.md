@@ -19,6 +19,9 @@ Porridge.cmajorpatch    manifest
 dsp/                    Cmajor DSP
   Porridge.cmajor         top-level graph
   ParamStore.cmajor       the parameter endpoints: Oatmeal's 342, then Porridge's own (generated)
+  param-ids.txt           every parameter's CLAP id, for good: hosts keep automation by these, so
+                          endpoints can come and go in any order (gen.mjs adds new parameters;
+                          tools/param-ids.mjs says how, and how branches' additions merge)
   Slots.cmajor            parameter -> program-struct slot constants (generated)
   ModTables.cmajor        modulation sources, targets and knob laws (generated)
   Synth.cmajor            MIDI, voice manager, arpeggiator, per-voice rendering, effects chain,
@@ -118,7 +121,8 @@ presets/vanilla.porridge  Porridge's own bank (built by tools/vanilla-bank.mjs)
 docs/internals/         reverse-engineering notes on the original
 tools/
   gen.mjs                 regenerates ParamStore/Slots/ModTables from the parameter tables, and
-                          the test host's field table and manifest
+                          the test host's field table and manifest, and gives new parameters
+                          CLAP ids in dsp/param-ids.txt (param-ids.mjs)
   bundle.mjs              bundles the compiled view and worker into bundle/
   random-levels.mjs       measures the synth's levels for the random patches' estimate, K-
                           weighted (--tables writes ui/random/LevelTables.res: waves, noise,
@@ -127,8 +131,9 @@ tools/
   clap/                   the C++ clap-patch.mjs adds: PorridgeBridge.h (settings, the host's
                           menu, the view's requests), PorridgeLibrary.h (the bank library:
                           bank folders scanned and copied, files opened in the browser kept)
-  clap-patch.mjs          patches the generated CLAP wrapper: aspect-locked resizing, the
-                          interface size setting, the host's parameter menu, the
+  clap-patch.mjs          patches the generated CLAP wrapper: parameter ids from
+                          dsp/param-ids.txt (not endpoint handles), aspect-locked resizing,
+                          the interface size setting, the host's parameter menu, the
                           64-sample latency, and a faster start (a QuickJS worker, one
                           rebuild per activation)
   event-switch.mjs        turns the generated class's event dispatch into a switch (in the
@@ -149,6 +154,9 @@ tools/
                           host.cpp's --time prints the render's own CPU time, for benchmarks
                           (--timefrom skips the attacks; an events file can also set
                           parameters at given frames);
+                          claphost.cpp (a minimal CLAP host: parameters, values, state) and
+                          clap-ids.mjs (a build keeps an earlier build's parameter ids, and
+                          loads its state),
                           banklibrary.cpp (the plugin's bank library on real files), oneshot.mjs (one-shot LFOs hold their
                           end), levels.mjs (the Vanilla bank's gains, levels and motion),
                           random.mjs (random patches: sound values, the wildness knobs, the

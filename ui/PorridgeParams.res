@@ -932,10 +932,9 @@ let rackSpecs = Array.fromInitializer(~length=rackSlots, i => {
 // Oatmeal's EQ has no switch; Porridge's switches it (and its copies) off without losing its bands.
 let eqOnSpecs = [{id: "EQ_On", name: "EQ on", kind: Choice({names: onOff, init: 1})}]
 
-// (only: the parameters to copy; the retired copies' are in their places, for `endpoints`, and
-// left out of `all`)
+// (only: the parameters to copy; the retired copies have none)
 let copySpecsOf = (kinds, ~only=_ => true) => kinds->Array.flatMap(k =>
-  [...k.copies, ...retiredOf(k)]->Array.flatMap(n =>
+  k.copies->Array.flatMap(n =>
     k.params
     ->Array.filter(((id, _)) => only(id))
     ->Array.map(((id, label)) => {
@@ -1154,8 +1153,8 @@ let voiceExtraSpecs = [
   ...stepSpecs,
 ]
 
-// (with the retired copies' parameters)
-let groupsAsAdded = [
+// Porridge's parameters by feature, in the order they were added (the order of their slots).
+let groups = [
   (Macros, macroSpecs),
   (Modulations, slotSpecs),
   (Mpe, mpeSpecs),
@@ -1193,19 +1192,13 @@ let groupsAsAdded = [
   (OscShape, oscShapeSpecs),
 ]
 
-// The retired copies' parameters: no longer the patch's, presets' or hosts'.
+// The retired copies' parameters: no longer the patch's, presets' or hosts' (their CLAP ids stay
+// reserved in dsp/param-ids.txt).
 let retiredIds = Set.fromArray(
   rackKinds->Array.flatMap(k => retiredOf(k)->Array.flatMap(n => k.params->Array.map(((id, _)) => copyId(id, n)))),
 )
 let isRetiredId = id => retiredIds->Set.has(id)
 
-let groups = groupsAsAdded->Array.map(((f, specs)) => (f, specs->Array.filter(s => !isRetiredId(s.id))))
-
 let all = groups->Array.flatMap(((_, specs)) => specs)
-
-// Every parameter endpoint there has been, in order, and whether it's retired: the patch keeps a
-// retired one's place (as an endpoint that isn't a parameter), because CLAP hosts know
-// parameters by their endpoint's number, which counts the endpoints before it.
-let endpoints = groupsAsAdded->Array.flatMap(((_, specs)) => specs->Array.map(s => (s.id, isRetiredId(s.id))))
 
 let slotOf = i => firstSlot + i

@@ -525,14 +525,6 @@ processor ParamStore
     input event float C3_Depth [[ name: "Chorus 3 depth", min: 0.10000000149011612, max: 100, init: 8, unit: "ms" ]];
     input event float C3_Feedback [[ name: "Chorus 3 feedback", min: -1, max: 1, init: 0 ]];
     input event float C3_Mix [[ name: "Chorus 3 mix", min: 0, max: 1, init: 0.800000011920929 ]];
-    input event float C4_Mode;    // retired
-    input event float C4_Stereo;    // retired
-    input event float C4_Voices;    // retired
-    input event float C4_Rate;    // retired
-    input event float C4_MinDelay;    // retired
-    input event float C4_Depth;    // retired
-    input event float C4_Feedback;    // retired
-    input event float C4_Mix;    // retired
     input event int D2_On [[ name: "Delay 2 on", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event int D2_Unit [[ name: "Delay 2 unit", min: 0, max: 14, init: 5, text: "ms|10 ms|sec|4/5 16ths|2/3 16ths|16ths|4/5 8ths|2/3 8ths|8ths|4/5 quarter notes|2/3 quarter notes|quarter notes|4/5 half notes|2/3 half notes|half notes" ]];
     input event int D2_Quantize [[ name: "Delay 2 quantize", min: 0, max: 1, init: 0, text: "free length|quantize length" ]];
@@ -563,21 +555,6 @@ processor ParamStore
     input event float D3_HP [[ name: "Delay 3 highpass", min: 0, max: 1, init: 0 ]];
     input event float D3_Dry [[ name: "Delay 3 dry out", min: 0, max: 31.622777938842773, init: 1 ]];
     input event float D3_Wet [[ name: "Delay 3 wet out", min: 0, max: 31.622777938842773, init: 0.800000011920929 ]];
-    input event float D4_On;    // retired
-    input event float D4_Unit;    // retired
-    input event float D4_Quantize;    // retired
-    input event float D4_ReverseL;    // retired
-    input event float D4_ReverseR;    // retired
-    input event float D4_LengthL;    // retired
-    input event float D4_LengthR;    // retired
-    input event float D4_FeedbackL;    // retired
-    input event float D4_FeedbackR;    // retired
-    input event float D4_InputPan;    // retired
-    input event float D4_Rotation;    // retired
-    input event float D4_LP;    // retired
-    input event float D4_HP;    // retired
-    input event float D4_Dry;    // retired
-    input event float D4_Wet;    // retired
     input event int R2_On [[ name: "Reverb 2 on", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event float R2_Size [[ name: "Reverb 2 size", min: 10, max: 250, init: 30 ]];
     input event float R2_Length [[ name: "Reverb 2 length", min: 0.10000000149011612, max: 120, init: 1.2000000476837158, unit: "sec" ]];
@@ -604,19 +581,6 @@ processor ParamStore
     input event float R3_Rotation [[ name: "Reverb 3 rotation", min: -3.1415927410125732, max: 3.1415927410125732, init: 2.2619469165802 ]];
     input event float R3_Predelay [[ name: "Reverb 3 predelay", min: -500, max: 500, init: 0, unit: "ms" ]];
     input event float R3_EarlyMix [[ name: "Reverb 3 early mix", min: 0, max: 1, init: 0.5 ]];
-    input event float R4_On;    // retired
-    input event float R4_Size;    // retired
-    input event float R4_Length;    // retired
-    input event float R4_Dullness;    // retired
-    input event float R4_Brightness;    // retired
-    input event float R4_Dry;    // retired
-    input event float R4_Wet;    // retired
-    input event float R4_1;    // retired
-    input event float R4_2;    // retired
-    input event float R4_3;    // retired
-    input event float R4_Rotation;    // retired
-    input event float R4_Predelay;    // retired
-    input event float R4_EarlyMix;    // retired
     input event int EQ2_On [[ name: "EQ 2 on", min: 0, max: 1, init: 1, text: "off|on" ]];
     input event float EQ2_1_Freq [[ name: "EQ 2 band 1 freq", min: 15, max: 20000, init: 1000, unit: "Hz" ]];
     input event float EQ2_1_Amp [[ name: "EQ 2 band 1 amp", min: -60, max: 60, init: 0, unit: "dB" ]];
@@ -659,27 +623,6 @@ processor ParamStore
     input event float EQ3_5_Amp [[ name: "EQ 3 band 5 amp", min: -60, max: 60, init: 0, unit: "dB" ]];
     input event float EQ3_5_Slope [[ name: "EQ 3 band 5 slope", min: 0.0625, max: 16, init: 1 ]];
     input event int EQ3_5_Type [[ name: "EQ 3 band 5 type", min: 0, max: 3, init: 0, text: "off|peak/notch|low shelf|high shelf" ]];
-    input event float EQ4_On;    // retired
-    input event float EQ4_1_Freq;    // retired
-    input event float EQ4_1_Amp;    // retired
-    input event float EQ4_1_Slope;    // retired
-    input event float EQ4_1_Type;    // retired
-    input event float EQ4_2_Freq;    // retired
-    input event float EQ4_2_Amp;    // retired
-    input event float EQ4_2_Slope;    // retired
-    input event float EQ4_2_Type;    // retired
-    input event float EQ4_3_Freq;    // retired
-    input event float EQ4_3_Amp;    // retired
-    input event float EQ4_3_Slope;    // retired
-    input event float EQ4_3_Type;    // retired
-    input event float EQ4_4_Freq;    // retired
-    input event float EQ4_4_Amp;    // retired
-    input event float EQ4_4_Slope;    // retired
-    input event float EQ4_4_Type;    // retired
-    input event float EQ4_5_Freq;    // retired
-    input event float EQ4_5_Amp;    // retired
-    input event float EQ4_5_Slope;    // retired
-    input event float EQ4_5_Type;    // retired
     input event int Sat2_Type [[ name: "Distortion 2 type", min: 0, max: 16, init: 0, text: "off|hard clip|soft clip|sine|asymmetric|custom shape|tube|tape|saturate|mixer drive|7-stage clip|multiband|wavefold|bass amp|guitar amp|bitcrush|lo-fi sampler" ]];
     input event int Sat2_Oversample [[ name: "Distortion 2 oversample", min: 0, max: 3, init: 0, text: "off|2x|4x|8x" ]];
     input event float Sat2_Pregain [[ name: "Distortion 2 pregain", min: -60, max: 60, init: 0, unit: "dB" ]];
@@ -842,60 +785,6 @@ processor ParamStore
     input event float Sat4_X16 [[ name: "Distortion 4 point 16 in", automatable: false, min: -1, max: 1, init: 1 ]];
     input event float Sat4_Y16 [[ name: "Distortion 4 point 16 out", automatable: false, min: -1, max: 1, init: 1 ]];
     input event float Sat4_C16 [[ name: "Distortion 4 point 16 bend", automatable: false, min: -1, max: 1, init: 0 ]];
-    input event float Sat5_Type;    // retired
-    input event float Sat5_Oversample;    // retired
-    input event float Sat5_Pregain;    // retired
-    input event float Sat5_Limit;    // retired
-    input event float Sat5_Postgain;    // retired
-    input event float Sat5_Points;    // retired
-    input event float Sat5_X1;    // retired
-    input event float Sat5_Y1;    // retired
-    input event float Sat5_C1;    // retired
-    input event float Sat5_X2;    // retired
-    input event float Sat5_Y2;    // retired
-    input event float Sat5_C2;    // retired
-    input event float Sat5_X3;    // retired
-    input event float Sat5_Y3;    // retired
-    input event float Sat5_C3;    // retired
-    input event float Sat5_X4;    // retired
-    input event float Sat5_Y4;    // retired
-    input event float Sat5_C4;    // retired
-    input event float Sat5_X5;    // retired
-    input event float Sat5_Y5;    // retired
-    input event float Sat5_C5;    // retired
-    input event float Sat5_X6;    // retired
-    input event float Sat5_Y6;    // retired
-    input event float Sat5_C6;    // retired
-    input event float Sat5_X7;    // retired
-    input event float Sat5_Y7;    // retired
-    input event float Sat5_C7;    // retired
-    input event float Sat5_X8;    // retired
-    input event float Sat5_Y8;    // retired
-    input event float Sat5_C8;    // retired
-    input event float Sat5_X9;    // retired
-    input event float Sat5_Y9;    // retired
-    input event float Sat5_C9;    // retired
-    input event float Sat5_X10;    // retired
-    input event float Sat5_Y10;    // retired
-    input event float Sat5_C10;    // retired
-    input event float Sat5_X11;    // retired
-    input event float Sat5_Y11;    // retired
-    input event float Sat5_C11;    // retired
-    input event float Sat5_X12;    // retired
-    input event float Sat5_Y12;    // retired
-    input event float Sat5_C12;    // retired
-    input event float Sat5_X13;    // retired
-    input event float Sat5_Y13;    // retired
-    input event float Sat5_C13;    // retired
-    input event float Sat5_X14;    // retired
-    input event float Sat5_Y14;    // retired
-    input event float Sat5_C14;    // retired
-    input event float Sat5_X15;    // retired
-    input event float Sat5_Y15;    // retired
-    input event float Sat5_C15;    // retired
-    input event float Sat5_X16;    // retired
-    input event float Sat5_Y16;    // retired
-    input event float Sat5_C16;    // retired
     input event float F_Drive [[ name: "Filter drive", min: 0, max: 1, init: 0 ]];
     input event int Fl_On [[ name: "Flanger on", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event float Fl_Rate [[ name: "Flanger rate", min: 0, max: 1, init: 0.39203041791915894 ]];
@@ -998,13 +887,6 @@ processor ParamStore
     input event float Fl3_Feedback [[ name: "Flanger 3 Flanger feedback", min: -1, max: 1, init: 0.5 ]];
     input event float Fl3_Phase [[ name: "Flanger 3 Flanger stereo phase", min: 0, max: 180, init: 90 ]];
     input event float Fl3_Mix [[ name: "Flanger 3 Flanger mix", min: 0, max: 1, init: 0.5 ]];
-    input event float Fl4_On;    // retired
-    input event float Fl4_Rate;    // retired
-    input event float Fl4_Depth;    // retired
-    input event float Fl4_Delay;    // retired
-    input event float Fl4_Feedback;    // retired
-    input event float Fl4_Phase;    // retired
-    input event float Fl4_Mix;    // retired
     input event int Ph2_On [[ name: "Phaser 2 Phaser on", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event float Ph2_Rate [[ name: "Phaser 2 Phaser rate", min: 0, max: 1, init: 0.3333333432674408 ]];
     input event float Ph2_Depth [[ name: "Phaser 2 Phaser depth", min: 0, max: 1, init: 0.6000000238418579 ]];
@@ -1025,16 +907,6 @@ processor ParamStore
     input event float Ph3_Phase [[ name: "Phaser 3 Phaser stereo phase", min: 0, max: 180, init: 90 ]];
     input event float Ph3_Track [[ name: "Phaser 3 Phaser note tracking", min: 0, max: 1, init: 0 ]];
     input event float Ph3_Mix [[ name: "Phaser 3 Phaser mix", min: 0, max: 1, init: 0.5 ]];
-    input event float Ph4_On;    // retired
-    input event float Ph4_Rate;    // retired
-    input event float Ph4_Depth;    // retired
-    input event float Ph4_Freq;    // retired
-    input event float Ph4_Feedback;    // retired
-    input event float Ph4_Stages;    // retired
-    input event float Ph4_Spread;    // retired
-    input event float Ph4_Phase;    // retired
-    input event float Ph4_Track;    // retired
-    input event float Ph4_Mix;    // retired
     input event int Cp2_On [[ name: "Compressor 2 Compressor on", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event int Cp2_Bands [[ name: "Compressor 2 Compressor bands", min: 0, max: 1, init: 1, text: "single band|3 bands" ]];
     input event float Cp2_Depth [[ name: "Compressor 2 Compressor amount", min: 0, max: 1, init: 1 ]];
@@ -1091,34 +963,6 @@ processor ParamStore
     input event float Cp3_HighUpRatio [[ name: "Compressor 3 Compressor high up ratio", min: 1, max: 10, init: 2 ]];
     input event float Cp3_HighGain [[ name: "Compressor 3 Compressor high gain", min: -24, max: 24, init: 0 ]];
     input event int Cp3_HighOn [[ name: "Compressor 3 Compressor high band on", min: 0, max: 1, init: 1, text: "off|on" ]];
-    input event float Cp4_On;    // retired
-    input event float Cp4_Bands;    // retired
-    input event float Cp4_Depth;    // retired
-    input event float Cp4_Attack;    // retired
-    input event float Cp4_Release;    // retired
-    input event float Cp4_InGain;    // retired
-    input event float Cp4_OutGain;    // retired
-    input event float Cp4_LowSplit;    // retired
-    input event float Cp4_HighSplit;    // retired
-    input event float Cp4_Mix;    // retired
-    input event float Cp4_LowThresh;    // retired
-    input event float Cp4_LowRatio;    // retired
-    input event float Cp4_LowUpThresh;    // retired
-    input event float Cp4_LowUpRatio;    // retired
-    input event float Cp4_LowGain;    // retired
-    input event float Cp4_LowOn;    // retired
-    input event float Cp4_MidThresh;    // retired
-    input event float Cp4_MidRatio;    // retired
-    input event float Cp4_MidUpThresh;    // retired
-    input event float Cp4_MidUpRatio;    // retired
-    input event float Cp4_MidGain;    // retired
-    input event float Cp4_MidOn;    // retired
-    input event float Cp4_HighThresh;    // retired
-    input event float Cp4_HighRatio;    // retired
-    input event float Cp4_HighUpThresh;    // retired
-    input event float Cp4_HighUpRatio;    // retired
-    input event float Cp4_HighGain;    // retired
-    input event float Cp4_HighOn;    // retired
     input event int Rv2_On [[ name: "Algo reverb 2 Algo reverb on", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event int Rv2_Model [[ name: "Algo reverb 2 Algo reverb model", min: 0, max: 4, init: 0, text: "hall|plate|nitrous|basin|vintage" ]];
     input event float Rv2_Size [[ name: "Algo reverb 2 Algo reverb size", min: 0, max: 1, init: 0.5 ]];
@@ -1139,16 +983,6 @@ processor ParamStore
     input event float Rv3_Width [[ name: "Algo reverb 3 Algo reverb width", min: 0, max: 1, init: 1 ]];
     input event float Rv3_Mod [[ name: "Algo reverb 3 Algo reverb modulation", min: 0, max: 1, init: 0.30000001192092896 ]];
     input event float Rv3_Mix [[ name: "Algo reverb 3 Algo reverb mix", min: 0, max: 1, init: 0.30000001192092896 ]];
-    input event float Rv4_On;    // retired
-    input event float Rv4_Model;    // retired
-    input event float Rv4_Size;    // retired
-    input event float Rv4_Decay;    // retired
-    input event float Rv4_Predelay;    // retired
-    input event float Rv4_Damp;    // retired
-    input event float Rv4_LowCut;    // retired
-    input event float Rv4_Width;    // retired
-    input event float Rv4_Mod;    // retired
-    input event float Rv4_Mix;    // retired
     input event int Cv2_On [[ name: "Convolve 2 Convolve on", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event int Cv2_Impulse [[ name: "Convolve 2 Convolve impulse", min: 0, max: 11, init: 1, text: "room|hall|cathedral|plate|spring|cabinet 1×12|cabinet 4×12|metal tank|telephone|swell|noise bloom|file" ]];
     input event float Cv2_Mix [[ name: "Convolve 2 Convolve mix", min: 0, max: 1, init: 0.30000001192092896 ]];
@@ -1171,12 +1005,6 @@ processor ParamStore
     input event float Bd3_Feedback [[ name: "Bode 3 Bode feedback", min: 0, max: 1, init: 0 ]];
     input event float Bd3_Delay [[ name: "Bode 3 Bode delay", min: 0, max: 1, init: 0.6666666865348816 ]];
     input event float Bd3_Mix [[ name: "Bode 3 Bode mix", min: 0, max: 1, init: 0.5 ]];
-    input event float Bd4_On;    // retired
-    input event float Bd4_Shift;    // retired
-    input event float Bd4_Mode;    // retired
-    input event float Bd4_Feedback;    // retired
-    input event float Bd4_Delay;    // retired
-    input event float Bd4_Mix;    // retired
     input event int Ff2_On [[ name: "Filter 2 FX filter on", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event int Ff2_Type [[ name: "Filter 2 FX filter type", min: 0, max: 59, init: 16, text: "off|1P lowpass|2P lowpass|4P lowpass|1P highpass|2P highpass|4P highpass|2P wide bandpass|2P narrow bandpass|4P bandpass|2P notch|nonlinear 2P lowpass|nonlinear 4P lowpass|phaser, 4 stages|phaser, 12 stages|phaser, 36 stages|SVF LP > BP > HP|ladder|diode ladder|Sallen-Key|comb|formant|bandpass 12 dB|bandpass 24 dB|peak 12 dB|peak 24 dB|notch 12 dB|notch 24 dB|L/B/H 24 (morph)|L/N/H (morph)|B/P/B (morph)|N/P/N (morph)|MG low 6|MG low 12|MG low 18|MG low 24|MG dirty|acid ladder|French LP|German LP|clean drive|PZ SVF|comb +|comb −|flanger|flanger +|flanger −|phaser|phaser +|phaser −|formant I|formant II|formant III|low EQ|band EQ|high EQ|ring mod|sample & hold|diffusor|reverb" ]];
     input event float Ff2_Cutoff [[ name: "Filter 2 FX filter cutoff", min: 0, max: 1, init: 0.5927171111106873 ]];
@@ -1193,14 +1021,6 @@ processor ParamStore
     input event float Ff3_Drive [[ name: "Filter 3 FX filter drive", min: 0, max: 1, init: 0 ]];
     input event float Ff3_Spread [[ name: "Filter 3 FX filter stereo spread", min: -24, max: 24, init: 0, unit: "st" ]];
     input event float Ff3_Mix [[ name: "Filter 3 FX filter mix", min: 0, max: 1, init: 1 ]];
-    input event float Ff4_On;    // retired
-    input event float Ff4_Type;    // retired
-    input event float Ff4_Cutoff;    // retired
-    input event float Ff4_Resonance;    // retired
-    input event float Ff4_Morph;    // retired
-    input event float Ff4_Drive;    // retired
-    input event float Ff4_Spread;    // retired
-    input event float Ff4_Mix;    // retired
     input event int Ut2_On [[ name: "Utility 2 Utility on", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event float Ut2_Gain [[ name: "Utility 2 Utility gain", min: -48, max: 24, init: 0 ]];
     input event float Ut2_Pan [[ name: "Utility 2 Utility pan", min: -1, max: 1, init: 0 ]];
@@ -1217,14 +1037,6 @@ processor ParamStore
     input event int Ut3_InvR [[ name: "Utility 3 Utility invert right", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event int Ut3_Swap [[ name: "Utility 3 Utility swap sides", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event float Ut3_BassMono [[ name: "Utility 3 Utility bass mono", min: 0, max: 1, init: 0 ]];
-    input event float Ut4_On;    // retired
-    input event float Ut4_Gain;    // retired
-    input event float Ut4_Pan;    // retired
-    input event float Ut4_Width;    // retired
-    input event float Ut4_InvL;    // retired
-    input event float Ut4_InvR;    // retired
-    input event float Ut4_Swap;    // retired
-    input event float Ut4_BassMono;    // retired
     input event float Curve_Amp_Decay1 [[ name: "Amp env decay 1 curve", min: -1, max: 1, init: 0 ]];
     input event float Curve_Filter_Decay1 [[ name: "Filter env decay 1 curve", min: -1, max: 1, init: 0 ]];
     input event float Curve_Mod1_Decay1 [[ name: "Mod 1 env decay 1 curve", min: -1, max: 1, init: 0 ]];
@@ -1292,19 +1104,6 @@ processor ParamStore
     input event float Am3_LowFreq [[ name: "Ambience 3 Ambience low freq", min: 0, max: 1, init: 0.3333333432674408 ]];
     input event float Am3_Width [[ name: "Ambience 3 Ambience width", min: -1, max: 1, init: 0 ]];
     input event float Am3_Mix [[ name: "Ambience 3 Ambience mix", min: 0, max: 1, init: 0.30000001192092896 ]];
-    input event float Am4_On;    // retired
-    input event float Am4_Model;    // retired
-    input event float Am4_Size;    // retired
-    input event float Am4_Time;    // retired
-    input event float Am4_Density;    // retired
-    input event float Am4_Predelay;    // retired
-    input event float Am4_HighCut;    // retired
-    input event float Am4_HighTime;    // retired
-    input event float Am4_HighFreq;    // retired
-    input event float Am4_LowTime;    // retired
-    input event float Am4_LowFreq;    // retired
-    input event float Am4_Width;    // retired
-    input event float Am4_Mix;    // retired
     input event float Sat_Drive [[ name: "Dist drive", min: 0, max: 1, init: 0.5 ]];
     input event float Sat_Tone [[ name: "Dist tone", min: 0, max: 1, init: 0.5 ]];
     input event float Sat_Character [[ name: "Dist character", min: 0, max: 1, init: 0 ]];
@@ -1321,10 +1120,6 @@ processor ParamStore
     input event float Sat4_Tone [[ name: "Distortion 4 tone", min: 0, max: 1, init: 0.5 ]];
     input event float Sat4_Character [[ name: "Distortion 4 character", min: 0, max: 1, init: 0 ]];
     input event float Sat4_Mix [[ name: "Distortion 4 mix", min: 0, max: 1, init: 1 ]];
-    input event float Sat5_Drive;    // retired
-    input event float Sat5_Tone;    // retired
-    input event float Sat5_Character;    // retired
-    input event float Sat5_Mix;    // retired
     input event int Ai_On [[ name: "Air on", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event float Ai_Air [[ name: "Air amount", min: 0, max: 1, init: 0.5 ]];
     input event float Ai_Body [[ name: "Air body", min: 0, max: 1, init: 0.5 ]];
@@ -1340,11 +1135,6 @@ processor ParamStore
     input event float Ai3_Body [[ name: "Air 3 Air body", min: 0, max: 1, init: 0.5 ]];
     input event float Ai3_DarkFreq [[ name: "Air 3 Air dark freq", min: 0, max: 1, init: 0.5199999809265137 ]];
     input event float Ai3_Darken [[ name: "Air 3 Air darken", min: 0, max: 1, init: 0 ]];
-    input event float Ai4_On;    // retired
-    input event float Ai4_Air;    // retired
-    input event float Ai4_Body;    // retired
-    input event float Ai4_DarkFreq;    // retired
-    input event float Ai4_Darken;    // retired
     input event int KEQ_On [[ name: "Key EQ", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event float KEQ_1_Gain [[ name: "Key EQ low shelf gain", min: -24, max: 24, init: 0 ]];
     input event float KEQ_2_Gain [[ name: "Key EQ 2× gain", min: -24, max: 24, init: 0 ]];
@@ -1538,7 +1328,6 @@ processor ParamStore
     input event float Ff_Track [[ name: "FX filter note tracking", min: 0, max: 1, init: 0 ]];
     input event float Ff2_Track [[ name: "Filter 2 note tracking", min: 0, max: 1, init: 0 ]];
     input event float Ff3_Track [[ name: "Filter 3 note tracking", min: 0, max: 1, init: 0 ]];
-    input event float Ff4_Track;    // retired
     input event int Sh_On [[ name: "Shifter on", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event float Sh_Ratio [[ name: "Shifter ratio", min: -1, max: 1, init: 0.5 ]];
     input event float Sh_Hz [[ name: "Shifter offset", min: -1, max: 1, init: 0 ]];
@@ -1572,22 +1361,16 @@ processor ParamStore
     input event int Sat2_Track [[ name: "Distortion 2 Dist lo-fi note tracking", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event int Sat3_Track [[ name: "Distortion 3 Dist lo-fi note tracking", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event int Sat4_Track [[ name: "Distortion 4 Dist lo-fi note tracking", min: 0, max: 1, init: 0, text: "off|on" ]];
-    input event float Sat5_Track;    // retired
     input event float Fl2_RateTrack [[ name: "Flanger 2 Flanger rate tracking", min: 0, max: 1, init: 0 ]];
     input event float Fl2_PhaseRand [[ name: "Flanger 2 Flanger random start", min: 0, max: 1, init: 0 ]];
     input event float Fl2_Track [[ name: "Flanger 2 Flanger delay tracking", min: 0, max: 1, init: 0 ]];
     input event float Fl3_RateTrack [[ name: "Flanger 3 Flanger rate tracking", min: 0, max: 1, init: 0 ]];
     input event float Fl3_PhaseRand [[ name: "Flanger 3 Flanger random start", min: 0, max: 1, init: 0 ]];
     input event float Fl3_Track [[ name: "Flanger 3 Flanger delay tracking", min: 0, max: 1, init: 0 ]];
-    input event float Fl4_RateTrack;    // retired
-    input event float Fl4_PhaseRand;    // retired
-    input event float Fl4_Track;    // retired
     input event float Ph2_RateTrack [[ name: "Phaser 2 Phaser rate tracking", min: 0, max: 1, init: 0 ]];
     input event float Ph2_PhaseRand [[ name: "Phaser 2 Phaser random start", min: 0, max: 1, init: 0 ]];
     input event float Ph3_RateTrack [[ name: "Phaser 3 Phaser rate tracking", min: 0, max: 1, init: 0 ]];
     input event float Ph3_PhaseRand [[ name: "Phaser 3 Phaser random start", min: 0, max: 1, init: 0 ]];
-    input event float Ph4_RateTrack;    // retired
-    input event float Ph4_PhaseRand;    // retired
     input event int Oc_On [[ name: "Octaver on", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event float Oc_Sub [[ name: "Octaver down", min: 0, max: 1, init: 0.699999988079071 ]];
     input event float Oc_Up [[ name: "Octaver up", min: 0, max: 1, init: 0 ]];

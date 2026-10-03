@@ -3,6 +3,8 @@
 //                            actions), then Porridge's own (ui/PorridgeParams.res), forwarding every
 //                            change to the synth as (slot, value); hosts don't list the routing
 //                            and setup ones (ParamInfo: automatable: false)
+//   dsp/param-ids.txt      - every parameter's CLAP id, kept for good (tools/param-ids.mjs): new
+//                            parameters are added to it
 //   dsp/Slots.cmajor       - slot constants: index into the synth's mirror of the program struct,
 //                            every slot's default, and names for the choice values the DSP tests
 //   dsp/ModTables.cmajor   - the modulation matrix's sources and targets (ui/ModMatrix.res), with
@@ -19,10 +21,11 @@ import { fileURLToPath } from "node:url";
 import { all as fields } from "../ui/oatmeal/Fields.res.mjs";
 import { xyTargets, modEnvTargets, ccTargets } from "../ui/oatmeal/OatmealParams.res.mjs";
 import { paramInfo } from "../ui/ParamInfo.res.mjs";
-import { all as porridgeParams, endpoints as porridgeEndpoints, slotOf as porridgeSlot, fxOrder, rackId, rackSlots, rackKinds, rackEntries, copyId } from "../ui/PorridgeParams.res.mjs";
+import { all as porridgeParams, slotOf as porridgeSlot, fxOrder, rackId, rackSlots, rackKinds, rackEntries, copyId } from "../ui/PorridgeParams.res.mjs";
 import { makeDefs, choiceValue } from "../ui/ParamDefs.res.mjs";
 import { programSize, tableOffset } from "../ui/oatmeal/OatmealFormat.res.mjs";
 import * as ModMatrix from "../ui/ModMatrix.res.mjs";
+import { readIds, assignIds, idsText } from "./param-ids.mjs";
 
 const root = join (dirname (fileURLToPath (import.meta.url)), "..");
 
@@ -118,13 +121,14 @@ for (const f of all)
                              : `    { "${id}", ${offset}, FieldType::${kind}, ${isInt} },`);
 }
 
-// Porridge's endpoints in the order they came, the retired ones (PorridgeParams.endpoints) in
-// their places as plain events that do nothing: hosts know a parameter by its endpoint's number.
-{
-    const live = new Map (endpoints.splice (fields.length).map ((line, i) => [porridgeParams[i].id, line]));
-    for (const [id, retired] of porridgeEndpoints)
-        endpoints.push (retired ? `    input event float ${id};    // retired` : live.get (id));
-}
+// Hosts know a parameter by its CLAP id, which dsp/param-ids.txt keeps for every endpoint there
+// has been (tools/param-ids.mjs): a new parameter gets one here, and the endpoints' order and
+// number don't matter to hosts.
+const idsPath = join (root, "dsp", "param-ids.txt");
+const clapIds = readIds (idsPath);
+const newIds = assignIds (clapIds, all.map (f => f.id));
+writeGenerated (idsPath, idsText (clapIds));
+if (newIds.length) console.log (`new CLAP ids (dsp/param-ids.txt): ${newIds.join (", ")}`);
 
 // A camelCase identifier from a menu label: "LFO 1 speed" -> lfo1Speed, "1 PWM rate" -> osc1PwmRate.
 function labelIdent (label)
