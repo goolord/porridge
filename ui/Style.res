@@ -557,6 +557,7 @@ let css = `
     flex-wrap: wrap; gap: 3px; padding: 5px 6px; box-sizing: border-box; background: var(--panel);
     border-top: 1px solid var(--signal); box-shadow: 0 -2px 0 rgba(31,26,14,0.15); }
 .mtray.on { display: flex; }
+.mtray.dragging { opacity: 0; pointer-events: none; transition: opacity 0.1s; }
 .mchip { position: relative; height: 20px; box-sizing: border-box; padding: 0 7px 0 12px; border-radius: 2px;
     background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge); font-size: 11.5px; line-height: 20px;
     white-space: nowrap; cursor: grab; max-width: 96px; overflow: hidden; text-overflow: ellipsis; }

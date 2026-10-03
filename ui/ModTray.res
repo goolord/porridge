@@ -1,6 +1,7 @@
 // The source tray: every modulation source as a small chip, from a switch at the end of the
 // status line, over the bottom of any page. Drag a chip onto a parameter to connect the source
-// to it (at a quarter of its range); "vary per note" connects the random source a little, so
+// to it (at a quarter of its range; the tray hides while a chip is dragged, so that it covers
+// none of them); "vary per note" connects the random source a little, so
 // that each note gets the parameter a bit differently. An alt-drag on the parameter then sets
 // how much (Controls.paramControl). Click a chip to select its source (ModFocus): what it moves
 // lights up on every page.
@@ -69,9 +70,11 @@ let make = (ctx: Ctx.t, stage) => {
           d->Option.forEach(d => d.el->addClass("dropping"))
         }
         let move = (cx, cy) => {
-          if Math.hypot(cx - x0, cy - y0) > 4. {
+          if !moved.contents && Math.hypot(cx - x0, cy - y0) > 4. {
             moved := true
             ghost->setStyle("display", "")
+            // out of the way of the parameters under it
+            tray->addClass("dragging")
           }
           let (x, y) = toStage(cx, cy)
           ghost->place(x + 8., y - 22.)->ignore
@@ -91,6 +94,7 @@ let make = (ctx: Ctx.t, stage) => {
           ~onMove=mv => move(mv->clientX, mv->clientY),
           ~onUp=() => {
             ghost->remove
+            tray->removeClass("dragging")
             ctx.status->Status.clear
             let d = hot.contents
             setHot(None)
