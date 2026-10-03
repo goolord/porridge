@@ -71,7 +71,7 @@ These override anything below that disagrees.
 
 ---
 
-## Status (2026-10-02, after rounds 1 and 2)
+## Status (2026-10-03, after rounds 1-3)
 
 Done, on main:
 - Phase 1: tab marks (ui/Features.res), empty slots collapsed to "+", one switch per effect, no
@@ -99,13 +99,30 @@ filter menu's first level; 879 host-visible parameters (the rest are effect copi
 parameters, kept automatable); 51.7 MB per instance (45 MB would mean cutting reachable delay or
 convolver capacity).
 
+Round 3 (2026-10-03), on main:
+- Phase 5b, done: CLAP ids come from an append-only registry (dsp/param-ids.txt), so endpoints can
+  go; the custom shapes' points are stored state; the rack is 8 generic slots of 28 knobs (the lane
+  4 of 21) over per-kind instances (8 of each kind, 1 convolver), Oatmeal's chorus, delay, reverb
+  and EQ staying fixed effects as well as slot kinds; the pool claims what the knobs need (a delay
+  its lengths, a reverb its lines at the rate), and an effect that doesn't fit runs dry with an
+  "out of memory" mark. Copies in programs, presets, DAW sessions and the matrix load into slots.
+- DSP merges: Sallen-Key runs as the SVF's lowpass and peak 12 as B/P/B at morph 0.5 (aliased in
+  the DSP, not at load: shared morph and resonance make a load-time rewrite inexact); the key
+  shifter is the Bode's note ratio, and the Bode can sit in the lane. Not merged, measured
+  different: low EQ boost vs high EQ cut (up to 24 dB apart in level), and the distortion's
+  tube / saturate / mixer drive (0.2-7 dB from any hard or soft clip, knee fitted, on a sine).
+- Oversampling is one HQ switch outside Oat mode (a unity-gain 4x; Oat mode keeps 2x/4x/8x).
+- Also: noise types (pink to violet, crackle, digital, metallic, a sample), unison random phase
+  as an amount, a pencil on the draw buttons, "Oat saw" names, a dismiss for FL Studio's menu.
+
+Metrics now: 696 host-visible parameters (308 of them slot knobs), 50.96 MB per instance, 799
+modulation targets, a 25 s clean MSVC build of the plugin (59 s before the slots).
+
 Not done yet:
-- DSP merges of the measured-identical filter and distortion types, Bode with the key shifter, and a
-  single convolver instance: the pickers already offer each sound once, so what's left is memory,
-  parameters and code size, not UX.
-- Oversampling as an HQ switch: the filters are unity gain now outside Oat mode (half-band stages,
-  flat to 20 kHz), so what is left is folding 2x/4x/8x into one switch.
-- Free stacking: see Phase 5b (make CLAP ids independent of endpoint order first).
+- The Bode's and flanger's lines still claim their 192 kHz size; slot delays keep the copies'
+  10 s cap (Oatmeal's has 30 s), which the pool's footprints would now allow.
+- Host automation recorded on a removed copy parameter doesn't move to the slot knobs.
+
 
 ## 1. Diagnosis (evidence)
 
