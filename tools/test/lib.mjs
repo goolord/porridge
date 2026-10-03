@@ -177,3 +177,53 @@ export const loudest = ([l, r], rate) =>
         best = Math.max (best, power.slice (k, k + window).reduce ((a, b) => a + b, 0) / window);
     return 10 * Math.log10 (Math.max (best, 1e-18));
 };
+
+// The power spectrum of a channel from sample a to b (Welch: 4096-point Hann frames, half
+// overlapping), each bin's mean power; bin k is k * rate / 4096 Hz.
+export const powerSpectrum = (x, a, b) =>
+{
+    const N = 4096, P = new Float64Array (N / 2);
+    const fft = (re, im) =>
+    {
+        for (let i = 1, j = 0; i < N; ++i)
+        {
+            let bit = N >> 1;
+            for (; j & bit; bit >>= 1) j ^= bit;
+            j ^= bit;
+            if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; }
+        }
+        for (let len = 2; len <= N; len <<= 1)
+        {
+            const w = -2 * Math.PI / len, wr = Math.cos (w), wi = Math.sin (w), h = len / 2;
+            for (let i = 0; i < N; i += len)
+                for (let k = 0, cr = 1, ci = 0; k < h; ++k)
+                {
+                    const p = i + k, q = p + h;
+                    const vr = re[q] * cr - im[q] * ci, vi = re[q] * ci + im[q] * cr;
+                    re[q] = re[p] - vr; im[q] = im[p] - vi; re[p] += vr; im[p] += vi;
+                    const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+                }
+        }
+    };
+    let frames = 0;
+    for (let s = a; s + N <= b; s += N / 2, ++frames)
+    {
+        const re = new Float64Array (N), im = new Float64Array (N);
+        for (let i = 0; i < N; ++i) re[i] = x[s + i] * (0.5 - 0.5 * Math.cos (2 * Math.PI * i / N));
+        fft (re, im);
+        for (let k = 0; k < N / 2; ++k) P[k] += re[k] * re[k] + im[k] * im[k];
+    }
+    return P.map (p => p / Math.max (frames, 1));
+};
+
+// The octave bands' power (dB) of a power spectrum at a rate, centred on 31.5 Hz .. 16 kHz.
+export const octaveBands = (P, rate) => [31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000].map (f =>
+{
+    let s = 0;
+    for (let k = 1; k < P.length; ++k)
+    {
+        const hz = k * rate / (2 * P.length);
+        if (hz >= f / Math.SQRT2 && hz < f * Math.SQRT2) s += P[k];
+    }
+    return 10 * Math.log10 (s + 1e-30);
+});

@@ -1,7 +1,8 @@
 // A convolver's impulse response from a file. Each convolver (Cv_, Cv2_) has one, kept with the
 // program (Preset), in the stored state for the current program, and sent to the patch in
 // chunks (dsp/Types.cmajor ImpulseChunk). Impulses are kept at 48 kHz or less and at most
-// maxFrames long: what the convolver can hold.
+// maxFrames long: what the convolver can hold. The noise's sample (noiseSlot) is kept and sent
+// the same way, mono.
 
 type t = {
   name: string,
@@ -11,8 +12,10 @@ type t = {
   right: option<Float32Array.t>,
 }
 
-// one per convolver (PorridgeParams.newKinds convolve: the first and its copy)
-let slots = 2
+// one per convolver (PorridgeParams.newKinds convolve: the first and its copy), then the noise's
+// sample (noiseSlot: the noise type "sample", dsp/Oscillator.cmajor NoiseSample)
+let slots = 3
+let noiseSlot = 2
 let maxFrames = 131072
 let maxRate = 48000.
 let chunkFrames = 2048
@@ -72,6 +75,45 @@ let fromAudio = (name, audio: AudioFile.t): option<t> => {
   | [(left, rate), (right, _)] if TypedArray.length(left) > 0 => Some({name, rate, left, right: Some(right)})
   | [(left, rate)] if TypedArray.length(left) > 0 => Some({name, rate, left, right: None})
   | _ => None
+  }
+}
+
+// The noise's sample from a file: mono (the channels averaged), from its first sound, fitted as
+// an impulse is (2.7 s at 48 kHz at most), its end crossfaded into its start (with equal power,
+// as for noise) so that it loops without a click, and as loud (RMS) as the white noise. None
+// if it's too short or silent.
+let noiseRms = 0.57735027
+let loopFade = 2048
+
+let noiseFromAudio = (name, audio: AudioFile.t): option<t> => {
+  let (d, rate) = fit(trimStart([audio.samples])->Array.getUnsafe(0), audio.sampleRate)
+  let n = TypedArray.length(d)
+  let fade = Math.Int.min(loopFade, n / 4)
+  if n < 256 {
+    None
+  } else {
+    let m = n - fade
+    let out = Float32Array.fromLength(m)
+    for i in 0 to m - 1 {
+      out->put(i, d->at(i))
+    }
+    for i in 0 to fade - 1 {
+      let a = Math.Constants.pi /. 2. *. Int.toFloat(i) /. Int.toFloat(fade)
+      out->put(i, d->at(i) *. Math.sin(a) +. d->at(m + i) *. Math.cos(a))
+    }
+    let power = ref(0.)
+    for i in 0 to m - 1 {
+      power := power.contents +. out->at(i) *. out->at(i)
+    }
+    let rms = Math.sqrt(power.contents /. Int.toFloat(m))
+    if rms < 1e-6 {
+      None
+    } else {
+      for i in 0 to m - 1 {
+        out->put(i, out->at(i) *. noiseRms /. rms)
+      }
+      Some({name, rate, left: out, right: None})
+    }
   }
 }
 

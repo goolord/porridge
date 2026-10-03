@@ -47,7 +47,7 @@ let make = (ctx: Ctx.t, parent, box: box, ~show: block => unit) => {
   let lights = (e, ids) => model->ModFocus.register(e, ids)
   lights(osc1, () => ["O1_Amp", "O1_PWM_W", "O1_PWM_R", "O1_PWM_D", Modulators.pitchKnob])
   lights(osc2, () => ["O2_Amp", "O2_PWM_W", "O2_PWM_R", "O2_PWM_D", "Transpose", "Detune", Modulators.pitchKnob])
-  lights(noise, () => ["N_Amp", "N_Resonance", "N_Transpose"])
+  lights(noise, () => ["N_Amp", "N_Resonance", "N_Transpose", "N_Density"])
   lights(unison, () => ["U_Detune", "U_Spread", "U_Width", "Drift_Pitch"])
   lights(filterNode, () =>
     ["Cutoff", "Resonance", "F_EnvMod", "F_Track", "F_Split", "F_Mix", "F_Morph", "F_Drive", Modulators.envMark("filterEnv")]
@@ -193,6 +193,8 @@ let make = (ctx: Ctx.t, parent, box: box, ~show: block => unit) => {
     voice->appendChild(mix)
     voice->appendChild(osc2)
     if get("N_Amp") > 0. {
+      // (white, Oatmeal's, is simply noise)
+      noise->setTextContent(get("N_Type") == 0. ? "noise" : "noise · " ++ listText("N_Type"))
       el("span", ~cls="fsep", ~text="+", ~parent=voice)->ignore
       voice->appendChild(noise)
     }
@@ -271,6 +273,7 @@ let make = (ctx: Ctx.t, parent, box: box, ~show: block => unit) => {
       "Transpose",
       "OscMix",
       "N_Amp",
+      "N_Type",
       "U_Voices",
       "Filter",
       "Cutoff",

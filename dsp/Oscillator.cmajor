@@ -909,12 +909,224 @@ namespace porridge
         int glideRem;
         float glideStep;
         float l1, l2, b1, b2, F, q, g;
+
+        // the other types' (N_Type, renderTyped): whether the note's first block has been, the
+        // colours' filter states (pink's three poles, brown's one) and the last input, the shift
+        // register, its clock's phase (in steps) and its held output, the sample's place, the
+        // crackle's click
+        bool started;
+        float s0, s1, s2, prev;
+        int lfsr;
+        float clock, held;
+        float64 pos;
+        float click;
     }
 
     void resetNoise (Noise& this)
     {
         this.first = true;
         this.l1 = 0; this.l2 = 0; this.b1 = 0; this.b2 = 0; this.g = 0;
+        this.started = false;
+        this.s0 = 0; this.s1 = 0; this.s2 = 0; this.prev = 0;
+        this.clock = 0; this.held = 0; this.pos = 0; this.click = 0;
+    }
+
+    //==============================================================================
+    /// The noise types (N_Type) after Oatmeal's white, in ui/PorridgeParams.res noiseTypes' order.
+    namespace noiseType
+    {
+        let white = 0;
+        let pink = 1;
+        let brown = 2;
+        let blue = 3;
+        let violet = 4;
+        let crackle = 5;
+        let digital = 6;
+        let metallic = 7;
+        let sample = 8;
+    }
+
+    /// The sample the "sample" noise type loops (ui/Impulse.res's noise slot, mono, at most
+    /// noiseSampleFrames at `rate`): one for the whole instance, which every voice reads from a
+    /// place of its own. length 0: none (silence), as while a new one is arriving.
+    let noiseSampleFrames = 131072;
+
+    struct NoiseSample
+    {
+        float[noiseSampleFrames] data;
+        int length, loading;
+        float rate;
+    }
+
+    /// Part of the noise sample, as a convolver's impulse arrives (ImpulseChunk): an offset-0
+    /// chunk starts a new one (silent until the chunk that reaches its last frame), length 0
+    /// clears it. Only the left channel is read (the view sends the sample mono).
+    void loadChunk (NoiseSample& this, const ImpulseChunk& c)
+    {
+        if (c.length <= 0 || c.offset == 0)
+            this.length = 0;
+
+        if (c.length <= 0)
+        {
+            this.loading = 0;
+            return;
+        }
+
+        if (c.offset == 0)
+        {
+            this.loading = min (c.length, noiseSampleFrames);
+            this.rate = max (c.rate, 1000.0f);
+        }
+
+        if (this.loading == 0)
+            return;
+
+        for (wrap<impulseChunkFrames> j)
+        {
+            let i = c.offset + int (j);
+
+            if (i >= 0 && i < this.loading)
+                this.data.at (i) = c.left[j];
+        }
+
+        if (c.offset + impulseChunkFrames >= this.loading)
+        {
+            this.length = this.loading;
+            this.loading = 0;
+        }
+    }
+
+    /// The colours' filters at a sample rate: Paul Kellet's three-pole pink filter (its poles
+    /// kept at their frequencies, 16.5, 265 and 3945 Hz, and its gains scaled to match), brown's
+    /// leaky integrator (from 40 Hz), and the gains that keep each colour as loud (RMS) as the
+    /// white it filters; how fast a crackle's click decays (over a tenth of a millisecond); and
+    /// the metallic noise's loop as band-limited waves (buildMetal).
+    struct NoiseTables
+    {
+        float p0, p1, p2, g0, g1, g2, pinkGain, blueGain, brownPole, brownGain, crackleDecay;
+        float[metalLevels * metalSize] metal;
+    }
+
+    void build (NoiseTables& c, float64 sr)
+    {
+        let at44 = float64[3] (0.99765, 0.96300, 0.57000);
+        let gain44 = float64[3] (0.0990460, 0.2965164, 1.0526913);
+        let w = 0.1848;     // the white's own share
+        float64[3] p, g;
+
+        for (wrap<3> k)
+        {
+            let hz = -log (at44[k]) * 44100.0 / twoPi;
+            p[k] = exp (-twoPi * hz / sr);
+            g[k] = gain44[k] * (1.0 - p[k]) / (1.0 - at44[k]);
+        }
+
+        // the pink's power (and its next sample's covariance) over the white's, summed over its
+        // impulse response h0 = g0 + g1 + g2 + w, hm = sum gk pk^m: r0 = sum hm^2, r1 = sum
+        // hm hm+1 (the double sums count m >= 0 for r0, m >= 1 for r1)
+        var G = 0.0, r0 = 0.0, r1 = 0.0;
+
+        for (wrap<3> j)
+        {
+            G += g[j];
+
+            for (wrap<3> k)
+            {
+                let d = 1.0 - p[j] * p[k];
+                r0 += g[j] * g[k] / d;
+                r1 += g[j] * g[k] * p[j] * p[k] * p[k] / d;
+            }
+        }
+
+        var h1 = 0.0;
+        for (wrap<3> k) h1 += g[k] * p[k];
+        r0 += 2.0 * w * G + w * w;
+        r1 += (G + w) * h1;
+
+        c.p0 = float (p[0]); c.p1 = float (p[1]); c.p2 = float (p[2]);
+        c.g0 = float (g[0]); c.g1 = float (g[1]); c.g2 = float (g[2]);
+        c.pinkGain = float (1.0 / sqrt (r0));
+        // blue: the pink's difference, whose power is 2 (r0 - r1)
+        c.blueGain = float (1.0 / sqrt (2.0 * (r0 - r1)));
+        let b = exp (-twoPi * 40.0 / sr);
+        c.brownPole = float (b);
+        c.brownGain = float (sqrt ((1.0 + b) / (1.0 - b)));
+        c.crackleDecay = float (exp (-1.0 / (0.0001 * sr)));
+        c.buildMetal();
+    }
+
+    /// The metallic noise is the 15-bit shift register's short loop (93 steps, as the NES's
+    /// noise channel in its short mode), one loop a cycle of the note: a wave. It plays from
+    /// tables of it with fewer harmonics for higher notes (metalHarmonics: the loop's 46 and the
+    /// hold's images up to three times as many, then about half an octave fewer each), so that it
+    /// never aliases.
+    let metalSize = 2048;
+    let metalLevels = 16;
+    let metalHarmonics = int[metalLevels] (279, 186, 128, 93, 64, 46, 32, 23, 16, 11, 8, 6, 4, 3, 2, 1);
+
+    /// The loop's 93 steps held (each a 93rd of the cycle), as a sum of its harmonics: c_h =
+    /// DFT(steps)[h mod 93] / 93 times the hold's sinc(h / 93) and its half-step delay. Without
+    /// DC, and as loud (RMS) as the white noise were all its harmonics there. The tables are
+    /// sums of the harmonics up to theirs, made fewest first.
+    void buildMetal (NoiseTables& this)
+    {
+        float64[93] steps;
+        var r = 1;
+        var ones = 0;
+
+        for (wrap<93> k)
+        {
+            let fb = (r ^ (r >> 6)) & 1;
+            r = (r >> 1) | (fb << 14);
+            steps[k] = (r & 1) != 0 ? 1.0 : 0.0;
+            ones += r & 1;
+        }
+
+        float64[93] re, im;
+
+        for (wrap<93> h)
+        {
+            for (wrap<93> k)
+            {
+                let a = -twoPi * float64 (int (h) * int (k)) / 93.0;
+                re[h] += steps[k] * cos (a);
+                im[h] += steps[k] * sin (a);
+            }
+        }
+
+        // the held steps' power without DC: p (1 - p), p the share of ones
+        let p = float64 (ones) / 93.0;
+        let norm = 0.57735027 / sqrt (p * (1.0 - p));
+        float64[metalSize] y;
+        var done = 0;
+
+        for (int level = metalLevels - 1; level >= 0; --level)
+        {
+            for (int h = done + 1; h <= metalHarmonics.at (level); ++h)
+            {
+                let x = pi * float64 (h) / 93.0;
+                let d = h % 93;
+                let amp = 2.0 * sqrt (re.at (d) * re.at (d) + im.at (d) * im.at (d)) / 93.0 * sin (x) / x;
+                let phase = atan2 (im.at (d), re.at (d)) - x;
+
+                // (the harmonic's phasor turned a table step at a time)
+                let dc = cos (float64 (h) * twoPi / float64 (metalSize)), ds = sin (float64 (h) * twoPi / float64 (metalSize));
+                var c = amp * cos (phase), sn = amp * sin (phase);
+
+                for (wrap<metalSize> j)
+                {
+                    y[j] += c;
+                    let c2 = c * dc - sn * ds;
+                    sn = c * ds + sn * dc;
+                    c = c2;
+                }
+            }
+
+            done = metalHarmonics.at (level);
+
+            for (wrap<metalSize> j)
+                this.metal.at (level * metalSize + int (j)) = float (y[j] * norm);
+        }
     }
 
     void glideTo (Noise& this, float t, int m)
@@ -1161,8 +1373,10 @@ namespace porridge
         return out;
     }
 
-    /// Writes one block of noise into buf (white, or resonant band-pass when N resonance > 0).
-    void renderNoise (Noise& this, Rand& rng, const float[numSlots]& P, float Rg, float at, float ampMod, float resMod,
+    /// Writes one block of noise into buf (white, or resonant band-pass when N resonance > 0; the
+    /// other types in renderTyped). speed: the sample's, by the transpose and its modulation.
+    void renderNoise (Noise& this, Rand& rng, Lcg& crng, const NoiseTables& colours, const NoiseSample& smp,
+                      const float[numSlots]& P, float Rg, float at, float ampMod, float resMod, float speed,
                       float64 sr, float[blockSize]& buf, int n)
     {
         let amp = ampMod * P[slot::N_Amp] * aftertouchGain (at, P[slot::N_Aftertouch]);
@@ -1184,6 +1398,13 @@ namespace porridge
         }
 
         let reso = P[slot::N_Resonance];
+        let type = int (P[slot::N_Type]);
+
+        if (type != noiseType::white)
+        {
+            this.renderTyped (type, rng, crng, colours, smp, P, Rg, amp, resMod, speed, sr, buf, n);
+            return;
+        }
 
         if (reso <= 0)
         {
@@ -1224,6 +1445,315 @@ namespace porridge
             this.g += dg;
             let a = this.noiseSvf (buf.at (i), this.F, this.q);
             let b = this.noiseSvf (buf.at (i), this.F, this.q);
+            buf.at (i) = (a + b) * this.g;
+        }
+    }
+
+    //==============================================================================
+    /// The digital noise's clock, as a multiple of the note's frequency (C4: 8.4 kHz).
+    let digitalClock = 32.0f;
+
+    /// The shift register's output, a bit as loud (RMS) as the white noise (its long loop has as
+    /// many ones as zeros).
+    let lfsrLevel = 0.57735027f;
+
+    /// One step of the 15-bit shift register, as the NES's noise channel's long mode (the
+    /// feedback is bit 0 xor bit 1: a loop of 32767 steps).
+    void stepLfsr (Noise& this)
+    {
+        let r = this.lfsr;
+        let fb = (r ^ (r >> 1)) & 1;
+        this.lfsr = (r >> 1) | (fb << 14);
+        this.held = (this.lfsr & 1) != 0 ? -lfsrLevel : lfsrLevel;
+    }
+
+    /// The noise types after white, at about white's level (crackle: clicks of up to 2), before
+    /// the level and the resonance: n samples into buf. clockHz: the note's frequency, for the
+    /// shift register and the metallic loop; speed: the sample's playback speed. Every colour draws one number of
+    /// Oatmeal's rand() a sample, as white does.
+    void fillTyped (Noise& this, int type, Rand& rng, Lcg& crng, const NoiseTables& c, const NoiseSample& smp,
+                    float density, float clockHz, float speed, float64 sr, float[blockSize]& buf, int n)
+    {
+        // (rand()'s mean is half a step under 0)
+        let centre = 1.0f / 32768.0f;
+
+        if (type == noiseType::pink || type == noiseType::blue)
+        {
+            let blue = type == noiseType::blue;
+
+            for (int i = 0; i < n; ++i)
+            {
+                let x = rng.bipolar() + centre;
+                this.s0 = c.p0 * this.s0 + c.g0 * x;
+                this.s1 = c.p1 * this.s1 + c.g1 * x;
+                this.s2 = c.p2 * this.s2 + c.g2 * x;
+                let y = this.s0 + this.s1 + this.s2 + 0.1848f * x;
+                buf.at (i) = blue ? (y - this.prev) * c.blueGain : y * c.pinkGain;
+                this.prev = y;
+            }
+        }
+        else if (type == noiseType::brown)
+        {
+            let k = 1.0f - c.brownPole;
+
+            for (int i = 0; i < n; ++i)
+            {
+                this.s0 = c.brownPole * this.s0 + k * (rng.bipolar() + centre);
+                buf.at (i) = this.s0 * c.brownGain;
+            }
+        }
+        else if (type == noiseType::violet)
+        {
+            for (int i = 0; i < n; ++i)
+            {
+                let x = rng.bipolar();
+                buf.at (i) = (x - this.prev) * 0.70710678f;
+                this.prev = x;
+            }
+        }
+        else if (type == noiseType::crackle)
+        {
+            // each sample a click with a chance of density / sr, of a random size and sign
+            // (more small ones than big: its square, up to 2), decaying over a tenth of a millisecond
+            let threshold = float (min (float64 (density) / sr, 1.0)) * 2.0f - 1.0f;
+            let decay = c.crackleDecay;
+
+            for (int i = 0; i < n; ++i)
+            {
+                if (crng.nextSigned() < threshold)
+                {
+                    let a = crng.nextSigned();
+                    this.click += 2.0f * a * abs (a);
+                }
+
+                buf.at (i) = this.click;
+                this.click = abs (this.click) > 1e-9f ? this.click * decay : 0.0f;
+            }
+        }
+        else if (type == noiseType::digital)
+        {
+            // the register's output held between its clock's steps, each sample the mean of
+            // what it held over the sample (a box filter, against the steps' aliasing)
+            let inc = clamp (float (float64 (clockHz) * float64 (digitalClock) / sr), 0.0f, 8.0f);
+
+            for (int i = 0; i < n; ++i)
+            {
+                var left = 1.0f;
+                var sum = 0.0f;
+                var ph = this.clock;
+
+                while (ph + inc * left >= 1.0f)
+                {
+                    let part = min ((1.0f - ph) / inc, left);
+                    sum += this.held * part;
+                    left -= part;
+                    this.stepLfsr();
+                    ph = 0;
+                }
+
+                this.clock = ph + inc * left;
+                buf.at (i) = sum + this.held * left;
+            }
+        }
+        else if (type == noiseType::metallic)
+        {
+            // the loop's table with as many harmonics as fit under 0.45 of the rate (none above)
+            let inc = float64 (clockHz) / sr;
+            var level = 0;
+
+            while (level < metalLevels && float64 (metalHarmonics.at (level)) * inc > 0.45)
+                ++level;
+
+            if (level >= metalLevels)
+            {
+                for (int i = 0; i < n; ++i)
+                    buf.at (i) = 0;
+
+                return;
+            }
+
+            let base = level * metalSize;
+            let step = float (inc * float64 (metalSize));
+            var ph = this.clock;
+
+            for (int i = 0; i < n; ++i)
+            {
+                let k = int (ph);
+                let f = ph - float (k);
+                let a = c.metal.at (base + k);
+                let b = c.metal.at (base + ((k + 1) & (metalSize - 1)));
+                buf.at (i) = a + (b - a) * f;
+                ph += step;
+
+                if (ph >= float (metalSize))
+                    ph -= float (metalSize);
+            }
+
+            this.clock = ph;
+        }
+        else if (type == noiseType::sample)
+        {
+            let len = smp.length;
+
+            if (len <= 0)
+            {
+                for (int i = 0; i < n; ++i)
+                    buf.at (i) = 0;
+
+                return;
+            }
+
+            let flen = float64 (len);
+            let step = clamp (float64 (smp.rate) / sr * float64 (speed), 0.0, 16.0);
+
+            for (int i = 0; i < n; ++i)
+            {
+                if (this.pos >= flen)
+                    this.pos -= flen * floor (this.pos / flen);
+
+                let k = int (this.pos);
+                let f = float (this.pos - float64 (k));
+                let a = smp.data.at (k);
+                let b = smp.data.at (k + 1 < len ? k + 1 : 0);
+                buf.at (i) = a + (b - a) * f;
+                this.pos += step;
+            }
+        }
+        else
+        {
+            for (int i = 0; i < n; ++i)
+                buf.at (i) = 0;
+        }
+    }
+
+    /// A colour's power at a frequency (radians a sample) over the white's it filters (fillTyped).
+    float64 colourPower (const NoiseTables& c, int type, float64 w)
+    {
+        if (type == noiseType::violet)
+            return 1.0 - cos (w);
+
+        if (type == noiseType::brown)
+        {
+            let p = float64 (c.brownPole), g = float64 (c.brownGain) * (1.0 - p);
+            return g * g / (1.0 + p * p - 2.0 * p * cos (w));
+        }
+
+        if (type == noiseType::pink || type == noiseType::blue)
+        {
+            // sum of gk / (1 - pk e^-jw), plus the white's share
+            var re = 0.1848, im = 0.0;
+            let p = float64[3] (float64 (c.p0), float64 (c.p1), float64 (c.p2));
+            let g = float64[3] (float64 (c.g0), float64 (c.g1), float64 (c.g2));
+
+            for (wrap<3> k)
+            {
+                let dr = 1.0 - p[k] * cos (w), di = p[k] * sin (w);
+                let d = dr * dr + di * di;
+                re += g[k] * dr / d;
+                im -= g[k] * di / d;
+            }
+
+            let pink = re * re + im * im;
+            return type == noiseType::pink ? pink * float64 (c.pinkGain) * float64 (c.pinkGain)
+                                           : pink * 2.0 * (1.0 - cos (w)) * float64 (c.blueGain) * float64 (c.blueGain);
+        }
+
+        return 1.0;
+    }
+
+    /// A constant far under hearing added to what the types' band-pass filters take, so that their
+    /// state never decays into denormals in silence (between crackles, or with no sample).
+    let antiDenormal = 1e-20f;
+
+    /// One block of a noise type after white (see fillTyped) at its level, through the
+    /// resonance's band-pass as white goes. The filters start on as much of the noise itself as
+    /// white's exact warm-up would take, up to noiseExactMax samples (so a crackle starts quiet).
+    void renderTyped (Noise& this, int type, Rand& rng, Lcg& crng, const NoiseTables& colours, const NoiseSample& smp,
+                      const float[numSlots]& P, float Rg, float amp, float resMod, float speed,
+                      float64 sr, float[blockSize]& buf, int n)
+    {
+        if (! this.started)
+        {
+            this.started = true;
+            // a shift register of its own, a place of its own in the metallic loop (in its
+            // table's samples) and in the sample
+            let u = (crng.nextSigned() + 1.0f) * 0.5f;
+            this.lfsr = 1 + int (u * 32766.0f);
+            this.held = (this.lfsr & 1) != 0 ? -lfsrLevel : lfsrLevel;
+            this.clock = type == noiseType::metallic ? min (u * float (metalSize), float (metalSize - 1)) : 0.0f;
+            this.pos = float64 (u) * float64 (smp.length);
+        }
+
+        let density = expKnob (1.0f, 4000.0f, P[slot::N_Density]);
+        let clockHz = Rg * this.freq;
+        let reso = P[slot::N_Resonance];
+
+        if (reso <= 0)
+        {
+            this.fillTyped (type, rng, crng, colours, smp, density, clockHz, speed, sr, buf, n);
+
+            for (int i = 0; i < n; ++i)
+                buf.at (i) *= amp;
+
+            return;
+        }
+
+        let w = min (float64 (Rg) * float64 (this.freq) * 0.5 / sr * float64 (piF) * 2.0, float64 (piF * 0.98f));
+        var F = float (2.0 * sin (w * 0.5));
+        if (F > 1.2f) F = 1.2f;
+        let m = clamp (resMod, -1.0f, 1.0f);
+        let r2 = m > 0 ? reso + (1.0f - reso) * m : reso * (1.0f + m);
+        let q = 1.0f - clamp (1.0f - (1.0f - r2) * (1.0f - r2), 0.0f, 1.0f) * 0.995f;
+        let g = amp * 0.05f / (q * F);
+
+        if (this.first)
+        {
+            this.first = false;
+            this.F = F;
+            this.q = q;
+            this.g = g;
+            let need = 256.0 + 80.0 / max (float64 (q) * float64 (F), 1e-12);
+            var left = int (min (need, float64 (noiseExactMax)));
+
+            // a colour whose run would be longer than that (strong resonance on a low note) takes
+            // white's draw of the filters' state, scaled to the colour's level at the band
+            if (need > float64 (noiseExactMax) && type <= noiseType::violet)
+            {
+                this.warmDraw (rng, int ((sr + 1.0) * 0.5));
+                let k = float (sqrt (colourPower (colours, type, min (2.0 * w, float64 (pi)))));
+                this.l1 *= k; this.b1 *= k; this.l2 *= k; this.b2 *= k;
+                left = 0;
+            }
+
+            while (left > 0)
+            {
+                let k = min (left, blockSize);
+                this.fillTyped (type, rng, crng, colours, smp, density, clockHz, speed, sr, buf, k);
+
+                for (int i = 0; i < k; ++i)
+                {
+                    this.noiseSvf (buf.at (i) + antiDenormal, F, q);
+                    this.noiseSvf (buf.at (i) + antiDenormal, F, q);
+                }
+
+                left -= k;
+            }
+        }
+
+        this.fillTyped (type, rng, crng, colours, smp, density, clockHz, speed, sr, buf, n);
+
+        let dF = (F - this.F) / float (n);
+        let dq = (q - this.q) / float (n);
+        let dg = (g - this.g) / float (n);
+
+        for (int i = 0; i < n; ++i)
+        {
+            this.F += dF;
+            this.q += dq;
+            this.g += dg;
+            let x = buf.at (i) + antiDenormal;
+            let a = this.noiseSvf (x, this.F, this.q);
+            let b = this.noiseSvf (x, this.F, this.q);
             buf.at (i) = (a + b) * this.g;
         }
     }

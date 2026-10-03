@@ -1634,6 +1634,8 @@ processor ParamStore
     input event float O2_Morph [[ name: "Osc 2 morph", min: 0, max: 1, init: 0 ]];
     input event int O2_MorphTo [[ name: "Osc 2 morph wave", min: 0, max: 5, init: 0, text: "Sine|Saw|Square|Triangle|Osc 1 user|Osc 2 user" ]];
     input event float O2_PD [[ name: "Osc 2 phase distortion", min: 0, max: 1, init: 0 ]];
+    input event int N_Type [[ name: "Noise type", min: 0, max: 8, init: 0, text: "white|pink|brown|blue|violet|crackle|digital|metallic|sample" ]];
+    input event float N_Density [[ name: "Noise density", min: 0, max: 1, init: 0.361190527677536 ]];
 
     event O1_Waveform (int v) { paramOut <- porridge::ParamChange (2117, float (v)); }
     event O1_Amp (float v) { paramOut <- porridge::ParamChange (2127, v); }
@@ -3045,4 +3047,6 @@ processor ParamStore
     event O2_Morph (float v) { paramOut <- porridge::ParamChange (3665, v); }
     event O2_MorphTo (int v) { paramOut <- porridge::ParamChange (3666, float (v)); }
     event O2_PD (float v) { paramOut <- porridge::ParamChange (3667, v); }
+    event N_Type (int v) { paramOut <- porridge::ParamChange (3668, float (v)); }
+    event N_Density (float v) { paramOut <- porridge::ParamChange (3669, v); }
 }

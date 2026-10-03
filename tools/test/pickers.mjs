@@ -39,7 +39,7 @@ const leftOut = {
 const counts = {
     Waveform: 9, LfoShape: 7, Lfo3Shape: 7, LfoUnit: 18, DelayUnit: 15, ArpUnit: 18, FilterType: 60, Filter2Type: 60,
     FxFilterType: 60, FilterDouble: 3, DistType: 17, DistMode: 4, VoiceMode: 3, TouchMode: 3, OscMix: 7, GlideMode: 7,
-    ArpMode: 6, DelayReverse: 3, ChorusMode: 5,
+    ArpMode: 6, DelayReverse: 3, ChorusMode: 5, NoiseType: 9,
 };
 
 const seen = new Set ();

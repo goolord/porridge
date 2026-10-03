@@ -652,8 +652,9 @@ let css = `
 .sstrip canvas { position: absolute; cursor: ew-resize; }
 .sstrip .x { right: 3px; top: 3px; width: 20px; padding: 0; font-size: 14px; line-height: 17px; }
 
+/* (it lets drags through, to the places that take a file of their own: a convolver's graph, the noise tab) */
 .drop {
-    position: absolute; inset: 0; z-index: 100; display: none; align-items: center; justify-content: center;
+    position: absolute; inset: 0; z-index: 100; display: none; align-items: center; justify-content: center; pointer-events: none;
     background: rgba(28, 60, 115, 0.55); color: var(--paper); font-size: 22px; font-weight: 700;
 }
 .drop.on { display: flex; }

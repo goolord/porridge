@@ -576,11 +576,14 @@ let make = (host, pc) => {
   })
   host->onDrag(#dragover, preventDefault)
   host->onDrag(#drop, e => {
+    // (a place that takes a file of its own, a convolver's graph or the noise tab, has taken it)
+    let taken = e->defaultPrevented
     e->preventDefault
     depth := 0
     drop->removeClass("on")
     e
     ->dataTransfer
+    ->Option.filter(_ => !taken)
     ->Option.forEach(d => {
       let files = d->transferredFiles->filesToArray
       let sample = files->Array.find(f => AudioFile.isAudio(f->fileName))

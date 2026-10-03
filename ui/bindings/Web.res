@@ -98,6 +98,7 @@ type shadowInit = {mode: string}
 @get external target: Dom.event_like<'a> => Dom.eventTarget = "target"
 @send external composedPath: Dom.event_like<'a> => array<Dom.eventTarget> = "composedPath"
 @send external preventDefault: Dom.event_like<'a> => unit = "preventDefault"
+@get external defaultPrevented: Dom.event_like<'a> => bool = "defaultPrevented"
 @send external stopPropagation: Dom.event_like<'a> => unit = "stopPropagation"
 @send external stopImmediatePropagation: Dom.event_like<'a> => unit = "stopImmediatePropagation"
 

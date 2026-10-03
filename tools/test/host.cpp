@@ -4,7 +4,7 @@
 //
 //   host --program prog.bin --events events.txt --frames 88200 --rate 44100 --out out.f32
 //        [--tempo 120] [--set Endpoint=value ...] [--input in.f32] [--preroll n] [--latency n]
-//        [--voices voices.txt] [--time] [--timefrom n]
+//        [--voices voices.txt] [--time] [--timefrom n] [--impulse which:rate:file.f32 ...]
 //
 // --input feeds a recorded signal to the effects instead of the voices. --preroll renders n
 // frames before frame 0 and drops them (the DLL harness renders 128 after loading a program).
@@ -14,6 +14,8 @@
 // --voices asks for the view's reports of the sounding notes (VoiceView) and writes one line per
 // report: the frame, then the struct's 450 words as it's laid out (ints, bools as ints, floats);
 // "--voices -" asks for them and drops them (what the open view costs).
+// --impulse sends a file's audio (the output format below) at `rate` as an ImpulseChunk's
+// `which`, as the view does: a convolver's (0, 1) impulse, or the noise's sample (2).
 // --time renders 64 frames a call and prints how long the render loop took ("render_seconds
 // 0.123"), every call slower than 120 µs ("slow_block <frame> <µs>"; a 64-frame block has 1333 µs
 // at 48 kHz) and the slowest ("render_worst_us"), for CPU measurements: on
@@ -103,6 +105,7 @@ static void sendShape (Patch& p, const char* endpoint, int which, const float* d
 int main (int argc, char** argv)
 {
     std::string programPath, eventsPath, inputPath, tuningPath, voicesPath, outPath = "out.f32";
+    std::vector<std::string> impulses;
     bool timing = false;
     double worst = 0;
     long frames = 44100, preroll = 0, latency = 64, timeFrom = 0;
@@ -126,6 +129,7 @@ int main (int argc, char** argv)
         else if (a == "--preroll") preroll = atol (next().c_str());
         else if (a == "--latency") latency = atol (next().c_str());
         else if (a == "--tuning") tuningPath = next();
+        else if (a == "--impulse") impulses.push_back (next());
         else if (a == "--set")
         {
             auto s = next(); auto eq = s.find ('=');
@@ -215,6 +219,30 @@ int main (int argc, char** argv)
             memcpy (buf.data() + 4 + 4 * k, &s, 4);
         }
         patch->addEvent (Patch::getEndpointHandleForName ("tuningIn"), 0, buf.data());
+    }
+
+    // --impulse which:rate:path, in chunks of 2048 frames (dsp/Types.cmajor ImpulseChunk)
+    for (auto& spec : impulses)
+    {
+        auto c1 = spec.find (':'), c2 = spec.find (':', c1 + 1);
+        const int32_t which = atoi (spec.substr (0, c1).c_str());
+        const float r = (float) atof (spec.substr (c1 + 1, c2 - c1 - 1).c_str());
+        auto d = readFile (spec.substr (c2 + 1));
+        int32_t ch, n;
+        memcpy (&ch, d.data(), 4); memcpy (&n, d.data() + 4, 4);
+        const int chunk = 2048;
+        std::vector<unsigned char> buf (20 + 8 * chunk);
+        for (int32_t off = 0; off < n; off += chunk)
+        {
+            std::fill (buf.begin(), buf.end(), (unsigned char) 0);
+            const int32_t channels = ch > 1 ? 2 : 1;
+            memcpy (buf.data(), &which, 4); memcpy (buf.data() + 4, &channels, 4);
+            memcpy (buf.data() + 8, &n, 4); memcpy (buf.data() + 12, &off, 4); memcpy (buf.data() + 16, &r, 4);
+            const int m = std::min (chunk, n - off);
+            memcpy (buf.data() + 20, d.data() + 8 + 4 * off, 4 * m);
+            memcpy (buf.data() + 20 + 4 * chunk, d.data() + 8 + 4 * ((ch > 1 ? n : 0) + off), 4 * m);
+            patch->addEvent (Patch::getEndpointHandleForName ("impulseIn"), 0, buf.data());
+        }
     }
 
     std::vector<Event> events;
