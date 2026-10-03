@@ -420,7 +420,7 @@ let targets = [
   knob("Cutoff", "cutoff", "filter"),
   knob("Resonance", "resonance", "filter"),
   knob("F_EnvMod", "filter env amount", "filter"),
-  knob("F_Track", "filter track", "filter"),
+  knob("F_Track", "filter key track", "filter"),
   knob("F_Split", "filter split", "filter"),
   knob("F_Mix", "filter mix", "filter"),
   knob("Sat_Pregain", "dist pregain", "distortion"),
