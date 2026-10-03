@@ -746,9 +746,15 @@ let oscUnison = (r, w, p, m) => {
   if chance(r, Math.min(0.95, p.unison + 0.25 * w)) {
     put(m, "U_Voices", tiered(r, w, [(2., 0., 2.), (3., 0., 1.5), (4., 0., 1.), (5., 0.4, 0.6), (6., 0.5, 0.5), (8., 0.65, 0.5)]))
     put(m, "U_Detune", logWithin(r, w, (5., 14.), (3., 80.)))
-    put(m, "U_Spread", between(r, 0.35, 0.8))
+    let u = r()
+    put(m, "U_Spread", 0.35 + (0.8 - 0.35) * u)
     put(m, "U_Width", within(r, w, (1., 1.2), (0.8, 1.8)))
-    put(m, "U_RandomPhase", 1.)
+    // the random phase: mostly the whole cycle (the copies' attacks differ from note to note);
+    // less keeps them closer to the oscillator's own start phase, for a firmer attack. (Its
+    // number comes from the spread's draw, the digits it didn't use, so that the patches made
+    // after it stay as they were.)
+    let (lo, hi) = widen(w, (0.7, 1.), (0.2, 1.))
+    put(m, "U_RandomPhase", lo + (hi - lo) * Float.mod(u * 7919., 1.))
   }
 }
 

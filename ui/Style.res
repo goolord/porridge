@@ -390,6 +390,10 @@ let css = `
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .btn.withicon { display: flex; align-items: center; justify-content: center; gap: 5px; }
 .btn.withicon > span { overflow: hidden; text-overflow: ellipsis; }
+/* the "draw" buttons on the plots: a pencil before the word, in the button's old size */
+.btn.drawbtn { padding: 0 2px; gap: 3px; }
+.btn.drawbtn > span { overflow: visible; }
+.btn.drawbtn .ic { height: 11px; }
 /* a "?" that explains the control beside it in a tooltip */
 .btn.help { padding: 0; font-weight: 700; color: var(--ink-soft); background: var(--tile); border-color: var(--tile-edge); }
 .btn.help:hover { color: var(--ink); background: var(--panel-hi); border-color: var(--edge); }

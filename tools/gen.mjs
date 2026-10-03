@@ -164,7 +164,7 @@ const targetConstants = (name, doc, labels) => ns (name, doc, labels.map ((l, i)
 // Choice values the DSP compares against, by their menu labels (which must exist).
 const choices = [
     { ns: "waveType", param: "O1_Waveform", doc: "Oscillator waveforms (O1_Waveform, O2_Waveform).",
-      values: { sine: "Sine", saw: "Oatmeal saw", pulse: "Oatmeal pulse", triangle: "Oatmeal triangle", user: "User",
+      values: { sine: "Sine", saw: "Oat saw", pulse: "Oat pulse", triangle: "Oat triangle", user: "User",
                 userPwm: "User PWM", sawHQ: "Saw", pulseHQ: "Pulse", triangleHQ: "Triangle" } },
     { ns: "oscMixMode", param: "OscMix", doc: "How the two oscillators combine (OscMix).",
       values: { normal: "normal", sync: "hardsync", fm: "FM (1 -> 2, 1 silent)", pm2to1: "PM 2 > 1",

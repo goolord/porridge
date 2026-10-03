@@ -239,7 +239,8 @@ let lfoSpecs = [1, 2]->Array.flatMap(n => {
 
 let unisonSpecs = [
   {id: "U_DetuneCurve", name: "Unison detune curve", kind: Float({min: 0., max: 1., init: 0., text: percent})},
-  {id: "U_RandomPhase", name: "Unison random phase", kind: Choice({names: onOff, init: 0})},
+  // how much of the cycle each copy's start phase is spread over (it was off/on: 1 is the old "on")
+  {id: "U_RandomPhase", name: "Unison random phase", kind: Float({min: 0., max: 1., init: 0., text: percent})},
   {id: "U_Width", name: "Unison width", kind: Float({min: 0., max: 2., init: 1., text: percent})},
 ]
 

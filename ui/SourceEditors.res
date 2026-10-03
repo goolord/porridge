@@ -99,6 +99,8 @@ let drawButton = (ctx: Ctx.t, body, plot: box, ~status, table) =>
     ~x=plot.x + plot.w - 48.,
     ~y=plot.y + plot.h - 23.,
     ~w=44.,
+    ~cls="drawbtn",
+    ~icon=Icons.pencil,
     ~status,
     () => ctx.openShape(table),
   )->ignore

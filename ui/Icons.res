@@ -66,14 +66,14 @@ let steppingRandom = wide([Line("M1 10 H5 V4 H9 V12 H13 V6 H17 V11 H21")])
 let flat = wide([Line("M1 8 H21")])
 let fmWave = wide([Line("M1 8 C2 3 3 3 4 8 S5.5 13 6.5 8 S9 3 10.5 8 S14 13 16 8 S19.5 3 21 8")])
 
-// (Oatmeal's aliasing waves look like the others)
+// (the Oat aliasing waves look like the others)
 let waveformByName = name =>
   switch name {
   | "sine" => Some(sine)
-  | "saw" | "oatmeal saw" => Some(saw)
+  | "saw" | "oat saw" => Some(saw)
   | "saw down" => Some({...saw, mirrored: true})
-  | "pulse" | "square" | "oatmeal pulse" => Some(pulse)
-  | "triangle" | "oatmeal triangle" => Some(triangle)
+  | "pulse" | "square" | "oat pulse" => Some(pulse)
+  | "triangle" | "oat triangle" => Some(triangle)
   | "user" => Some(user)
   | "user pwm" => Some(userPwm)
   | "smooth random" => Some(smoothRandom)
@@ -353,6 +353,17 @@ let filterDouble = [
 // the settings button: a solid gear with a hole (wound the other way, so it stays open)
 
 let gear = {width: 16., marks: [Fill("M6.55 2.69L6.69 0.51H9.31L9.45 2.69A5.5 5.5 0 0 1 10.73 3.22L12.37 1.78L14.22 3.63L12.78 5.27A5.5 5.5 0 0 1 13.31 6.55L15.49 6.69V9.31L13.31 9.45A5.5 5.5 0 0 1 12.78 10.73L14.22 12.37L12.37 14.22L10.73 12.78A5.5 5.5 0 0 1 9.45 13.31L9.31 15.49H6.69L6.55 13.31A5.5 5.5 0 0 1 5.27 12.78L3.63 14.22L1.78 12.37L3.22 10.73A5.5 5.5 0 0 1 2.69 9.45L0.51 9.31V6.69L2.69 6.55A5.5 5.5 0 0 1 3.22 5.27L1.78 3.63L3.63 1.78L5.27 3.22A5.5 5.5 0 0 1 6.55 2.69ZM10.3 8A2.3 2.3 0 1 0 5.7 8A2.3 2.3 0 1 0 10.3 8Z")]}
+
+//==============================================================================
+// the "draw" buttons (the shapes editor): a pencil, its point at the bottom left
+let pencil = {
+  width: 15.,
+  marks: [
+    Line("M2 14 L3.5 9.5 L10.5 2.5 L13.5 5.5 L6.5 12.5 Z"),
+    Line("M3.5 9.5 L6.5 12.5"),
+    Line("M9 4 L12 7"),
+  ],
+}
 
 //==============================================================================
 // lookup

@@ -33,7 +33,7 @@ const author = "Porridge";
 
 // list values: short names here for the labels a parameter's list has (ParamDefs.choiceValue)
 const choices = (id, labels) => Object.fromEntries (Object.entries (labels).map (([k, label]) => [k, choiceValue (id, label)]));
-const wave = choices ("O1_Waveform", { sine: "Sine", saw: "Oatmeal saw", pulse: "Oatmeal pulse", tri: "Oatmeal triangle",
+const wave = choices ("O1_Waveform", { sine: "Sine", saw: "Oat saw", pulse: "Oat pulse", tri: "Oat triangle",
                                        user: "User", userPwm: "User PWM", sawHQ: "Saw", pulseHQ: "Pulse", triHQ: "Triangle" });
 const mix = choices ("OscMix", { normal: "normal", sync: "hardsync", fm: "FM (1 -> 2, 1 silent)", pm: "PM 2 > 1",
                                  pmFeedback: "PM 1 feedback", ring: "ring 1 × 2", am: "AM 2 > 1" });
