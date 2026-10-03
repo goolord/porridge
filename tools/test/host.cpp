@@ -249,7 +249,10 @@ int main (int argc, char** argv)
         patch->addEvent (Patch::getEndpointHandleForName ("tuningIn"), 0, buf.data());
     }
 
-    // --impulse which:rate:path, in chunks of 2048 frames (dsp/Types.cmajor ImpulseChunk)
+    // --impulse which:rate:path, in chunks of 2048 frames (dsp/Types.cmajor ImpulseChunk), each
+    // file a send of its own; several files go a chunk of each at a time, in the order given, as
+    // the view's and the worker's sends to one slot can arrive mixed
+    std::vector<std::vector<std::vector<unsigned char>>> sends;
     for (auto& spec : impulses)
     {
         auto c1 = spec.find (':'), c2 = spec.find (':', c1 + 1);
@@ -259,18 +262,31 @@ int main (int argc, char** argv)
         int32_t ch, n;
         memcpy (&ch, d.data(), 4); memcpy (&n, d.data() + 4, 4);
         const int chunk = 2048;
-        std::vector<unsigned char> buf (20 + 8 * chunk);
+        const int32_t send = (int32_t) sends.size() + 1;
+        auto& chunks = sends.emplace_back();
         for (int32_t off = 0; off < n; off += chunk)
         {
-            std::fill (buf.begin(), buf.end(), (unsigned char) 0);
+            auto& buf = chunks.emplace_back (24 + 8 * chunk, (unsigned char) 0);
             const int32_t channels = ch > 1 ? 2 : 1;
             memcpy (buf.data(), &which, 4); memcpy (buf.data() + 4, &channels, 4);
             memcpy (buf.data() + 8, &n, 4); memcpy (buf.data() + 12, &off, 4); memcpy (buf.data() + 16, &r, 4);
+            memcpy (buf.data() + 20, &send, 4);
             const int m = std::min (chunk, n - off);
-            memcpy (buf.data() + 20, d.data() + 8 + 4 * off, 4 * m);
-            memcpy (buf.data() + 20 + 4 * chunk, d.data() + 8 + 4 * ((ch > 1 ? n : 0) + off), 4 * m);
-            patch->addEvent (Patch::getEndpointHandleForName ("impulseIn"), 0, buf.data());
+            memcpy (buf.data() + 24, d.data() + 8 + 4 * off, 4 * m);
+            memcpy (buf.data() + 24 + 4 * chunk, d.data() + 8 + 4 * ((ch > 1 ? n : 0) + off), 4 * m);
         }
+    }
+    for (size_t k = 0; ; ++k)
+    {
+        bool any = false;
+        for (auto& chunks : sends)
+            if (k < chunks.size())
+            {
+                patch->addEvent (Patch::getEndpointHandleForName ("impulseIn"), 0, chunks[k].data());
+                any = true;
+            }
+        if (! any)
+            break;
     }
 
     std::vector<Event> events;

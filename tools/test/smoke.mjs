@@ -250,9 +250,9 @@ check (hq.every (w => w.every ((v, i) => v === hq[0][i])), "outside Oat mode 2x,
     writeFileSync (one, "0 144 60 100\n88200 128 60 0\n");
     const quiet = { O1_Amp: 0, O2_Amp: 0, N_Amp: 0.5, Filter: 0, Oat_Mode: 0 };
     // the samples: a 1 kHz sine and white noise, 2 s at 48 kHz, as loud as the white noise
-    const f32 = (name, f) =>
+    const f32 = (name, f, n = 96000) =>
     {
-        const n = 96000, b = Buffer.alloc (8 + 4 * n);
+        const b = Buffer.alloc (8 + 4 * n);
         b.writeInt32LE (1, 0); b.writeInt32LE (n, 4);
         for (let i = 0; i < n; ++i) b.writeFloatLE (f (i), 8 + 4 * i);
         const path = join (dir, name);
@@ -265,6 +265,18 @@ check (hq.every (w => w.every ((v, i) => v === hq[0][i])), "outside Oat mode 2x,
     const noiseRender = (name, sets, { events = one, sample = sine } = {}) =>
         render ({ program: init, events, frames: 2 * rate, rate, sets: { ...quiet, ...sets }, args: sample ? ["--impulse", `2:48000:${sample}`] : [],
                   out: join (dir, name + ".f32") })[0];
+    // two sends to one slot at once (the view's and the worker's can be), a chunk of each in turn:
+    // the one whose first chunk came last is kept whole, and nothing of the other gets into it,
+    // though the other is longer and its chunks go on after the kept one is complete
+    {
+        const short = f32 ("noise_short.f32", i => 0.8165 * Math.sin (2 * Math.PI * 300 * i / 48000), 5000);
+        const sampleRender = (name, files) =>
+            render ({ program: init, events: one, frames: rate, rate, sets: { ...quiet, N_Type: PorridgeParams.noiseTypes.indexOf ("sample") },
+                      args: files.flatMap (p => ["--impulse", `2:48000:${p}`]), out: join (dir, name + ".f32") })[0];
+        const alone = sampleRender ("noise_send_alone", [short]), mixed = sampleRender ("noise_send_mixed", [hiss, short]);
+        const differ = alone.reduce ((n, v, i) => n + (v !== mixed[i]), 0);
+        check (differ === 0 && alone.some (v => v !== 0), `two sends to the noise's sample at once keep the later one  ${differ} samples differ`);
+    }
     const from = Math.round (0.2 * rate), to = Math.round (1.9 * rate);
     const rmsOf = x => { let s = 0; for (let i = from; i < to; ++i) s += x[i] * x[i]; return Math.sqrt (s / (to - from)); };
     const bandsOf = x => octaveBands (powerSpectrum (x, from, to), rate);

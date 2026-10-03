@@ -42,7 +42,10 @@ namespace porridge
     /// Part of an impulse response loaded from a file, for convolver `which` (0 or 1), or of the
     /// noise's sample (which = noiseSampleSlot, Oscillator.cmajor NoiseSample): frames
     /// offset .. offset + impulseChunkFrames of `length`, at sample rate `rate`, with 1 or 2
-    /// channels (a mono impulse leaves `right` unused). The last chunk completes it.
+    /// channels (a mono impulse leaves `right` unused). The last chunk completes it. `send` is
+    /// the same in every chunk of one send and different from any other's: the view and the
+    /// worker both send, so a slot can get two sends at once, and only the one whose offset-0
+    /// chunk came last is kept (Synth's impulseIn).
     struct ImpulseChunk
     {
         int which;
@@ -50,6 +53,7 @@ namespace porridge
         int length;
         int offset;
         float rate;
+        int send;
         float[impulseChunkFrames] left, right;
     }
 

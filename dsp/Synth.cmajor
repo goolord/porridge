@@ -99,6 +99,8 @@ namespace porridge
         int blockCount;                             // blocks rendered
         int[rack::convolveCount] convolverRan;      // the block each convolver last ran in
         int[rack::convolveCount] viewSent;          // the impulse each convolver last showed the view
+        int[4] impulseSends;                        // each impulse slot's send (ImpulseChunk.send): the
+                                                    // convolvers', then the noise sample's (noiseSampleSlot)
 
         // the rack's pool (Common.cmajor's FxPool), and the first block of each effect that keeps
         // its lines there (-1: none, it isn't in the rack) and how many it has, by pool id:
@@ -354,9 +356,20 @@ namespace porridge
                 viewSent[k] = -1;
         }
 
+        /// A chunk of a convolver's impulse or of the noise's sample. An offset-0 chunk (or an
+        /// empty impulse) starts its slot's send; the rest of an older send to that slot, from
+        /// the view or the worker, is dropped, as it would spoil the newer one.
         event impulseIn (ImpulseChunk c)
         {
-            if (c.which >= 0 && c.which < rack::convolveCount)
+            if (c.which < 0 || c.which >= impulseSends.size)
+                return;
+
+            if (c.offset == 0 || c.length <= 0)
+                impulseSends.at (c.which) = c.send;
+            else if (c.send != impulseSends.at (c.which))
+                return;
+
+            if (c.which < rack::convolveCount)
                 convolvers.at (c.which).loadImpulse (c);
             else if (c.which == noiseSampleSlot)
                 noiseSample.loadChunk (c);

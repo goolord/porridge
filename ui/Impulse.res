@@ -126,6 +126,8 @@ type chunkPayload = {
   length: int,
   offset: int,
   rate: float,
+  // the send's id (see send below)
+  send: int,
   left: array<float>,
   right: array<float>,
 }
@@ -140,8 +142,10 @@ let chunkOf = (d: Float32Array.t, offset) => {
 }
 
 // The impulse's chunks, sent a few at a time so that the patch's event queue keeps up. A newer
-// send to the same convolver stops an older one (from the same sender: the view and the worker
-// each have their own; see sender below).
+// send to the same convolver stops an older one from the same sender (the view and the worker
+// each have their own; see sender below). Every chunk of a send carries its id, which no other
+// send of either sender has, so the patch drops what still comes of an older send to the slot
+// once a newer one has started, whichever sent it (dsp/Synth.cmajor impulseIn).
 let generation = Array.make(~length=slots, 0)
 
 // Stops this sender's send to the slot, if one is under way.
@@ -154,6 +158,8 @@ let send = (pc, which, imp: option<t>) =>
   if which >= 0 && which < slots {
     let gen = generation->Array.getUnsafe(which) + 1
     generation->Array.setUnsafe(which, gen)
+    // (random: the view and the worker can't count together)
+    let send = Math.Int.random(1, 2147483647)
     switch imp {
     | None =>
       // an empty impulse: the file's slot plays silence until one is loaded
@@ -161,7 +167,7 @@ let send = (pc, which, imp: option<t>) =>
       PatchConnection.sendEventOrValueNow(
         pc,
         "impulseIn",
-        {which, channels: 1, length: 0, offset: 0, rate: maxRate, left: silence, right: silence},
+        {which, channels: 1, length: 0, offset: 0, rate: maxRate, send, left: silence, right: silence},
       )
     | Some(imp) =>
       let length = frames(imp)
@@ -179,6 +185,7 @@ let send = (pc, which, imp: option<t>) =>
                 length,
                 offset,
                 rate: imp.rate,
+                send,
                 left: chunkOf(imp.left, offset),
                 right: chunkOf(imp.right->Option.getOr(imp.left), offset),
               },
@@ -317,7 +324,7 @@ let sender = pc => {
         if sent->Array.getUnsafe(which) != text {
           sent->Array.setUnsafe(which, text)
           if viewSent->Array.includes(which) {
-            // (and what's left of an older send from here would spoil it)
+            // (the patch would drop what's left of an older send from here; this saves sending it)
             stop(which)
           } else {
             send(pc, which, fromJson(item))
