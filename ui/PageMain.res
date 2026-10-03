@@ -323,6 +323,8 @@ let voicePanel = (ctx: Ctx.t, page) => {
   )
   v->Grid.param("BendRange", 0, 2, "bend range")
   v->Grid.param("GlobalTranspose", 1, 2, "transpose")
+  // the pitch and mod wheels, as on the Play page, side by side in the last column
+  v->Grid.at(2, 3, ~rows=4, "the wheels", box => Wheels.make(ctx, voice->Panel.body(0), box, ~gap=Grid.columnGap))
 
   // what aftertouch does to the oscillators (the noise's and the filter's are theirs)
   let touch = Grid.make(ctx, voice->Panel.body(1), ~cw)
