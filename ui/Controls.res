@@ -717,8 +717,8 @@ let lfoMode = (ctx: Ctx.t, parent, id, ~x, ~y, ~w) => {
     status: ctx.status->Status.live(e, () =>
       switch model->ParamModel.get(id) {
       | 0. => "Per-voice: each voice has its own, starting with its note. Click shared for one that every voice follows."
-      | 1. => "Shared by every note, restarted by each new one. Click again to let it run free; click per-voice for one in each voice."
-      | _ => "Shared by every note, running free. Click again to restart it with each note; click per-voice for one in each voice."
+      | 1. => "Shared by every voice, restarted by each new note. Click again to let it run free; click per-voice for one in each voice."
+      | _ => "Shared by every voice, running free. Click again to restart it with each note; click per-voice for one in each voice."
       }
     ),
   }

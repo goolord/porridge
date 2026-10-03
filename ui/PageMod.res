@@ -84,10 +84,10 @@ let targetGroups = ModMatrix.groups->Array.map(((key, title)) => (
 // the picker's two sections
 let sections: array<(string, ModMatrix.scope, string)> = [
   ("per-voice", EachNote, "Each voice moves these its own way"),
-  ("on the whole sound", Shared, "These have one value: a per-note source gives them the newest note's, or every note's by level (below the connections)"),
+  ("on the whole sound", Shared, "These have one value: a per-voice source gives them the newest note's, or every voice's by level (below the connections)"),
 ]
 
-let followHelp = "Each note has its own LFOs, envelopes and velocity; an effect on the whole sound has one setting, so it takes theirs from the newest note, or from all of them by how loud each is."
+let followHelp = "Each voice has its own LFOs, envelopes and velocity; an effect on the whole sound has one setting, so it takes theirs from the newest note, or from all of them by how loud each is."
 let emptyHelp = "Each connection gets an amount, and can be scaled by a second source (via) and held, slewed, bent or stepped (⋯). Oatmeal's own routings (the mod envelopes' and XY pad's targets, the LFOs' depths, velocity, aftertouch...) are listed here too as they're set."
 
 let build = (ctx: Ctx.t, page) => {
@@ -261,9 +261,9 @@ let build = (ctx: Ctx.t, page) => {
     e
   }
   let eachHeading = heading("per-voice", "Sources each voice has its own of: on something in the voice, every voice moves it its own way")
-  let sharedHeading = heading("shared", "Sources every note shares (an LFO is here while its mode is shared)")
-  let macroHeading = heading("macros", "Knobs to turn, automate or map: shared by every note")
-  let ccHeading = heading("controllers", "The Play page's assignable controllers: shared by every note")
+  let sharedHeading = heading("shared", "Sources every voice shares (an LFO is here while its mode is shared)")
+  let macroHeading = heading("macros", "Knobs to turn, automate or map: shared by every voice")
+  let ccHeading = heading("controllers", "The Play page's assignable controllers: shared by every voice")
 
   // the groups, laid out again when an LFO's mode, the touch mode or MPE moves a source between them
   let c3 = Grid.fitColumns(sourcesWidth, sourceColumns)
@@ -1008,7 +1008,7 @@ let build = (ctx: Ctx.t, page) => {
 
   // below the list: what per-note sources follow on the whole sound
   let footer = el("div", ~cls="mfoot", ~parent=list.el)->place(0., listHeight - footerHeight, ~w=listWidth - 2., ~h=footerHeight - 2.)
-  Controls.choice(ctx, footer, "MM_Follow", ~x=Grid.padX, ~y=4., ~w=280., ~label="per-note sources on the whole sound follow")
+  Controls.choice(ctx, footer, "MM_Follow", ~x=Grid.padX, ~y=4., ~w=280., ~label="per-voice sources on the whole sound follow")
   Controls.help(footer, followHelp, ~x=Grid.padX + 284., ~y=4., ~size=Style.controlHeight, ~tipW=360., ~left=true, ~above=true)
 
   //==============================================================================

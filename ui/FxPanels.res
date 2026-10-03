@@ -626,7 +626,7 @@ let drawResonator = (p: FxGraph.plot, get: string => float) => {
   FxGraph.path(p.layer, ~cls="curve")->FxGraph.setPath(Plots.pathFrom(points))
   FxGraph.note(
     p,
-    `its resonances for a 220 Hz note (its partials dim), ringing for ${PorridgeParams.msText(decay * 1000.)}: each note gets its own`,
+    `its resonances for a 220 Hz note (its partials dim), ringing for ${PorridgeParams.msText(decay * 1000.)}: each voice tunes its own to its note`,
   )
 }
 
@@ -671,7 +671,7 @@ let drawOctaver = (p: FxGraph.plot, get: string => float) => {
   })
   FxGraph.path(p.layer, ~cls="curve dim")->FxGraph.setPath(Plots.pathFrom(input))
   FxGraph.path(p.layer, ~cls="curve")->FxGraph.setPath(Plots.pathFrom(output))
-  FxGraph.note(p, "four cycles of a note (dim) and the octaver's output: each note finds its own cycles")
+  FxGraph.note(p, "four cycles of a note (dim) and the octaver's output: each voice finds its own note's")
 }
 
 //==============================================================================
@@ -970,14 +970,12 @@ let shows = (item, ~perVoice) =>
 
 let graphTitle = (k: FxRack.kind) =>
   switch k {
-  | #flanger | #phaser => "response"
-  | #filter => "response: drag the point for cutoff and resonance"
+  | #flanger | #phaser | #filter => "response"
   | #space => "tail"
-  | #convolve => "impulse"
-  | #bode => "partials"
+  | #convolve => "impulse and wet tone"
+  | #bode | #shifter => "partials"
   | #utility => "stereo"
   | #ambience | #air => "tone"
-  | #shifter => "partials: each note moves by a share of its own pitch"
   | #resonator => "response for a 220 Hz note"
   | #octaver => "waveform"
   | _ => ""
