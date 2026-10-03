@@ -34,6 +34,7 @@ let modelRate = 48000.
 let make = (ctx: Ctx.t, body, ~id: string => string, ~placement, ~perVoice: unit => bool, ~w, ~h) => {
   let model = ctx.model
   let get = x => model->ParamModel.get(id(x))
+  let oat = () => model->ParamModel.get("Oat_Mode") != 0.
   let gap = Grid.gap
   let settingsHeight = Grid.bareHeight(1)
   let graphHeight = h - settingsHeight - gap
@@ -71,6 +72,7 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement, ~perVoice: unit
     FxDsp.distort(
       ~kind=kind(),
       ~oversample=Float.toInt(get("Sat_Oversample")),
+      ~oat=oat(),
       ~pregain=get("Sat_Pregain"),
       ~limit=get("Sat_Limit"),
       ~postgain=get("Sat_Postgain"),
@@ -85,6 +87,7 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement, ~perVoice: unit
     let key = [
       get("Sat_Type"),
       get("Sat_Oversample"),
+      model->ParamModel.get("Oat_Mode"),
       get("Sat_Pregain"),
       get("Sat_Limit"),
       get("Sat_Postgain"),
@@ -97,7 +100,7 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement, ~perVoice: unit
     | Some((k, v)) if k == key => v
     | _ =>
       let oversample = Float.toInt(get("Sat_Oversample"))
-      let os = FxDsp.oversampleGain(oversample)
+      let os = FxDsp.oversampleGain(~oat=oat(), oversample)
       // (the model runs at the oversampled rate, up to 4x here)
       let sr = modelRate * Int.toFloat(Math.Int.min(4, Math.Int.max(1, [1, 2, 4, 8][oversample]->Option.getOr(1))))
       let pre = Math.pow(10., ~exp=(get("Sat_Pregain") - get("Sat_Limit")) / 20.)

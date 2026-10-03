@@ -35,7 +35,7 @@ type t = {
   dispose: unit => unit,
 }
 
-let oatModeHelp = "Oat mode keeps Oatmeal's MIDI timing (notes, controllers and arpeggiator steps start on the next 64-sample block, not on their own sample) and its legato quirk: a stereo voice's right filter envelopes never start. It is saved with the program."
+let oatModeHelp = "Oat mode keeps Oatmeal's MIDI timing (notes, controllers and arpeggiator steps start on the next 64-sample block, not on their own sample), its legato quirk (a stereo voice's right filter envelopes never start) and its distortion oversampling filters (which change the level and dull the highs). It is saved with the program."
 
 // two presses of Escape this close together stop every note
 let panicMs = 400.

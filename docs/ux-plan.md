@@ -103,7 +103,8 @@ Not done yet:
 - DSP merges of the measured-identical filter and distortion types, Bode with the key shifter, and a
   single convolver instance: the pickers already offer each sound once, so what's left is memory,
   parameters and code size, not UX.
-- Oversampling as an HQ switch: waits for the oversampling-gain fix in the DSP bug session.
+- Oversampling as an HQ switch: the filters are unity gain now outside Oat mode (half-band stages,
+  flat to 20 kHz), so what is left is folding 2x/4x/8x into one switch.
 - Free stacking: see Phase 5b (make CLAP ids independent of endpoint order first).
 
 ## 1. Diagnosis (evidence)

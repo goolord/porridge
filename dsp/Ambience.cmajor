@@ -475,9 +475,10 @@ namespace porridge
                       float replace, float size)
     {
         let overall = float (this.sr / 44100.0);
-        // (VerbTiny's own regeneration starts at half; here it starts at none, the matrix alone)
-        let regen = (1.0f - (1.0f - replace) * (1.0f - replace)) * 0.0625f;
-        let attenuate = (1.0f - replace) * (1.0f - replace);
+        // (VerbTiny's own regeneration starts at half; here it starts at none, the matrix alone,
+        // and reaches a loop gain of 0.99 rather than 1. VerbTiny also fades its input out as
+        // the regeneration rises, to silence at the top, for a freeze; here the input stays.)
+        let regen = (1.0f - (1.0f - replace) * (1.0f - replace)) * (0.0625f * 0.99f);
         float derez, trim, derezF, trimF;
         ambBezStep (1.0f / ((1.0f + 3.0f * size) * overall), derez, trim);
         ambBezStep (1.0f / overall, derezF, trimF);
@@ -485,8 +486,8 @@ namespace porridge
         for (wrap<blockSize> i)
         {
             this.bez[8] += derez;
-            this.bez[6] += pre[i][0] * attenuate * derez;
-            this.bez[7] += pre[i][1] * attenuate * derez;
+            this.bez[6] += pre[i][0] * derez;
+            this.bez[7] += pre[i][1] * derez;
 
             if (this.bez[8] > 1.0f)
             {
