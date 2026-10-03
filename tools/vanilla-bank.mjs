@@ -1,10 +1,12 @@
 // Builds presets/vanilla.porridge, Porridge's own preset bank: 64 programs made for the features
 // Oatmeal doesn't have (per-voice distortion and panning driven by the modulation matrix, the
-// HQ waveforms, PM/ring/AM, Porridge's filter types, envelope curves, the LFO extras, unison
-// width, drift, the effects rack and its own effects, macros, MPE and microtuning), plus programs
-// after Oatmeal's own factory bank and some in the style of modern bass music. Every program moves:
-// something evolves within each note and something varies from note to note, and the instruments
-// (the drums aside) answer velocity, the mod wheel and aftertouch.
+// voice lane's effects in every note, LFO 3 and wander, the oscillators' own envelopes, the key
+// EQ, the distortion models, the HQ waveforms, PM/ring/AM, Porridge's filter types, envelope
+// curves, the LFO extras, unison width, drift, the effects rack and its own effects, macros, MPE
+// and microtuning) and for Oatmeal's that its own programs use most (drawn waveforms and the XY
+// pad), plus programs after Oatmeal's own factory bank and some in the style of modern bass
+// music. Every program moves: something evolves within each note and something varies from note
+// to note, and the instruments (the drums aside) answer velocity, the mod wheel and aftertouch.
 //
 // Each program lists only what differs from Init. The bank goes through Preset.res, so the
 // values are clamped and written exactly as the plugin writes them. Reverb is kept for the
@@ -18,6 +20,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as Preset from "../ui/Preset.res.mjs";
 import * as FilterTypes from "../ui/FilterTypes.res.mjs";
+import * as FxRack from "../ui/FxRack.res.mjs";
 import * as PorridgeParams from "../ui/PorridgeParams.res.mjs";
 import { choiceValue } from "../ui/ParamDefs.res.mjs";
 
@@ -40,7 +43,9 @@ const filter = Object.fromEntries (Object.entries ({
     acid: "acid ladder", cleanDrive: "clean drive", combPlus: "comb +", formant1: "formant I", formant2: "formant II",
     formant3: "formant III",
 }).map (([k, name]) => [k, FilterTypes.index (name)]));
-const dist = choices ("Sat_Type", { off: "off", hard: "hard clip", soft: "soft clip", sine: "sine", asym: "asymmetric" });
+const dist = choices ("Sat_Type", { off: "off", hard: "hard clip", soft: "soft clip", sine: "sine", asym: "asymmetric",
+                                    tube: "tube", tape: "tape", saturate: "saturate", wavefold: "wavefold",
+                                    bassAmp: "bass amp", guitarAmp: "guitar amp", lofi: "lo-fi sampler" });
 const distMode = choices ("Sat_Mode", { global: "global", voicePost: "per voice, after filter",
                                         voicePre: "per voice, before filter", double: "double (before filter and global)" });
 const lfoUnit = choices ("LFO_1_Unit", { ms: "ms", ms10: "10 ms", sec: "sec", sixteenth: "16ths", eighthTriplet: "2/3 8ths",
@@ -106,14 +111,28 @@ const delay = ({ unit, length, feedback, wet }) => {
 
 const mod = (source, target, amount, via) => via ? { source, target, amount, via } : { source, target, amount };
 
-// the effects rack, slot by slot, by the names in its menu; Oatmeal's chorus, delay, reverb and
-// EQ stay in their slots unless they're left out, or do nothing there (see the end)
-const rack = (...names) => Object.fromEntries (Array.from ({ length: PorridgeParams.rackSlots }, (_, i) =>
+// the effects rack, slot by slot, by the names in its menu (with FX_Order, which orders the slots
+// holding Oatmeal's four); Oatmeal's chorus, delay, reverb and EQ stay in their slots unless
+// they're left out, or do nothing there (see the end)
+const rack = (...names) => Object.fromEntries (FxRack.values (names.map (name =>
 {
-    const k = names[i] === undefined ? 0 : PorridgeParams.rackNames.indexOf (names[i]);
-    if (k < 0) throw new Error ("no rack entry " + names[i]);
-    return [PorridgeParams.rackId (i + 1), k];
-}));
+    const e = FxRack.ofValue (PorridgeParams.rackNames.indexOf (name));
+    if (! e) throw new Error ("no rack entry " + name);
+    return e;
+})));
+
+// the voice lane: effects in every voice, slot by slot by the names in its menu, and how many of
+// them come before the filter and before the amp envelope (the rest come after the amp, and
+// ring on after it)
+const lane = (names, { filterAt = 0, ampAt = filterAt } = {}) => ({
+    ...Object.fromEntries (names.map ((name, i) =>
+    {
+        const k = PorridgeParams.rackNames.indexOf (name);
+        if (k < 0) throw new Error ("no rack entry " + name);
+        return [PorridgeParams.laneId (i + 1), k];
+    })),
+    VL_FilterAt: filterAt, VL_AmpAt: ampAt,
+});
 
 // knob positions of the rack effects' frequencies and times (lo · (hi / lo) ^ knob)
 const knob = (lo, hi) => x => PorridgeParams.expPos (lo, hi, x);
@@ -121,6 +140,46 @@ const hz = knob (20, 20000);
 const fxRate = knob (0.02, 20);
 const compAttack = knob (0.1, 300), compRelease = knob (5, 3000);
 const flangerMs = knob (0.1, 20), bodeMs = knob (1, 1000), reverbSeconds = knob (0.1, 30);
+const resonatorMs = knob (10, 10000);
+const lfo3Hz = knob (0.02, 50), wanderHz = knob (0.02, 10);
+// the shifter's ratio knob for a fraction of the note (2 · knob³)
+const shiftRatio = r => Math.sign (r) * Math.cbrt (Math.abs (r) / 2);
+const resonatorModel = choices ("Rs_Model", { harmonic: "harmonic", odd: "odd", fifths: "fifths", bar: "bar", bell: "bell", membrane: "membrane" });
+const shifterMode = choices ("Sh_Mode", { up: "up", down: "down", stereo: "stereo (L up, R down)", ring: "ring" });
+
+// LFO 3 (only the matrix reaches it): { shape, mode, sync } by the names in its lists, rate in
+// Hz, random phase, and delay and fade-in in ms
+const lfo3Shape = choices ("LFO_3_Shape", { sine: "sine", tri: "triangle", sawUp: "saw up", sawDown: "saw down", square: "square",
+                                            sampleHold: "sample & hold", smoothRandom: "smooth random" });
+const lfo3Mode = choices ("LFO_3_Mode", { perVoice: "per-voice", sharedReset: "shared, reset on note", sharedFree: "shared, free" });
+const lfo3Sync = choices ("LFO_3_Sync", { free: "free", bar: "1 bar", half: "1/2", quarter: "1/4", eighth: "1/8", sixteenth: "1/16" });
+const lfo3 = ({ shape, mode, sync, rate, phaseRand, delay, fade }) => {
+    const p = {};
+    const set = (k, x) => { if (x !== undefined) p["LFO_3_" + k] = x; };
+    set ("Shape", pick (lfo3Shape, shape)); set ("Mode", pick (lfo3Mode, mode)); set ("Sync", pick (lfo3Sync, sync));
+    set ("Rate", rate === undefined ? undefined : lfo3Hz (rate)); set ("PhaseRand", phaseRand); set ("Delay", delay); set ("Fade", fade);
+    return p;
+};
+
+// an oscillator's own envelope (its level follows it, under the amp envelope)
+const oscEnv = (n, e) => ({ [`OE${n}_On`]: 1, ...env (`OE${n}_`, e) });
+
+// the key EQ: gains (dB) of its eight bands, on the note's harmonics 1 (a low shelf), 2, 4 ... 128
+const keyEq = gains => ({ KEQ_On: 1, ...Object.fromEntries (gains.map ((g, i) => [`KEQ_${i + 1}_Gain`, g])) });
+
+// the XY pad's routes, Oatmeal's: { x: [[target, depth], ...], y: [...] } by the names in its
+// target list (depths -1..1: the cutoffs in units of 4 octaves, levels of 60 dB, the rest of their
+// range), and its random walk { radius 0..1, rate Hz } around where the pad sits
+const xyTarget = choices ("XY_H_Target_1", { cutoff1: "cutoff 1", cutoff2: "cutoff 2", resonance: "resonance",
+                                             envMod: "filter env mod", pitch: "pitch", pan: "pan", distortion: "distortion",
+                                             lfo1Speed: "LFO 1 speed", lfo2Speed: "LFO 2 speed", lfo1Depth: "LFO 1 depth",
+                                             lfo2Depth: "LFO 2 depth", amp2: "2 amp", noiseAmp: "noise amp",
+                                             filterMix: "filter mix", me1Depth: "ME 1 depth" });
+const xy = ({ x = [], y = [], walk }) => ({
+    ...Object.fromEntries ([["H", x], ["V", y]].flatMap (([axis, routes]) => routes.flatMap (([target, depth], i) =>
+        [[`XY_${axis}_Target_${i + 1}`, pick (xyTarget, target)], [`XY_${axis}_Depth_${i + 1}`, depth]]))),
+    ...(walk ? { XY_Var_Radius: walk.radius, XY_Var_Rate: walk.rate } : {}),
+});
 const bodeHz = PorridgeParams.bodeShiftValue;
 const bassMono = PorridgeParams.bassMonoValue;
 const impulse = name => PorridgeParams.impulseNames.indexOf (name);
@@ -353,15 +412,59 @@ const programs = [
         mod ("macro2", "O2_PWM_D", -0.2),
     ],
 },
+{
+    name: "Phase Keys", category: "keys", tags: ["electric piano", "voice lane", "phaser", "osc envelopes", "key EQ", "tube"],
+    description: "An electric piano in which every note has a phaser of its own: each starts its sweep at a random "
+        + "point and higher notes sweep faster, so a chord shimmers several ways at once instead of all together. "
+        + "The tine is a drawn wave two octaves up with its own envelope, a bark that dies away within a quarter "
+        + "second, over a sine body; a tube model on each voice growls when you play hard, and the key EQ keeps "
+        + "every note's upper harmonics soft. Mod wheel: a stereo tremolo; aftertouch: a deeper phaser. Macros: "
+        + "phase, bark, tremolo, tone.",
+    macros: ["phase", "bark", "tremolo", "tone"],
+    params: {
+        O1_Waveform: wave.sine, O2_Waveform: wave.user, Transpose: 2, O2_Amp: 0.6, VeloSens: 0.6,
+        ...oscEnv (2, { a: 0.2, bp: 1, d2: 250, s: 0.06, r: 100 }), Curve_Osc2_Decay: 0.3,
+        Filter: filter.lp2, Cutoff: 0.6, Resonance: 0.05, F_Track: 0.6, F_EnvMod: 0.15, F_VeloSens: 0.6,
+        ...fenv ({ a: 0.5, bp: 1, d2: 1500, s: 0.3, r: 300 }),
+        ...amp ({ a: 1, bp: 1, d2: 6000, s: 0, r: 350 }), Curve_Amp_Decay: 0.3,
+        Sat_Type: dist.tube, Sat_Mode: distMode.voicePost, Sat_Drive: 0.3, Sat_Postgain: -12,
+        ...lane (["Phaser"]),
+        Ph_On: 1, Ph_Rate: fxRate (0.6), Ph_Depth: 0.55, Ph_Freq: hz (900), Ph_Feedback: 0.4, Ph_Stages: 1,
+        Ph_Track: 0.5, Ph_Mix: 0.5, Ph_PhaseRand: 1, Ph_RateTrack: 0.5,
+        ...keyEq ([0, 1.5, 0, -2, -4, -6, -8, -8]),
+        ...lfo (1, { sync: "globalFree", unit: "ms10", speed: 18 }),
+        Voices: 12,
+        ...rack ("Ambience", "Delay"),
+        Am_On: 1, Am_Model: 0, Am_Size: 0.3, Am_Mix: 0.2,
+        ...delay ({ unit: "eighth", length: [3, 4], feedback: 0.25, wet: 0.06 }),
+    },
+    modulations: [
+        mod ("velocity", "Sat_Pregain", 0.2),
+        mod ("velocity", "Ph_Feedback", 0.15),
+        mod ("random", "Ph_Freq", 0.08),
+        mod ("random", "finePitch", 0.03),
+        mod ("key", "O2_Amp", -0.15),
+        mod ("lfo1", "volume", 0.35, "modWheel"),
+        mod ("lfo1", "pan", 0.5, "modWheel"),
+        mod ("lfo1", "volume", 0.35, "macro3"),
+        mod ("lfo1", "pan", 0.5, "macro3"),
+        mod ("aftertouch", "Ph_Depth", 0.3),
+        mod ("aftertouch", "Ph_Feedback", 0.15),
+        mod ("macro1", "Ph_Mix", 0.4),
+        mod ("macro2", "O2_Amp", 0.2),
+        mod ("macro4", "Cutoff", 0.3),
+    ],
+    tables: { wave2: harmonics ([[1, 1], [2, 0.4], [3, 0.25], [5, 0.12]]) },
+},
 
 //------------------------------------------------------------------ pads
 {
-    name: "Oat Field", category: "pad", tags: ["supersaw", "unison", "drift", "wide", "evolving"],
+    name: "Oat Field", category: "pad", tags: ["supersaw", "unison", "drift", "wide", "evolving", "XY pad"],
     description: "Seven-voice HQ supersaw with a supersaw-style detune curve, random unison phases and extra "
         + "stereo width, slowly drifting in pitch and cutoff like an old polysynth. Each chord opens slowly; "
         + "the detune breathes in and out over eleven seconds while a second slow LFO moves the cutoff, and "
-        + "every note gets its own detune and brightness. Mod wheel: resonance; aftertouch: brighter and wider. "
-        + "Macros: brightness, width, drift.",
+        + "every note gets its own detune and brightness. The XY pad: X opens the filter, Y adds resonance. Mod "
+        + "wheel: resonance; aftertouch: brighter and wider. Macros: brightness, width, drift.",
     macros: ["brightness", "width", "drift", ""],
     params: {
         O1_Waveform: wave.sawHQ, O2_Waveform: wave.sawHQ, Transpose: -1, O2_Amp: 0.45,
@@ -373,6 +476,7 @@ const programs = [
         ...lfo (1, { sync: "globalFree", shape: "tri", unit: "sec", speed: 11 }),
         ...lfo (2, { sync: "globalFree", unit: "sec", speed: 5 }),
         R_On: 1, R_Size: 65, R_Length: 3.5, R_Wet: 0.14, R_Dullness: 0.6,
+        ...xy ({ x: [["cutoff1", 0.4]], y: [["resonance", 0.6]] }),
     },
     modulations: [
         mod ("modEnv1", "Cutoff", 0.12),
@@ -572,12 +676,13 @@ const programs = [
 },
 
 {
-    name: "Grit Bloom", category: "pad", tags: ["per-voice drive", "per-voice pan", "evolving"],
+    name: "Grit Bloom", category: "pad", tags: ["per-voice drive", "per-voice pan", "voice lane", "phaser", "evolving"],
     description: "A clean pad that grows grit: a slow mod envelope raises each note's distortion drive and "
         + "cutoff, and moves the note out from the centre, each one to its own random side. As it blooms the "
         + "filter's resonance rises and a slow per-note LFO starts sweeping that peak through the upper "
-        + "harmonics, every note at its own phase, while a high phaser fades in. Mod wheel: a faster phaser; "
-        + "aftertouch: more grit. Macros: grit, bloom, shimmer.",
+        + "harmonics, every note at its own phase, while a high phaser fades in, one in every voice, starting "
+        + "its sweep at a random point and drifting in pitch on its own. Mod wheel: faster phasers; aftertouch: "
+        + "more grit. Macros: grit, bloom, shimmer.",
     macros: ["grit", "bloom", "shimmer", ""],
     params: {
         O1_Waveform: wave.sawHQ, O2_Waveform: wave.sawHQ, Transpose: semis (7), O2_Amp: 0.4,
@@ -586,9 +691,10 @@ const programs = [
         ...menv1 ({ a: 2600, bp: 1, s: 1, r: 2000 }), Curve_Mod1_Attack: -0.3,
         ...amp ({ a: 380, bp: 1, s: 1, r: 2200 }), Curve_Amp_Attack: -0.2,
         ...lfo (2, { sync: "perNote", shape: "tri", unit: "sec", speed: 3.5 }), LFOPhaseRand: 1,
-        ...rack ("Chorus", "Phaser", "Delay", "Reverb", "EQ"),
+        ...lane (["Phaser"]),
         Ph_On: 1, Ph_Rate: fxRate (0.13), Ph_Depth: 0.6, Ph_Freq: hz (2500), Ph_Feedback: 0.6, Ph_Stages: 3,
-        Ph_Spread: 0.6, Ph_Mix: 0,
+        Ph_Spread: 0.6, Ph_Mix: 0, Ph_PhaseRand: 1,
+        Wander_Rate: wanderHz (0.2),
         R_On: 1, R_Size: 55, R_Length: 2.5, R_Wet: 0.1,
         ...delay ({ unit: "eighth", length: [3, 4], feedback: 0.35, wet: 0.07 }),
         Macro_2: 1, Macro_3: 0.6,
@@ -602,6 +708,7 @@ const programs = [
         mod ("modEnv1", "F_Morph", 0.2, "macro3"),
         mod ("lfo2", "Cutoff", 0.1, "modEnv1"),
         mod ("modEnv1", "Ph_Mix", 0.8, "macro3"),
+        mod ("wander", "Ph_Freq", 0.08),
         mod ("random", "finePitch", 0.05),
         mod ("random", "Detune", 0.01),
         mod ("modWheel", "Ph_Rate", 0.25),
@@ -796,14 +903,54 @@ const programs = [
     // a sidechain duck: silent on the beat, back up by the next (LFO shapes are 0..1)
     tables: { lfoShape1: Float32Array.from ({ length: 512 }, (_, i) => 1 - Math.exp (-7 * i / 511)) },
 },
+{
+    name: "Tuned Jets", category: "pad", tags: ["voice lane", "flanger", "wander", "XY pad", "User"],
+    description: "A flanger in every voice whose delay follows the note's period, so with its feedback it rings at the "
+        + "note, a string drawn out into a jet. Each note's flanger starts at its own point of its sweep and sweeps "
+        + "faster the higher it plays, and its feedback wanders on its own, so the notes of a chord swell and hollow "
+        + "out apart. Under it, a drawn wave rich in odd harmonics, a saw an octave up and a little breath. The XY "
+        + "pad: X opens the filter, Y adds resonance, with a slow random walk. Mod wheel: more ring; "
+        + "aftertouch: brighter. Macros: jet, ring, air, wander.",
+    macros: ["jet", "ring", "air", "wander"],
+    params: {
+        O1_Waveform: wave.user, O2_Waveform: wave.sawHQ, Transpose: 1, Detune: 0.5, O2_Amp: 0.3, N_Amp: 0.08,
+        Filter: filter.mgLow12, Cutoff: 0.42, Resonance: 0.1, F_Track: 0.5,
+        ...amp ({ a: 700, bp: 1, s: 1, r: 2500 }), Curve_Amp_Attack: -0.3, Curve_Amp_Release: 0.3,
+        ...lane (["Flanger"]),
+        Fl_On: 1, Fl_Rate: fxRate (0.15), Fl_Depth: 0.08, Fl_Delay: flangerMs (1000 / 261.63), Fl_Feedback: 0.65,
+        Fl_Mix: 0.5, Fl_Track: 1, Fl_RateTrack: 0.5, Fl_PhaseRand: 1,
+        Wander_Rate: wanderHz (0.25),
+        ...xy ({ x: [["cutoff1", 0.35]], y: [["resonance", 0.4]], walk: { radius: 0.2, rate: 0.4 } }),
+        Drift_Pitch: 3,
+        ...rack ("Chorus", "Reverb"),
+        C_Mode: 1, C_Stereo: 2, C_Mix: 0.3,
+        R_On: 1, R_Size: 65, R_Length: 3.2, R_Wet: 0.13, R_Dullness: 0.6,
+        Macro_4: 0.6,
+    },
+    modulations: [
+        mod ("wander", "Fl_Feedback", 0.12, "macro4"),
+        mod ("wander", "Cutoff", 0.05),
+        mod ("random", "Fl_Depth", 0.04),
+        mod ("random", "finePitch", 0.04),
+        mod ("velocity", "Cutoff", 0.06),
+        mod ("velocity", "Fl_Mix", 0.1),
+        mod ("modWheel", "Fl_Feedback", 0.15),
+        mod ("aftertouch", "Cutoff", 0.15),
+        mod ("macro1", "Fl_Mix", 0.3),
+        mod ("macro2", "Fl_Feedback", 0.2),
+        mod ("macro3", "N_Amp", 0.15),
+    ],
+    tables: { wave1: harmonics ([[1, 1], [2, 0.15], [3, 0.45], [5, 0.3], [7, 0.2], [9, 0.12], [11, 0.07]]) },
+},
 
 //------------------------------------------------------------------ leads
 {
-    name: "Velvet Lead", category: "lead", tags: ["mono", "ladder", "vibrato", "compressor", "PWM"],
+    name: "Velvet Lead", category: "lead", tags: ["mono", "ladder", "vibrato", "compressor", "PWM", "XY pad"],
     description: "A legato ladder lead with glide: a saw and a slowly pulse-width-modulated square, each note "
         + "scooping up into pitch. The vibrato waits, fades in and then quickens the longer a note is held; a "
         + "slow per-note LFO keeps the filter alive. A gentle compressor holds it steady in front of the delay. "
-        + "Mod wheel: more vibrato; aftertouch: brighter and driven. Macros: drive, cutoff.",
+        + "The XY pad: X opens the filter, Y deepens the vibrato. Mod wheel: more vibrato; aftertouch: brighter "
+        + "and driven. Macros: drive, cutoff.",
     macros: ["drive", "cutoff", "", ""],
     params: {
         PolyMode: poly.legato, Glide: 60, GlideMode: 0,
@@ -821,6 +968,7 @@ const programs = [
         ...rack ("Chorus", "Compressor", "Delay", "Reverb", "EQ"),
         ...glue (-20, 3, 8, 120, 4),
         ...delay ({ unit: "eighth", length: 3, feedback: 0.35, wet: 0.13 }),
+        ...xy ({ x: [["cutoff1", 0.35]], y: [["lfo1Depth", 0.8]] }),
     },
     modulations: [
         mod ("modEnv1", "LFO_1_Speed", -0.035),
@@ -836,19 +984,19 @@ const programs = [
     ],
 },
 {
-    name: "Fuzz Lead", category: "lead", tags: ["mono", "fuzz", "convolution", "cabinet"],
-    description: "Two detuned saws through an asymmetric clipper (4x oversampled) after the filter, so the "
-        + "clipper sees every harmonic and the two saws grind against each other, then a 1×12 guitar cabinet "
-        + "(convolved) takes the fizz off. Held notes swell into more fuzz like an amp feeding back, the pick "
-        + "attack and the beat between the saws change from note to note, and a random LFO wobbles the tone. "
-        + "It starts as a crunch: the mod wheel turns it into full fuzz; aftertouch sweeps a resonant wah in "
-        + "front of the clipper. Macros: fuzz, cutoff, cabinet.",
-    macros: ["fuzz", "cutoff", "cabinet", ""],
+    name: "Fuzz Lead", category: "lead", tags: ["mono", "fuzz", "guitar amp", "convolution", "cabinet"],
+    description: "Two detuned saws through a guitar amp (a distortion model: a high-gain amp into a 4×12 "
+        + "cabinet) after the filter, so the amp sees every harmonic and the two saws grind against each other, "
+        + "then a 1×12 cabinet (convolved) blended in for a smaller box. Held notes swell into more gain like an "
+        + "amp feeding back, the pick attack and the beat between the saws change from note to note, and a random "
+        + "LFO wobbles the tone. It starts as a crunch: the mod wheel turns it into full fuzz; aftertouch sweeps "
+        + "a resonant wah in front of the amp. Macros: fuzz, cutoff, cabinet, tone.",
+    macros: ["fuzz", "cutoff", "cabinet", "tone"],
     params: {
         PolyMode: poly.legato, Glide: 30, GlideMode: 0,
         O1_Waveform: wave.sawHQ, O2_Waveform: wave.sawHQ, Transpose: 0, Detune: 1.2, O2_Amp: 0.8,
         Filter: filter.mgLow12, Cutoff: 0.66, Resonance: 0.15, F_EnvMod: 0.1, F_Track: 0.5,
-        Sat_Type: dist.asym, Sat_Mode: distMode.voicePost, Sat_Oversample: 2, Sat_Pregain: 20, Sat_Postgain: -14,
+        Sat_Type: dist.guitarAmp, Sat_Mode: distMode.voicePost, Sat_Drive: 0.35, Sat_Tone: 0.5, Macro_4: 0.5,
         ...fenv ({ a: 2, bp: 1, d2: 400, s: 0.3, r: 200 }),
         ...amp ({ a: 3, bp: 1, s: 1, r: 180 }),
         ...menv1 ({ a: 2200, bp: 1, s: 1, r: 200 }), Curve_Mod1_Attack: -0.4,
@@ -856,7 +1004,7 @@ const programs = [
         LFO_1_Delay: 500, LFO_1_Fade: 500,
         ...lfo (2, { sync: "perNote", shape: "smoothRandom", unit: "sec", speed: 1.2 }),
         ...rack ("Chorus", "Convolve", "Delay", "Reverb", "EQ"),
-        Cv_On: 1, Cv_Impulse: impulse ("cabinet 1×12"), Cv_Mix: 1, Cv_Gain: -6,
+        Cv_On: 1, Cv_Impulse: impulse ("cabinet 1×12"), Cv_Mix: 0.5,
         ...delay ({ unit: "eighth", length: [3, 2], feedback: 0.3, wet: 0.1 }),
     },
     modulations: [
@@ -870,9 +1018,10 @@ const programs = [
         mod ("modWheel", "Cutoff", 0.06),
         mod ("aftertouch", "Cutoff", -0.15),
         mod ("aftertouch", "Resonance", 0.5),
-        mod ("macro1", "Sat_Pregain", 0.15),
+        mod ("macro1", "Sat_Drive", 0.3),
         mod ("macro2", "Cutoff", 0.3),
-        mod ("macro3", "Cv_Mix", -0.6),
+        mod ("macro3", "Cv_Mix", -0.4),
+        mod ("macro4", "Sat_Tone", 0.3),
     ],
 },
 {
@@ -1013,38 +1162,42 @@ const programs = [
     ],
 },
 {
-    name: "Anthem Saw", category: "lead", tags: ["supersaw", "trance", "unison", "delay"],
-    description: "A big supersaw lead: nine detuned saws with an octave above, a filter envelope on every "
-        + "note, a slow LFO breathing the detune and the cutoff, and a vibrato that fades in on held notes. "
-        + "Every note gets its own detune and brightness, and a dotted-eighth delay trails it. Mod wheel: more "
-        + "vibrato; aftertouch: brighter and wider. Macros: brightness, detune, delay.",
-    macros: ["brightness", "detune", "delay", ""],
+    name: "Shifter Lead", category: "lead", tags: ["voice lane", "key shifter", "LFO 3", "wander", "saturate"],
+    description: "Two saws with a frequency shifter in every voice that follows the key: it moves each note's partials "
+        + "by a fraction of the note's own pitch, up on the left and down on the right, so every note has the same "
+        + "glassy, slightly inharmonic shine wherever it is played, chords included. LFO 3, one per note, fades in "
+        + "after half a second and sways the shift on held notes, and each note's offset wanders on its own; harder "
+        + "notes shift further. A saturate model after the filter. Mod wheel: vibrato; aftertouch: more shine. "
+        + "Macros: shift, shine, drive, vibrato.",
+    macros: ["shift", "shine", "drive", "vibrato"],
     params: {
-        O1_Waveform: wave.sawHQ, U_Voices: 9, U_Detune: 30, U_DetuneCurve: 0.6, U_RandomPhase: 1, U_Spread: 0.85,
-        U_Width: 1.5,
-        O2_Waveform: wave.sawHQ, Transpose: 1, O2_Amp: 0.4,
-        Filter: filter.ladder, Cutoff: 0.55, Resonance: 0.15, F_Track: 0.5, F_EnvMod: 0.25, F_VeloSens: 0.4,
-        ...fenv ({ a: 1, bp: 1, d2: 800, s: 0.6, r: 400 }),
-        ...amp ({ a: 3, bp: 1, s: 1, r: 400 }),
-        ...lfo (1, { sync: "perNote", unit: "ms10", speed: 18 }), LFO_1_Pitch: 0.3,
-        LFO_1_Delay: 500, LFO_1_Fade: 900,
-        ...lfo (2, { sync: "globalFree", unit: "sec", speed: 7 }),
-        C_Mode: 1, C_Stereo: 2, C_Mix: 0.25,
+        O1_Waveform: wave.sawHQ, O2_Waveform: wave.sawHQ, Transpose: 0, Detune: 0.6, O2_Amp: 0.7,
+        Filter: filter.ladder, Cutoff: 0.5, Resonance: 0.25, F_Track: 0.5, F_EnvMod: 0.25, F_VeloSens: 0.4,
+        ...fenv ({ a: 2, bp: 1, d2: 700, s: 0.4, r: 300 }),
+        ...amp ({ a: 4, bp: 1, s: 1, r: 260 }),
+        Sat_Type: dist.saturate, Sat_Mode: distMode.voicePost, Sat_Drive: 0.4,
+        ...lane (["Shifter"]),
+        Sh_On: 1, Sh_Ratio: shiftRatio (0.03), Sh_Mode: shifterMode.stereo, Sh_Mix: 0.4,
+        ...lfo3 ({ shape: "tri", mode: "perVoice", rate: 0.4, phaseRand: 1, delay: 500, fade: 1500 }),
+        Wander_Rate: wanderHz (0.3),
+        ...lfo (1, { sync: "perNote", unit: "ms10", speed: 18 }), LFO_1_Delay: 400, LFO_1_Fade: 600,
+        Voices: 8,
+        ...rack ("Delay"),
         ...delay ({ unit: "sixteenth", length: 3, feedback: 0.35, wet: 0.12 }),
-        Macro_3: 0.5,
     },
     modulations: [
-        mod ("lfo2", "U_Detune", 0.02),
-        mod ("lfo2", "Cutoff", 0.04),
-        mod ("random", "U_Detune", 0.01),
-        mod ("random", "Cutoff", 0.03),
-        mod ("velocity", "Cutoff", 0.05),
-        mod ("modWheel", "LFO_1_Pitch", 0.12),
-        mod ("aftertouch", "Cutoff", 0.15),
-        mod ("aftertouch", "U_Width", 0.15),
-        mod ("macro1", "Cutoff", 0.25),
-        mod ("macro2", "U_Detune", 0.04),
-        mod ("macro3", "D_Wet", 0.12),
+        mod ("lfo3", "Sh_Ratio", 0.04),
+        mod ("wander", "Sh_Hz", 0.15),
+        mod ("velocity", "Sh_Ratio", 0.03),
+        mod ("random", "Sh_Ratio", 0.03),
+        mod ("velocity", "Cutoff", 0.06),
+        mod ("modWheel", "LFO_1_Pitch", 0.15),
+        mod ("aftertouch", "Sh_Mix", 0.4),
+        mod ("aftertouch", "Cutoff", 0.08),
+        mod ("macro1", "Sh_Ratio", 0.15),
+        mod ("macro2", "Sh_Mix", 0.4),
+        mod ("macro3", "Sat_Drive", 0.3),
+        mod ("macro4", "LFO_1_Pitch", 0.15),
     ],
 },
 {
@@ -1082,38 +1235,6 @@ const programs = [
 },
 
 //------------------------------------------------------------------ bass
-{
-    name: "Chew Bass", category: "bass", tags: ["per-voice drive", "diode ladder", "mono", "PWM"],
-    description: "A resonant diode ladder chewing in front of an asymmetric drive on the voice: the filter "
-        + "envelope and an eighth-note LFO keep the resonant peak moving, the square under the saw slowly "
-        + "changes width, and the drive after it turns the peak into a snarl. Velocity adds drive and envelope, "
-        + "and low notes are driven harder than high ones, so the line grows teeth as it goes down. Mod wheel: "
-        + "the LFO goes to sixteenths; aftertouch: resonance. Macros: chew, drive, cutoff.",
-    macros: ["chew", "drive", "cutoff", ""],
-    params: {
-        PolyMode: poly.legato, Glide: 25, GlideMode: 0,
-        O1_Waveform: wave.sawHQ, O2_Waveform: wave.pulseHQ, O2_PWM_R: 0.5, O2_PWM_D: 0.2, Transpose: -1, O2_Amp: 0.6,
-        Filter: filter.diode, Cutoff: 0.27, Resonance: 0.74, F_EnvMod: 0.5, F_VeloSens: 0.5, F_Track: 0.5,
-        ...fenv ({ a: 0.2, bp: 1, d2: 300, s: 0.15, r: 120 }), Curve_Filter_Decay: 0.3,
-        ...amp ({ a: 1, bp: 1, s: 0.8, r: 60 }),
-        ...lfo (2, { sync: "globalReset", shape: "tri", unit: "eighth", speed: 1 }),
-        LFO_2_Quantize: 1,
-        Sat_Type: dist.asym, Sat_Mode: distMode.voicePost, Sat_Pregain: 12, Sat_Postgain: -9,
-        Macro_1: 0.5,
-    },
-    modulations: [
-        mod ("velocity", "Sat_Pregain", 0.15),
-        mod ("velocity", "F_EnvMod", 0.08),
-        mod ("key", "Sat_Pregain", -0.2),
-        mod ("lfo2", "Cutoff", 0.12, "macro1"),
-        mod ("modWheel", "LFO_2_Speed", -0.1),
-        mod ("random", "Cutoff", 0.03),
-        mod ("aftertouch", "Resonance", 0.2),
-        mod ("macro1", "Resonance", 0.15),
-        mod ("macro2", "Sat_Pregain", 0.15),
-        mod ("macro3", "Cutoff", 0.25),
-    ],
-},
 {
     name: "Sub Fold", category: "bass", tags: ["wavefolder", "per-voice drive", "sub", "wobble"],
     description: "A pure sine sub, with a quiet sine an octave up so it carries on small speakers. A short "
@@ -1172,11 +1293,12 @@ const programs = [
     ],
 },
 {
-    name: "Reese Drift", category: "bass", tags: ["reese", "unison", "drift", "SVF", "flanger"],
+    name: "Reese Drift", category: "bass", tags: ["reese", "unison", "drift", "SVF", "flanger", "XY pad"],
     description: "Two detuned HQ saws with unison and analog drift, through a state-variable filter whose "
         + "slow LFO morphs it between lowpass and bandpass. A second slow LFO changes how fast the saws beat "
-        + "against each other, and a slow flanger in the rack (with the bass kept mono) adds the jet. Mod wheel: "
-        + "resonance and more bandpass; aftertouch: drive. Macros: growl, drive.",
+        + "against each other, and a slow flanger in the rack (with the bass kept mono) adds the jet. The XY "
+        + "pad: X opens the filter, Y adds resonance and drive. Mod wheel: resonance and more bandpass; "
+        + "aftertouch: drive. Macros: growl, drive.",
     macros: ["growl", "drive", "", ""],
     params: {
         PolyMode: poly.legato, Glide: 20, GlideMode: 0,
@@ -1184,6 +1306,7 @@ const programs = [
         U_Voices: 3, U_Detune: 30, U_Spread: 0.5, U_Width: 1.2,
         Drift_Pitch: 12, Drift_Rate: 0.6,
         Filter: filter.svf, F_Morph: 0.1, Cutoff: 0.33, Resonance: 0.25, F_Track: 0.5,
+        ...xy ({ x: [["cutoff1", 0.3]], y: [["resonance", 0.5], ["distortion", 0.3]] }),
         ...lfo (1, { sync: "globalFree", unit: "sec", speed: 6 }),
         ...lfo (2, { sync: "globalFree", shape: "tri", unit: "sec", speed: 9 }),
         Sat_Type: dist.soft, Sat_Mode: distMode.voicePost, Sat_Pregain: 8, Sat_Postgain: -5,
@@ -1237,37 +1360,49 @@ const programs = [
     ],
 },
 {
-    name: "Talk Bass", category: "bass", tags: ["formant", "vowel", "mono", "compressor"],
-    description: "A bass that talks: a saw and a square an octave down through a formant filter. Each note's "
-        + "mod envelope sweeps the vowel from its own starting point and an eighth-note LFO makes held notes yap, "
-        + "then a soft drive, a compressor and a bass-mono utility keep it solid. Mod wheel: the LFO goes to "
-        + "sixteenths; aftertouch: opens the vowel. Macros: talk, vowel, drive.",
-    macros: ["talk", "vowel", "drive", ""],
+    name: "Octave Bass", category: "bass", tags: ["voice lane", "octaver", "bass amp", "key EQ", "XY pad"],
+    description: "A reedy drawn wave through an octaver in the voice, which finds a sub octave and an octave up "
+        + "from the note itself, then a ladder and a bass amp (a distortion model) in the voice too. The key EQ "
+        + "cuts each note's second harmonic and lifts its fourth and eighth, so the growl sits in the same place on "
+        + "every note. Harder notes get more sub, high ones less, each note's octave up and drive differ, and its "
+        + "tone and octave up wander on their own while it is held. The XY pad: X opens the filter, Y adds "
+        + "resonance, and a slow random walk keeps them moving. Mod wheel: an eighth-note wobble of the filter and "
+        + "the octave up; aftertouch: more amp, brighter. Macros: sub, octave up, amp, cutoff.",
+    macros: ["sub", "octave up", "amp", "cutoff"],
     params: {
-        PolyMode: poly.legato, Glide: 30, GlideMode: 0,
-        O1_Waveform: wave.sawHQ, O2_Waveform: wave.pulseHQ, Transpose: -1, O2_Amp: 0.5,
-        Filter: filter.formant2, Cutoff: 0.45, Resonance: 0.5, F_Track: 0.3, F_Morph: 0.1,
-        ...menv1 ({ a: 60, bp: 1, d2: 350, s: 0.25, r: 150 }),
+        PolyMode: poly.legato, Glide: 35, GlideMode: 0,
+        O1_Waveform: wave.user,
+        Filter: filter.ladder, Cutoff: 0.33, Resonance: 0.25, F_Track: 0.5, F_EnvMod: 0.3, F_VeloSens: 0.4,
+        ...fenv ({ a: 0.5, bp: 1, d2: 350, s: 0.3, r: 120 }), Curve_Filter_Decay: 0.3,
         ...amp ({ a: 2, bp: 1, s: 1, r: 90 }),
-        ...lfo (2, { sync: "globalReset", shape: "tri", unit: "eighth", speed: 1 }),
-        LFO_2_Quantize: 1,
-        Sat_Type: dist.soft, Sat_Mode: distMode.voicePost, Sat_Pregain: 8, Sat_Postgain: -5,
-        ...rack ("Chorus", "Delay", "Reverb", "EQ", "Compressor", "Utility"),
-        ...glue (-20, 3, 5, 90, 3),
-        Ut_On: 1, Ut_BassMono: bassMono (150),
-        Macro_1: 0.6,
+        ...lane (["Octaver", "Distortion 2"], { filterAt: 1, ampAt: 2 }),
+        Oc_On: 1, Oc_Sub: 0.6, Oc_Up: 0.2, Oc_Dry: 0.8,
+        Sat2_Type: dist.bassAmp, Sat2_Drive: 0.45, Sat2_Tone: 0.5, Sat2_Character: 0.4,
+        ...keyEq ([0, -4, 3, 4, 0, -2, -4, -6]),
+        ...lfo (2, { sync: "globalReset", shape: "tri", unit: "eighth", speed: 1 }), LFO_2_Quantize: 1,
+        Wander_Rate: wanderHz (0.5),
+        ...xy ({ x: [["cutoff1", 0.4]], y: [["resonance", 0.5]], walk: { radius: 0.15, rate: 0.5 } }),
+        ...rack ("Compressor"),
+        ...glue (-20, 3, 5, 90, 2),
     },
     modulations: [
-        mod ("modEnv1", "F_Morph", 0.5),
-        mod ("lfo2", "F_Morph", 0.35, "macro1"),
-        mod ("velocity", "F_Morph", 0.1),
-        mod ("random", "F_Morph", 0.1),
-        mod ("modWheel", "LFO_2_Speed", -0.1),
-        mod ("aftertouch", "F_Morph", 0.2),
-        mod ("aftertouch", "Cutoff", 0.06),
-        mod ("macro2", "F_Morph", 0.4),
-        mod ("macro3", "Sat_Pregain", 0.15),
+        mod ("velocity", "Oc_Sub", 0.2),
+        mod ("velocity", "F_EnvMod", 0.08),
+        mod ("key", "Oc_Sub", -0.2),
+        mod ("random", "Oc_Up", 0.15),
+        mod ("random", "Sat2_Pregain", 0.08),
+        mod ("wander", "Cutoff", 0.12),
+        mod ("wander", "Oc_Up", 0.15),
+        mod ("lfo2", "Oc_Up", 0.4, "modWheel"),
+        mod ("lfo2", "Cutoff", 0.12, "modWheel"),
+        mod ("aftertouch", "Sat2_Pregain", 0.25),
+        mod ("aftertouch", "Cutoff", 0.1),
+        mod ("macro1", "Oc_Sub", 0.3),
+        mod ("macro2", "Oc_Up", 0.4),
+        mod ("macro3", "Sat2_Pregain", 0.2),
+        mod ("macro4", "Cutoff", 0.3),
     ],
+    tables: { wave1: harmonics ([[1, 1], [2, 0.35], [3, 0.55], [4, 0.2], [5, 0.35], [7, 0.2], [9, 0.1]]) },
 },
 
 {
@@ -1499,36 +1634,48 @@ const programs = [
     ],
 },
 {
-    name: "Squash Pluck", category: "pluck", tags: ["supersaw", "compressor", "OTT", "delay"],
-    description: "A bright supersaw pluck squashed OTT-style by the three-band compressor: downward compression "
-        + "tames the attack and upward compression lifts the tail and the top, so each pluck stays dense as it "
-        + "dies. Each pluck lands at its own place and brightness, and a slow LFO evolves the detune and cutoff "
-        + "across a sequence. A short tempo delay behind it. Mod wheel: resonance; velocity: a longer sweep. "
-        + "Macros: squash, brightness, delay.",
-    macros: ["squash", "brightness", "delay", ""],
+    name: "Resonator Pluck", category: "pluck", tags: ["voice lane", "resonator", "osc envelopes", "string"],
+    description: "Only a pick goes in: a pulse and a triangle that their own envelopes cut off within a tenth "
+        + "of a second, and a tick of noise, into a resonator in every voice tuned to its note, which rings as "
+        + "the string. Each string rings for its own time and at its own brightness, harder plucks are brighter, "
+        + "high strings ring shorter, and each is tuned a hair apart and placed at its own spot in the stereo field. "
+        + "The amp envelope damps the string when the key is let go. Mod wheel: a longer ring; aftertouch: "
+        + "brighter. Macros: ring, brightness, pick, body.",
+    macros: ["ring", "brightness", "pick", "body"],
     params: {
-        O1_Waveform: wave.sawHQ, U_Voices: 5, U_Detune: 22, U_DetuneCurve: 0.5, U_RandomPhase: 1, U_Spread: 0.7,
-        U_Width: 1.3,
-        O2_Waveform: wave.sawHQ, Transpose: 1, O2_Amp: 0.3,
-        Filter: filter.ladder, Cutoff: 0.3, Resonance: 0.2, F_Track: 0.5, F_EnvMod: 0.5, F_VeloSens: 0.4,
-        ...fenv ({ a: 0.2, bp: 1, d2: 230, s: 0, r: 200 }), Curve_Filter_Decay: 0.45,
-        ...amp ({ a: 0.5, bp: 1, d2: 2400, s: 0, r: 250 }), Curve_Amp_Decay: 0.25,
-        ...lfo (2, { sync: "globalFree", unit: "sec", speed: 8 }),
-        ...rack ("Chorus", "Compressor", "Delay", "Reverb", "EQ"),
-        Cp_On: 1, Cp_Depth: 0.6, Cp_Attack: compAttack (3), Cp_Release: compRelease (90), Cp_InGain: 4, Cp_Mix: 0.8,
-        Cp_LowUpThresh: -40, Cp_MidUpThresh: -40, Cp_HighUpThresh: -40, Cp_MidUpRatio: 3, Cp_HighUpRatio: 3,
-        ...delay ({ unit: "sixteenth", length: 3, feedback: 0.3, wet: 0.1 }),
+        O1_Waveform: wave.pulseHQ, O1_PWM_W: 0.3, O2_Waveform: wave.triHQ, Transpose: 1, O2_Amp: 0.5,
+        ...oscEnv (1, { a: 0.2, bp: 1, d2: 100, s: 0, r: 20 }),
+        ...oscEnv (2, { a: 0.2, bp: 1, d2: 50, s: 0, r: 20 }),
+        N_Resonance: 0.5, N_Transpose: 12,
+        Filter: filter.svf, Cutoff: 0.55, Resonance: 0.1, F_Track: 0.6, F_EnvMod: 0.25, F_VeloSens: 0.5,
+        ...fenv ({ a: 0.2, bp: 1, d2: 900, s: 0.2, r: 300 }),
+        ...amp ({ a: 0.3, bp: 1, s: 1, r: 260 }),
+        ...menv2 ({ a: 0.2, bp: 1, d2: 15, s: 0, r: 10 }),
+        ...lane (["Resonator"], { filterAt: 1 }),
+        Rs_On: 1, Rs_Model: resonatorModel.harmonic, Rs_Decay: resonatorMs (1500), Rs_Bright: 0.5, Rs_Mix: 0.9, Rs_Gain: 24,
+        Voices: 12,
+        ...rack ("Delay", "Algo reverb"),
+        ...delay ({ unit: "eighth", length: [3, 4], feedback: 0.25, wet: 0.07 }),
+        Rv_On: 1, Rv_Model: reverbModel.plate, Rv_Size: 0.35, Rv_Decay: reverbSeconds (1.6), Rv_Mix: 0.12,
+        Macro_4: 0.5,
     },
     modulations: [
+        mod ("random", "Rs_Decay", 0.05),
+        mod ("random", "Rs_Bright", 0.12),
+        mod ("random", "finePitch", 0.03),
         mod ("random", "pan", 0.35),
-        mod ("random", "Cutoff", 0.04),
-        mod ("lfo2", "U_Detune", 0.02),
-        mod ("lfo2", "Cutoff", 0.05),
-        mod ("velocity", "F_EnvMod", 0.1),
-        mod ("modWheel", "Resonance", 0.35),
-        mod ("macro1", "Cp_Depth", 0.4),
-        mod ("macro2", "Cutoff", 0.2),
-        mod ("macro3", "D_Wet", 0.12),
+        mod ("velocity", "Rs_Bright", 0.2),
+        mod ("velocity", "Cutoff", 0.08),
+        mod ("key", "Rs_Decay", -0.15),
+        mod ("modEnv2", "N_Amp", 0.3),
+        mod ("modWheel", "Rs_Decay", 0.15),
+        mod ("aftertouch", "Rs_Bright", 0.4),
+        mod ("aftertouch", "Cutoff", 0.1),
+        mod ("macro1", "Rs_Decay", 0.2),
+        mod ("macro2", "Rs_Bright", 0.3),
+        mod ("macro2", "Cutoff", 0.15),
+        mod ("macro3", "O1_PWM_W", 0.25),
+        mod ("macro4", "Rs_Mix", 0.15),
     ],
 },
 {
@@ -1792,36 +1939,43 @@ const programs = [
     ],
 },
 {
-    name: "Gated Grit", category: "sequence", tags: ["per-voice drive", "tempo sync", "gate"],
-    description: "A 16th-note square LFO, reset on each note, gates the volume and the drive of every voice "
-        + "together, and bounces the sound between left and right, while a whole-note ramp lifts the filter "
-        + "over each bar. Slew softens the edges. Mod wheel: the gate goes to 32nds; aftertouch: more grit. "
-        + "Macros: gate, grit, rise.",
-    macros: ["gate", "grit", "rise", ""],
+    name: "Formant Steps", category: "sequence", tags: ["voice lane", "formant", "LFO 3", "sample & hold", "User PWM"],
+    description: "Every note talks in its own rhythm: a formant filter in each voice, following the note, whose "
+        + "vowel LFO 3 picks again every sixteenth (sample & hold, one per note, each from a random start), so a "
+        + "held chord turns into several voices chattering against each other, each at its own place in the "
+        + "stereo field. Under it, a drawn saw-like wave played as a pulse (User PWM), its width swept slowly in "
+        + "each note. Harder notes ring more. Mod wheel: wider vowel steps; aftertouch: brighter vowels. Macros: steps, "
+        + "vowel, resonance, drive.",
+    macros: ["steps", "vowel", "resonance", "drive"],
     params: {
-        O1_Waveform: wave.sawHQ, O2_Waveform: wave.sawHQ, Transpose: -1, O2_Amp: 0.6, U_Voices: 3, U_Detune: 15,
-        U_Spread: 0.5,
-        Filter: filter.svf, Cutoff: 0.42, Resonance: 0.25,
-        ...amp ({ a: 5, bp: 1, s: 1, r: 300 }),
-        ...lfo (1, { sync: "globalReset", shape: "saw", unit: "whole", speed: 1 }),
-        LFO_1_Quantize: 1,
-        ...lfo (2, { sync: "globalReset", shape: "square", unit: "sixteenth", speed: 1 }),
-        LFO_2_Quantize: 1, LFO_2_Slew: 0.2,
-        Sat_Type: dist.soft, Sat_Mode: distMode.voicePost, Sat_Pregain: 8, Sat_Postgain: -6,
-        ...delay ({ unit: "sixteenth", length: 3, feedback: 0.4, wet: 0.1 }),
-        Macro_1: 0.6, Macro_3: 0.5,
+        O1_Waveform: wave.userPwm, O1_PWM_W: 0.35, O2_Waveform: wave.sawHQ, Transpose: -1, O2_Amp: 0.35,
+        Filter: filter.ladder, Cutoff: 0.6, Resonance: 0.1, F_Track: 0.5,
+        ...amp ({ a: 3, bp: 1, s: 1, r: 200 }),
+        ...lane (["Filter"], { ampAt: 1 }),
+        Ff_On: 1, Ff_Type: FilterTypes.index ("formant II"), Ff_Cutoff: hz (900), Ff_Track: 0.8, Ff_Resonance: 0.45,
+        Ff_Morph: 0.5, Ff_Drive: 0.15, Ff_Mix: 1,
+        ...lfo3 ({ shape: "sampleHold", mode: "perVoice", sync: "sixteenth", phaseRand: 1 }),
+        ...lfo (2, { sync: "perNote", unit: "sec", speed: 3 }), LFOPhaseRand: 1,
+        ...rack ("Delay"),
+        ...delay ({ unit: "sixteenth", length: [3, 4], feedback: 0.35, wet: 0.1 }),
+        Macro_1: 0.5,
     },
     modulations: [
-        mod ("lfo2", "volume", 0.5, "macro1"),
-        mod ("lfo2", "Sat_Pregain", 0.12),
-        mod ("lfo2", "pan", 0.3),
-        mod ("lfo1", "Cutoff", 0.15, "macro3"),
-        mod ("lfo1", "F_Morph", 0.12, "macro3"),
-        mod ("random", "Cutoff", 0.03),
-        mod ("modWheel", "LFO_2_Speed", -0.1),
-        mod ("aftertouch", "Sat_Pregain", 0.12),
-        mod ("macro2", "Sat_Pregain", 0.15),
+        mod ("lfo3", "Ff_Morph", 0.25),
+        mod ("lfo3", "Ff_Morph", 0.25, "macro1"),
+        mod ("lfo3", "Ff_Morph", 0.25, "modWheel"),
+        mod ("random", "Ff_Cutoff", 0.05),
+        mod ("random", "pan", 0.4),
+        mod ("lfo2", "O1_PWM_W", 0.12),
+        mod ("velocity", "Ff_Resonance", 0.2),
+        mod ("velocity", "Cutoff", 0.05),
+        mod ("aftertouch", "Ff_Cutoff", 0.15),
+        mod ("aftertouch", "Ff_Resonance", 0.3),
+        mod ("macro2", "Ff_Morph", 0.4),
+        mod ("macro3", "Ff_Resonance", 0.3),
+        mod ("macro4", "Ff_Drive", 0.4),
     ],
+    tables: { wave1: harmonics (Array.from ({ length: 24 }, (_, i) => [i + 1, (i % 4 === 2 ? 0.6 : 1) / (i + 1)])) },
 },
 
 {
@@ -1943,13 +2097,15 @@ const programs = [
     tables: { lfoShape2: Float32Array.from ({ length: 512 }, (_, i) => 0.5 - 0.5 * Math.tanh (7 * (i / 511 - 0.5)) / Math.tanh (3.5)) },
 },
 {
-    name: "Glass Spiral", category: "texture", tags: ["frequency shifter", "bode", "feedback", "ambient"],
+    name: "Glass Spiral", category: "texture", tags: ["frequency shifter", "bode", "voice lane", "key shifter", "ambient"],
     description: "Glassy tones fed into the Bode frequency shifter's feedback delay: every echo comes back "
         + "shifted a little higher than the last, so each note spirals up into a shimmering cloud while the dry "
-        + "note stays where it is. Each note's sparkle (a glassy partial) is struck and fades, its ratio cast a "
-        + "little differently, and a slow LFO drifts the spiral's speed. Notes land at random places in the "
-        + "stereo field. Mod wheel: a longer spiral; aftertouch: more of it. Macros: shift, spiral, mix.",
-    macros: ["shift", "spiral", "mix", ""],
+        + "note stays where it is. Before that, a key shifter in every voice adds partials moved by a fraction of "
+        + "the note that each note draws at random, so every note glints with its own inharmonic edge. Each note's "
+        + "sparkle (a glassy partial) is struck and fades, its ratio cast a little differently, and a slow LFO "
+        + "drifts the spiral's speed. Notes land at random places in the stereo field. Mod wheel: a longer spiral; "
+        + "aftertouch: more of it. Macros: shift, spiral, mix, glint.",
+    macros: ["shift", "spiral", "mix", "glint"],
     params: {
         O1_Waveform: wave.triHQ, O2_Waveform: wave.sine, Transpose: ratio (3), O2_Amp: 0.12, Voices: 12,
         Filter: filter.svf, Cutoff: 0.6, Resonance: 0.1, F_Track: 0.5,
@@ -1957,30 +2113,37 @@ const programs = [
         ...menv1 ({ a: 0.5, bp: 1, d2: 1500, s: 0, r: 500 }),
         ...lfo (2, { sync: "globalFree", unit: "sec", speed: 10 }),
         RandomPan: 0.5, Drift_Pitch: 3,
+        ...lane (["Shifter"]),
+        Sh_On: 1, Sh_Ratio: shiftRatio (0.25), Sh_Mode: shifterMode.up, Sh_Mix: 0.3,
         ...rack ("Chorus", "Bode", "Delay", "Reverb", "EQ", "Algo reverb"),
         Bd_On: 1, Bd_Shift: bodeHz (35), Bd_Mode: 0, Bd_Feedback: 0.55, Bd_Delay: bodeMs (220), Bd_Mix: 0.4,
         Rv_On: 1, Rv_Model: reverbModel.hall, Rv_Size: 0.5, Rv_Decay: reverbSeconds (2.5), Rv_Mix: 0.15,
+        Macro_4: 0.5,
     },
     modulations: [
         mod ("modEnv1", "O2_Amp", 0.15),
         mod ("random", "Transpose", 0.01),
+        mod ("random", "Sh_Ratio", 0.12),
         mod ("lfo2", "Bd_Shift", 0.04),
         mod ("velocity", "Cutoff", 0.08),
+        mod ("velocity", "Sh_Mix", 0.1),
         mod ("modWheel", "Bd_Feedback", 0.2),
         mod ("aftertouch", "Bd_Mix", 0.2),
         mod ("macro1", "Bd_Shift", 0.25),
         mod ("macro2", "Bd_Feedback", 0.3),
         mod ("macro3", "Bd_Mix", 0.3),
+        mod ("macro4", "Sh_Mix", 0.3),
     ],
 },
 {
-    name: "Tape Memory", category: "keys", tags: ["lo-fi", "drift", "effects order", "wow and flutter"],
-    description: "A worn tape keyboard: heavy drift, a slow random wow on pitch, a soft drive on each voice "
-        + "and echoes that run into the chorus (the delay comes first in the effects order). Each note carries "
-        + "its own tape hiss and a fast random flutter that roughens the pitch like noise modulating it, the "
-        + "level wavers like a stretched tape, every note is a little duller or brighter, and notes ring on for "
-        + "seconds after the key is let go. Mod wheel: more wow; aftertouch: brighter. Macros: wear, echo.",
-    macros: ["wear", "echo", "", ""],
+    name: "Tape Memory", category: "keys", tags: ["lo-fi", "tape", "voice lane", "wander", "wow and flutter"],
+    description: "A worn tape keyboard: an old sampler in every voice, its sample rate kept on whole multiples of "
+        + "the note so the grit stays in tune, then a tape model on the whole sound, heavy drift, a slow random wow "
+        + "on pitch and echoes that run into the chorus (the delay comes first in the effects order). Each note "
+        + "carries its own tape hiss, a fast random flutter and a slow wander off pitch of its own, the level wavers "
+        + "like a stretched tape, every note is a little duller or brighter, and notes ring on for seconds after "
+        + "the key is let go. Mod wheel: more wow; aftertouch: brighter. Macros: wear, echo, tape.",
+    macros: ["wear", "echo", "tape", ""],
     params: {
         O1_Waveform: wave.triHQ, O2_Waveform: wave.sine, Transpose: 1, O2_Amp: 0.4,
         Filter: filter.lp2, Cutoff: 0.5, Resonance: 0.1, F_Track: 0.5,
@@ -1990,10 +2153,14 @@ const programs = [
         ...lfo (1, { sync: "globalFree", shape: "smoothRandom", unit: "ms10", speed: 60 }),
         LFO_1_Slew: 0.5,
         ...lfo (2, { sync: "perNote", shape: "smoothRandom", unit: "ms", speed: 2 }),
-        Sat_Type: dist.soft, Sat_Mode: distMode.voicePost, Sat_Pregain: 4,
+        Wander_Rate: wanderHz (0.15),
+        ...lane (["Distortion 2"]),
+        Sat2_Type: dist.lofi, Sat2_Track: 1, Sat2_Drive: 0.35, Sat2_Tone: 0.4, Sat2_Mix: 0.7,
+        Sat_Type: dist.tape, Sat_Mode: distMode.global, Sat_Drive: 0.4,
         FX_Order: 6, C_Mode: 4, C_Mix: 0.5,
         ...delay ({ unit: "eighth", length: 3, feedback: 0.45, wet: 0.18 }), D_LP: 0.5,
         EQ_1_Type: 3, EQ_1_Freq: 6000, EQ_1_Amp: -8, EQ_2_Type: 2, EQ_2_Freq: 150, EQ_2_Amp: 2,
+        Macro_3: 0.5,
     },
     modulations: [
         mod ("lfo1", "finePitch", 0.1),
@@ -2001,13 +2168,15 @@ const programs = [
         mod ("lfo1", "volume", 0.12),
         mod ("lfo2", "finePitch", 0.03),
         mod ("lfo2", "finePitch", 0.05, "macro1"),
+        mod ("wander", "finePitch", 0.05),
         mod ("random", "Cutoff", 0.05),
         mod ("velocity", "Cutoff", 0.06),
         mod ("aftertouch", "Cutoff", 0.12),
         mod ("macro1", "Drift_Pitch", 0.4),
-        mod ("macro1", "Sat_Pregain", 0.1),
+        mod ("macro1", "Sat2_Pregain", 0.1),
         mod ("macro1", "N_Amp", 0.08),
         mod ("macro2", "D_Wet", 0.1),
+        mod ("macro3", "Sat_Drive", 0.3),
     ],
 },
 {
@@ -2099,33 +2268,6 @@ const programs = [
         mod ("aftertouch", "Cutoff", 0.15),
         mod ("macro1", "Resonance", 0.2),
         mod ("macro2", "Cv_Mix", 0.3),
-    ],
-},
-{
-    name: "Downlifter", category: "fx", tags: ["noise", "pitch envelope", "flanger", "sweep"],
-    description: "A downlifter for the drop: noise and a detuned saw falling three octaves over three "
-        + "seconds as a filter closes over them, through a slow flanger and a hall. Each one falls in its own "
-        + "direction across the stereo field. Harder hits are brighter. Macros: noise, flange.",
-    macros: ["noise", "flange", "", ""],
-    params: {
-        O1_Waveform: wave.sawHQ, U_Voices: 3, U_Detune: 30, U_Spread: 0.8, N_Amp: 0.5,
-        Filter: filter.svf, Cutoff: 0.35, Resonance: 0.3, F_EnvMod: 0.6,
-        ...fenv ({ a: 0.2, bp: 1, d2: 9000, s: 0, r: 1500 }),
-        ...amp ({ a: 2, bp: 1, d2: 12000, s: 0, r: 1500 }),
-        PEnv_On: 1, PEnv_Start: 24, PEnv_Attack: 0.2, PEnv_Peak: 24, PEnv_Decay: 9000, PEnv_Sustain: -12,
-        ...lfo (1, { sync: "perNote", shape: "saw", unit: "sec", speed: 3 }),
-        LFO_1_OneShot: 1,
-        ...rack ("Chorus", "Flanger", "Delay", "Reverb", "EQ", "Algo reverb"),
-        Fl_On: 1, Fl_Rate: fxRate (0.15), Fl_Feedback: 0.6, Fl_Mix: 0.3,
-        Rv_On: 1, Rv_Model: reverbModel.hall, Rv_Decay: reverbSeconds (3), Rv_Mix: 0.2,
-        Macro_1: 0.5, Macro_2: 0.5,
-    },
-    modulations: [
-        mod ("lfo1", "pan", 0.8, "random"),
-        mod ("velocity", "Cutoff", 0.1),
-        mod ("macro1", "N_Amp", 0.15),
-        mod ("macro2", "Fl_Mix", 0.3),
-        mod ("macro2", "Fl_Feedback", 0.2),
     ],
 },
 
@@ -2291,63 +2433,63 @@ const programs = [
 // changing a program's sound.
 const gains = {
     "Felt Piano": 0.382,
-    "Crunch Clav": 0.199,
+    "Crunch Clav": 0.2,
     "Rotary Fold": 0.0857,
     "Pulse Organ": 0.132,
     "Blorb Pulse": 0.194,
+    "Phase Keys": 0.173,
     "Oat Field": 0.182,
     "Solina Phase": 0.215,
     "Stereo Swarm": 0.187,
     "Warm Wool": 0.191,
     "Vowel Choir": 0.521,
     "Comb String": 0.193,
-    "Grit Bloom": 0.109,
+    "Grit Bloom": 0.103,
     "Speckle Pad": 0.111,
     "Highpass Haze": 0.335,
     "Drive Dog": 0.386,
     "Ghost Tide": 0.112,
     "Future Chords": 0.482,
+    "Tuned Jets": 0.084,
     "Velvet Lead": 0.449,
-    "Fuzz Lead": 1.88,
+    "Fuzz Lead": 0.412,
     "Feedback Lead": 0.227,
     "MPE Sync Lead": 0.0657,
     "Trill Lead": 0.288,
     "Overwrought Sync": 0.111,
-    "Anthem Saw": 0.277,
+    "Shifter Lead": 0.223,
     "Tearout Screech": 0.989,
-    "Chew Bass": 0.361,
     "Sub Fold": 0.177,
-    "Rubber Bass": 0.178,
+    "Rubber Bass": 0.177,
     "Reese Drift": 0.349,
     "Acid Oats": 0.299,
-    "Talk Bass": 1.03,
+    "Octave Bass": 0.383,
     "Wooly Bass": 0.141,
     "Snap Bass": 0.147,
     "Wub Bass": 0.756,
     "Growl Bass": 1.42,
     "Neuro Comb": 0.8,
     "Yoi Bass": 0.588,
-    "Spring Twang": 0.315,
-    "Squash Pluck": 0.702,
+    "Spring Twang": 0.325,
+    "Resonator Pluck": 1.3,
     "Wide Harp": 0.154,
-    "AM Bells": 0.0812,
-    "Just Bells": 0.128,
-    "Folded Mallets": 0.0993,
+    "AM Bells": 0.081,
+    "Just Bells": 0.129,
+    "Folded Mallets": 0.0992,
     "Glass Pluck": 0.247,
     "Vlorg Glass": 0.0797,
     "Brassy Oats": 0.0984,
     "S&H Panner": 0.191,
-    "Gated Grit": 0.145,
+    "Formant Steps": 0.264,
     "Step Filter": 0.374,
     "Chip Arp": 0.241,
-    "Arp Bubbles": 1.33,
-    "Doppler Flyby": 0.508,
-    "Glass Spiral": 0.21,
-    "Tape Memory": 0.159,
-    "Rise Machine": 0.275,
-    "Whoosh": 0.316,
-    "Reverse Swell": 0.22,
-    "Downlifter": 0.121,
+    "Arp Bubbles": 1.35,
+    "Doppler Flyby": 0.461,
+    "Glass Spiral": 0.303,
+    "Tape Memory": 0.248,
+    "Rise Machine": 0.273,
+    "Whoosh": 0.323,
+    "Reverse Swell": 0.204,
     "Oat Kick": 0.231,
     "Porridge Snare": 0.183,
     "Hold Hat": 0.315,
@@ -2387,6 +2529,14 @@ parsed._0.presets.forEach ((p, i) =>
 // Oatmeal's chorus, delay, reverb and EQ leave the rack where they're switched off (the EQ: every
 // band off), as they do from an Oatmeal import, so that no program shows idle effects
 parsed._0.presets.forEach (p => Preset.withoutIdleEffects (p.values));
+
+// and no program shows an effect that does nothing: every one in its rack and its voice lane is on
+for (const p of parsed._0.presets)
+{
+    const get = id => p.values.get (id) ?? 0;
+    for (const e of [...FxRack.read (get), ...FxRack.readLane (get)])
+        if (! FxRack.isOn (e, get)) throw new Error (`${p.meta.name}: its ${FxRack.kindName (e.kind)} is off`);
+}
 
 const out = join (root, "presets", "vanilla.porridge");
 writeFileSync (out, Preset.writeBank (parsed._0.presets, "Vanilla"));

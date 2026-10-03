@@ -38,13 +38,15 @@ type card = {
   vary: element,
 }
 
-// A card's patch: its values, the program it goes into (Init, or the program it varies, for its
-// shapes, tuning and impulses), its kind and name, and where it came from (for the program's
-// description); the level it is to play at (dB at the output, as a loudness meter hears it: the
-// variations of a program play as loud as it does), and whether its output gain has been set from
-// a measurement of how loud it plays (until then it is the estimate's).
+// A card's patch: its values and tables (its drawn waves, and the program's LFO shapes and
+// curves), the program it goes into (Init, or the program it varies, for its tuning and
+// impulses), its kind and name, and where it came from (for the program's description); the
+// level it is to play at (dB at the output, as a loudness meter hears it: the variations of a
+// program play as loud as it does), and whether its output gain has been set from a measurement
+// of how loud it plays (until then it is the estimate's).
 type patch = {
   values: Bank.values,
+  tables: OatmealFormat.tables,
   base: Preset.t,
   kind: PatchGen.kind,
   name: string,
@@ -86,11 +88,11 @@ let wildWord = w =>
 // what each area's knob does, from tame to wild
 let wildHelp = (a: PatchGen.area) =>
   switch a {
-  | #osc => "a wave or two, a little unison; wilder: sync, FM, PM, ring and AM at odd ratios, noise, roughness, wide unison"
+  | #osc => "a wave or two (often a drawn one), a little unison; wilder: stranger drawn waves, sync, FM, PM, ring and AM at odd ratios, noise, roughness, wide unison"
   | #filter => "a lowpass with a modest envelope; wilder: formants, combs and the rest, more resonance, deeper sweeps, a second filter"
   | #env => "envelopes as the kind of patch has them; wilder: any times, two-stage decays, pitch sweeps"
-  | #mod => "none at all; then vibrato and gentle note-to-note variation; wilder: wobbles, blips, sample & hold, growls"
-  | #fx => "dry; then a space, an echo or a chorus; wilder: more of the rack, drive, frequency shifting, odd rooms"
+  | #mod => "none at all; then vibrato, gentle note-to-note variation and now and then the XY pad to play; wilder: wobbles, blips, sample & hold, growls, a pad that wanders"
+  | #fx => "dry; then a space, an echo or a chorus; wilder: more of the rack, an effect in every voice, drive, frequency shifting, odd rooms"
   }
 
 let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
@@ -383,7 +385,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
     {
       ...p.base,
       values: PatchGen.copy(p.values),
-      tables: Preset.copyTables(p.base.tables),
+      tables: Preset.copyTables(p.tables),
       meta: {
         ...p.base.meta,
         name: p.name->String.slice(~start=0, ~end=Preset.maxNameLength),
@@ -485,10 +487,10 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
   // How loud a patch's whole note plays (dB before the output gain) and its loudest moment, from
   // a measurement of its first `ms`: the estimate adds what comes later (a slow attack's loudest
   // moments are past the measurement), never less.
-  let wholeNote = (values, ~kind, ~ms, (level, loudest)) => {
+  let wholeNote = (values, ~tables, ~kind, ~ms, (level, loudest)) => {
     let note = PatchGen.profile(kind).note
-    let (later, laterLoudest) = PatchGen.simulated(values, ~note)
-    let (early, earlyLoudest) = PatchGen.simulated(values, ~note, ~within=ms)
+    let (later, laterLoudest) = PatchGen.simulated(values, ~note, ~tables)
+    let (early, earlyLoudest) = PatchGen.simulated(values, ~note, ~within=ms, ~tables)
     (level + Math.max(0., later - early), loudest + Math.max(0., laterLoudest - earlyLoudest))
   }
 
@@ -505,7 +507,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
         measuring := None
         switch (result, p.target) {
         | (Some(heard), Some(target)) =>
-          let (level, loudest) = wholeNote(p.values, ~kind=p.kind, ~ms, heard)
+          let (level, loudest) = wholeNote(p.values, ~tables=p.tables, ~kind=p.kind, ~ms, heard)
           let values = PatchGen.copy(p.values)
           let gainDb = Math.min(target - level, PatchGen.ceilingDb - loudest)
           values->Map.set("Gain", Math.min(2., PatchGen.ampOfDb(gainDb)))
@@ -625,15 +627,20 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
   let lockedNow = () => PatchGen.areas->Array.filter(a => locks->Set.has(a))
 
   // what is playing: the chosen card (with any edits), or the program (the locks keep its areas)
-  let playing = () =>
+  let playing = () => {
+    let current = () => {
+      let program = ProgramStore.captureCurrent(programs)
+      {PatchGen.values: program.values, tables: program.tables}
+    }
     switch (chosen.contents, original.contents) {
     | (Some(slot), Some(_)) =>
-      patchAt(slot)->Option.map(p => (edited.contents ? ProgramStore.captureCurrent(programs).values : p.values, p.kind))
+      patchAt(slot)->Option.map(p => (edited.contents ? current() : {PatchGen.values: p.values, tables: p.tables}, p.kind))
     | _ => None
     }->Option.getOr({
-      let values = ProgramStore.captureCurrent(programs).values
-      (values, PatchGen.kindOf(values))
+      let program = current()
+      (program, PatchGen.kindOf(program.values))
     })
+  }
 
   // A new row of cards, after the rows before it (the last few of them, to go back to).
   let push = (gen: generation) => {
@@ -683,12 +690,13 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
     | (None, _) => Array.make(~length=slotCount, referenceKind)
     }
     let patches = kinds->Array.map(k => {
-      let values = PatchGen.generate(~wild=wild.contents, ~kind=k, ~random=r, ~keep?)
+      let made = PatchGen.generate(~wild=wild.contents, ~kind=k, ~random=r, ~keep?)
       {
-        values,
+        values: made.values,
+        tables: made.tables,
         base: Lazy.get(init),
         kind: k,
-        name: PatchGen.nameOf(values, ~kind=k, ~random=r),
+        name: PatchGen.nameOf(made.values, ~kind=k, ~random=r),
         origin: "Made at random",
         target: Some(PatchGen.targetDb),
         measured: false,
@@ -705,11 +713,21 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
     let r: PatchGen.rng = Math.random
     let locked = lockedNow()
     let patches = Array.fromInitializer(~length=slotCount, i => {
-      let values = PatchGen.vary(from.values, ~amount, ~wild=wild.contents, ~locks=locked, ~kind=from.kind, ~random=r)
+      let varied = PatchGen.vary(
+        {values: from.values, tables: from.tables},
+        ~amount,
+        ~wild=wild.contents,
+        ~locks=locked,
+        ~kind=from.kind,
+        ~random=r,
+      )
       {
         ...from,
-        values,
-        name: from.base === Lazy.get(init) ? PatchGen.nameOf(values, ~kind=from.kind, ~random=r) : `${from.name} ${Int.toString(i + 1)}`,
+        values: varied.values,
+        tables: varied.tables,
+        name: from.base === Lazy.get(init)
+          ? PatchGen.nameOf(varied.values, ~kind=from.kind, ~random=r)
+          : `${from.name} ${Int.toString(i + 1)}`,
         origin: `${from.origin}, varied ${amountName}`,
         measured: false,
       }
@@ -721,7 +739,12 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
   let startVary = (slot, amount) =>
     patchAt(slot)->Option.forEach(p => {
       let edits = chosen.contents == Some(slot) && edited.contents && original.contents != None
-      let from = edits ? {...p, values: ProgramStore.captureCurrent(programs).values} : p
+      let from = if edits {
+        let program = ProgramStore.captureCurrent(programs)
+        {...p, values: program.values, tables: program.tables}
+      } else {
+        p
+      }
       variations(from, amount, ~title=p.name->String.toLowerCase)
     })
 
@@ -734,7 +757,16 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
     let kind = PatchGen.kindOf(program.values)
     let vary = target =>
       variations(
-        {values: program.values, base: program, kind, name, origin: `Varied from ${name}`, target, measured: false},
+        {
+          values: program.values,
+          tables: program.tables,
+          base: program,
+          kind,
+          name,
+          origin: `Varied from ${name}`,
+          target,
+          measured: false,
+        },
         amount,
         ~title=name,
       )
@@ -747,7 +779,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
         let gain = program.values->Map.get("Gain")->Option.getOr(0.1)
         vary(
           result->Option.map(heard => {
-            let (level, _) = wholeNote(program.values, ~kind, ~ms, heard)
+            let (level, _) = wholeNote(program.values, ~tables=program.tables, ~kind, ~ms, heard)
             level + PatchGen.dbOfAmp(gain)
           }),
         )
