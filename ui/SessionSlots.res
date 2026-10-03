@@ -98,9 +98,9 @@ let migrate = (pc, state: PatchConnection.fullState) => {
   StoredState.send(pc, Params, StoredParams.encode(get))
   let before = state.values->Option.flatMap(v => v->Dict.get(StoredState.name(Impulses)))
   let now = Impulse.encode(p.impulses)
+  // (the worker sends what it changes, as it does any list it's sent)
   if before != Some(JSON.String(now)) && !(before == None && now == "") {
     StoredState.send(pc, Impulses, now)
-    p.impulses->Array.forEachWithIndex((imp, which) => Impulse.send(pc, which, imp))
   }
   warnings
 }

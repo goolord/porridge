@@ -1,7 +1,8 @@
 // Runs whenever the patch is created, with or without the GUI open.
 // Parameters are restored by the host, but the user waveforms, LFO shapes, response curves,
 // the convolvers' impulses and the custom shapes' points (StoredParams) live in the patch's
-// stored state and must be pushed into the DSP here.
+// stored state and must be pushed into the DSP here (but for the impulses the view sends
+// itself as it stores them: Impulse.sender).
 // On a fresh instance it installs the factory bank and loads its first program, like
 // Oatmeal does when it starts.
 
@@ -82,13 +83,17 @@ let default = pc => {
   let sendShapes = shapeSender(pc)
   let sendStored = storedSender(pc)
   let checkSlots = slotChecker(pc)
-  let sendImpulses = Impulse.sender(pc)
+  // (the impulses the view changes, it sends: see Impulse.sender)
+  let impulses = Impulse.sender(pc)
 
   pc->addStoredStateValueListener(({key, value}) => {
     switch (StoredState.keyOf(key), value) {
     | (Some(Shapes), String(shapes)) => Bank.decodeShapes(shapes)->Option.forEach(sendShapes)
     | (Some(Tuning), String(tuning)) => Bank.sendTuning(pc, Bank.decodeTuning(tuning))
-    | (Some(Impulses), String(s)) => sendImpulses(s)
+    | (Some(Impulses), String(s)) => impulses.stored(s)
+    // (none: a host's session without impulses)
+    | (Some(Impulses), Null) => impulses.stored("")
+    | (None, _) if key->String.startsWith(Impulse.sentPrefix) => impulses.announced(key)
     // (none: a state without custom shapes, whose points are at their defaults)
     | (Some(Params), value) =>
       sendStored(value)

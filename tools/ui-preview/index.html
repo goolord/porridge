@@ -42,6 +42,12 @@ class MockPatchConnection
     removeStoredStateValueListener (fn) { this.stateListeners = this.stateListeners.filter (f => f !== fn); }
     requestStoredStateValue (key)
     {
+        // The patch answers requests in order with the stores around them; this answers them
+        // later, but for the view's announcement of the impulses it sent (Impulse.sentPrefix),
+        // which must reach the worker before the list the view stores right after it.
+        if (key.startsWith ("impulsesSent?"))
+            return this.stateListeners.forEach (f => f ({ key, value: this.state.get (key) }));
+
         setTimeout (() =>
         {
             this.stateListeners.forEach (f => f ({ key, value: this.state.get (key) }));

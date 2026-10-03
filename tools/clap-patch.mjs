@@ -59,7 +59,9 @@
 //    a renderer process) of its own per instance; the web view took half a second or more to
 //    start, during which the patch played without its waveforms and a new instance without
 //    its bank. choc's QuickJS never ran promise jobs, so it does now
-//    (choc_javascript_QuickJS.h).
+//    (choc_javascript_QuickJS.h). On Windows, a setTimeout the worker made inside another's
+//    callback could be killed as soon as it was made, so a chain of them stopped at random;
+//    a timer is killed as it's dropped now (choc_MessageLoop.h).
 //  - Activating rebuilds the patch only if the sample rate or block size changed, instead of
 //    loading it again from scratch (which built it three times).
 //  - Cmajor's Engine keeps the program details it last parsed (cmaj_Engine.h): Porridge's are
@@ -181,6 +183,29 @@ if (open(join(project, "include", "choc", "choc", "javascript", "choc_javascript
   }
 
   insertBefore(`        return returnVal.toChocValue();\n`, `        runPendingJobs();\n`);
+
+  save();
+}
+
+//==============================================================================
+// choc's message loop timers, which run the patch worker's setTimeout and setInterval
+
+if (open(join(project, "include", "choc", "choc", "gui", "choc_MessageLoop.h"))) {
+  // On Windows a timer's id is its Pimpl's address, and a timer that has fired is killed after
+  // its callback returns. The worker's setTimeout drops the timer inside that callback, so a
+  // setTimeout made there could get the same address, and so the same id, and be killed as soon
+  // as it was made: a chain of them (Impulse.send's chunks) stopped at random.
+  insertBefore(
+    `    static void staticCallback (HWND, UINT, UINT_PTR p, DWORD) noexcept\n`,
+    `    ${marker} a timer is killed as it's dropped, so its id is free for the next one at its
+    // address (added by tools/clap-patch.mjs)
+    ~Pimpl()
+    {
+        sharedState->killTimer();
+    }
+
+`,
+  );
 
   save();
 }
