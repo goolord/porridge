@@ -198,7 +198,7 @@ let info = list =>
   // The HQ (anti-aliased) saw, pulse and triangle are the waves; Oatmeal's alias, and are there
   // for its programs, which keep them (and an Oatmeal export makes the HQ ones Oatmeal's).
   | Waveform => {
-      names: Some(["Sine", "Oatmeal saw", "Oatmeal pulse", "Oatmeal triangle", "User", "User PWM"]),
+      names: Some(["Sine", "Oat saw", "Oat pulse", "Oat triangle", "User", "User PWM"]),
       short: Some(["Sine", "Oat saw", "Oat pulse", "Oat tri", "User", "User PWM"]),
       added: Some({
         names: ["Saw", "Pulse", "Triangle"],
@@ -214,7 +214,7 @@ let info = list =>
         (8, None),
         (4, None),
         (5, None),
-        (1, Some("Oatmeal (aliasing)")),
+        (1, Some("Oat (aliasing)")),
         (2, None),
         (3, None),
       ]),

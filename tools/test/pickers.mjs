@@ -79,7 +79,7 @@ const named = [
     ["Ff_Type", "Sallen-Key", 19], ["Sat_Type", "soft clip", 2], ["Sat_Type", "custom shape", 5], ["Sat_Type", "lo-fi sampler", 16],
     ["LFO_1_Unit", "16ths", 5], ["LFO_1_Unit", "2/3 8ths", 7], ["LFO_2_Unit", "whole notes", 17], ["D_Unit", "quarter notes", 11],
     ["Arp_Unit", "32nds", 5], ["Arp_Unit", "sec", 2], ["LFO_1_Shape", "User", 6], ["O1_Waveform", "Saw", 6],
-    ["O1_Waveform", "Oatmeal saw", 1], ["GlideMode", "constant time", 0], ["GlideMode", "by interval", 1],
+    ["O1_Waveform", "Oat saw", 1], ["GlideMode", "constant time", 0], ["GlideMode", "by interval", 1],
     ["LFO_3_Shape", "Sine", 0], ["LFO_3_Shape", "Triangle", 1], ["LFO_3_Shape", "Saw", 2], ["LFO_3_Shape", "Saw down", 3],
     ["LFO_3_Shape", "Square", 4], ["LFO_3_Shape", "Stepping random", 5], ["LFO_3_Shape", "Smooth random", 6],
 ];

@@ -66,14 +66,14 @@ let steppingRandom = wide([Line("M1 10 H5 V4 H9 V12 H13 V6 H17 V11 H21")])
 let flat = wide([Line("M1 8 H21")])
 let fmWave = wide([Line("M1 8 C2 3 3 3 4 8 S5.5 13 6.5 8 S9 3 10.5 8 S14 13 16 8 S19.5 3 21 8")])
 
-// (Oatmeal's aliasing waves look like the others)
+// (the Oat aliasing waves look like the others)
 let waveformByName = name =>
   switch name {
   | "sine" => Some(sine)
-  | "saw" | "oatmeal saw" => Some(saw)
+  | "saw" | "oat saw" => Some(saw)
   | "saw down" => Some({...saw, mirrored: true})
-  | "pulse" | "square" | "oatmeal pulse" => Some(pulse)
-  | "triangle" | "oatmeal triangle" => Some(triangle)
+  | "pulse" | "square" | "oat pulse" => Some(pulse)
+  | "triangle" | "oat triangle" => Some(triangle)
   | "user" => Some(user)
   | "user pwm" => Some(userPwm)
   | "smooth random" => Some(smoothRandom)
