@@ -110,7 +110,7 @@ let oscPanel = (ctx: Ctx.t, page) => {
   noise->Grid.param("N_Amp", 0, 0, "noise level")
   noise->Grid.param("N_Resonance", 1, 0, "resonance")
   noise->Grid.param("N_Transpose", 2, 0, "transpose")
-  noise->Grid.param("N_Aftertouch", 3, 0, "touch > level")
+  noise->Grid.param("N_Aftertouch", 3, 0, "aftertouch")
   noise->Grid.param("O1_Noise", 0, 1, "osc 1 rough")
   noise->Grid.param("O1_NoiseColour", 1, 1, "colour")
   noise->Grid.param("O2_Noise", 2, 1, "osc 2 rough")
@@ -189,10 +189,11 @@ let filterPanel = (ctx: Ctx.t, page) => {
   shownWhile(ctx, main, ["Filter"], () => FilterTypes.hasDrive(filterType()), g =>
     g->Grid.param("F_Drive", 5, 0, "drive")
   )
-  main->Grid.param("F_Track", 0, 1, "track")
+  // (what moves the cutoff, by its sources' names on the Mod page)
+  main->Grid.param("F_Track", 0, 1, "key")
   main->Grid.param("F_EnvMod", 1, 1, "env")
   main->Grid.param("F_VeloSens", 2, 1, "velocity")
-  main->Grid.param("F_Aftertouch", 3, 1, "touch")
+  main->Grid.param("F_Aftertouch", 3, 1, "aftertouch")
   main->Grid.param("Drift_Cutoff", 4, 1, "drift")
 
   // the response, with a point to drag for the cutoff and resonance, beside the envelope
@@ -299,7 +300,7 @@ let voicePanel = (ctx: Ctx.t, page) => {
   let model = ctx.model
   let voice = Panel.make(
     page,
-    ~tabs=["voice", "touch", "random", "tuning"],
+    ~tabs=["voice", "aftertouch", "random", "tuning"],
     ~x=Style.designWidth - margin - lastWidth,
     ~y=top + rowHeight + gap,
     ~w=lastWidth,
@@ -326,15 +327,16 @@ let voicePanel = (ctx: Ctx.t, page) => {
   // what aftertouch does to the oscillators (the noise's and the filter's are theirs)
   let touch = Grid.make(ctx, voice->Panel.body(1), ~cw)
   touch->Grid.choice("AftertouchMode", 0, 0, "mode")
-  touch->Grid.param("OscAftertouch", 1, 0, "touch > level")
-  touch->Grid.param("O1_Afterpitch", 0, 1, "touch > osc 1")
-  touch->Grid.param("O2_Afterpitch", 1, 1, "touch > osc 2")
+  touch->Grid.param("OscAftertouch", 1, 0, "osc levels")
+  touch->Grid.param("O1_Afterpitch", 0, 1, "osc 1 pitch")
+  touch->Grid.param("O2_Afterpitch", 1, 1, "osc 2 transpose")
 
+  // (the note's random pitch, pan and level, and the key's say in the pan, named as their routes)
   let random = Grid.make(ctx, voice->Panel.body(2), ~cw)
-  random->Grid.param("RandomFreq", 0, 0, "random freq")
-  random->Grid.param("RandomPan", 1, 0, "random pan")
-  random->Grid.param("RandomAmp", 2, 0, "random amp")
-  random->Grid.param("FreqPan", 0, 1, "freq > pan")
+  random->Grid.param("RandomFreq", 0, 0, "random > pitch")
+  random->Grid.param("RandomPan", 1, 0, "random > pan")
+  random->Grid.param("RandomAmp", 2, 0, "random > volume")
+  random->Grid.param("FreqPan", 0, 1, "key > pan")
 
   let tuning = Grid.make(ctx, voice->Panel.body(3), ~cw=Grid.fitColumns(lastWidth, 4))
   tuning->Grid.param("Tune_Main", 0, 0, "tune")
@@ -379,11 +381,11 @@ let build = (ctx: Ctx.t, page) => {
   let ampGrid = Grid.make(ctx, amp.el, ~y=ampBox.y + ampBox.h + 4., ~cw=Grid.fitColumns(lastWidth, 3))
   ampGrid->Grid.param("Gain", 0, 0, "output gain")
   ampGrid->Grid.param("VeloSens", 1, 0, "velocity")
-  ampGrid->Grid.param("FreqEnv", 2, 0, "freq > env")
+  ampGrid->Grid.param("FreqEnv", 2, 0, "key > env speed")
 
   let modulation = Panel.make(
     page,
-    ~tabs=["mod env 1", "mod env 2", "pitch env", "lfo 1", "lfo 2", "lfo 3"],
+    ~tabs=["mod env 1", "mod env 2", "pitch env", "LFO 1", "LFO 2", "LFO 3"],
     ~x=margin,
     ~y=top + rowHeight + gap,
     ~w=modWidth,

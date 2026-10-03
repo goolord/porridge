@@ -182,8 +182,8 @@ let tableName = table =>
   switch table {
   | Wave1 => "osc 1 waveform"
   | Wave2 => "osc 2 waveform"
-  | LfoShape1 => "lfo 1 shape"
-  | LfoShape2 => "lfo 2 shape"
+  | LfoShape1 => "LFO 1 shape"
+  | LfoShape2 => "LFO 2 shape"
   | VelocityCurve => "velocity map"
   | AftertouchCurve => "aftertouch map"
   }

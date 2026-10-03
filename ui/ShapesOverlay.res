@@ -12,8 +12,8 @@ type shape = {table: OatmealFormat.table, tab: string, bipolar: bool}
 let shapes = [
   {table: Wave1, tab: "osc 1 waveform", bipolar: true},
   {table: Wave2, tab: "osc 2 waveform", bipolar: true},
-  {table: LfoShape1, tab: "lfo 1 shape", bipolar: false},
-  {table: LfoShape2, tab: "lfo 2 shape", bipolar: false},
+  {table: LfoShape1, tab: "LFO 1 shape", bipolar: false},
+  {table: LfoShape2, tab: "LFO 2 shape", bipolar: false},
 ]
 
 let clipboard = ref(None)
