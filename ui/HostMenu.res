@@ -18,19 +18,74 @@
 
 open! Web
 
+// What opens the menu for some parameters that the host lists, at a point in the view
+type opener = (array<string>, float, float) => unit
+
+// A right press on a control that has the host's menu: when, where, what puts back the values it
+// may change, and what opens the menu if a second press makes it a double one
+type press = {at: float, x: float, y: float, restore: unit => unit, listed: array<string>, open_: opener}
+
 type t = {
   channel: HostChannel.t,
   // whether the host can show its menu
   mutable available: bool,
   // stops listening for the press or key that closes the menu, while it may be open
   mutable stopDismiss: option<unit => unit>,
+  // the last right press on a control with the host's menu, and the double press's menu, which
+  // opens with the context menu event that comes after it
+  mutable last: option<press>,
+  mutable armed: option<(array<string>, opener)>,
+  stopDoubles: unit => unit,
 }
 
-// Windows' default double-click time
+// Windows' default double-click time, and how far the second click may be from the first
 let doubleClickMs = 500.
+let doubleClickPixels = 6.
 
 let make = pc => {
-  let t = {channel: HostChannel.make(pc, "host"), available: false, stopDismiss: None}
+  // A second right press near the first, soon after, is a double one wherever it lands: the first
+  // may have moved what it pressed (a graph's point, reset), so the document hears it, before
+  // anything in the view does.
+  let tRef = ref(None)
+  let onPress = ev =>
+    tRef.contents->Option.forEach(t =>
+      switch t.last {
+      | Some(p)
+        if ev->button == 2 &&
+        Date.now() - p.at <= doubleClickMs &&
+        Math.hypot(ev->clientX - p.x, ev->clientY - p.y) <= doubleClickPixels =>
+        t.last = None
+        t.armed = Some((p.listed, p.open_))
+        ev->preventDefault
+        ev->stopImmediatePropagation
+        p.restore()
+      | _ =>
+        t.last = None
+        t.armed = None
+      }
+    )
+  let onMenu = ev =>
+    tRef.contents->Option.forEach(t =>
+      t.armed->Option.forEach(((listed, open_)) => {
+        t.armed = None
+        ev->preventDefault
+        open_(listed, ev->clientX, ev->clientY)
+      })
+    )
+  document->onDocumentPointerDownCapture(onPress)
+  document->onDocumentMouse(#contextmenu, onMenu)
+  let t = {
+    channel: HostChannel.make(pc, "host"),
+    available: false,
+    stopDismiss: None,
+    last: None,
+    armed: None,
+    stopDoubles: () => {
+      document->offDocumentPointerDownCapture(onPress)
+      document->offDocumentMouse(#contextmenu, onMenu)
+    },
+  }
+  tRef := Some(t)
   t.channel->HostChannel.listen(reply =>
     t.available = switch reply->Dict.get("menu") {
     | Some(Boolean(menu)) => menu
@@ -48,6 +103,7 @@ let stopDismissing = t => {
 
 let dispose = t => {
   t->stopDismissing
+  t.stopDoubles()
   t.channel->HostChannel.dispose
 }
 
@@ -97,40 +153,38 @@ let showAt = (t, model, id, ~x, ~y) => {
   )
 }
 
-// Opens the menu (also from a control's own menu: Controls) on a double right-click on e, a
-// control for the parameter id. The first click
-// has already done what a right-click does there (reset the value, step it...), so the second
-// puts back the value from before it, and the control never sees it. The menu opens with the
-// context menu event, which comes with the release on Windows, as menus do there. (Hosts have
-// no menu for the routing and setup parameters, which they don't list: ParamInfo.isSetup.)
-let attach = (t, model, e, id) => {
-  // the time of the last right press, and the value before it
-  let last = ref(None)
-  let armed = ref(false)
+// Opens the menu (also from a control's own menu: Controls) on a double right-click on e, which
+// edits the parameters ids() gives: open gets those the host lists, and where it was clicked (a
+// graph's point can edit several: Controls.hostMenuFor picks one). The first click has already
+// done what a right-click does there (reset the values, step a list...), so the second puts back
+// the values from before it, and the control never sees it (make's listeners take it). The menu
+// opens with the context menu event, which comes with the release on Windows, as menus do there.
+// (Hosts have no menu for the routing and setup parameters, which they don't list:
+// ParamInfo.isSetup.)
+let attachMany = (t, model, e, ids: unit => array<string>, ~open_: opener) => {
   e->onPointerCapture(#pointerdown, ev => {
-    armed := false
-    if ev->button == 2 && has(t, id) {
-      let now = Date.now()
-      switch last.contents {
-      | Some((at, before)) if now - at <= doubleClickMs =>
-        last := None
-        armed := true
-        ev->preventDefault
-        ev->stopImmediatePropagation
-        if model->ParamModel.get(id) != before {
-          model->ParamModel.gestureSet(id, before)
-        }
-      | _ => last := Some((now, model->ParamModel.get(id)))
-      }
-    } else {
-      last := None
+    let all = ids()
+    let listed = all->Array.filter(id => has(t, id))
+    if ev->button == 2 && listed != [] {
+      let before = all->Array.map(id => (id, model->ParamModel.get(id)))
+      t.last = Some({
+        at: Date.now(),
+        x: ev->clientX,
+        y: ev->clientY,
+        restore: () =>
+          before->Array.forEach(((id, v)) =>
+            if model->ParamModel.get(id) != v {
+              model->ParamModel.gestureSet(id, v)
+            }
+          ),
+        listed,
+        open_,
+      })
     }
   })
-  e->onMouse(#contextmenu, ev => {
-    ev->preventDefault
-    if armed.contents {
-      armed := false
-      showAt(t, model, id, ~x=ev->clientX, ~y=ev->clientY)
-    }
-  })
+  e->onMouse(#contextmenu, preventDefault)
 }
+
+// The same for a control of one parameter.
+let attach = (t, model, e, id) =>
+  attachMany(t, model, e, () => [id], ~open_=(_, x, y) => showAt(t, model, id, ~x, ~y))

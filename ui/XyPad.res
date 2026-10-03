@@ -26,6 +26,8 @@ let make = (ctx: Ctx.t, parent, area) => {
   let box = {x: area.x + (area.w - side) / 2., y: area.y + (area.h - side) / 2., w: side, h: side}
   let s = Plots.svg(parent, box)
   s->addClass("draw")
+  // the host's menu for X or Y on a double right-click (before the drags below)
+  Controls.hostMenuFor(ctx, s, () => ["XY_X", "XY_Y"])
   let svgEl = svgEl(s, ...)
   Plots.background(s, box)
   s->Plots.line(side / 2., 1., side / 2., side - 1.)->ignore

@@ -136,6 +136,27 @@ let hookMenus = (c, e) => {
   c.ctx.hostMenu->HostMenu.attach(c.ctx.model, e, c.id)
 }
 
+// The host's menu on a double right-click on e, which edits the parameters ids() gives (a graph's
+// point): of one the host lists, it opens straight away; of several, a menu picks which first.
+let hostMenuFor = (ctx: Ctx.t, e, ids) =>
+  ctx.hostMenu->HostMenu.attachMany(ctx.model, e, ids, ~open_=(listed, x, y) => {
+    let show = id => ctx.hostMenu->HostMenu.showAt(ctx.model, id, ~x, ~y)
+    switch listed {
+    | [id] => show(id)
+    | _ =>
+      ctx.menu->Menu.show(
+        e,
+        listed->Array.mapWithIndex((id, i) => {
+          Menu.label: (ctx.model->ParamModel.def(id)).name,
+          value: i,
+          heading: ?(i == 0 ? Some("host menu for") : None),
+        }),
+        -1,
+        i => listed[i]->Option.forEach(show),
+      )
+    }
+  })
+
 // A control's element: focusable, with its label (after an on/off box, with ~box), showing the
 // parameter's status text while hovered, its menu on ctrl+right-click and the host's menu on a
 // double right-click. Search finds it where it is (Reach).

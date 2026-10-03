@@ -188,6 +188,8 @@ let handle = (
   let h = {dot, hit, key, hot, x: 0., y: 0., mods}
   g.handles->Array.push(h)
   let statusText = () => model->ParamModel.statusText(ids) ++ Modulators.statusText(model, ids)
+  // (before the press below, which the second right-click of a double one never reaches)
+  Controls.hostMenuFor(g.ctx, hit, () => ids)
   hit->onPointer(#pointerdown, ev => {
     ev->preventDefault
     // not a press on the graph behind it too

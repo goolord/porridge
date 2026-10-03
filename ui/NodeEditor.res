@@ -84,6 +84,8 @@ let node = (t, i, ~dot, ~hitR, ~cursor, ~onDrag, ~onRightClick, ~wheel: unit => 
     "circle",
     [("class", Str("hit")), ("r", Num(hitR)), ("style", Str("cursor:" ++ cursor))],
   )
+  // (before the press below, which the second right-click of a double one never reaches)
+  Controls.hostMenuFor(t.g.ctx, hit, ids)
   hit->onPointer(#pointerdown, ev => {
     ev->preventDefault
     switch ev->button {
