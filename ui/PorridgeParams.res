@@ -674,6 +674,11 @@ let shifterRatioText = v => {
   let r = 2. * v * v * v
   (r > 0. ? "+" : "") ++ Float.toFixed(r, ~digits=Math.abs(r) < 0.1 ? 3 : 2) ++ " × note"
 }
+// A typed ratio of the note (as the text shows it) to the knob.
+let shifterRatioRead = s => {
+  let r = Float.parseFloat(s)
+  Float.isFinite(r) ? Some(Math.max(-1., Math.min(1., Math.cbrt(r / 2.)))) : None
+}
 let shifterHzText = v => {
   let hz = 1000. * v * v * v
   (hz > 0. ? "+" : "") ++ Float.toFixed(hz, ~digits=Math.abs(hz) < 10. ? 2 : 1) ++ " Hz"
@@ -1259,7 +1264,7 @@ let bodeRatioSpecs = [
   {
     id: "Bd_Ratio",
     name: "Bode note ratio",
-    kind: Float({min: -1., max: 1., init: 0., text: shifterRatioText}),
+    kind: Float({min: -1., max: 1., init: 0., text: shifterRatioText, read: shifterRatioRead}),
     about: "the shift as a part of the note: each note's partials keep their places (on the whole sound, the newest note's)",
   },
 ]
