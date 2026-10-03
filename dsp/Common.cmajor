@@ -129,7 +129,9 @@ namespace porridge
     // Delay lines laid out in a mono region of the pool: the algorithmic reverb's (Space.cmajor)
     // and the ambience's (Ambience.cmajor). Lines is a struct with its region (`fxAt`), whether
     // the region is known to be all zeros (`clean`), and per line its start in the region
-    // (`base`), its capacity (`cap`) and its write index (`wp`).
+    // (`base`), its capacity (`cap`) and its write index (`wp`). Their reads and writes find a
+    // float from its index in the whole pool (fxAt * 1024 + ...) rather than through poolGet:
+    // MSVC's builds of the reverbs' loops come out 3 to 10 % faster that way.
 
     /// Lays line j out at top (moved on past it), empty, with room for `capacity` samples.
     void poolLine<Lines> (Lines& this, int j, int capacity, int& top)
