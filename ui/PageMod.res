@@ -13,9 +13,10 @@
 // they're set, which "⋯" adds. Oatmeal's own routings (Modulators: the mod envelopes', the XY
 // pad's and the controllers' target slots, and its fixed depths) are rows too, with an "Oatmeal"
 // badge: they edit their own parameters, a slot's target picks from Oatmeal's list, and × sets
-// the depth to 0 (and frees a slot). The count says how many of the matrix's slots are in use. A
-// per-note source on the whole sound follows the newest note, or every note by its level (the
-// setting below the list); its cable says which.
+// the depth to 0 (and frees a slot); the depths every program starts with (the bend range...)
+// fold into one quiet row under the list while they stay at their Init values. The count says
+// how many of the matrix's slots are in use. A per-voice source on the whole sound follows the
+// newest note, or every voice by its level (the setting below the list); its cable says which.
 
 open! Web
 
@@ -83,10 +84,10 @@ let targetGroups = ModMatrix.groups->Array.map(((key, title)) => (
 // the picker's two sections
 let sections: array<(string, ModMatrix.scope, string)> = [
   ("per-voice", EachNote, "Each voice moves these its own way"),
-  ("on the whole sound", Shared, "These have one value: a per-note source gives them the newest note's, or every note's by level (below the connections)"),
+  ("on the whole sound", Shared, "These have one value: a per-voice source gives them the newest note's, or every voice's by level (below the connections)"),
 ]
 
-let followHelp = "Each note has its own LFOs, envelopes and velocity; an effect on the whole sound has one setting, so it takes theirs from the newest note, or from all of them by how loud each is."
+let followHelp = "Each voice has its own LFOs, envelopes and velocity; an effect on the whole sound has one setting, so it takes theirs from the newest note, or from all of them by how loud each is."
 let emptyHelp = "Each connection gets an amount, and can be scaled by a second source (via) and held, slewed, bent or stepped (⋯). Oatmeal's own routings (the mod envelopes' and XY pad's targets, the LFOs' depths, velocity, aftertouch...) are listed here too as they're set."
 
 let build = (ctx: Ctx.t, page) => {
@@ -260,9 +261,9 @@ let build = (ctx: Ctx.t, page) => {
     e
   }
   let eachHeading = heading("per-voice", "Sources each voice has its own of: on something in the voice, every voice moves it its own way")
-  let sharedHeading = heading("shared", "Sources every note shares (an LFO is here while its mode is shared)")
-  let macroHeading = heading("macros", "Knobs to turn, automate or map: shared by every note")
-  let ccHeading = heading("controllers", "The Play page's assignable controllers: shared by every note")
+  let sharedHeading = heading("shared", "Sources every voice shares (an LFO is here while its mode is shared)")
+  let macroHeading = heading("macros", "Knobs to turn, automate or map: shared by every voice")
+  let ccHeading = heading("controllers", "The Play page's assignable controllers: shared by every voice")
 
   // the groups, laid out again when an LFO's mode, the touch mode or MPE moves a source between them
   let c3 = Grid.fitColumns(sourcesWidth, sourceColumns)
@@ -976,6 +977,26 @@ let build = (ctx: Ctx.t, page) => {
   add->onActivate(addConnection)
   add->hover(() => "Pick a source, then a target")
 
+  // after it, quietly: Oatmeal's fixed depths at their Init values (Modulators.atDefaults), one
+  // row that opens to list them
+  let showDefaults = ref(false)
+  let defaultsRow = el("div", ~cls="mdflt", ~parent=rowsBox)
+  defaultsRow->setTabIndex(0)
+  let toggleDefaults = () => {
+    showDefaults := !showDefaults.contents
+    redraw.contents()
+  }
+  defaultsRow->onPointer(#pointerdown, ev => {
+    ev->preventDefault
+    if ev->button == 0 {
+      toggleDefaults()
+    }
+  })
+  defaultsRow->onActivate(toggleDefaults)
+  defaultsRow->hover(() =>
+    `Oatmeal's own depths that every program starts with (the bend range, velocity on the volume, a little random pitch and volume per note): they aren't counted or marked until they're changed. Click to ${showDefaults.contents ? "hide" : "show"} them.`
+  )
+
   let empty = el("div", ~cls="mempty", ~parent=list.el)
   el("div", ~cls="big", ~text="Nothing moves anything yet.", ~parent=empty)->ignore
   let emptyLine = el("div", ~cls="msub", ~parent=empty)
@@ -987,7 +1008,7 @@ let build = (ctx: Ctx.t, page) => {
 
   // below the list: what per-note sources follow on the whole sound
   let footer = el("div", ~cls="mfoot", ~parent=list.el)->place(0., listHeight - footerHeight, ~w=listWidth - 2., ~h=footerHeight - 2.)
-  Controls.choice(ctx, footer, "MM_Follow", ~x=Grid.padX, ~y=4., ~w=280., ~label="per-note sources on the whole sound follow")
+  Controls.choice(ctx, footer, "MM_Follow", ~x=Grid.padX, ~y=4., ~w=280., ~label="per-voice sources on the whole sound follow")
   Controls.help(footer, followHelp, ~x=Grid.padX + 284., ~y=4., ~size=Style.controlHeight, ~tipW=360., ~left=true, ~above=true)
 
   //==============================================================================
@@ -1062,23 +1083,42 @@ let build = (ctx: Ctx.t, page) => {
   let scrolledFor = ref(None)
   let draw = () => {
     let routes = Modulators.all(get)
+    let defaults = Modulators.allAtDefaults(get)
     rowsBox->querySelectorAll(":scope > .conn")->nodesToArray->Array.forEach(r => r->removeClass("on"))
     routes->Array.forEachWithIndex((r, i) =>
       switch r.via {
       | Connection(k) => matrixRows->Map.get(k)->Option.forEach(row => row.show(r, i))
-      | Slot(_) | Depth => builtInRowOf(r.amount).show(r, i)
+      | Slot(_) | Depth =>
+        let row = builtInRowOf(r.amount)
+        row.show(r, i)
+        row.el->removeClass("dflt")
       }
     )
     let n = Array.length(routes)
     let used = slotNumbers->Array.filter(isUsed)->Array.length
-    add->setStyle("display", used < ModMatrix.slots ? "flex" : "none")
-    add->placeBox({
-      x: Grid.padX,
-      y: 4. + Int.toFloat(n) * Grid.rowHeight,
-      w: listWidth - 2. - 2. * Grid.padX,
-      h: Style.controlHeight,
-    })->ignore
-    empty->setStyle("display", n == 0 ? "block" : "none")
+    let line = (e, i, ~shown) => {
+      e->setStyle("display", shown ? "flex" : "none")
+      e->placeBox({
+        x: Grid.padX,
+        y: 4. + Int.toFloat(i) * Grid.rowHeight,
+        w: listWidth - 2. - 2. * Grid.padX,
+        h: Style.controlHeight,
+      })->ignore
+    }
+    line(add, n, ~shown=used < ModMatrix.slots)
+    let d = Array.length(defaults)
+    line(defaultsRow, n + 1, ~shown=d > 0)
+    defaultsRow->setTextContent(
+      `${Int.toString(d)} built-in ${d == 1 ? "route" : "routes"} at ${d == 1 ? "its default" : "their defaults"} ${showDefaults.contents ? "‹" : "›"}`,
+    )
+    if showDefaults.contents {
+      defaults->Array.forEachWithIndex((r, i) => {
+        let row = builtInRowOf(r.amount)
+        row.show(r, n + 2 + i)
+        row.el->addClass("dflt")
+      })
+    }
+    empty->setStyle("display", n == 0 && !showDefaults.contents ? "block" : "none")
     count->setTextContent(`${Int.toString(used)} of ${Int.toString(ModMatrix.slots)}`)
     let picked = selected()
     rowsBox->toggleClass("focus", picked != None)

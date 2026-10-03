@@ -208,7 +208,8 @@ let css = `
 .fnd.dist { box-shadow: inset 0 0 0 1px var(--signal); }
 .fnd.add { flex: none; background: transparent; box-shadow: none; border: 1.5px dashed var(--edge); font-size: 14px; line-height: 17px; }
 .fnd.fx { flex: 0 1 auto; }
-.fnd.fx.off { color: var(--ink-faint); }
+.fnd.fx.off, .fnd.osc.off { color: var(--ink-faint); }
+.fnd.osc.off { background: transparent; }
 .fnd.drag { z-index: 3; cursor: grabbing; box-shadow: inset 0 0 0 1.5px var(--signal), 3px 3px 0 rgba(31,26,14,0.25); }
 .fnd.drop-before { box-shadow: inset 0 0 0 1px var(--edge), inset 3px 0 0 var(--signal); }
 .fnd.drop-after { box-shadow: inset 0 0 0 1px var(--edge), inset -3px 0 0 var(--signal); }
@@ -230,6 +231,8 @@ let css = `
 .dchip .dx { position: absolute; right: 6px; top: 0; line-height: 22px; font-weight: 400; font-size: 14px; color: var(--ink-faint); cursor: pointer; }
 .dchip .dx:hover { color: var(--ink); }
 .dchip.zero .dl, .dchip.zero .dv { opacity: 0.55; }
+.dchip.dflt { background: transparent; box-shadow: inset 0 0 0 1px var(--edge); color: var(--ink-soft); }
+.dchip.dflt .sw, .dchip.dflt .dt i { opacity: 0.45; }
 .dchip.add { cursor: pointer; justify-content: center; padding: 0; background: transparent; box-shadow: none;
     border: 1.5px dashed var(--edge); color: var(--ink-soft); }
 .dchip.add:hover { background: var(--panel-hi); color: var(--ink); }
@@ -354,6 +357,7 @@ let css = `
     background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge);
 }
 .tg:hover { background: var(--panel-hi); box-shadow: inset 0 0 0 1px var(--edge); }
+.tg.dim > * { opacity: 0.45; }
 .tg b { flex: none; width: 11px; height: 11px; border: 1.5px solid var(--ink); box-sizing: border-box; border-radius: 1px; background: transparent; }
 .tg.on b { background: var(--signal); border-color: var(--signal); box-shadow: inset 0 0 0 1.5px var(--paper); }
 .tg.on { color: var(--ink); }
@@ -774,6 +778,11 @@ let css = `
 .addrow:hover, .addrow:focus-visible { background: var(--panel-hi); color: var(--ink); border-color: var(--ink); outline: none; }
 .addrow b { font-size: 17px; line-height: 1; }
 .addrow .sub { color: var(--ink-faint); font-size: 12px; margin-left: 6px; }
+/* Oatmeal's depths at their Init values: one quiet row, which opens to list them */
+.mdflt { position: absolute; box-sizing: border-box; align-items: center; padding: 0 10px; font-size: 12px;
+    color: var(--ink-faint); cursor: pointer; white-space: nowrap; }
+.mdflt:hover, .mdflt:focus-visible { color: var(--ink); outline: none; }
+.conn.dflt { opacity: 0.6; }
 .mempty { position: absolute; left: 20px; right: 20px; top: 92px; text-align: center; color: var(--ink-soft);
     font-size: 13px; line-height: 1.45; }
 .mempty .big { font-size: 17px; font-weight: 700; color: var(--ink); margin-bottom: 6px; }

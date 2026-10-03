@@ -9,10 +9,9 @@ open! Web
 // the note the filter's cutoff is told relative to (PatchGen's "at 2.5×")
 let note = 48
 
-// What each source moves, by source: "LFO 1 > cutoff, resonance; mod env 1 > osc 2 pitch". The
-// filter's own envelope, key and velocity amounts are the filter line's.
+// What each source moves, by source: "LFO 1 > cutoff, resonance; mod env 1 > osc 2 pitch", as the
+// Mod page lists them. The filter envelope's amount is the filter line's.
 let modText = (ctx: Ctx.t, get) => {
-  let filterOwn = ["filterEnv", "key", "velocity"]
   let name = (s: ModMatrix.source, i) =>
     switch ModEdit.macroOf(i) {
     | Some(m) => ModEdit.macroName(ctx.programs, m)
@@ -32,7 +31,7 @@ let modText = (ctx: Ctx.t, get) => {
       i == 0
         ? []
         : Modulators.from(get, s.key)
-          ->Array.filter(r => get(r.amount) != 0. && !(r.via == Depth && filterOwn->Array.includes(s.key)))
+          ->Array.filter(r => get(r.amount) != 0. && r.amount != "F_EnvMod")
           ->Array.map(label)
           ->Array.reduce([], (seen, l) => seen->Array.includes(l) ? seen : [...seen, l])
     targets == [] ? None : Some(`${name(s, i)} > ${targets->Array.join(", ")}`)

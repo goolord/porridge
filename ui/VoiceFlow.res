@@ -31,8 +31,8 @@ let make = (ctx: Ctx.t, parent, box: box, ~show: block => unit) => {
       }
     )
 
-  let osc1 = node("")
-  let osc2 = node("")
+  let osc1 = node(~cls="osc", "")
+  let osc2 = node(~cls="osc", "")
   let mix = el("span", ~cls="fsep")
   let noise = node("noise")
   let unison = node("")
@@ -184,6 +184,10 @@ let make = (ctx: Ctx.t, parent, box: box, ~show: block => unit) => {
     osc2->setTextContent(
       "osc 2 · " ++ listText("O2_Waveform") ++ (transpose != 0. ? " " ++ model->ParamModel.shortText("Transpose") : ""),
     )
+    // (an oscillator at no level, simply added, is heard nowhere: Init's osc 2)
+    let silent = id => get("OscMix") == 0. && get(id) <= (model->ParamModel.def(id)).min
+    osc1->toggleClass("off", silent("O1_Amp"))
+    osc2->toggleClass("off", silent("O2_Amp"))
     voice->appendChild(osc1)
     mix->setTextContent(get("OscMix") == 0. ? "+" : listText("OscMix"))
     voice->appendChild(mix)
@@ -262,6 +266,8 @@ let make = (ctx: Ctx.t, parent, box: box, ~show: block => unit) => {
       ...VoiceLane.ids,
       "O1_Waveform",
       "O2_Waveform",
+      "O1_Amp",
+      "O2_Amp",
       "Transpose",
       "OscMix",
       "N_Amp",

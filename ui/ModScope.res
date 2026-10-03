@@ -46,5 +46,5 @@ let followText = get => get("MM_Follow") == 0. ? "newest note" : "all notes"
 let scopeHelp = (scope: ModMatrix.scope) =>
   switch scope {
   | EachNote => "per-voice: each voice has its own value"
-  | Shared => "one value every note shares"
+  | Shared => "whole sound: one value every voice shares"
   }

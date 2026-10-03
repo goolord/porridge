@@ -6,7 +6,7 @@
 
 open! Web
 
-let hint = "Drag the XY pad; right-drag keeps its distance from the centre. Click an arpeggiator step to pick it, right-click to step through them (shift goes back). Double-click a macro's name to rename it. Ctrl+right-click a control for its menu."
+let hint = "Drag the XY pad; right-drag keeps its distance from the centre. Double-click a macro's name to rename it. Ctrl+right-click a control for its menu."
 
 let margin = 6.
 // the arpeggiator's steps and the length handle under them
@@ -106,6 +106,11 @@ let arpeggiator = (ctx: Ctx.t, page, ~x, ~y, ~w, ~h) => {
     notes->Grid.toggle(`Arp_Add_${n}_On`, 3 * k, 0, n)
     notes->Grid.param(`Arp_Add_${n}_Shift`, 3 * k + 1, 0, `note ${n}`, ~span=2)
   }
+  // the rest recede while the mode is off
+  let rest = arp.el->querySelectorAll(".p, .tg")->nodesToArray->Array.slice(~start=1)
+  let dim = () => rest->Array.forEach(e => e->toggleClass("dim", ctx.model->ParamModel.get("Arp_Mode") == 0.))
+  ctx.model->ParamModel.listenEach(["Arp_Mode"], dim)
+  dim()
 }
 
 //==============================================================================
@@ -147,7 +152,12 @@ let xy = (ctx: Ctx.t, page, ~x, ~y, ~w, ~h) => {
   g->Grid.param("XY_Var_Radius", 2, 0, "rand radius")
   g->Grid.param("XY_Y", 0, 1, "y")
   g->Grid.param("XY_V_CC", 1, 1, "y cc")
-  g->Grid.param("XY_Var_Rate", 2, 1, "rand rate")
+  // (the wandering's rate, which does nothing while it has no radius)
+  let rate = el("div", ~parent=panel.el)
+  {...g, el: rate}->Grid.param("XY_Var_Rate", 2, 1, "rand rate")
+  let showRate = () => rate->setStyle("display", ctx.model->ParamModel.get("XY_Var_Radius") > 0. ? "" : "none")
+  ctx.model->ParamModel.listenEach(["XY_Var_Radius"], showRate)
+  showRate()
 }
 
 let build = (ctx: Ctx.t, page) => {
