@@ -29,7 +29,8 @@ dsp/                    Cmajor DSP
   Oscillator, Filter, Modulation, Effects, Tables, Voice, Types, Common
                           (Voice.cmajor also has the key EQ: a low shelf under each voice's
                           note and bands on its harmonics; Oscillator.cmajor each oscillator's
-                          roughness, noise in its phase)
+                          roughness, noise in its phase, and its shape: a morph towards a
+                          second wave and CZ-style phase distortion, both per voice)
   FxExtra.cmajor          Porridge's flanger, phaser, compressor, bode, rack filter and utility
   VoiceFx.cmajor          the voice lane: up to four effects in every voice, around the filter
                           and the amp envelope (the rack's filter, distortion, EQ, phaser,
@@ -143,7 +144,8 @@ tools/
                           bounded and fall silent, the ambience's models and the distortion's
                           types too, and the distortion's mix lines up with oversampling; the
                           oscillator envelopes and the noise source; the key EQ's bands and
-                          shelf; oscillator roughness; osc 2 heard in PM),
+                          shelf; oscillator roughness; osc 2 heard in PM; the oscillators'
+                          morph and phase distortion),
                           host.cpp's --time prints the render's own CPU time, for benchmarks
                           (--timefrom skips the attacks; an events file can also set
                           parameters at given frames);

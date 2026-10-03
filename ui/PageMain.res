@@ -92,21 +92,39 @@ let oscPanel = (ctx: Ctx.t, page) => {
   let model = ctx.model
   let osc = Panel.make(
     page,
-    ~tabs=["oscillators", "noise", "unison", "phase", "osc envs"],
+    ~tabs=["oscillators", "shape", "noise", "unison", "phase", "osc envs"],
     ~x=margin,
     ~y=top,
     ~w=oscWidth,
     ~h=rowHeight,
   )
   oscillators(ctx, osc->Panel.body(0))
-  osc->Panel.mark(model, 1, [Features.noise, Features.oscNoise])->ignore
-  osc->Panel.mark(model, 2, [Features.unison, Features.drift])->ignore
-  osc->Panel.mark(model, 3, [Features.oscPhase])->ignore
-  osc->Panel.mark(model, 4, [Features.oscEnv(1), Features.oscEnv(2)])->ignore
+  osc->Panel.mark(model, 1, [Features.oscShape])->ignore
+  osc->Panel.mark(model, 2, [Features.noise, Features.oscNoise])->ignore
+  osc->Panel.mark(model, 3, [Features.unison, Features.drift])->ignore
+  osc->Panel.mark(model, 4, [Features.oscPhase])->ignore
+  osc->Panel.mark(model, 5, [Features.oscEnv(1), Features.oscEnv(2)])->ignore
+
+  // each oscillator's shape: its wave crossfaded towards a morph wave, and its phase distorted
+  let cw = Grid.fitColumns(oscWidth, 4)
+  let shape = Grid.make(ctx, osc->Panel.body(1), ~cw)
+  [1, 2]->Array.forEach(n => {
+    let osc = Int.toString(n)
+    let r = n - 1
+    shape->Grid.choice(`O${osc}_MorphTo`, 0, r, `osc ${osc} morph to`, ~span=2)
+    shape->Grid.param(`O${osc}_Morph`, 2, r, "morph")
+    shape->Grid.param(`O${osc}_PD`, 3, r, "phase dist")
+  })
+  shape->Grid.help(
+    0,
+    2,
+    "Morph crossfades the oscillator's wave towards the wave beside it. Phase distortion runs the first half of each cycle faster than the second, as Casio's CZ synths did: on a sine it sweeps like a resonant filter opening, and on high notes it eases off rather than alias. Both can be modulated per voice.",
+    ~tipW=280.,
+    ~left=true,
+  )
 
   // the noise generator, and each oscillator's roughness (its pitch moved by noise)
-  let cw = Grid.fitColumns(oscWidth, 4)
-  let noise = Grid.make(ctx, osc->Panel.body(1), ~cw)
+  let noise = Grid.make(ctx, osc->Panel.body(2), ~cw)
   noise->Grid.param("N_Amp", 0, 0, "noise level")
   noise->Grid.param("N_Resonance", 1, 0, "resonance")
   noise->Grid.param("N_Transpose", 2, 0, "transpose")
@@ -116,7 +134,7 @@ let oscPanel = (ctx: Ctx.t, page) => {
   noise->Grid.param("O2_Noise", 2, 1, "osc 2 rough")
   noise->Grid.param("O2_NoiseColour", 3, 1, "colour")
 
-  let unison = Grid.make(ctx, osc->Panel.body(2), ~cw)
+  let unison = Grid.make(ctx, osc->Panel.body(3), ~cw)
   unison->Grid.param("U_Voices", 0, 0, "voices")
   unison->Grid.param("U_Detune", 1, 0, "detune")
   unison->Grid.param("U_Spread", 2, 0, "spread")
@@ -129,7 +147,7 @@ let oscPanel = (ctx: Ctx.t, page) => {
   unison->Grid.param("Drift_Pitch", 0, 2, "drift pitch")
   unison->Grid.param("Drift_Rate", 1, 2, "drift rate")
 
-  let phase = Grid.make(ctx, osc->Panel.body(3), ~cw)
+  let phase = Grid.make(ctx, osc->Panel.body(4), ~cw)
   [("Osc", "osc"), ("PWM", "pwm")]->Array.forEachWithIndex(((id, label), r) => {
     phase->Grid.param(id ++ "Phase", 0, r, label ++ " phase")
     phase->Grid.param(id ++ "PhaseRand", 1, r, label ++ " rand")
@@ -137,7 +155,7 @@ let oscPanel = (ctx: Ctx.t, page) => {
   })
 
   // each oscillator's own envelope, beside its switch
-  let envs = osc->Panel.body(4)
+  let envs = osc->Panel.body(5)
   let envHeight = (rowHeight - Grid.padTop - 6.) / 2.
   [1, 2]->Array.forEach(n => {
     let env = EnvEditor.oscEnv(n)

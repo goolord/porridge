@@ -178,6 +178,7 @@ let featureLoss = (feature: PorridgeParams.feature) =>
   | OscEnvs => Some("the oscillator envelopes")
   | KeyEq => Some("the key EQ")
   | OscNoise => Some("the oscillator noise")
+  | OscShape => Some("the oscillators' morph and phase distortion")
   | PairMix => Some("osc 2 heard in PM, ring and AM")
   | LfoExtras => Some("the LFO delay, slew, steps and one-shot")
   | UnisonExtras => Some("the unison extras")
@@ -240,7 +241,7 @@ let porridgeOnly = p => {
   | [] => ()
   | copies => add(Some(`the rack's extra effects (${copies->Array.map(e => FxRack.kindName(e.kind))->Array.join(", ")})`))
   }
-  features([Curves, Decay1Curves, OscEnvs, KeyEq, OscNoise, PairMix, LfoExtras, UnisonExtras])
+  features([Curves, Decay1Curves, OscEnvs, KeyEq, OscShape, OscNoise, PairMix, LfoExtras, UnisonExtras])
   oatmealLists(~list=DistType)
   if p.values->Map.get("Sat_Mix")->Option.mapOr(false, x => x != 1.) {
     add(Some("the distortion mix"))

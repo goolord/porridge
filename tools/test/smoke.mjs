@@ -203,6 +203,25 @@ for (const os of [0, 1, 2, 3])
     const pm = between ({ OscMix: 3, O2_Amp: 0.5, Transpose: 19 / 12, O2_Waveform: 0 });
     const heardPm = between ({ OscMix: 3, O2_Amp: 0.5, Transpose: 19 / 12, O2_Waveform: 0, O2_PairMix: 1 });
     check (heardPm.level - pm.level > 0.5, `osc 2 heard in PM  level ${(heardPm.level - pm.level).toFixed (2)} dB`);
+
+    // the oscillators' shape: a sine morphed all the way to the saw is the HQ saw; phase
+    // distortion brightens a sine (its third harmonic rises from nothing) and adds no DC to a
+    // saw; both stay bounded with unison and in the sync and FM mixes
+    const shaped = (name, sets) => render ({ program: init, events: one, frames: rate, rate, sets: { ...plain, ...sets }, out: join (dir, name + ".f32") })[0];
+    const morphed = shaped ("morph_saw", { O1_Waveform: 0, O1_Morph: 1, O1_MorphTo: 1 }), saw = shaped ("hq_saw", { O1_Waveform: 6 });
+    const morphDiff = morphed.reduce ((m, x, i) => Math.max (m, Math.abs (x - saw[i])), 0);
+    check (morphDiff < 1e-6, `sine morphed to the saw is the HQ saw  max diff ${morphDiff.toExponential (2)}`);
+    const third = sets => levelAt (shaped ("pd_sine", { O1_Waveform: 0, ...sets }), 660, 0.3, rate);
+    check (third ({ O1_PD: 0.7 }) - third ({}) > 60, `phase distortion brightens a sine  3rd harmonic +${(third ({ O1_PD: 0.7 }) - third ({})).toFixed (1)} dB`);
+    const bent = shaped ("pd_saw", { O1_Waveform: 6, O1_PD: 1 });
+    const from = Math.floor (0.3 * rate), to = Math.floor (0.7 * rate);
+    let dc = 0, peak = 0;
+    for (let i = from; i < to; ++i) { dc += bent[i]; peak = Math.max (peak, Math.abs (bent[i])); }
+    dc /= to - from;
+    check (Math.abs (dc) < 0.01 * peak, `phase distortion adds no DC  ${(100 * dc / peak).toFixed (2)} % of the peak`);
+    sounds ("osc shape, unison, sync", { O1_PD: 0.8, O1_Morph: 0.5, O1_MorphTo: 2, O2_PD: 0.5, O2_Morph: 1, O2_MorphTo: 4, U_Voices: 4, OscMix: 1 }, { tail: false });
+    sounds ("osc shape, FM", { O1_PD: 0.6, O2_PD: 0.9, O2_Morph: 0.5, O2_Amp: 1, OscMix: 2 }, { tail: false });
+    await flush ();
 }
 
 // the noise source, on the pitch and on the cutoff

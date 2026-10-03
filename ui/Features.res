@@ -30,6 +30,9 @@ let noise = make("noise", "noise", ["N_Amp"], get => get("N_Amp") > 0.)
 let oscNoise = make("oscNoise", "osc roughness", ["O1_Noise", "O2_Noise"], get =>
   get("O1_Noise") > 0. || get("O2_Noise") > 0.
 )
+let oscShape = make("oscShape", "osc morph and phase dist", ["O1_Morph", "O1_PD", "O2_Morph", "O2_PD"], get =>
+  get("O1_Morph") > 0. || get("O1_PD") > 0. || get("O2_Morph") > 0. || get("O2_PD") > 0.
+)
 let unison = make("unison", "unison", ["U_Voices"], get => get("U_Voices") > 1.)
 let drift = make("drift", "drift", ["Drift_Pitch", "Drift_Cutoff"], get =>
   get("Drift_Pitch") > 0. || get("Drift_Cutoff") > 0.
@@ -84,6 +87,7 @@ let tuning = anyChanged(
 )
 
 let all = [
+  oscShape,
   noise,
   oscNoise,
   unison,

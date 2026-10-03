@@ -32,6 +32,14 @@ namespace porridge
         // coefficient and the gain that keeps the noise's RMS whatever its colour
         float nzDepth, nzCoef, nzGain, nzLp;
         Lcg nz;
+
+        // the oscillator's shape (O1_Morph, O1_MorphTo, O1_PD, osc 2's): how far the wave is
+        // crossfaded towards the morph wave (morphWave: PorridgeParams.morphWaves, with
+        // morphSet the user wave's table set), and the phase distortion's amount
+        float morph, pd;
+        int morphWave, morphSet;
+        float morphCur;                 // the morph as it ramps to 'morph', sample by sample
+        OscShape shp;                   // the shape's block (beginBlock), while it's on
     }
 
     /// The fields of a new oscillator that don't start at zero (the rest must be zero).
@@ -113,6 +121,20 @@ namespace porridge
         this.nzDepth = src.nzDepth;
         this.nzCoef = src.nzCoef;
         this.nzGain = src.nzGain;
+        this.morph = src.morph;
+        this.pd = src.pd;
+        this.morphWave = src.morphWave;
+        this.morphSet = src.morphSet;
+    }
+
+    /// The oscillator's shape: morph 0..1 towards morphTo (0 sine, 1 saw, 2 square, 3 triangle,
+    /// 4 and 5 the user waves, read from user1 and user2), and phase distortion 0..1.
+    void setShape (Osc& this, float morph, int morphTo, float pd, int user1, int user2)
+    {
+        this.morph = clamp (morph, 0.0f, 1.0f);
+        this.morphWave = clamp (morphTo, 0, 5);
+        this.morphSet = morphTo == 4 ? user1 : user2;
+        this.pd = clamp (pd, 0.0f, 1.0f);
     }
 
     /// The oscillator noise's lowpass coefficient and gain for a colour (see setNoise), the
@@ -168,6 +190,92 @@ namespace porridge
     /// Pulse, user PWM and HQ pulse: the difference of two phases of a waveform.
     bool isPulse (int waveform)     { return waveform == waveType::pulse || waveform == waveType::userPwm || waveform == waveType::pulseHQ; }
 
+    /// A table to read: its offset in 'sets' (-1: the sine table) and phase shift, with the
+    /// mask and scale of the phase's fraction.
+    struct Tab
+    {
+        int offset, shift;
+        int64 mask;
+        float64 fracScale;
+    }
+
+    Tab makeTab (int offset, int shift)
+    {
+        return Tab (offset, shift, (1i64 << shift) - 1, 1.0 / float64 (1i64 << shift));
+    }
+
+    float read (const WaveTables& tables, const Tab& t, int64 ph)
+    {
+        let p = ph & u32;
+        let i = int (p >> t.shift);
+        let fr = float64 (p & t.mask) * t.fracScale;
+
+        if (t.offset < 0)
+            return float ((1.0 - fr) * float64 (tables.sine.at (i)) + fr * float64 (tables.sine.at (i + 1)));
+
+        return float ((1.0 - fr) * float64 (tables.sets.at (t.offset + i)) + fr * float64 (tables.sets.at (t.offset + i + 1)));
+    }
+
+    /// A waveform's tables for a phase step t: the brightest that doesn't alias (as the plain
+    /// oscillator reads), the next one down, and how far t is from the speed at which the first
+    /// became the brightest to the one at which it would alias. Crossfaded by that, they change
+    /// smoothly as t does.
+    struct TablePair
+    {
+        Tab a, b;
+        float64 mix;
+    }
+
+    TablePair waveTables (const WaveTables& tables, int waveform, int userSet, int64 t, bool pair)
+    {
+        TablePair p;
+        let tf = float64 (max (t, 1i64));
+
+        if (waveform == waveType::sine)
+        {
+            p.a = makeTab (-1, 17);
+            p.b = p.a;
+        }
+        else if (waveform >= waveType::sawHQ)
+        {
+            // (as chooseHQ, half an octave apart)
+            let base = hqBase + (waveform == waveType::triangleHQ ? setTri : setSaw) * hqSetSize;
+            var level = 0;
+
+            while (level < hqLevels - 1 && float64 (tables.hqHarm.at (level)) * tf >= 2147483648.0)
+                ++level;
+
+            p.a = makeTab (base + level * hqStride, 20);
+
+            if (pair)
+            {
+                let next = min (level + 1, hqLevels - 1);
+                p.b = makeTab (base + next * hqStride, 20);
+                let hi = 2147483648.0 / float64 (tables.hqHarm.at (level));
+                let lo = level > 0 ? 2147483648.0 / float64 (tables.hqHarm.at (level - 1)) : hi * 0.7071067811865476;
+                p.mix = next > level ? clamp (log (tf / lo) / log (hi / lo), 0.0, 1.0) : 0.0;
+            }
+        }
+        else
+        {
+            // (an octave apart)
+            let set = (waveform == waveType::saw || waveform == waveType::pulse) ? setSaw
+                        : (waveform == waveType::triangle ? setTri : userSet);
+            let c = chooseTable (set, min (t, 0x7fffffffffffi64));
+            p.a = makeTab (c.offset, c.shift);
+
+            if (pair)
+            {
+                let d = chooseTable (set, min (2 * t, 0x7fffffffffffi64));
+                p.b = makeTab (d.offset, d.shift);
+                let l = log (tf) * 1.4426950408889634;
+                p.mix = l - floor (l);
+            }
+        }
+
+        return p;
+    }
+
     struct OscBlock
     {
         int tableOffset, shift;
@@ -177,6 +285,25 @@ namespace porridge
         float astep;
         bool glideOn, glideUp, pulse, pwmActive;
         int64 pwStep;
+        bool shaped;                    // morph or phase distortion is on (Osc.shp, shapedValue)
+    }
+
+    /// The shape's block, set by beginBlock while morph or phase distortion is on (and kept in
+    /// the oscillator, so that OscBlock, which every block of every oscillator starts afresh,
+    /// stays small): the morph's step per sample, its tables, and whether it's the square (two
+    /// saws); while the phase is bent, the next tables down for the wave and the morph wave, and
+    /// how far to crossfade to them (0 otherwise); the phase distortion's turn of the wave's
+    /// phase (pdRot), knee (as a phase) and two slopes, 1 / the phase step, the DC it adds, and
+    /// its knees' polyBLAMP sizes.
+    struct OscShape
+    {
+        bool pdOn, morphOn, mSquare;
+        float morphStep;
+        Tab morphA, morphB, waveB;
+        float64 levelMix;
+        int64 pdRot;
+        float64 pdKnee, pdK1, pdK2, pdInvInc, pdBlamp0, pdBlampK;
+        float pdDc;
     }
 
     OscBlock beginBlock (Osc& this, const WaveTables& tables, int userSet, float mult, int64 extra, int n)
@@ -197,6 +324,7 @@ namespace porridge
         if (this.first)
         {
             this.amp = this.ampTarget;
+            this.morphCur = this.morph;
             this.first = false;
         }
 
@@ -204,29 +332,103 @@ namespace porridge
 
         let inc = ((this.offset + this.base) & u32) + extra;
 
-        if (this.waveform == waveType::sine)
+        // Phase distortion: the cycle's first part, d of it, plays the first half of the wave
+        // (k1 = 0.5 / d times as fast), the rest the second half. d shrinks from 0.5 (none) on a
+        // log scale, never below 3 samples' worth, so that the fast half lasts at least 3
+        // samples (on high notes it eases off rather than alias). The tables are the ones for
+        // up to twice the fast half's speed: its harmonics stay under half of Nyquist there,
+        // or joining it to the slow half aliases them (15 dB more on a saw), crossfaded to the
+        // next ones down as the speed rises (waveTables), so a sweep doesn't step. So a wave
+        // bent hard keeps only a few of its harmonics, and sounds like a bent sine.
+        var tinc = inc;
+        var pdOn = false;
+        float64 pdKnee, pdK1, pdK2;
+
+        if (this.pd > 0)
         {
-            b.tableOffset = -1;
-            b.shift = 17;
+            let f = float64 (max (inc, 1i64)) / two32;
+            let dMin = min (0.5, max (0.01, 3.0 * f));
+            let k1 = pow (0.5 / dMin, float64 (this.pd));
+
+            if (k1 > 1.000001)
+            {
+                let d = 0.5 / k1;
+                pdOn = true;
+                pdKnee = d * two32;
+                pdK1 = k1;
+                pdK2 = 0.5 / (1.0 - d);
+                tinc = int64 (float64 (inc) * k1 * min (2.0, k1));
+            }
         }
-        else if (this.waveform >= waveType::sawHQ)
+
+        if (! pdOn)
         {
-            // HQ saw, pulse (two saws) and triangle
-            let c = tables.chooseHQ (this.waveform == waveType::triangleHQ ? setTri : setSaw, inc);
-            b.tableOffset = c.offset;
-            b.shift = c.shift;
+            if (this.waveform == waveType::sine)
+            {
+                b.tableOffset = -1;
+                b.shift = 17;
+            }
+            else if (this.waveform >= waveType::sawHQ)
+            {
+                // HQ saw, pulse (two saws) and triangle
+                let c = tables.chooseHQ (this.waveform == waveType::triangleHQ ? setTri : setSaw, inc);
+                b.tableOffset = c.offset;
+                b.shift = c.shift;
+            }
+            else
+            {
+                let set = (this.waveform == waveType::saw || this.waveform == waveType::pulse) ? setSaw
+                            : (this.waveform == waveType::triangle ? setTri : userSet);
+                let c = chooseTable (set, min (inc, 0x7fffffffffffi64));
+                b.tableOffset = c.offset;
+                b.shift = c.shift;
+            }
+
+            b.mask = (1i64 << b.shift) - 1;
+            b.fracScale = 1.0 / float64 (1i64 << b.shift);
         }
         else
         {
-            let set = (this.waveform == waveType::saw || this.waveform == waveType::pulse) ? setSaw
-                        : (this.waveform == waveType::triangle ? setTri : userSet);
-            let c = chooseTable (set, min (inc, 0x7fffffffffffi64));
-            b.tableOffset = c.offset;
-            b.shift = c.shift;
+            // the wave's table, and the next one down
+            let w = waveTables (tables, this.waveform, userSet, tinc, true);
+            b.tableOffset = w.a.offset;
+            b.shift = w.a.shift;
+            b.mask = w.a.mask;
+            b.fracScale = w.a.fracScale;
+            this.shp.waveB = w.b;
+            this.shp.levelMix = w.mix;
+            this.shp.pdKnee = pdKnee;
+            this.shp.pdK1 = pdK1;
+            this.shp.pdK2 = pdK2;
         }
 
-        b.mask = (1i64 << b.shift) - 1;
-        b.fracScale = 1.0 / float64 (1i64 << b.shift);
+        // the morph, ramped from where it was, and its wave's tables, for the same speed
+        if (this.morph == 0 && this.morphCur != 0 && abs (this.morphCur) < 1e-6f)
+            this.morphCur = 0;
+
+        let morphOn = this.morph > 0 || this.morphCur > 0;
+        b.shaped = pdOn || morphOn;
+
+        if (b.shaped)
+        {
+            this.shp.pdOn = pdOn;
+            this.shp.morphOn = morphOn;
+
+            if (! pdOn)
+                this.shp.levelMix = 0;
+        }
+
+        if (morphOn)
+        {
+            this.shp.morphStep = (this.morph - this.morphCur) / float (n);
+            let mw = this.morphWave == 0 ? waveType::sine
+                   : this.morphWave <= 2 ? waveType::sawHQ
+                   : this.morphWave == 3 ? waveType::triangleHQ : waveType::user;
+            let m = waveTables (tables, mw, this.morphSet, tinc, pdOn);
+            this.shp.morphA = m.a;
+            this.shp.morphB = m.b;
+            this.shp.mSquare = this.morphWave == 2;
+        }
 
         if (this.glideOn)
         {
@@ -269,6 +471,38 @@ namespace porridge
             }
         }
 
+        if (pdOn)
+        {
+            // the knees on the wave's peaks where it has them (a sine's are a quarter of a cycle
+            // on, a triangle's at 0 and 1/2), where bending the phase kinks it least
+            let isTri = this.waveform == waveType::triangle || this.waveform == waveType::triangleHQ;
+            this.shp.pdRot = isTri ? 0 : 0x40000000i64;
+            let incF = float64 (max (inc, 1i64)) / two32;
+            this.shp.pdInvInc = 1.0 / float64 (max (inc, 1i64));
+
+            // what kink is left: the slope's jump at each knee (the wave's slope there, per
+            // cycle, times the change in speed), smoothed over the samples either side
+            let e = 0x200000i64;
+            let s0 = 1024.0 * float64 (this.composite (tables, b, e - this.shp.pdRot) - this.composite (tables, b, -e - this.shp.pdRot));
+            let sK = 1024.0 * float64 (this.composite (tables, b, 0x80000000i64 + e - this.shp.pdRot)
+                                        - this.composite (tables, b, 0x80000000i64 - e - this.shp.pdRot));
+            this.shp.pdBlamp0 = s0 * (this.shp.pdK1 - this.shp.pdK2) * incF / 6.0;
+            this.shp.pdBlampK = sK * (this.shp.pdK2 - this.shp.pdK1) * incF / 6.0;
+
+            // the DC it adds: the wave's first half (of the bent phase) takes d of the cycle,
+            // its second 1 - d: (d - 1/2) (first half's mean - second's), from 8 points (which
+            // leave under 0.5 % of the peak)
+            var halves = 0.0;
+
+            for (int j = 0; j < 8; ++j)
+            {
+                let y = float64 (this.composite (tables, b, (int64 (2 * j + 1) << 28) - this.shp.pdRot));
+                halves += j < 4 ? y : -y;
+            }
+
+            this.shp.pdDc = float ((0.5 / this.shp.pdK1 - 0.5) * halves / 4.0);
+        }
+
         return b;
     }
 
@@ -282,6 +516,78 @@ namespace porridge
             return float ((1.0 - fr) * float64 (tables.sine.at (i)) + fr * float64 (tables.sine.at (i + 1)));
 
         return float ((1.0 - fr) * float64 (tables.sets.at (b.tableOffset + i)) + fr * float64 (tables.sets.at (b.tableOffset + i + 1)));
+    }
+
+    /// The morph wave at phase p from table t.
+    float morphValue (const WaveTables& tables, bool square, const Tab& t, int64 p)
+    {
+        let z = read (tables, t, p);
+        return square ? z - read (tables, t, p + 0x80000000i64) : z;
+    }
+
+    /// The wave at phase p with its morph, before any phase distortion (the pulse's second
+    /// phase and the square's follow p, so a distorted pulse keeps its width); while the phase
+    /// is bent, crossfaded towards the next tables down.
+    float composite (const Osc& this, const WaveTables& tables, const OscBlock& b, int64 p)
+    {
+        var y = lookup (tables, b, p);
+
+        if (b.pulse)
+            y -= lookup (tables, b, p + this.pwCur);
+
+        if (this.shp.levelMix > 0)
+        {
+            var y2 = read (tables, this.shp.waveB, p);
+
+            if (b.pulse)
+                y2 -= read (tables, this.shp.waveB, p + this.pwCur);
+
+            y = float (float64 (y) + this.shp.levelMix * float64 (y2 - y));
+        }
+
+        if (this.shp.morphOn)
+        {
+            var z = morphValue (tables, this.shp.mSquare, this.shp.morphA, p);
+
+            if (this.shp.levelMix > 0)
+                z = float (float64 (z) + this.shp.levelMix * float64 (morphValue (tables, this.shp.mSquare, this.shp.morphB, p) - z));
+
+            y = float (float64 (y) + float64 (this.morphCur) * float64 (z - y));
+        }
+
+        return y;
+    }
+
+    /// The wave with its morph and phase distortion. The distortion's phase is the wave's
+    /// turned by pdRot: its first part, up to the knee, plays the first half of the wave, the
+    /// rest the second; then the DC that adds comes off, and the kinks at the knees (0 and
+    /// pdKnee) are smoothed with a polyBLAMP over the sample either side.
+    float shapedValue (const Osc& this, const WaveTables& tables, const OscBlock& b, int64 ph)
+    {
+        if (! this.shp.pdOn)
+            return this.composite (tables, b, ph);
+
+        let p = float64 ((ph + this.shp.pdRot) & u32);
+        let w = p < this.shp.pdKnee ? p * this.shp.pdK1 : 2147483648.0 + (p - this.shp.pdKnee) * this.shp.pdK2;
+        var y = float64 (this.composite (tables, b, int64 (w) - this.shp.pdRot) - this.shp.pdDc);
+
+        let t0 = abs ((p >= 2147483648.0 ? p - two32 : p) * this.shp.pdInvInc);
+
+        if (t0 < 1.0)
+        {
+            let a = 1.0 - t0;
+            y += this.shp.pdBlamp0 * a * a * a;
+        }
+
+        let tK = abs ((p - this.shp.pdKnee) * this.shp.pdInvInc);
+
+        if (tK < 1.0)
+        {
+            let a = 1.0 - tK;
+            y += this.shp.pdBlampK * a * a * a;
+        }
+
+        return float (y);
     }
 
     /// Per-sample updates shared by all oscillator variants: amp ramp, pulse width ramp, glide.
@@ -311,6 +617,14 @@ namespace porridge
         return float (a);
     }
 
+    /// The shape's per-sample update, for the renderers that read waveValue: the morph ramp.
+    /// (renderPlain has a loop of its own for it, renderPlainShaped.)
+    void tickShape (Osc& this, const OscBlock& b)
+    {
+        if (b.shaped && this.shp.morphOn)
+            this.morphCur += this.shp.morphStep;
+    }
+
     /// Moves the phase on by one sample, and the pitch ramp (offset) on by its slope.
     void stepPhase (Osc& this, const OscBlock& b)
     {
@@ -324,16 +638,40 @@ namespace porridge
 
     float waveValue (const Osc& this, const WaveTables& tables, const OscBlock& b, int64 ph)
     {
+        if (b.shaped)
+            return this.shapedValue (tables, b, ph);
+
         if (b.pulse)
             return lookup (tables, b, ph) - lookup (tables, b, ph + this.pwCur);
 
         return lookup (tables, b, ph);
     }
 
+    /// renderPlain with the shape on (morph or phase distortion).
+    void renderPlainShaped (Osc& this, const WaveTables& tables, const OscBlock& b, float[blockSize]& out, int n)
+    {
+        for (int i = 0; i < n; ++i)
+        {
+            let amp = this.tickShared (b);
+
+            if (this.shp.morphOn)
+                this.morphCur += this.shp.morphStep;
+
+            out.at (i) = float (float64 (out.at (i)) + float64 (amp) * float64 (this.shapedValue (tables, b, this.phase)));
+            this.stepPhase (b);
+        }
+    }
+
     /// Plain oscillator: adds into out.
     void renderPlain (Osc& this, const WaveTables& tables, int userSet, float mult, float[blockSize]& out, int n)
     {
         let b = this.beginBlock (tables, userSet, mult, 0, n);
+
+        if (b.shaped)
+        {
+            this.renderPlainShaped (tables, b, out, n);
+            return;
+        }
 
         for (int i = 0; i < n; ++i)
         {
@@ -362,6 +700,7 @@ namespace porridge
         for (int i = 0; i < n; ++i)
         {
             amp.at (i) = this.tickShared (b);
+            this.tickShape (b);
             wave.at (i) = this.waveValue (tables, b, this.phase);
             this.stepPhase (b);
         }
@@ -380,6 +719,7 @@ namespace porridge
         for (int i = 0; i < n; ++i)
         {
             let a = this.tickShared (b);
+            this.tickShape (b);
 
             if (pm)
             {
@@ -448,6 +788,7 @@ namespace porridge
         for (int i = 0; i < n; ++i)
         {
             let amp = this.tickShared (b);
+            this.tickShape (b);
             let y = this.waveValue (tables, b, this.phase);
             out.at (i) = float (float64 (out.at (i)) + float64 (y + this.ring.at (this.ringIdx)) * float64 (amp));
             this.ring.at (this.ringIdx) = 0;
@@ -530,6 +871,7 @@ namespace porridge
         for (int i = 0; i < n; ++i)
         {
             let amp = this.tickShared (b);
+            this.tickShape (b);
 
             if (isCarrier)
                 this.phase = (this.phase + (int64 (float64 ((this.base + this.offset) & u32) * float64 (fm.at (i))) & u32)) & u32;

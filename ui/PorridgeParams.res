@@ -1022,6 +1022,30 @@ let oscNoiseSpecs = [1, 2]->Array.flatMap(n => {
   ]
 })
 
+// Each oscillator's shape: its wave crossfaded towards a second one (morph), and its phase bent
+// so that it runs through the first half of the cycle faster than the second (phase distortion,
+// as Casio's CZ: on a sine, a resonant sweep without a filter). Both are knob targets, so each
+// voice can have its own. The morph waves are the HQ (alias-free) saw, square and triangle.
+let morphWaves = ["Sine", "Saw", "Square", "Triangle", "Osc 1 user", "Osc 2 user"]
+let oscShapeSpecs = [1, 2]->Array.flatMap(n => {
+  let osc = Int.toString(n)
+  [
+    {
+      id: `O${osc}_Morph`,
+      name: `Osc ${osc} morph`,
+      kind: Float({min: 0., max: 1., init: 0., text: percent}),
+      about: "the wave crossfaded towards the morph wave",
+    },
+    {id: `O${osc}_MorphTo`, name: `Osc ${osc} morph wave`, kind: Choice({names: morphWaves, init: 0})},
+    {
+      id: `O${osc}_PD`,
+      name: `Osc ${osc} phase distortion`,
+      kind: Float({min: 0., max: 1., init: 0., text: percent}),
+      about: "the wave's first half squeezed: brighter, like a filter opening (less on high notes, which would alias)",
+    },
+  ]
+})
+
 // In the PM 2 > 1, ring and AM osc mixes, osc 2 heard as well as modulating (at this much of
 // its level, which is also the depth): an oscillator that modulates another and sounds beside
 // it, as Synplant's B does.
@@ -1079,6 +1103,7 @@ type feature =
   | VoiceLane
   | ResonatorGain
   | VoiceExtras
+  | OscShape
 
 // The voice lane (dsp/VoiceFx.cmajor): up to laneSlots effects in every voice, which each note
 // runs its own copy of, holding the same values as the rack's slots (only the kinds that work in
@@ -1165,6 +1190,7 @@ let groupsAsAdded = [
     Array.concat(resonatorGainSpecs, copySpecsOf(rackKinds->Array.filter(k => k.key == "resonator"), ~only=id => id == "Rs_Gain")),
   ),
   (VoiceExtras, voiceExtraSpecs),
+  (OscShape, oscShapeSpecs),
 ]
 
 // The retired copies' parameters: no longer the patch's, presets' or hosts'.

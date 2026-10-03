@@ -715,6 +715,10 @@ let targets = [
   ...effectTargets("phaser", "phaser", [2, 3, 4], [("Ph_RateTrack", "rate tracking")]),
   ...effectTargets("flanger", "flanger", [2, 3, 4], [("Fl_RateTrack", "rate tracking"), ("Fl_Track", "delay tracking")]),
   ...effectTargets("octaver", "octaver", [2], [("Oc_Sub", "down"), ("Oc_Up", "up"), ("Oc_Dry", "dry")]),
+  knob("O1_Morph", "osc 1 morph", "osc"),
+  knob("O1_PD", "osc 1 phase dist", "osc"),
+  knob("O2_Morph", "osc 2 morph", "osc"),
+  knob("O2_PD", "osc 2 phase dist", "osc"),
 ]
 
 // The target groups, by the key in each target's group, with their titles.

@@ -3411,6 +3411,8 @@ namespace porridge
                           pw2 + pwMod2, pwmDepth2 + pwmDepthMod2 + P[slot::O2_PWM_D], pwmRate2 + pwmRateMod2, P[slot::O2_PWM_R]);
             v.osc1[0].setNoise (P[slot::O1_Noise], P[slot::O1_NoiseColour], oscNoiseC[0], sampleRate);
             v.osc2[0].setNoise (P[slot::O2_Noise], P[slot::O2_NoiseColour], oscNoiseC[1], sampleRate);
+            v.osc1[0].setShape (P[slot::O1_Morph], int (P[slot::O1_MorphTo]), P[slot::O1_PD], userSet1, userSet2);
+            v.osc2[0].setShape (P[slot::O2_Morph], int (P[slot::O2_MorphTo]), P[slot::O2_PD], userSet1, userSet2);
 
             // oscillators
             let oscMix = int (P[slot::OscMix]);

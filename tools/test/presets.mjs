@@ -200,7 +200,9 @@ else
     const targets = { C4_Mix: 65, D4_Wet: 68, Sat5_Pregain: 75, D4_Rotation: 144, Ff4_Track: 449, Fl4_Track: 477 };
     for (const [key, i] of Object.entries (targets))
         if (ModMatrix.targetIndex (key) !== i || ModMatrix.targets[i].law !== "Retired") fail (`target ${key} isn't retired at ${i}`);
-    if (ModMatrix.targets.length !== 484) fail (`${ModMatrix.targets.length} targets, not 484`);
+    // (the oscillators' morph and phase distortion came after, at 484 .. 487)
+    if (ModMatrix.targets.length !== 488) fail (`${ModMatrix.targets.length} targets, not 488`);
+    if (ModMatrix.targetIndex ("O1_Morph") !== 484 || ModMatrix.targetIndex ("O2_PD") !== 487) fail ("the osc shape targets moved");
     if (! ModMatrix.targets.every (t => (t.law === "Retired") === PorridgeParams.isRetiredId (t.key))) fail ("a retired copy's target moves something");
     if (ParamDefs.makeDefs ().some (d => PorridgeParams.isRetiredId (d.id))) fail ("a retired copy keeps its parameters");
 }

@@ -113,6 +113,34 @@ let waveSample = (wave, pw, user, phase) =>
   | _ => 0.
   }
 
+// The morph waves (PorridgeParams.morphWaves) at phase 0..1: sine, saw, square, triangle, then
+// the user waves.
+let morphSample = (to, user1, user2, phase) =>
+  switch to {
+  | 1 => waveSample(6, 0.5, user1, phase)
+  | 2 => waveSample(7, 0.5, user1, phase)
+  | 3 => waveSample(8, 0.5, user1, phase)
+  | 4 => userAt(user1, phase)
+  | 5 => userAt(user2, phase)
+  | _ => waveSample(0, 0.5, user1, phase)
+  }
+
+// The phase distortion of phase 0..1 at an amount 0..1 (as dsp/Oscillator.cmajor's, for a note
+// whose fast half may shrink to 3 % of the cycle, about middle C's): the turned phase's first
+// part, up to the knee, plays the first half of the wave, the rest the second. The knees sit on
+// a sine's peaks (a quarter of a cycle on), a triangle's at 0 and 1/2.
+let bendPhase = (wave, pd, phase) =>
+  if pd <= 0. {
+    phase
+  } else {
+    let rot = wave == 3 || wave == 8 ? 0. : 0.25
+    let k1 = Math.pow(0.5 / 0.03, ~exp=pd)
+    let d = 0.5 / k1
+    let p = Float.mod(phase + rot, 1.)
+    let w = p < d ? p * k1 : 0.5 + (p - d) * 0.5 / (1. - d)
+    Float.mod(w - rot + 1., 1.)
+  }
+
 // Whether a waveform is one of the HQ (anti-aliased) ones.
 let isHQ = wave => wave >= 6 && wave <= 8
 
@@ -139,19 +167,30 @@ let wave = (ctx: Ctx.t, parent, osc, box, ~badge=true) => {
     let wave = Float.toInt(ctx.model->ParamModel.get(prefix ++ "Waveform"))
     let pw = ctx.model->ParamModel.get(prefix ++ "PWM_W")
     let user = ctx.programs->ProgramStore.shape(osc == 0 ? Wave1 : Wave2)
+    // its shape: the morph and the phase distortion
+    let morph = ctx.model->ParamModel.get(prefix ++ "Morph")
+    let morphTo = Float.toInt(ctx.model->ParamModel.get(prefix ++ "MorphTo"))
+    let pd = ctx.model->ParamModel.get(prefix ++ "PD")
+    let (user1, user2) = (ctx.programs->ProgramStore.shape(Wave1), ctx.programs->ProgramStore.shape(Wave2))
     let (w, h) = (box.w - 6., box.h - 8.)
     let scale = 0.5 / 1.2
     let n = Float.toInt(w)
     let points = Array.fromInitializer(~length=n + 1, k => {
+      let f = bendPhase(wave, pd, Int.toFloat(k) / Int.toFloat(n))
+      let f = k == n && pd <= 0. ? 0.99999 : f
+      let v = waveSample(wave, pw, user, f)
+      let v = morph > 0. ? v + morph * (morphSample(morphTo, user1, user2, f) - v) : v
       let f = Int.toFloat(k) / Int.toFloat(n)
-      let v = waveSample(wave, pw, user, k == n ? 0.99999 : f)
       (3. + f * w, 4. + (0.5 - scale * Float.clamp(v, ~min=-1.2, ~max=1.2)) * h)
     })
     curve->setAttribute("d", Str(pathFrom(points)))
     badge->Option.forEach(b => b->toggleClass("hidden", !isHQ(wave)))
   }
 
-  ctx.model->ParamModel.listenEach([prefix ++ "Waveform", prefix ++ "PWM_W"], draw)
+  ctx.model->ParamModel.listenEach(
+    [prefix ++ "Waveform", prefix ++ "PWM_W", prefix ++ "Morph", prefix ++ "MorphTo", prefix ++ "PD"],
+    draw,
+  )
   ctx.programs->ProgramStore.onShapes(draw)
   draw()
   s
