@@ -151,11 +151,13 @@ let loadValue = (id, x) =>
 //==============================================================================
 // Oatmeal
 
+// (in Oat mode, which plays it as Oatmeal does)
 let fromOatmeal = (bytes: Uint8Array.t) => {
   let values = defaultValues()
   Bank.programValues(bytes)->Map.forEachWithKey((x, id) =>
     loadValue(id, x)->Option.forEach(x => values->Map.set(id, x))
   )
+  values->Map.set("Oat_Mode", 1.)
   {
     meta: emptyMeta(getName(bytes)),
     values: withoutIdleEffects(values),

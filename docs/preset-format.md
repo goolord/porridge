@@ -85,7 +85,8 @@ the macros `Macro_1`..`Macro_4`, then four per modulation slot (`ModN_Source`, `
 | `Bd_Ratio` | the frequency shifter's (bode's) shift as a part of the note, added to `Bd_Shift`: 2 · knob³ of the note's frequency, -1..1 (in the voice lane each note's own, on the whole sound the newest note's). The voice lane's key shifter (`Sh_`, `Sh2_`, rack values `Shifter` and `Shifter 2`) was retired into it in October 2026: a program with one loads it as a bode in its slot, its ratio as `Bd_Ratio`, its offset (`Sh_Hz`, ±1 kHz) as `Bd_Shift` (±5 kHz) at ∛(1/5) of its turn, its mode and mix as they were, and its connections with it (an offset's amount scaled the same way) |
 
 They are appended to, never reordered, and each one's default leaves the sound exactly as
-Oatmeal's, except `Oat_Mode` (off: MIDI is sample-accurate, and the distortion's oversampling is HQ). **Export for Oatmeal** leaves
+Oatmeal's, except `Oat_Mode` (off: MIDI is sample-accurate, and the distortion's oversampling is HQ),
+which an imported Oatmeal program (and the factory bank) has on. **Export for Oatmeal** leaves
 them out and says so.
 
 Porridge also adds values after the last of some of Oatmeal's lists: the waveforms `Saw HQ`,

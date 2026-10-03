@@ -58,6 +58,10 @@ programs.forEach ((orig, i) =>
     if (OatmealFormat.getName (back) !== name) fail (`${i}: name "${OatmealFormat.getName (back)}" != "${name}"`);
 });
 
+// Oatmeal's programs load in Oat mode; Init doesn't
+if (! presets.every (p => p.values.get ("Oat_Mode") === 1)) fail ("an Oatmeal program loads outside Oat mode");
+if (Preset.init ("Init").values.get ("Oat_Mode") !== 0) fail ("Init is in Oat mode");
+
 // stored-state encoding, and the legacy base64 Oatmeal bank
 const decoded = Preset.decodeBank (Preset.encodeBank (presets));
 if (! decoded || ! decoded.every ((p, i) => sameValues (presets[i].values, p.values))) fail ("stored bank differs");

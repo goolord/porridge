@@ -3,7 +3,7 @@
 // Append only: hosts and presets know parameters by id, and the order fixes the host order.
 // Every default leaves the sound exactly as Oatmeal's, except Oat_Mode: off by default, so
 // MIDI lands on its own sample rather than at the next 64-sample block (and the rest of what
-// Oat mode keeps, below, is Porridge's).
+// Oat mode keeps, below, is Porridge's). An Oatmeal program loads with it on (Preset.fromOatmeal).
 
 type kind =
   // read: a typed value (in the text's units) to the parameter's value
