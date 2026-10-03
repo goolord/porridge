@@ -356,6 +356,7 @@ let css = `
     background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge);
 }
 .tg:hover { background: var(--panel-hi); box-shadow: inset 0 0 0 1px var(--edge); }
+.tg.dim > * { opacity: 0.45; }
 .tg b { flex: none; width: 11px; height: 11px; border: 1.5px solid var(--ink); box-sizing: border-box; border-radius: 1px; background: transparent; }
 .tg.on b { background: var(--signal); border-color: var(--signal); box-shadow: inset 0 0 0 1.5px var(--paper); }
 .tg.on { color: var(--ink); }

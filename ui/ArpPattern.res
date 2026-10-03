@@ -14,7 +14,12 @@ let make = (ctx: Ctx.t, parent, box) => {
   let hoverId = ref(None)
   let railHover = ref(false)
 
-  let status = id => ctx.status->Status.show(model->ParamModel.longText(id))
+  let status = id =>
+    ctx.status->Status.show(
+      model->ParamModel.longText(id) ++ (
+        id == "Arp_End" ? ". Drag for the pattern's length" : ". Click to pick it, right-click for the next (shift: the one before)"
+      ),
+    )
 
   let menuItems = id => () =>
     Controls.namesOf(model->ParamModel.def(id))->Array.mapWithIndex((name, value) =>
