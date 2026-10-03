@@ -192,8 +192,17 @@ let connections = (get: string => float) =>
     }
   })
 
+// A fixed depth that Init sets to something other than 0 (the bend range, velocity's say in the
+// volume, the note's random pitch and volume) is in every program, so it says nothing about this
+// one while it stays there: it's no route of the program's (not listed, counted or marked) until
+// it's changed. The Mod page folds those into one row, and the source's own editor shows them
+// quietly (atDefaults).
+let initOf = id => Lazy.get(ParamDefs.byId)->Map.get(id)->Option.mapOr(0., d => d.init)
+let isDefault = (get: string => float, amount) => get(amount) == initOf(amount)
+
 // What source key moves through Oatmeal's own routings, read with get: its slots that have a
-// target (a controller's while it's assigned), then its fixed depths that aren't 0.
+// target (a controller's while it's assigned), then its fixed depths that aren't 0 or at their
+// Init values.
 let builtIns = (get: string => float, key) => {
   let source = ModMatrix.sourceIndex(key)
   let slotRoutes = slotSets->Array.flatMap(((k, prefix, list)) =>
@@ -217,9 +226,17 @@ let builtIns = (get: string => float, key) => {
         })
   )
   let depths = fixedDepths(key)->Array.filterMap(((amount, label, targets)) =>
-    get(amount) != 0. ? Some({key, source, via: Depth, label, amount, targets}) : None
+    get(amount) != 0. && !isDefault(get, amount) ? Some({key, source, via: Depth, label, amount, targets}) : None
   )
   [...slotRoutes, ...depths]
+}
+
+// Source key's fixed depths that sit at their Init values, which aren't 0.
+let atDefaults = (get: string => float, key) => {
+  let source = ModMatrix.sourceIndex(key)
+  fixedDepths(key)->Array.filterMap(((amount, label, targets)) =>
+    get(amount) != 0. && isDefault(get, amount) ? Some({key, source, via: Depth, label, amount, targets}) : None
+  )
 }
 
 // Everything source key moves, read with get: Oatmeal's own routings, then the matrix's
@@ -234,6 +251,9 @@ let all = get => {
     ...connections->Array.filter(r => r.key == key),
   ])
 }
+
+// Every fixed depth at its Init value, source by source.
+let allAtDefaults = get => Lazy.get(sourceKeys)->Array.flatMap(atDefaults(get, _))
 
 // The parameters that can change what source key moves.
 let fromIds = key => [

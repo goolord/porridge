@@ -1,5 +1,6 @@
 // A source's destinations as chips, one per route leaving it in any system (Modulators.from):
-// its Oatmeal slots or fixed depths, and the matrix's connections. Each chip, in the source's
+// its Oatmeal slots or fixed depths, and the matrix's connections, then quietly its fixed depths
+// at their Init values (Modulators.atDefaults), which nothing else marks. Each chip, in the source's
 // colour, shows what it moves and how much: drag it sideways to change the amount (shift for fine
 // steps, double-click to type one, or the arrow keys), × (or Delete) takes the route out. "+"
 // offers the source's own targets (Oatmeal's list for its slots, or its fixed depths) and then the
@@ -138,9 +139,10 @@ let make = (ctx: Ctx.t, parent, key, box: box, ~wide=false) => {
     | Slot(target) => `Oatmeal's own slot ${String.slice(target, ~start=String.length(target) - 1)}`
     | Depth => "Oatmeal's own depth"
     }
-  let chip = (r: Modulators.route) => {
+  // (a fixed depth at its Init value is drawn quietly: every program has it)
+  let chip = (r: Modulators.route, ~atDefault) => {
     let def = model->ParamModel.def(r.amount)
-    let e = el("div", ~cls="dchip", ~parent=root)
+    let e = el("div", ~cls=atDefault ? "dchip dflt" : "dchip", ~parent=root)
     e->setTabIndex(0)
     el("i", ~cls="sw", ~parent=e)->setStyle("background", colour)
     el("span", ~cls="dl", ~text=r.label, ~parent=e)->ignore
@@ -150,7 +152,7 @@ let make = (ctx: Ctx.t, parent, key, box: box, ~wide=false) => {
     fill->setStyle("background", colour)
     let x = el("b", ~cls="dx", ~text="×", ~parent=e)
     let status = ctx.status->Status.live(e, () =>
-      `${sourceLabel()} → ${r.label}: ${def.valueText(get(r.amount))} (${systemOf(r)}). Drag sideways to change it, shift for fine steps, double-click to type it; × takes it out`
+      `${sourceLabel()} → ${r.label}: ${def.valueText(get(r.amount))} (${systemOf(r)}${atDefault ? ", at Init's value" : ""}). Drag sideways to change it, shift for fine steps, double-click to type it; × takes it out`
     )
     let update = () => {
       let a = get(r.amount)
@@ -229,11 +231,12 @@ let make = (ctx: Ctx.t, parent, key, box: box, ~wide=false) => {
   let updates = ref([])
   let refresh = () => {
     let routes = Modulators.from(get, key)
-    let routeKey = routes->Array.map(r => r.amount ++ ":" ++ r.label)->Array.join(",")
+    let defaults = Modulators.atDefaults(get, key)
+    let routeKey = [...routes, ...defaults]->Array.map(r => r.amount ++ ":" ++ r.label)->Array.join(",") ++ "/" ++ Int.toString(Array.length(defaults))
     if routeKey != shown.contents && !dragging.contents {
       shown := routeKey
       root->querySelectorAll(".dchip:not(.add)")->nodesToArray->Array.forEach(remove)
-      updates := routes->Array.map(chip)
+      updates := [...routes->Array.map(chip(_, ~atDefault=false)), ...defaults->Array.map(chip(_, ~atDefault=true))]
       // (+ after them)
       root->appendChild(add)
     } else {

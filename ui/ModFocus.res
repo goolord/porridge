@@ -71,7 +71,9 @@ let apply = (model, s) => {
         tab->style->setProperty("--mc", colour)
         s.litTabs->Array.push(tab)
       })
-      if entry.counted {
+      // (a route's amount in the Mod page's list lights, but isn't counted: the page where the
+      // parameter has its own control counts it)
+      if entry.counted && entry.el->closest(".conn") == None {
         let page = entry.el->closest(".pv-page")
         s.pages->Array.forEachWithIndex(((p, _), i) =>
           if page->Option.mapOr(false, page => page === p) {
