@@ -71,6 +71,41 @@ These override anything below that disagrees.
 
 ---
 
+## Status (2026-10-02, after rounds 1 and 2)
+
+Done, on main:
+- Phase 1: tab marks (ui/Features.res), empty slots collapsed to "+", one switch per effect, no
+  idle effect cards, duplicates removed, prose turned into "?" tips, the header (‹ name ›, A/B,
+  Browse, Random, panic, ≡, gear), structural parameters out of the host list, undo/redo.
+- Phase 2: one connections list with Oatmeal's built-in routes (those at their Init values folded
+  away), source editors in the Mod page's bay, source focus across pages, one vocabulary, a menu on
+  every control (ctrl+right-click; right-click still resets).
+- Phase 3: four pages (Synth, Mod, FX, Play); the Synth page's voice flow and destination chips; the
+  FX strip as the signal path; the Play page (macros, XY, arpeggiator, wheels, MIDI input, patch
+  summary); the shapes editor as an overlay.
+- Phase 4: filter, distortion and space pickers by family; rare values under "more"; HQ waves by
+  default; consistent LFO names.
+- Phase 5, in part: cached routing scans (-10 to -12 % per voice, bit-exact), MPE mode (controllers
+  once a block: -47 % on a dense MPE stream), MIDI dispatch as a switch (-83 % of the rest), rack
+  copies 4 to 3 with load-time migration and stable CLAP ids, a shared buffer pool (82.4 to 51.7 MB
+  per instance).
+- Phase 6: ctrl+K search and commands, A/B compare, keyboard nudging; the random generator draws user
+  waves and routes the XY pad and the voice lane; Vanilla rebuilt around the voice lane.
+
+Metrics now (Init): 24 parameter controls on the Synth page; 18 Synth tabs, marked when in use (with
+Decision 1 keeping the envelopes and LFOs there, the marks matter more than the count, so that target
+is dropped); 0 permanent prose lines; 13 header controls (9 without the page tabs); 12 entries on the
+filter menu's first level; 879 host-visible parameters (the rest are effect copies 2-3's sound
+parameters, kept automatable); 51.7 MB per instance (45 MB would mean cutting reachable delay or
+convolver capacity).
+
+Not done yet:
+- DSP merges of the measured-identical filter and distortion types, Bode with the key shifter, and a
+  single convolver instance: the pickers already offer each sound once, so what's left is memory,
+  parameters and code size, not UX.
+- Oversampling as an HQ switch: waits for the oversampling-gain fix in the DSP bug session.
+- Free stacking: see Phase 5b (make CLAP ids independent of endpoint order first).
+
 ## 1. Diagnosis (evidence)
 
 ### 1.1 Everything has the same weight
