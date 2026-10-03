@@ -42,7 +42,7 @@ let clipboard = ref(None)
 //
 // A right-click keeps doing what it always has (resetting a knob or a switch, stepping a list):
 // it's the quickest reset there is, Oatmeal's, and the one the hints teach, and a menu in its
-// place would make every reset two clicks and put the host's double right-click behind a menu
+// place would make every reset two clicks and put the host's shift+right-click behind a menu
 // that's in the way. So the menu is on ctrl+right-click (or the menu key, or shift+F10, on a
 // control with the keyboard's focus); the pages' hints say so.
 let contextMenu = (c, e, ~x, ~y) => {
@@ -98,7 +98,7 @@ let contextMenu = (c, e, ~x, ~y) => {
       item("Reset to default", 2, ~rule=true, ~keys="right-click"),
       item("Copy value", 3),
       item("Paste value", 4, ~disabled=clipboard.contents == None),
-      item("Host menu…", 5, ~rule=true, ~keys="double right-click", ~disabled=!(ctx.hostMenu->HostMenu.has(id))),
+      item("Host menu…", 5, ~rule=true, ~keys="shift+right-click", ~disabled=!(ctx.hostMenu->HostMenu.has(id))),
     ],
     -1,
     v =>
@@ -115,8 +115,8 @@ let contextMenu = (c, e, ~x, ~y) => {
   )
 }
 
-// A control's menu on ctrl+right-click (and from the keyboard), and the host's menu on a double
-// right-click (see HostMenu). Hook them before the control's own pointer handlers, which a
+// A control's menu on ctrl+right-click (and from the keyboard), and the host's menu on a
+// shift+right-click (see HostMenu). Hook them before the control's own pointer handlers, which a
 // ctrl+right-click never reaches.
 let hookMenus = (c, e) => {
   e->onPointerCapture(#pointerdown, ev =>
@@ -136,16 +136,18 @@ let hookMenus = (c, e) => {
   c.ctx.hostMenu->HostMenu.attach(c.ctx.model, e, c.id)
 }
 
-// The host's menu on a double right-click on e, which edits the parameters ids() gives (a graph's
-// point): of one the host lists, it opens straight away; of several, a menu picks which first.
+// The host's menu on a shift+right-click on e, which edits the parameters ids() gives (a graph's
+// point): of one the host lists, it opens straight away; of several, a menu at the pointer picks
+// which first.
 let hostMenuFor = (ctx: Ctx.t, e, ids) =>
-  ctx.hostMenu->HostMenu.attachMany(ctx.model, e, ids, ~open_=(listed, x, y) => {
+  ctx.hostMenu->HostMenu.attachMany(e, ids, ~open_=(listed, x, y) => {
     let show = id => ctx.hostMenu->HostMenu.showAt(ctx.model, id, ~x, ~y)
     switch listed {
     | [id] => show(id)
     | _ =>
-      ctx.menu->Menu.show(
-        e,
+      ctx.menu->Menu.showAtClient(
+        ~x,
+        ~y,
         listed->Array.mapWithIndex((id, i) => {
           Menu.label: (ctx.model->ParamModel.def(id)).name,
           value: i,
@@ -159,7 +161,7 @@ let hostMenuFor = (ctx: Ctx.t, e, ids) =>
 
 // A control's element: focusable, with its label (after an on/off box, with ~box), showing the
 // parameter's status text while hovered, its menu on ctrl+right-click and the host's menu on a
-// double right-click. Search finds it where it is (Reach).
+// shift+right-click. Search finds it where it is (Reach).
 // (more: what the status text says after the parameter's own)
 let frame = (ctx: Ctx.t, parent, id, ~cls, ~x, ~y, ~w=?, ~label=?, ~labelCls=?, ~box=false, ~more=() => "") => {
   let e = el("div", ~cls, ~parent)->place(x, y, ~w?)

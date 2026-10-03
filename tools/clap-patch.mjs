@@ -18,7 +18,7 @@
 //    "porridge:library?" and the plugin answers with "porridge:library" values; see
 //    tools/clap/PorridgeLibrary.h and ui/BankLibrary.res.
 //  - The host's menu for a parameter (CLAP's context-menu extension; in FL Studio it has
-//    Create automation clip, Link to controller and so on), which a double right-click on a
+//    Create automation clip, Link to controller and so on), which a shift+right-click on a
 //    control opens. The view asks through the same bridge, with keys that start with
 //    "porridge:host?": ?get is answered with a "porridge:host" state value
 //    { menu: <whether the host can show it> }; ?menu=<json> { id, x, y, scale } shows it for

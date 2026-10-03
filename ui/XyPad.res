@@ -26,7 +26,7 @@ let make = (ctx: Ctx.t, parent, area) => {
   let box = {x: area.x + (area.w - side) / 2., y: area.y + (area.h - side) / 2., w: side, h: side}
   let s = Plots.svg(parent, box)
   s->addClass("draw")
-  // the host's menu for X or Y on a double right-click (before the drags below)
+  // the host's menu for X or Y on a shift+right-click (before the drags below)
   Controls.hostMenuFor(ctx, s, () => ["XY_X", "XY_Y"])
   let svgEl = svgEl(s, ...)
   Plots.background(s, box)

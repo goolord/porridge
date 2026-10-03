@@ -1147,7 +1147,7 @@ let lfo3Specs = [
 ]
 
 // The on-screen pitch and mod wheels (Wheels.res) as host parameters, so that hosts can record
-// and play back their moves and link controllers to them (their menu on a double right-click).
+// and play back their moves and link controllers to them (their menu on a shift+right-click).
 // A change of either plays as channel 1's pitch bend or mod wheel (CC 1) would, whatever channels
 // MIDI_Channel_n let in (dsp/Synth.cmajor handleWheel). They are performance state, not part of
 // the sound (isPerformance): programs, presets, banks, Oatmeal exports, the random patches and

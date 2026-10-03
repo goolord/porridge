@@ -2,7 +2,7 @@
 // (PorridgeParams.wheelSpecs), which plays as channel 1's pitch bend or controller 1 would, so
 // they drive the bend range, the mod wheel's CC targets and the modulation matrix's sources; and
 // hosts record a drag (a gesture) as automation, play it back (the wheels follow), and have their
-// menu for it on a double right-click (in FL Studio: create an automation clip, link a
+// menu for it on a shift+right-click (in FL Studio: create an automation clip, link a
 // controller). They are playing, not the program: moving them is no undo step and no edit.
 // The pitch wheel springs back to the centre when it's let go; the mod wheel stays put.
 // Middle click (or ctrl-click) resets a wheel; scrolling moves the mod wheel.
@@ -26,7 +26,7 @@ let wheel = (ctx: Ctx.t, parent, box, kind) => {
   let track = {...box, h: box.h - labelHeight}
   let s = Plots.svg(parent, box)
   s->addClass("draw")
-  // the host's menu for the wheel's parameter on a double right-click (before the drags below)
+  // the host's menu for the wheel's parameter on a shift+right-click (before the drags below)
   Controls.hostMenuFor(ctx, s, () => [id])
   let svgEl = svgEl(s, ...)
   Plots.background(s, track)

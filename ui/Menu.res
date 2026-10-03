@@ -275,3 +275,11 @@ let showAt = (t, parent, ~x, ~y, items, current, onPick) => {
   show(t, anchor, items, current, onPick)
   anchor->remove
 }
+
+// Shows a menu at a point on the screen (client coordinates: a pointer's), as if below an anchor
+// there.
+let showAtClient = (t, ~x, ~y, items, current, onPick) => {
+  let r = t.root->getBoundingClientRect
+  let s = r.width / t.root->offsetWidth
+  showAt(t, t.root, ~x=(x - r.left) / s, ~y=(y - r.top) / s, items, current, onPick)
+}

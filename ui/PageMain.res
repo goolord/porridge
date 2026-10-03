@@ -7,7 +7,7 @@
 
 open! Web
 
-let hint = "Drag or scroll to change a value, shift for fine steps. Double-click to type, right-click to reset, ctrl+right-click for more (modulate, copy, host menu). Click a list to pick from it, right-click to step through it."
+let hint = "Drag or scroll to change a value, shift for fine steps. Double-click to type, right-click to reset, ctrl+right-click for more (modulate, copy), shift+right-click for the host's menu. Click a list to pick from it, right-click to step through it."
 
 let (margin, gap) = (6., Grid.gap)
 let flowHeight = 30.
