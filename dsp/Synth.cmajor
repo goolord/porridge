@@ -109,6 +109,7 @@ namespace porridge
         FxPool fxPool;
         int[numPooled] poolAt, poolSize;
         int poolMarks;
+        bool poolDirty = true;                      // a parameter or the tempo changed since the last claim
         int[5] spaceBlocks;
         int[3] ambBlocks;
 
@@ -297,6 +298,7 @@ namespace porridge
         {
             P.at (c.slot) = c.value;
             paramsChanged = true;
+            poolDirty = true;
         }
 
         event shapeIn (Shape s)
@@ -328,7 +330,7 @@ namespace porridge
             keySemitones = t.semitones;
         }
 
-        event tempoIn (std::timeline::Tempo t)          { if (t.bpm > 0) bpm = t.bpm; }
+        event tempoIn (std::timeline::Tempo t)          { if (t.bpm > 0) bpm = t.bpm; poolDirty = true; }
         event panicIn (int x)                           { panicPending = true; }
 
         /// The view asks for n readings of the output's level (each 512 frames' K-weighted mean
@@ -577,13 +579,23 @@ namespace porridge
             }
         }
 
-        /// Swaps slot g's values with its kind's working parameters, so that the kind's code runs
-        /// the slot; swapping again puts both back.
-        void swapSlot (int g, int kind)
+        /// Puts slot g's values in its kind's working parameters, so that the kind's code runs
+        /// the slot: Porridge's own kinds' working parameters are theirs alone, and take a copy;
+        /// Oatmeal's chorus, delay, reverb, EQ and distortion's are its own effects', which the
+        /// slot's values are swapped with (leaveSlot swaps them back).
+        void enterSlot (int g, int kind)
         {
             let n = rack::knobs.at (kind);
             let q = rack::q + g * rack::slotKnobs;
             let w = kind * rack::slotKnobs;
+
+            if (rack::own.at (kind))
+            {
+                for (int i = 0; i < n; ++i)
+                    P.at (rack::work.at (w + i)) = P.at (q + i);
+
+                return;
+            }
 
             for (int i = 0; i < n; ++i)
             {
@@ -592,6 +604,12 @@ namespace porridge
                 P.at (a) = P.at (q + i);
                 P.at (q + i) = x;
             }
+        }
+
+        void leaveSlot (int g, int kind)
+        {
+            if (! rack::own.at (kind))
+                enterSlot (g, kind);
         }
 
         /// Runs one of Oatmeal's four effects (0 chorus, 1 delay, 2 reverb, 3 EQ).
@@ -645,13 +663,13 @@ namespace porridge
                 return active;
 
             var out = active;
-            swapSlot (g, kind);
+            enterSlot (g, kind);
 
             // every kind's first parameter is its switch
             if (P.at (rack::work.at (kind * rack::slotKnobs)) != 0)
                 out = runKind (kind, k, g, active);
 
-            swapSlot (g, kind);
+            leaveSlot (g, kind);
             return out;
         }
 
@@ -971,9 +989,9 @@ namespace porridge
                     if (id >= 0 && need.at (id) == 0)
                     {
                         let kind = rack::kindOf.at (fx);
-                        swapSlot (int (k), kind);
+                        enterSlot (int (k), kind);
                         need.at (id) = max (1, poolNeeds (id));
-                        swapSlot (int (k), kind);
+                        leaveSlot (int (k), kind);
                         slotOf.at (id) = int (k);
                     }
                 }
@@ -4033,7 +4051,7 @@ namespace porridge
                     continue;
 
                 let g = rack::slots.size + s;
-                swapSlot (g, kind);
+                enterSlot (g, kind);
 
                 // every kind's first parameter is its switch (the distortion's, its type)
                 if (P.at (rack::work.at (kind * rack::slotKnobs)) != 0)
@@ -4073,7 +4091,7 @@ namespace porridge
                     voiceLanes.at (laneSlots * v.index + s).fresh = false;
                 }
 
-                swapSlot (g, kind);
+                leaveSlot (g, kind);
             }
         }
 
@@ -4435,8 +4453,15 @@ namespace porridge
                 firsts[k] = fxOrders.at (order * 4 + k);
 
             int numFirsts = 0;
-            bool[rack::numEntries] ran;     // the copies already run, by their rack values
-            claimPool();
+            bool[rack::numEntries] ran;     // the slots' instances already run, by their rack values
+
+            // (what the effects need follows their parameters and the tempo only: the matrix
+            // reaches none of the lengths, sizes and models)
+            if (poolDirty)
+            {
+                poolDirty = false;
+                claimPool();
+            }
 
             for (wrap<rack::slots.size> k)
             {

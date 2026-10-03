@@ -327,6 +327,9 @@ ${rackKinds.map ((k, i) => `    let ${k.key}Kind = ${i};`).join ("\n")}
     /// whether each kind runs in the rack, and in the voice lane (PorridgeParams' runsIn)
     let inRack = bool[${rackKinds.length}] (${rackKinds.map (k => k.runsIn !== "LaneOnly").join (", ")});
     let inLane = bool[${rackKinds.length}] (${rackKinds.map (k => k.runsIn !== "Rack").join (", ")});
+    /// whether a kind's working parameters are its alone (Porridge's own kinds), or one of
+    /// Oatmeal's effects' (its chorus, delay, reverb, EQ and distortion)
+    let own = bool[${rackKinds.length}] (${rackKinds.map (k => k.firstInRack).join (", ")});
     let knobs = int[${knobs.length}] (${knobs.join (", ")});
     let work = int[${work.length}] (${work.join (", ")});
     let row = int[${row.length}] (${row.join (", ")});
