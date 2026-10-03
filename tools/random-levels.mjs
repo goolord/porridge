@@ -1,7 +1,7 @@
 // Measures what the random patches' level estimate needs (ui/random/PatchGen.res: `loudness`),
 // rendering through the test host with the output gain at 1:
 //
-//   --tables   the levels of the waveforms, of the noise source by its resonance, and what each
+//   --tables   the levels of the waveforms, of the noise source by its resonance and its type, and what each
 //              distortion type and each filter type (for a saw and for a sine, with the cutoff
 //              from 2 octaves under the note to 5 over, and with resonance) do to a note's level;
 //              written to ui/random/LevelTables.res
@@ -22,6 +22,7 @@ import * as Preset from "../ui/Preset.res.mjs";
 import * as FilterTypes from "../ui/FilterTypes.res.mjs";
 import * as DistTypes from "../ui/DistTypes.res.mjs";
 import * as FxRack from "../ui/FxRack.res.mjs";
+import * as PorridgeParams from "../ui/PorridgeParams.res.mjs";
 import * as PatchGen from "../ui/random/PatchGen.res.mjs";
 import { root, outDir, host, kWeight, loudest } from "./test/lib.mjs";
 
@@ -102,6 +103,8 @@ if (args.includes ("--tables"))
     const noiseRes = [0, 0.3, 0.5, 0.7, 0.8, 0.9, 0.95];
     const pregains = [-24, -12, -6, 0, 6, 12, 18, 24, 30, 36, 42];
     const types = FilterTypes.all.length, drives = 17, waves = 9;
+    // (the sample is left out: what it plays is a file's)
+    const noiseTypes = PorridgeParams.noiseTypes.length - 1;
     const hz60 = 440 * 2 ** (-9 / 12);
     const plain = { Filter: 0, Sustain: 1, Attack: 1, Decay2: 1000, Release: 100, F_EnvMod: 0, F_Track: 0 };
     const note = changes => () => level (withValues ({ ...plain, ...changes }), 60);
@@ -109,6 +112,7 @@ if (args.includes ("--tables"))
     const tasks = [
         ...Array.from ({ length: waves }, (_, w) => note ({ O1_Waveform: w })),
         ...noiseRes.map (res => note ({ O1_Amp: 0, N_Amp: 1, N_Resonance: res })),
+        ...Array.from ({ length: noiseTypes }, (_, t) => note ({ O1_Amp: 0, N_Amp: 1, N_Type: t })),
         ...Array.from ({ length: drives }, (_, t) => pregains.map (pre =>
             note ({ O1_Waveform: 6, Sat_Type: t, Sat_Mode: 1, Sat_Pregain: pre, Sat_Postgain: 0 }))).flat (),
         ...Array.from ({ length: types }, (_, t) => [
@@ -122,6 +126,7 @@ if (args.includes ("--tables"))
     const take = n => { const r = results.slice (at, at + n); at += n; return r; };
     const waveLevels = take (waves);
     const noise = take (noiseRes.length);
+    const noiseTypeLevels = take (noiseTypes);
     const [saw, sine] = [waveLevels[6], waveLevels[0]];
     // (the distortion's output level for each input level: the saw's, raised by the pregain)
     const drive = Array.from ({ length: drives }, () => take (pregains.length));
@@ -149,6 +154,10 @@ let waves = ${list (waveLevels)}
 // the noise source's level alone at 0 dB, at these resonances
 let noiseResonances = ${axis (noiseRes)}
 let noise = ${list (noise)}
+
+// each noise type's level alone at 0 dB, with no resonance (N_Type, the sample left out; the
+// crackle at its default density)
+let noiseTypes = ${list (noiseTypeLevels)}
 
 // each distortion type's output level (Sat_Type, per voice after the filter, with no postgain)
 // for a saw going in at these levels (its own, raised by the pregain)

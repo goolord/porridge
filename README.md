@@ -128,8 +128,8 @@ tools/
                           the test host's field table and manifest
   bundle.mjs              bundles the compiled view and worker into bundle/
   random-levels.mjs       measures the synth's levels for the random patches' estimate, K-
-                          weighted (--tables writes ui/random/LevelTables.res: waves, noise,
-                          each filter type, each distortion type's curve) and fits the
+                          weighted (--tables writes ui/random/LevelTables.res: waves, noise
+                          and its types, each filter type, each distortion type's curve) and fits the
                           estimate's weights to renders of random patches (uses the test host)
   clap/                   the C++ clap-patch.mjs adds: PorridgeBridge.h (settings, the host's
                           menu, the view's requests), PorridgeLibrary.h (the bank library:

@@ -9,7 +9,11 @@ let waves = [-6.5, -11.7, -7.4, -8.3, -6.5, -0.4, -11.8, -7.4, -8.3]
 
 // the noise source's level alone at 0 dB, at these resonances
 let noiseResonances = [0.0, 0.3, 0.5, 0.7, 0.8, 0.9, 0.95]
-let noise = [-4.3, -10.6, -7.5, -2.5, 1.3, 6.4, 8.2]
+let noise = [-4.3, -10.6, -7.5, -2.9, 0.7, 6.4, 9.3]
+
+// each noise type's level alone at 0 dB, with no resonance (N_Type, the sample left out; the
+// crackle at its default density)
+let noiseTypes = [-4.3, -7.5, -11.0, -4.0, -4.0, -29.0, -5.8, -5.0]
 
 // each distortion type's output level (Sat_Type, per voice after the filter, with no postgain)
 // for a saw going in at these levels (its own, raised by the pregain)
