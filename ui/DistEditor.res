@@ -101,8 +101,10 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement, ~perVoice: unit
     | _ =>
       let oversample = Float.toInt(get("Sat_Oversample"))
       let os = FxDsp.oversampleGain(~oat=oat(), oversample)
-      // (the model runs at the oversampled rate, up to 4x here)
-      let sr = modelRate * Int.toFloat(Math.Int.min(4, Math.Int.max(1, [1, 2, 4, 8][oversample]->Option.getOr(1))))
+      // (the model runs at the oversampled rate, up to 4x here: Oatmeal's in Oat mode, HQ's 4x
+      // otherwise)
+      let factor = oversample <= 0 ? 1 : oat() ? [1, 2, 4, 8][oversample]->Option.getOr(1) : 4
+      let sr = modelRate * Int.toFloat(Math.Int.min(4, factor))
       let pre = Math.pow(10., ~exp=(get("Sat_Pregain") - get("Sat_Limit")) / 20.)
       let post = Math.pow(10., ~exp=(get("Sat_Limit") + get("Sat_Postgain")) / 20.)
       let mix = get("Sat_Mix")
@@ -413,7 +415,20 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement, ~perVoice: unit
   if placement {
     s->Grid.choice("Sat_Mode", 2, 0, "where", ~span=2)
   }
-  s->Grid.choice(id("Sat_Oversample"), first, 0, "oversample")
+  // the oversampling: one switch, HQ (4x, which an Oatmeal export writes as such); in Oat mode
+  // Oatmeal's list, whose 2x, 4x and 8x each sound as Oatmeal's do
+  s->Grid.at(first, 0, id("Sat_Oversample"), b => {
+    let hq = el("div", ~parent=settings.el)
+    Controls.toggle(ctx, hq, id("Sat_Oversample"), ~x=b.x, ~y=b.y, ~w=b.w, ~label="HQ", ~on=2.)
+    let list = el("div", ~parent=settings.el)
+    Controls.choice(ctx, list, id("Sat_Oversample"), ~x=b.x, ~y=b.y, ~w=b.w, ~label="oversample")
+    let show = () => {
+      hq->setStyle("display", oat() ? "none" : "")
+      list->setStyle("display", oat() ? "" : "none")
+    }
+    model->ParamModel.listen("Oat_Mode", show)
+    show()
+  })
   s->Grid.param(id("Sat_Pregain"), first + 1, 0, "pregain")
   s->Grid.param(id("Sat_Limit"), first + 2, 0, "limit")
   s->Grid.param(id("Sat_Postgain"), first + 3, 0, "postgain")

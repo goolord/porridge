@@ -677,10 +677,11 @@ let picker = (ctx: Ctx.t, parent, ~x, ~y, ~w, ~label, ~text, ~items, ~current, ~
 
 // An on/off box with a label. With a width, it fills it (as in a grid cell); without, it
 // is as wide as its label.
-let toggle = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=?, ~label=?) => {
+// (on: the value it sets when switched on; any value but 0 shows as on)
+let toggle = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=?, ~label=?, ~on=1.) => {
   let (c, e) = frame(ctx, parent, id, ~cls="tg", ~x, ~y, ~w?, ~label?, ~box=true)
 
-  let flip = () => gestureSet(c, current(c) != 0. ? 0. : 1.)
+  let flip = () => gestureSet(c, current(c) != 0. ? 0. : on)
   let update = () => {
     e->toggleClass("on", current(c) != 0.)
     refreshStatus(c)

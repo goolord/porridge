@@ -307,10 +307,6 @@ let rackKind = key =>
   | "air" => Some(wide([Line("M1 11.5 H9 C12.5 11.5 12.5 6 16 6 H21"), Line("M17.5 0.5 V4 M15.75 2.25 H19.25"), Dot(13., 2.5, 0.8), Dot(20.5, 2., 0.8)]))
   | "compressor" => Some(wide([Line("M2 14.5 L10.5 6 C13 3.5 16 3 20 2.6"), Dash("M10.5 6 L15 1.5")]))
   | "utility" => Some(wide([Line("M2 3.5 H20 M2 8 H20 M2 12.5 H20"), Fill("M12.5 1.5 h3 v4 h-3 Z"), Fill("M5 6 h3 v4 h-3 Z"), Fill("M9.5 10.5 h3 v4 h-3 Z")]))
-  // the key shifter: a note's partials (dashed) each moved up by the same share of its pitch,
-  // so that they stay spread alike
-  | "shifter" =>
-    Some(wide([Dash("M2 14.5 V6 M5.5 14.5 V8.5 M9 14.5 V10.5"), Line("M4.5 14.5 V6 M9.5 14.5 V8.5 M14.5 14.5 V10.5"), Line("M13 3 H20.5 M18.5 1 L20.5 3 L18.5 5")]))
   // the resonator: a struck note ringing away
   | "resonator" =>
     Some(wide([Line("M1 8 Q2.5 -3 4 8 Q5.5 17 7 8 Q8.5 1.2 10 8 Q11.5 12.8 13 8 Q14.5 4.8 16 8 Q17.5 9.8 19 8 L21 8")]))

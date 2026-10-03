@@ -1,5 +1,6 @@
 // The voice lane (dsp/VoiceFx.cmajor): every kind it runs sounds, stays bounded and falls silent
-// in each voice; the shifter and the filter's tracking follow each note's key; a resonator after
+// in each voice; the frequency shifter's ratio and the filter's tracking follow each note's key
+// (and on the whole sound, the shifter's the newest note's); a resonator after
 // the amp envelope rings on past its end (the voice lingers until it's quiet), one before it
 // doesn't; moving the amp after a lane distortion changes what it hears. Renders through the
 // test host.
@@ -36,7 +37,7 @@ const kinds = [
     ["phaser", "phaser", { Ph_On: 1, Ph_Feedback: 0.8 }],
     ["flanger", "flanger", { Fl_On: 1, Fl_Feedback: 0.9 }],
     ["utility", "utility", { Ut_On: 1, Ut_Pan: 0.5, Ut_Gain: -6 }],
-    ["shifter", "shifter", { Sh_On: 1, Sh_Mode: 2 }],
+    ["freq shifter", "bode", { Bd_On: 1, Bd_Ratio: 0.5, Bd_Mode: 2, Bd_Feedback: 0.8 }],
     ["resonator", "resonator", { Rs_On: 1, Rs_Decay: 0.8, Rs_Model: 4 }],
 ];
 for (const [name, value, sets] of kinds)
@@ -67,14 +68,18 @@ for (const [name, value, sets] of kinds)
     check (lift > 9 && Math.abs (low) < 1, `EQ in each voice: 1 kHz harmonic ${lift.toFixed (1)} dB, fundamental ${low.toFixed (1)} dB`);
 }
 
-// the shifter follows the key: half the note up moves 220 Hz to 330 and 440 Hz to 660
+// the frequency shifter's ratio follows the key: half the note up moves 220 Hz to 330 and 440 Hz
+// to 660 (with 50 Hz more from the shift), in each voice, and on the whole sound for the newest note
+for (const [where, slot] of [["in each voice", "VL_1"], ["on the whole sound", "FX_Rack_5"]])
 {
-    const sine = { O1_Waveform: 0, VL_1: entry ("shifter"), Sh_On: 1, Sh_Ratio: Math.cbrt (0.25), Sh_Mix: 1 };
+    const shift = Math.cbrt (50 / 5000);
+    const sine = { O1_Waveform: 0, [slot]: entry ("bode"), Bd_On: 1, Bd_Ratio: Math.cbrt (0.25), Bd_Shift: shift, Bd_Mix: 1 };
     const [a] = play ([[0, 57, 1]], sine, 1);
     const [b] = play ([[0, 69, 1]], sine, 1);
-    const lowGain = at (a, 330, 0.3) - at (a, 220, 0.3);
-    const highGain = at (b, 660, 0.3) - at (b, 440, 0.3);
-    check (lowGain > 30 && highGain > 30, `shifter: 220 Hz → 330 Hz (${lowGain.toFixed (1)} dB over 220), 440 Hz → 660 Hz (${highGain.toFixed (1)} dB over 440)`);
+    const lowGain = at (a, 380, 0.3) - at (a, 220, 0.3);
+    const highGain = at (b, 710, 0.3) - at (b, 440, 0.3);
+    check (lowGain > 30 && highGain > 30,
+           `freq shifter ${where}: 220 Hz → 380 Hz (${lowGain.toFixed (1)} dB over 220), 440 Hz → 710 Hz (${highGain.toFixed (1)} dB over 440)`);
 }
 
 // the filter's tracking: a lowpass at middle C tracking fully takes a note's 4th harmonic down by

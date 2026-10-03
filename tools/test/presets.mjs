@@ -8,7 +8,9 @@
 //   - modulations, macro names and microtunings survive a round trip;
 //   - Porridge's extra list values export as Oatmeal's nearest, and are reported;
 //   - the retired fourth copies keep their numbers, and programs that used one load it onto a
-//     free copy, or without it and a warning.
+//     free copy, or without it and a warning;
+//   - the retired key shifter loads as the frequency shifter (a free Bode copy, its ratio of the
+//     note, its offset as the shift), connections and all, or without it and a warning.
 //
 // run: node tools/test/presets.mjs
 
@@ -187,7 +189,8 @@ else
 // The rack's fourth copies (the fifth distortion) are retired: their rack values and modulation
 // targets keep their numbers and run or move nothing, and no menu offers them
 {
-    const retiredValues = [7, 10, 13, 16, 20, 24, 28, 32, 36, 42, 46, 50, 54, 58];
+    // (and the key shifter's two, which the frequency shifter took in)
+    const retiredValues = [7, 10, 13, 16, 20, 24, 28, 32, 36, 42, 46, 50, 54, 58, 59, 60];
     if (PorridgeParams.rackEntries.length !== 65) fail (`the rack has ${PorridgeParams.rackEntries.length} values, not 65`);
     PorridgeParams.rackEntries.forEach ((e, v) =>
     {
@@ -200,9 +203,13 @@ else
     const targets = { C4_Mix: 65, D4_Wet: 68, Sat5_Pregain: 75, D4_Rotation: 144, Ff4_Track: 449, Fl4_Track: 477 };
     for (const [key, i] of Object.entries (targets))
         if (ModMatrix.targetIndex (key) !== i || ModMatrix.targets[i].law !== "Retired") fail (`target ${key} isn't retired at ${i}`);
-    // (the oscillators' morph and phase distortion came after, at 484 .. 487)
-    if (ModMatrix.targets.length !== 488) fail (`${ModMatrix.targets.length} targets, not 488`);
+    // (the oscillators' morph and phase distortion came after, at 484 .. 487, then the frequency
+    // shifter's ratio of the note; the key shifter's targets are retired in their places)
+    if (ModMatrix.targets.length !== 491) fail (`${ModMatrix.targets.length} targets, not 491`);
     if (ModMatrix.targetIndex ("O1_Morph") !== 484 || ModMatrix.targetIndex ("O2_PD") !== 487) fail ("the osc shape targets moved");
+    if (ModMatrix.targetIndex ("Bd_Ratio") !== 488 || ModMatrix.targetIndex ("Bd3_Ratio") !== 490) fail ("the frequency shifter's ratio targets");
+    for (const [key, i] of Object.entries ({ Sh_Ratio: 450, Sh_Hz: 451, Sh_Mix: 452, Sh2_Mix: 455 }))
+        if (ModMatrix.targetIndex (key) !== i || ModMatrix.targets[i].law !== "Retired") fail (`target ${key} isn't retired at ${i}`);
     if (! ModMatrix.targets.every (t => (t.law === "Retired") === PorridgeParams.isRetiredId (t.key))) fail ("a retired copy's target moves something");
     if (ParamDefs.makeDefs ().some (d => PorridgeParams.isRetiredId (d.id))) fail ("a retired copy keeps its parameters");
 }
@@ -258,6 +265,58 @@ else
     const stored = Preset.decodeNamedBank (JSON.stringify ({ porridge: "bank", version: 1, name: "b", presets: [
         { name: "full", params: { FX_Rack_1: value ("air", 1), FX_Rack_2: value ("air", 2), FX_Rack_3: value ("air", 3), FX_Rack_4: retired ("Air 4") } } ] }));
     if (! stored || stored[2].length !== 1 || stored[1][0].values.get ("FX_Rack_4") !== 0) fail ("the stored bank's warnings");
+}
+
+// a program with the key shifter (retired: the frequency shifter took it in) loads it as a free
+// Bode copy: its ratio of the note, its offset (±1 kHz) as the shift (±5 kHz) at cbrt (1/5) of its
+// turn, its mode and mix, no feedback; its connections follow it, an offset's amount scaled as
+// its knob. With no Bode free it's left out, and the warning says so.
+{
+    const value = (kind, copy) => FxRack.value ({ kind, copy });
+    const shifter = n => PorridgeParams.rackNames.indexOf (n === 1 ? "Shifter (retired)" : `Shifter ${n} (retired)`);
+    const load = (params, modulations = []) =>
+    {
+        const doc = { porridge: "preset", version: 1, name: "old", params, modulations };
+        const r = Preset.parseJson (JSON.stringify (doc))._0;
+        return { p: r.presets[0], warnings: r.warnings, get: id => r.presets[0].values.get (id) };
+    };
+    const target = key => ModMatrix.targetIndex (key);
+    const f = Math.fround, k = Math.cbrt (0.2);
+    const def = id => Preset.defaultValues ().get (id);
+    const near = (a, b) => Math.abs (a - b) < 1e-6;
+
+    // onto the Bode, with every setting and connection
+    let r = load ({ VL_1: shifter (1), VL_AmpAt: 1, Sh_On: 1, Sh_Ratio: 0.3, Sh_Hz: -0.5, Sh_Mode: 2, Sh_Mix: 0.7, Bd_Feedback: 0.6 },
+                  [{ source: "lfo1", target: "Sh_Hz", amount: 0.2 }, { source: "wander", target: "Sh_Ratio", amount: 0.1 },
+                   { source: "lfo2", target: "Sh2_Mix", amount: 0.3 }]);
+    if (r.get ("VL_1") !== value ("bode", 1) || r.get ("VL_AmpAt") !== 1 || r.get ("Bd_On") !== 1 || r.get ("Bd_Ratio") !== f (0.3)
+        || ! near (r.get ("Bd_Shift"), -0.5 * k) || r.get ("Bd_Mode") !== 2 || r.get ("Bd_Mix") !== f (0.7)
+        || r.get ("Bd_Feedback") !== def ("Bd_Feedback") || r.warnings.length)
+        fail (`the shifter loads as lane ${r.get ("VL_1")}, ratio ${r.get ("Bd_Ratio")}, shift ${r.get ("Bd_Shift")}, feedback ${r.get ("Bd_Feedback")}: ${r.warnings}`);
+    if (r.get ("Mod1_Target") !== target ("Bd_Shift") || ! near (r.get ("Mod1_Amount"), 0.2 * k)
+        || r.get ("Mod2_Target") !== target ("Bd_Ratio") || r.get ("Mod2_Amount") !== f (0.1) || r.get ("Mod3_Source") !== 0)
+        fail ("the shifter's connections don't follow it (or a dead one stays)");
+    if (/"Sh2?_/.test (new TextDecoder ().decode (Preset.writePreset (r.p)))) fail ("the shifter's parameters are written");
+
+    // its defaults (ratio 0.5 of the note), onto the second Bode when the first is in the rack
+    r = load ({ FX_Rack_1: value ("bode", 1), Bd_On: 1, Bd_Shift: 0.4, VL_1: shifter (1), Sh_On: 1, Bd2_Delay: 0.1 });
+    if (r.get ("VL_1") !== value ("bode", 2) || r.get ("Bd2_Ratio") !== f (0.5) || r.get ("Bd2_Shift") !== 0 || r.get ("Bd2_Mix") !== f (0.5)
+        || r.get ("Bd2_Delay") !== def ("Bd2_Delay") || r.get ("Bd_Shift") !== f (0.4) || r.get ("FX_Rack_1") !== value ("bode", 1))
+        fail (`a shifter beside the rack's Bode loads as lane ${r.get ("VL_1")}, ratio ${r.get ("Bd2_Ratio")}`);
+
+    // an offset its connections took past ±1 kHz, where the knob ended, goes further now: said
+    r = load ({ VL_1: shifter (1), Sh_On: 1, Sh_Hz: 0.4 }, [{ source: "lfo1", target: "Sh_Hz", amount: 0.4 }]);
+    if (r.get ("VL_1") !== value ("bode", 1) || r.warnings.length !== 1 || ! r.warnings[0].includes ("±1 kHz"))
+        fail (`a shifter's offset modulated past its end: ${r.warnings}`);
+
+    // two shifters with two Bodes in the rack: the first takes the third, the second has none and
+    // leaves the lane, which closes up
+    r = load ({ FX_Rack_1: value ("bode", 1), FX_Rack_2: value ("bode", 2), VL_1: shifter (1), VL_2: value ("filter", 1), VL_3: shifter (2),
+                VL_FilterAt: 3, VL_AmpAt: 3, Sh2_On: 1, Sh2_Ratio: -0.2 }, [{ source: "lfo1", target: "Sh2_Ratio", amount: 0.5 }]);
+    const lane = [1, 2, 3, 4].map (n => r.get ("VL_" + n));
+    if (lane.join () !== [value ("bode", 3), value ("filter", 1), 0, 0].join () || r.get ("VL_FilterAt") !== 2 || r.get ("VL_AmpAt") !== 2
+        || r.warnings.length !== 1 || ! r.warnings[0].includes ("Shifter 2") || r.get ("Mod1_Source") !== 0)
+        fail (`two shifters, two Bodes: lane ${lane}, filter at ${r.get ("VL_FilterAt")}: ${r.warnings}`);
 }
 
 done (`ok: ${programs.length} programs round-trip`);

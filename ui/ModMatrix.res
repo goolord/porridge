@@ -396,6 +396,10 @@ let isRetiredCopy = (group, n) => n == (group == "distortion" ? 5 : 4)
 let copyKnob = (id, label, group, n) =>
   isRetiredCopy(group, n) ? {key: id, label, group: "retired", law: Retired} : knob(id, label, group)
 
+// Targets of a kind Porridge no longer has (the key shifter, which the frequency shifter took in:
+// PorridgeParams.mergedInto), in their places.
+let retiredTargets = targets => targets->Array.map(t => {...t, group: "retired", law: Retired})
+
 let targets = [
   {key: "none", label: "none", group: "", law: Volume},
   {key: "pitch", label: "pitch ±24 st", group: "voice", law: Pitch(24.)},
@@ -704,7 +708,7 @@ let targets = [
   knob("LFO_3_Fade", "LFO 3 fade in", "lfo"),
   knob("Wander_Rate", "wander rate", "lfo"),
   ...effectTargets("fxfilter", "FX filter", [2, 3, 4], [("Ff_Track", "tracking")]),
-  ...effectTargets("shifter", "key shifter", [2], [("Sh_Ratio", "ratio"), ("Sh_Hz", "offset"), ("Sh_Mix", "mix")]),
+  ...retiredTargets(effectTargets("shifter", "key shifter", [2], [("Sh_Ratio", "ratio"), ("Sh_Hz", "offset"), ("Sh_Mix", "mix")])),
   ...effectTargets(
     "resonator",
     "resonator",
@@ -719,6 +723,7 @@ let targets = [
   knob("O1_PD", "osc 1 phase dist", "osc"),
   knob("O2_Morph", "osc 2 morph", "osc"),
   knob("O2_PD", "osc 2 phase dist", "osc"),
+  ...effectTargets("bode", "freq shifter", [2, 3], [("Bd_Ratio", "× note")]),
 ]
 
 // The target groups, by the key in each target's group, with their titles.
@@ -743,7 +748,6 @@ let groups = [
   ("utility", "utility"),
   ("ambience", "ambience"),
   ("air", "air"),
-  ("shifter", "key shifter"),
   ("resonator", "resonator"),
   ("octaver", "octaver"),
 ]

@@ -143,10 +143,10 @@ const compAttack = knob (0.1, 300), compRelease = knob (5, 3000);
 const flangerMs = knob (0.1, 20), bodeMs = knob (1, 1000), reverbSeconds = knob (0.1, 30);
 const resonatorMs = knob (10, 10000);
 const lfo3Hz = knob (0.02, 50), wanderHz = knob (0.02, 10);
-// the shifter's ratio knob for a fraction of the note (2 · knob³)
+// the frequency shifter's ratio knob for a fraction of the note (2 · knob³)
 const shiftRatio = r => Math.sign (r) * Math.cbrt (Math.abs (r) / 2);
 const resonatorModel = choices ("Rs_Model", { harmonic: "harmonic", odd: "odd", fifths: "fifths", bar: "bar", bell: "bell", membrane: "membrane" });
-const shifterMode = choices ("Sh_Mode", { up: "up", down: "down", stereo: "stereo (L up, R down)", ring: "ring" });
+const bodeMode = choices ("Bd_Mode", { up: "up", down: "down", stereo: "stereo (L up, R down)", ring: "ring" });
 
 // LFO 3 (only the matrix reaches it): { shape, mode, sync } by the names in its lists, rate in
 // Hz, random phase, and delay and fade-in in ms
@@ -1165,7 +1165,7 @@ const programs = [
     ],
 },
 {
-    name: "Shifter Lead", category: "lead", tags: ["voice lane", "key shifter", "LFO 3", "wander", "saturate"],
+    name: "Shifter Lead", category: "lead", tags: ["voice lane", "frequency shifter", "LFO 3", "wander", "saturate"],
     description: "Two saws with a frequency shifter in every voice that follows the key: it moves each note's partials "
         + "by a fraction of the note's own pitch, up on the left and down on the right, so every note has the same "
         + "glassy, slightly inharmonic shine wherever it is played, chords included. LFO 3, one per note, fades in "
@@ -1179,8 +1179,8 @@ const programs = [
         ...fenv ({ a: 2, bp: 1, d2: 700, s: 0.4, r: 300 }),
         ...amp ({ a: 4, bp: 1, s: 1, r: 260 }),
         Sat_Type: dist.saturate, Sat_Mode: distMode.voicePost, Sat_Drive: 0.4,
-        ...lane (["Shifter"]),
-        Sh_On: 1, Sh_Ratio: shiftRatio (0.03), Sh_Mode: shifterMode.stereo, Sh_Mix: 0.4,
+        ...lane (["Bode"]),
+        Bd_On: 1, Bd_Ratio: shiftRatio (0.03), Bd_Shift: 0, Bd_Mode: bodeMode.stereo, Bd_Mix: 0.4,
         ...lfo3 ({ shape: "tri", mode: "perVoice", rate: 0.4, phaseRand: 1, delay: 500, fade: 1500 }),
         Wander_Rate: wanderHz (0.3),
         ...lfo (1, { sync: "perNote", unit: "ms10", speed: 18 }), LFO_1_Delay: 400, LFO_1_Fade: 600,
@@ -1189,16 +1189,17 @@ const programs = [
         ...delay ({ unit: "sixteenth", length: 3, feedback: 0.35, wet: 0.12 }),
     },
     modulations: [
-        mod ("lfo3", "Sh_Ratio", 0.04),
-        mod ("wander", "Sh_Hz", 0.15),
-        mod ("velocity", "Sh_Ratio", 0.03),
-        mod ("random", "Sh_Ratio", 0.03),
+        mod ("lfo3", "Bd_Ratio", 0.04),
+        // (±150 Hz: the shift's knob reaches ±5 kHz, cubed)
+        mod ("wander", "Bd_Shift", 0.15 * Math.cbrt (0.2)),
+        mod ("velocity", "Bd_Ratio", 0.03),
+        mod ("random", "Bd_Ratio", 0.03),
         mod ("velocity", "Cutoff", 0.06),
         mod ("modWheel", "LFO_1_Pitch", 0.15),
-        mod ("aftertouch", "Sh_Mix", 0.4),
+        mod ("aftertouch", "Bd_Mix", 0.4),
         mod ("aftertouch", "Cutoff", 0.08),
-        mod ("macro1", "Sh_Ratio", 0.15),
-        mod ("macro2", "Sh_Mix", 0.4),
+        mod ("macro1", "Bd_Ratio", 0.15),
+        mod ("macro2", "Bd_Mix", 0.4),
         mod ("macro3", "Sat_Drive", 0.3),
         mod ("macro4", "LFO_1_Pitch", 0.15),
     ],
@@ -2100,10 +2101,10 @@ const programs = [
     tables: { lfoShape2: Float32Array.from ({ length: 512 }, (_, i) => 0.5 - 0.5 * Math.tanh (7 * (i / 511 - 0.5)) / Math.tanh (3.5)) },
 },
 {
-    name: "Glass Spiral", category: "texture", tags: ["frequency shifter", "bode", "voice lane", "key shifter", "ambient"],
+    name: "Glass Spiral", category: "texture", tags: ["frequency shifter", "bode", "voice lane", "ambient"],
     description: "Glassy tones fed into the Bode frequency shifter's feedback delay: every echo comes back "
         + "shifted a little higher than the last, so each note spirals up into a shimmering cloud while the dry "
-        + "note stays where it is. Before that, a key shifter in every voice adds partials moved by a fraction of "
+        + "note stays where it is. Before that, a second shifter in every voice adds partials moved by a fraction of "
         + "the note that each note draws at random, so every note glints with its own inharmonic edge. Each note's "
         + "sparkle (a glassy partial) is struck and fades, its ratio cast a little differently, and a slow LFO "
         + "drifts the spiral's speed. Notes land at random places in the stereo field. Mod wheel: a longer spiral; "
@@ -2116,8 +2117,8 @@ const programs = [
         ...menv1 ({ a: 0.5, bp: 1, d2: 1500, s: 0, r: 500 }),
         ...lfo (2, { sync: "globalFree", unit: "sec", speed: 10 }),
         RandomPan: 0.5, Drift_Pitch: 3,
-        ...lane (["Shifter"]),
-        Sh_On: 1, Sh_Ratio: shiftRatio (0.25), Sh_Mode: shifterMode.up, Sh_Mix: 0.3,
+        ...lane (["Bode 2"]),
+        Bd2_On: 1, Bd2_Ratio: shiftRatio (0.25), Bd2_Shift: 0, Bd2_Mode: bodeMode.up, Bd2_Mix: 0.3,
         ...rack ("Chorus", "Bode", "Delay", "Reverb", "EQ", "Algo reverb"),
         Bd_On: 1, Bd_Shift: bodeHz (35), Bd_Mode: 0, Bd_Feedback: 0.55, Bd_Delay: bodeMs (220), Bd_Mix: 0.4,
         Rv_On: 1, Rv_Model: reverbModel.hall, Rv_Size: 0.5, Rv_Decay: reverbSeconds (2.5), Rv_Mix: 0.15,
@@ -2126,16 +2127,16 @@ const programs = [
     modulations: [
         mod ("modEnv1", "O2_Amp", 0.15),
         mod ("random", "Transpose", 0.01),
-        mod ("random", "Sh_Ratio", 0.12),
+        mod ("random", "Bd2_Ratio", 0.12),
         mod ("lfo2", "Bd_Shift", 0.04),
         mod ("velocity", "Cutoff", 0.08),
-        mod ("velocity", "Sh_Mix", 0.1),
+        mod ("velocity", "Bd2_Mix", 0.1),
         mod ("modWheel", "Bd_Feedback", 0.2),
         mod ("aftertouch", "Bd_Mix", 0.2),
         mod ("macro1", "Bd_Shift", 0.25),
         mod ("macro2", "Bd_Feedback", 0.3),
         mod ("macro3", "Bd_Mix", 0.3),
-        mod ("macro4", "Sh_Mix", 0.3),
+        mod ("macro4", "Bd2_Mix", 0.3),
     ],
 },
 {

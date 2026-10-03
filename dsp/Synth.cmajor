@@ -537,7 +537,7 @@ namespace porridge
         {
             let kind = fx > 0 && fx < rack::numEntries ? rack::kindOf.at (fx) : -1;
 
-            // (a distortion copy only runs while there is sound; the shifter and resonator only
+            // (a distortion copy only runs while there is sound; the resonator and octaver only
             // in the voice lane)
             if (kind < 0 || (kind == rack::distortionKind && ! active) || ! rack::inRack.at (kind))
                 return active;
@@ -571,7 +571,7 @@ namespace porridge
             if (kind == rack::flangerKind)  return flangers.at (k).process (fxPool, mix, active, P, sampleRate, noteHz);
             if (kind == rack::phaserKind)   return phasers.at (k).process (mix, active, P, sampleRate, noteHz);
             if (kind == rack::spaceKind)    return spaces.at (k).process (fxPool, mix, active, P, sampleRate);
-            if (kind == rack::bodeKind)     return bodes.at (k).process (fxPool, mix, active, P, sampleRate);
+            if (kind == rack::bodeKind)     return bodes.at (k).process (fxPool, mix, active, P, sampleRate, noteHz, laneGlides.at (blockSize));
             if (kind == rack::filterKind)   return filterFxs.at (k).process (fxTables, mix, active, P, sampleRate, noteHz);
             if (kind == rack::utilityKind)  return utilities.at (k).process (mix, active, P, sampleRate);
             if (kind == rack::ambienceKind) return ambiences.at (k).process (fxPool, mix, active, P, sampleRate);
@@ -3819,7 +3819,7 @@ namespace porridge
                     else if (kind == rack::phaserKind)     voiceLanes.at (laneSlots * v.index + s).lanePhaser (P, noteHz, sampleRate, glide, bufM, bufR, split, n);
                     else if (kind == rack::flangerKind)    voiceLanes.at (laneSlots * v.index + s).laneFlanger (voiceLaneBuffers.at (laneSlots * v.index + s), P, noteHz, sampleRate, glide, bufM, bufR, split, n);
                     else if (kind == rack::utilityKind)    voiceLanes.at (laneSlots * v.index + s).laneUtility (P, sampleRate, glide, bufM, bufR, split, n);
-                    else if (kind == rack::shifterKind)    voiceLanes.at (laneSlots * v.index + s).laneShifter (hilbert, P, noteHz, sampleRate, glide, bufM, bufR, split, n);
+                    else if (kind == rack::bodeKind)       voiceLanes.at (laneSlots * v.index + s).laneBode (hilbert, P, noteHz, sampleRate, glide, bufM, bufR, split, n);
                     else if (kind == rack::resonatorKind)  voiceLanes.at (laneSlots * v.index + s).laneResonator (P, noteHz, sampleRate, glide, bufM, bufR, split, n);
                     else if (kind == rack::octaverKind)    voiceLanes.at (laneSlots * v.index + s).laneOctaver (P, noteHz, sampleRate, glide, bufM, bufR, split, n);
                     else if (kind == rack::distortionKind)

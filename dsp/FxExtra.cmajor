@@ -446,17 +446,21 @@ namespace porridge
     }
 
     //==============================================================================
-    /// Bode frequency shifter: an IIR Hilbert pair (two chains of 8 allpasses with a 90 degree
-    /// difference from 20 Hz to sr/2 - 20 Hz, designed for the sample rate) and a quadrature
-    /// oscillator. With feedback the shifted signal also goes through a delay back into the
-    /// shifter's input, so every echo is shifted further (a barber pole).
+    /// The frequency shifter (Bode), on the whole sound (here) and in every voice (VoiceFx.cmajor's
+    /// laneBode), one design for both: an IIR Hilbert pair (two chains of 8 allpasses with a 90
+    /// degree difference from 20 Hz to sr/2 - 20 Hz, designed for the sample rate) and a
+    /// quadrature oscillator at Bd_Shift's Hz plus Bd_Ratio of a note (a voice's own; on the whole
+    /// sound the newest), so that with a ratio the shifted partials keep their places relative to
+    /// every note. The shift, mix and mode glide from piece to piece (the voices' laneGlide), the
+    /// oscillator turning by a fixed step through each. On the whole sound, with feedback, the
+    /// shifted signal also goes through a delay back into the shifter's input, so every echo is
+    /// shifted further (a barber pole); a voice has no feedback.
     let bodeLineSize = 192004;      // 1 s at 192 kHz and the interpolator's taps
     let hilbertCoefs = 16;          // even ones: path A, odd ones: path B (one sample later)
 
     /// The Hilbert pair's coefficients for a transition band of `transition` (of sr) at both
     /// ends: the polyphase half-band design (elliptic) from Laurent de Soras's HIIR, whose
-    /// allpasses in -z^-2 make a 90 degree phase splitter. Bode's, and every voice's shifter's
-    /// (VoiceFx.cmajor).
+    /// allpasses in -z^-2 make a 90 degree phase splitter.
     float[hilbertCoefs] hilbertDesign (float64 sr)
     {
         float[hilbertCoefs] c;
@@ -501,7 +505,63 @@ namespace porridge
         return c;
     }
 
-    /// Its feedback delay is a stereo line in the pool (FxPool) from block fxAt.
+    /// One sample u through the Hilbert pair, on one side (T = float) or both (float<2>), with
+    /// the allpasses' states (in z^-2) and path B's one-sample delay: a (path A) and b, 90 degrees
+    /// behind it.
+    void hilbertPair<T> (T[hilbertCoefs]& x1, T[hilbertCoefs]& x2, T[hilbertCoefs]& y1, T[hilbertCoefs]& y2, T& prev,
+                         const float[hilbertCoefs]& c, T u, T& a, T& b)
+    {
+        a = u;
+        b = prev;
+        prev = u;
+
+        for (wrap<hilbertCoefs / 2> j)
+        {
+            let ja = wrap<hilbertCoefs> (2 * j), jb = wrap<hilbertCoefs> (2 * j + 1);
+            let ya = c[ja] * (a + y2[ja]) - x2[ja];
+            x2[ja] = x1[ja]; x1[ja] = a; y2[ja] = y1[ja]; y1[ja] = ya;
+            a = ya;
+            let yb = c[jb] * (b + y2[jb]) - x2[jb];
+            x2[jb] = x1[jb]; x1[jb] = b; y2[jb] = y1[jb]; y1[jb] = yb;
+            b = yb;
+        }
+    }
+
+    /// The shift a block (or piece) aims at: Bd_Shift's knob (-1..1) cubed, times 5 kHz, and
+    /// Bd_Ratio's cubed, times 2, of the note (0: none).
+    float bodeTargetHz (const float[numSlots]& P, float noteHz)
+    {
+        let v = clamp (P[slot::Bd_Shift], -1.0f, 1.0f);
+        let r = clamp (P[slot::Bd_Ratio], -1.0f, 1.0f);
+        return noteHz * (2.0f * r * r * r) + 5000.0f * v * v * v;
+    }
+
+    /// Each side's way for Bd_Mode: 1 up, -1 down, 0 both (ring: the mean of up and down).
+    float<2> bodeSides (const float[numSlots]& P)
+    {
+        let mode = int (P[slot::Bd_Mode]);
+        return mode == bodeMode::down   ? float<2> (-1.0f, -1.0f)
+             : mode == bodeMode::stereo ? float<2> (1.0f, -1.0f)
+             : mode == bodeMode::ring   ? float<2> (0.0f, 0.0f)
+                                        : float<2> (1.0f, 1.0f);
+    }
+
+    /// The oscillator through a piece of n samples whose shift glides from hz0 to hz1: it turns
+    /// by a fixed step (at their mean) from the phase at the piece's start. Sets the phasor's
+    /// start (pc, ps) and step (rc, rs), and moves the phase (0..1) on to the piece's end.
+    void bodeTurn (float64& phase, float hz0, float hz1, int n, float64 sr, float64& pc, float64& ps, float64& rc, float64& rs)
+    {
+        let hz = float64 (0.5f * (hz0 + hz1));
+        let turn = twoPi * hz / sr;
+        rc = cos (turn);
+        rs = sin (turn);
+        pc = cos (twoPi * phase);
+        ps = sin (twoPi * phase);
+        phase += hz * float64 (n) / sr;
+        phase -= floor (phase);
+    }
+
+    /// On the whole sound. Its feedback delay is a stereo line in the pool (FxPool) from block fxAt.
     struct Bode
     {
         int fxAt;
@@ -512,8 +572,9 @@ namespace porridge
         float<2> prev;                              // path B's one-sample delay
         float<2> hpX, hpY;                          // the feedback's DC blocker
         float64 phase;                              // oscillator phase 0..1
-        float hz, fb, mix, delay;                   // smoothed: shift, feedback, mix, delay (samples)
-        float<2> side;                              // smoothed per side: 1 up, -1 down, 0 both (ring)
+        float hz, mix;                              // gliding per block: shift, mix
+        float<2> side;                              // and per side: 1 up, -1 down, 0 both (ring)
+        float fb, delay;                            // smoothed per sample: feedback, delay (samples)
         bool fresh, idle;
         int silentCount;
     }
@@ -540,15 +601,6 @@ namespace porridge
         this.silentCount = 0;
     }
 
-    /// One allpass section: y = c (x + y[n-2]) - x[n-2].
-    float<2> bodeSection (Bode& this, wrap<hilbertCoefs> j, float<2> x)
-    {
-        let y = this.c[j] * (x + this.y2[j]) - this.x2[j];
-        this.x2[j] = this.x1[j]; this.x1[j] = x;
-        this.y2[j] = this.y1[j]; this.y1[j] = y;
-        return y;
-    }
-
     /// The line's value d samples back (d >= 2), cubic-interpolated.
     float<2> bodeRead (const Bode& this, const FxPool& pool, float d)
     {
@@ -566,7 +618,9 @@ namespace porridge
         return hermite (poolFrame (pool, at, p), y1, y2, y3, t);
     }
 
-    bool process (Bode& this, FxPool& pool, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
+    /// noteHz: the newest note (0: none), which Bd_Ratio follows; glide: laneGlide for a block.
+    bool process (Bode& this, FxPool& pool, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr,
+                  float noteHz, float glide)
     {
         if (! active && this.idle)
             return false;
@@ -577,16 +631,11 @@ namespace porridge
             this.designRate = sr;
         }
 
-        let v = clamp (P[slot::Bd_Shift], -1.0f, 1.0f);
-        let tHz = 5000.0f * v * v * v;
+        let tHz = bodeTargetHz (P, noteHz);
         let tFb = clamp (P[slot::Bd_Feedback], 0.0f, 1.0f) * 0.95f;
         let tMix = clamp (P[slot::Bd_Mix], 0.0f, 1.0f);
         let tDelay = clamp (expKnob (1.0f, 1000.0f, P[slot::Bd_Delay]) * 0.001f * float (sr), 2.0f, float (bodeLineSize - 4));
-        let mode = int (P[slot::Bd_Mode]);
-        let tSide = mode == bodeMode::down   ? float<2> (-1.0f, -1.0f)
-                  : mode == bodeMode::stereo ? float<2> (1.0f, -1.0f)
-                  : mode == bodeMode::ring   ? float<2> (0.0f, 0.0f)
-                                             : float<2> (1.0f, 1.0f);
+        let tSide = bodeSides (P);
         let k = extraSmoothing (sr, 20.0, 1);
         let kd = extraSmoothing (sr, 60.0, 1);         // delay changes glide like tape
         let hpR = float (1.0 - twoPi * 10.0 / sr);     // the feedback's DC blocker at 10 Hz
@@ -598,22 +647,22 @@ namespace porridge
             this.side = tSide;
         }
 
+        let hz0 = this.hz, mix0 = this.mix, side0 = this.side;
+        this.hz += (tHz - this.hz) * glide;
+        this.mix += (tMix - this.mix) * glide;
+        this.side += (tSide - this.side) * glide;
+        float64 pc, ps, rc, rs;
+        bodeTurn (this.phase, hz0, this.hz, blockSize, sr, pc, ps, rc, rs);
+        let step = 1.0f / float (blockSize);
         float written = 0;
-
-        // the oscillator: a phasor from the phase at the block's start, turned by the shift's
-        // step, which is worked out again only while the shift glides
-        var pc = cos (twoPi * this.phase), ps = sin (twoPi * this.phase);
-        float64 rc = 1.0, rs = 0.0;
-        var turnHz = 0.0f;
-        var turnSet = false;
 
         for (wrap<blockSize> i)
         {
-            this.hz += (tHz - this.hz) * k;
+            let f = float (i + 1) * step;
+            let mix = mix0 + (this.mix - mix0) * f;
+            let side = side0 + (this.side - side0) * f;
             this.fb += (tFb - this.fb) * k;
-            this.mix += (tMix - this.mix) * k;
             this.delay += (tDelay - this.delay) * kd;
-            this.side += (tSide - this.side) * k;
 
             let x = buf[i];
             var u = x + 1e-18f;     // the offset keeps the decaying allpasses off denormals
@@ -627,44 +676,23 @@ namespace porridge
                 u += extraSoftClip (this.fb * h);
             }
 
-            // path A: the input through the even allpasses; path B: the previous input through
-            // the odd ones, 90 degrees behind A
-            var a = u;
-            var b = this.prev;
-            this.prev = u;
-
-            for (wrap<hilbertCoefs / 2> j)
-            {
-                a = this.bodeSection (wrap<hilbertCoefs> (2 * j), a);
-                b = this.bodeSection (wrap<hilbertCoefs> (2 * j + 1), b);
-            }
+            float<2> a, b;
+            hilbertPair (this.x1, this.x2, this.y1, this.y2, this.prev, this.c, u, a, b);
 
             let cs = float (pc);
             let sn = float (ps);
-            let turn = float64 (this.hz) / sr;
-            this.phase += turn;
-            this.phase -= floor (this.phase);
-
-            if (! turnSet || this.hz != turnHz)
-            {
-                turnSet = true;
-                turnHz = this.hz;
-                rc = cos (twoPi * turn);
-                rs = sin (twoPi * turn);
-            }
-
             let c1 = pc * rc - ps * rs;
             ps = ps * rc + pc * rs;
             pc = c1;
 
             // up: b cos + a sin, down: b cos - a sin, ring: their mean (b cos); the mode's
             // sign glides so that switching modes doesn't click
-            let wet = b * cs + a * sn * this.side;
+            let wet = b * cs + a * sn * side;
             setPoolFrame (pool, this.fxAt, this.pos, wet);
             this.pos = this.pos + 1 >= bodeLineSize ? 0 : this.pos + 1;
             written = max (written, extraPeak (wet));
 
-            buf[i] = x + (wet - x) * this.mix;
+            buf[i] = x + (wet - x) * mix;
         }
 
         if (stillSounding (this.idle, this.silentCount, active || written > 1e-8f, active || anyAbove (buf, 1e-8f)))

@@ -9,7 +9,7 @@
 //
 // The voice lane (VL_1..4, PorridgeParams.laneSpecs) holds the same effects, in every voice
 // instead of on the whole sound: only the kinds a voice can run (laneKinds), and an effect is in
-// the rack or the lane, not both. The shifter, resonator and octaver are only for the lane. The lane is
+// the rack or the lane, not both. The resonator and octaver are only for the lane. The lane is
 // kept without gaps; VL_FilterAt and VL_AmpAt say how many of it come before the filter and the
 // amp envelope.
 
@@ -29,7 +29,6 @@ type kind = [
   | #utility
   | #ambience
   | #air
-  | #shifter
   | #resonator
   | #octaver
 ]
@@ -54,7 +53,6 @@ let kinds: array<kind> = [
   #utility,
   #ambience,
   #air,
-  #shifter,
   #resonator,
   #octaver,
 ]
@@ -97,7 +95,7 @@ let menuGroups: array<(string, array<addEntry>)> = [
   ),
   ("tone", [#eq, #filter, #air]->Array.map(entryOf)),
   ("movement", [#chorus, #flanger, #phaser]->Array.map(entryOf)),
-  ("pitch", [#bode, #shifter, #octaver, #resonator]->Array.map(entryOf)),
+  ("pitch", [#bode, #octaver, #resonator]->Array.map(entryOf)),
   ("echo", [entryOf(#delay)]),
   (
     "space",

@@ -85,8 +85,8 @@ let param = (g, id, c, r, label, ~span=1) =>
 let choice = (g, id, c, r, label, ~span=1) =>
   g->at(c, r, ~span, id, b => Controls.choice(g.ctx, g.el, id, ~x=b.x, ~y=b.y, ~w=b.w, ~label))
 
-let toggle = (g, id, c, r, label, ~span=1) =>
-  g->at(c, r, ~span, id, b => Controls.toggle(g.ctx, g.el, id, ~x=b.x, ~y=b.y, ~w=b.w, ~label))
+let toggle = (g, id, c, r, label, ~span=1, ~on=1.) =>
+  g->at(c, r, ~span, id, b => Controls.toggle(g.ctx, g.el, id, ~x=b.x, ~y=b.y, ~w=b.w, ~label, ~on))
 
 // A button filling its cells.
 let button = (g, text, c, r, ~span=1, ~icon=?, ~status=?, onClick) =>

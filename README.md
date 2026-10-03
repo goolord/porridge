@@ -35,12 +35,14 @@ dsp/                    Cmajor DSP
                           note and bands on its harmonics; Oscillator.cmajor each oscillator's
                           roughness, noise in its phase, and its shape: a morph towards a
                           second wave and CZ-style phase distortion, both per voice)
-  FxExtra.cmajor          Porridge's flanger, phaser, compressor, bode, rack filter and utility
+  FxExtra.cmajor          Porridge's flanger, phaser, compressor, bode (the frequency shifter,
+                          whose Hilbert pair, oscillator and glides the voice lane's runs too),
+                          rack filter and utility
   VoiceFx.cmajor          the voice lane: up to four effects in every voice, around the filter
                           and the amp envelope (the rack's filter, distortion, EQ, phaser,
-                          flanger and utility, and a key-tracked frequency shifter, a
-                          resonator tuned to each note and an octaver); voices ring on past
-                          the amp while effects after it still sound. The phaser's and
+                          flanger, frequency shifter, its ratio following each note's key, and
+                          utility, and a resonator tuned to each note and an octaver); voices
+                          ring on past the amp while effects after it still sound. The phaser's and
                           flanger's LFOs can start each note at a random point and follow its
                           pitch, the flanger's delay its period
   Space.cmajor            the algo reverb (hall, plate, nitrous, basin, vintage)
@@ -149,11 +151,15 @@ tools/
                           what changed
   test/                   native C++ test host built from the patch (cmaj generate --target=cpp),
                           golden.mjs (bit-exact factory renders, in Oat mode), presets.mjs
-                          (format round trips), pickers.mjs (every list value maps to and
-                          from its menu), library.mjs (the preset browser's search),
+                          (format round trips, and retired values loading as what replaced
+                          them: the rack's fourth copies, the key shifter as the bode),
+                          pickers.mjs (every list value maps to and from its menu),
+                          library.mjs (the preset browser's search),
                           smoke.mjs (Porridge's own effects and filter types sound, stay
-                          bounded and fall silent, the ambience's models and the distortion's
-                          types too, and the distortion's mix lines up with oversampling; the
+                          bounded and fall silent, Sallen-Key and peak 12 dB as the SVF and
+                          B/P/B they run as, the ambience's models and the distortion's
+                          types too, and the distortion's mix lines up with its oversampling,
+                          HQ and Oatmeal's in Oat mode; the
                           oscillator envelopes and the noise source; the key EQ's bands and
                           shelf; oscillator roughness; osc 2 heard in PM; the oscillators'
                           morph and phase distortion),

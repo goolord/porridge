@@ -64,7 +64,7 @@ the macros `Macro_1`..`Macro_4`, then four per modulation slot (`ModN_Source`, `
 
 | parameters | |
 |---|---|
-| `Oat_Mode` | Oatmeal's MIDI timing (each message at the next 64-sample block) instead of sample-accurate, its legato filter envelopes and its distortion oversampling filters |
+| `Oat_Mode` | Oatmeal's MIDI timing (each message at the next 64-sample block) instead of sample-accurate, its legato filter envelopes and its distortion oversampling (2x, 4x and 8x through Oatmeal's filters). Outside Oat mode the oversampling is a switch, HQ: `Sat_Oversample` (and its copies') 2x, 4x and 8x all mean a unity-gain 4x, and keep their value, so an Oatmeal export writes what was there; Porridge's switch sets 4x |
 | `Drift_Pitch`, `Drift_Cutoff`, `Drift_Rate` | analog drift: cents per unison copy, semitones of cutoff per voice, Hz |
 | `FX_Order` | the order of chorus, delay, reverb and EQ: the index of a permutation, in lexicographic order (0 is Oatmeal's) |
 | `PM_Feedback` | osc 1's self-feedback in the PM osc mix modes |
@@ -77,14 +77,15 @@ the macros `Macro_1`..`Macro_4`, then four per modulation slot (`ModN_Source`, `
 | `Sat_Points`, `Sat_X1`..`Sat_X16`, `Sat_Y1`..`Sat_Y16`, `Sat_C1`..`Sat_C16` | the distortion's custom shape (type `custom shape`): the number of points less 2, then each point's input and output (-1..1) and the bend of the segment ending at it (the rack's distortions' too: `Sat2_Points`...; not host parameters) |
 | `C2_Mode` ... `Sat4_C16` | the rack's copies: each of Oatmeal's chorus (`C_`), delay (`D_`), reverb (`R_`), EQ (`EQ_`, with `EQ_On`) and distortion (`Sat_`, without `Sat_Mode`) parameters again, numbered (`D3_Wet` is delay copy 3's wet level) |
 | `F_Drive` | input drive into the analog filter types (`MG low` .. `PZ SVF`), 0..1 = 0 .. +24 dB |
-| `Fl_`, `Ph_`, `Cp_`, `Rv_`, `Cv_`, `Bd_`, `Ff_`, `Ut_` | Porridge's own rack effects, each with an `_On` switch: flanger, phaser, compressor (OTT-style, 1 or 3 bands), algo reverb (hall, plate, nitrous, basin, vintage), convolve (built-in impulses or a file), bode (frequency shifter and shifted delay), filter (any filter type) and utility (gain, pan, width, phase, bass mono). `Am_` is the ambience (very small spaces: room, clear coat, verb tiny), after the others Frequencies, rates and times hold their knob position 0..1 (the value is lo·(hi/lo)^v; the ranges are in `ui/PorridgeParams.res`) |
+| `Fl_`, `Ph_`, `Cp_`, `Rv_`, `Cv_`, `Bd_`, `Ff_`, `Ut_` | Porridge's own rack effects, each with an `_On` switch: flanger, phaser, compressor (OTT-style, 1 or 3 bands), algo reverb (hall, plate, nitrous, basin, vintage), convolve (built-in impulses or a file), bode (frequency shifter and shifted delay; in the voice lane too, without the delay), filter (any filter type) and utility (gain, pan, width, phase, bass mono). `Am_` is the ambience (very small spaces: room, clear coat, verb tiny), after the others Frequencies, rates and times hold their knob position 0..1 (the value is lo·(hi/lo)^v; the ranges are in `ui/PorridgeParams.res`) |
 | `Curve_Amp_Decay1`, `Curve_Filter_Decay1`, `Curve_Mod1_Decay1`, `Curve_Mod2_Decay1` | each envelope's decay 1 curve, -1..1. A file without them takes its `_Decay` curve, which bent both decays before |
 | `Fl2_Rate` ... `Ut3_BassMono` | their copies, numbered like Oatmeal's (convolve has one copy, the others two) |
 | `Sat_Drive`, `Sat_Tone`, `Sat_Character`, `Sat_Mix`, then `Sat2_Drive` ... `Sat4_Mix` | the distortion's knobs for its model types (each type takes them as controls of its own; `ui/DistTypes.res`), 0..1, and its mix with the dry sound, which every type has; then the rack copies' |
 | `Ai_On`, `Ai_Air`, `Ai_Body`, `Ai_DarkFreq`, `Ai_Darken`, then `Ai2_On` ... `Ai3_Darken` | the air rack effect (Airwindows Air4): the highs and the rest (0.5: as they were), and its darkening; then its copies |
+| `Bd_Ratio`, `Bd2_Ratio`, `Bd3_Ratio` | the frequency shifter's (bode's) shift as a part of the note, added to `Bd_Shift`: 2 · knob³ of the note's frequency, -1..1 (in the voice lane each note's own, on the whole sound the newest note's). The voice lane's key shifter (`Sh_`, `Sh2_`, rack values `Shifter` and `Shifter 2`) was retired into it in October 2026: a program with one loads it onto a free bode copy, its ratio as `Bd_Ratio`, its offset (`Sh_Hz`, ±1 kHz) as `Bd_Shift` (±5 kHz) at ∛(1/5) of its turn, its mode and mix as they were, and its connections with it (an offset's amount scaled the same way); with no bode free it's left out, and the warning says so |
 
 They are appended to, never reordered, and each one's default leaves the sound exactly as
-Oatmeal's, except `Oat_Mode` (off: MIDI is sample-accurate, and Porridge's oversampling filters are used). **Export for Oatmeal** leaves
+Oatmeal's, except `Oat_Mode` (off: MIDI is sample-accurate, and the distortion's oversampling is HQ). **Export for Oatmeal** leaves
 them out and says so.
 
 Porridge also adds values after the last of some of Oatmeal's lists: the waveforms `Saw HQ`,
