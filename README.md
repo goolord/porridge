@@ -145,7 +145,8 @@ tools/
                           pickers.mjs (every list value maps to and from its menu),
                           library.mjs (the preset browser's search),
                           smoke.mjs (Porridge's own effects and filter types sound, stay
-                          bounded and fall silent, the ambience's models and the distortion's
+                          bounded and fall silent, Sallen-Key and peak 12 dB as the SVF and
+                          B/P/B they run as, the ambience's models and the distortion's
                           types too, and the distortion's mix lines up with its oversampling,
                           HQ and Oatmeal's in Oat mode; the
                           oscillator envelopes and the noise source; the key EQ's bands and

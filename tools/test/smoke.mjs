@@ -243,6 +243,29 @@ for (let t = FilterTypes.firstPorridge; t < FilterTypes.all.length; ++t)
     sounds (`filter ${t} ${FilterTypes.all[t]}`.slice (0, 24), { Filter: t, Cutoff: 0.45, Resonance: 0.6, F_Morph: 0.3, F_Drive: 0.3 }, { tail: false });
 await flush ();
 
+// the types the DSP runs as another's (FilterTypes): Sallen-Key is the SVF's lowpass (morph 0)
+// with its own resonance law, peak 12 dB is B/P/B at the middle of its morph, whatever the morph
+// knob says
+{
+    const voice = (name, sets) => render ({ program: prog, events, frames: rate, rate, sets: { Cutoff: 0.45, F_Morph: 0.3, ...sets },
+                                           out: join (dir, `alias_${name}.f32`) })[0];
+    const nullOf = (a, b) =>
+    {
+        let d = 0, s = 0;
+        for (let i = 0; i < a.length; ++i) { d += (a[i] - b[i]) ** 2; s += a[i] * a[i]; }
+        return 10 * Math.log10 ((d + 1e-30) / (s + 1e-30));
+    };
+    for (const res of [0.3, 0.9])
+    {
+        const sk = voice (`sk${res}`, { Filter: 19, Resonance: res });
+        const svf = voice (`svf${res}`, { Filter: 16, Resonance: res * 1.98 / 1.96, F_Morph: 0 });
+        check (nullOf (sk, svf) < -60, `Sallen-Key at resonance ${res} is the SVF's lowpass (null ${nullOf (sk, svf).toFixed (1)} dB)`);
+        const peak = voice (`peak${res}`, { Filter: 24, Resonance: res });
+        const bpb = voice (`bpb${res}`, { Filter: 30, Resonance: res, F_Morph: 0.5 });
+        check (peak.every ((v, i) => v === bpb[i]), `peak 12 dB at resonance ${res} is B/P/B at its middle`);
+    }
+}
+
 // mono legato with unison spread: the right side's filter envelopes start too (Oatmeal never
 // starts them, and Oat mode keeps that, the right filter staying shut)
 {
