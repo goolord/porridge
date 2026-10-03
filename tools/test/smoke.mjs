@@ -11,10 +11,11 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { programSize, bankHeaderSize } from "../../ui/oatmeal/OatmealFormat.res.mjs";
 import { rackEntries } from "../../ui/PorridgeParams.res.mjs";
+import * as PorridgeParams from "../../ui/PorridgeParams.res.mjs";
 import * as FilterTypes from "../../ui/FilterTypes.res.mjs";
 import * as ModMatrix from "../../ui/ModMatrix.res.mjs";
 import * as DistTypes from "../../ui/DistTypes.res.mjs";
-import { root, outDir, render, renderAsync, pool, levelAt, checker } from "./lib.mjs";
+import { root, outDir, render, renderAsync, pool, levelAt, powerSpectrum, octaveBands, checker } from "./lib.mjs";
 
 const dir = outDir ("smoke");
 
@@ -231,6 +232,138 @@ check (hq.every (w => w.every ((v, i) => v === hq[0][i])), "outside Oat mode 2x,
     sounds ("osc shape, unison, sync", { O1_PD: 0.8, O1_Morph: 0.5, O1_MorphTo: 2, O2_PD: 0.5, O2_Morph: 1, O2_MorphTo: 4, U_Voices: 4, OscMix: 1 }, { tail: false });
     sounds ("osc shape, FM", { O1_PD: 0.6, O2_PD: 0.9, O2_Morph: 0.5, O2_Amp: 1, OscMix: 2 }, { tail: false });
     await flush ();
+}
+
+// the noise generator's types: each sounds, stays bounded and has a spectrum of its own (its
+// octave bands 4 dB from every other type's somewhere); the colours keep white's level and tilt
+// as they should; white ignores what only the others use (the density, a sample); the crackle
+// grows with its density; the digital noise brightens up the keyboard; the metallic noise has
+// the note's pitch and never aliases; the sample plays at its speed (the transpose), each note
+// from a place of its own, and nothing until one is loaded; and every type through the resonance,
+// with unison spread
+{
+    const init = join (root, "tools", "re", "init_prog.bin");
+    const one = join (dir, "noise_events.txt");
+    writeFileSync (one, "0 144 60 100\n88200 128 60 0\n");
+    const quiet = { O1_Amp: 0, O2_Amp: 0, N_Amp: 0.5, Filter: 0, Oat_Mode: 0 };
+    // the samples: a 1 kHz sine and white noise, 2 s at 48 kHz, as loud as the white noise
+    const f32 = (name, f) =>
+    {
+        const n = 96000, b = Buffer.alloc (8 + 4 * n);
+        b.writeInt32LE (1, 0); b.writeInt32LE (n, 4);
+        for (let i = 0; i < n; ++i) b.writeFloatLE (f (i), 8 + 4 * i);
+        const path = join (dir, name);
+        writeFileSync (path, b);
+        return path;
+    };
+    let seed = 1;
+    const sine = f32 ("noise_sine.f32", i => 0.8165 * Math.sin (2 * Math.PI * 1000 * i / 48000));
+    const hiss = f32 ("noise_hiss.f32", () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 1073741824 - 1);
+    const noiseRender = (name, sets, { events = one, sample = sine } = {}) =>
+        render ({ program: init, events, frames: 2 * rate, rate, sets: { ...quiet, ...sets }, args: sample ? ["--impulse", `2:48000:${sample}`] : [],
+                  out: join (dir, name + ".f32") })[0];
+    const from = Math.round (0.2 * rate), to = Math.round (1.9 * rate);
+    const rmsOf = x => { let s = 0; for (let i = from; i < to; ++i) s += x[i] * x[i]; return Math.sqrt (s / (to - from)); };
+    const bandsOf = x => octaveBands (powerSpectrum (x, from, to), rate);
+    // the bands' slope over 250 Hz .. 8 kHz, per Hz (white is flat), dB an octave
+    const slope = b =>
+    {
+        const xs = [3, 4, 5, 6, 7, 8], ys = xs.map (i => b[i] - 10 * Math.log10 (2) * i);
+        const mx = xs.reduce ((p, q) => p + q) / 6, my = ys.reduce ((p, q) => p + q) / 6;
+        return xs.reduce ((p, x, i) => p + (x - mx) * (ys[i] - my), 0) / xs.reduce ((p, x) => p + (x - mx) ** 2, 0);
+    };
+    const types = PorridgeParams.noiseTypes;
+    const renders = types.map ((name, t) => noiseRender (`noise_${name}`, { N_Type: t }));
+    const bands = renders.map (bandsOf), levels = renders.map (x => 20 * Math.log10 (rmsOf (x) / rmsOf (renders[0])));
+    const crests = renders.map (x => 20 * Math.log10 (x.slice (from, to).reduce ((m, v) => Math.max (m, Math.abs (v)), 0) / rmsOf (x)));
+    renders.forEach ((x, t) =>
+    {
+        const peak = x.reduce ((m, v) => Math.max (m, Math.abs (v)), 0);
+        check (x.every (Number.isFinite) && rmsOf (x) > 1e-4 && peak < 16,
+               `noise ${types[t].padEnd (9)} level ${levels[t].toFixed (2).padStart (6)} dB, peak/RMS ${crests[t].toFixed (1).padStart (4)} dB, slope ${slope (bands[t]).toFixed (2).padStart (5)} dB/oct`);
+    });
+    // (by the octave bands' shape, and the peak over the RMS: the crackle is in its clicks)
+    let closest = Infinity, pair = "";
+    for (let a = 0; a < types.length; ++a)
+        for (let b = a + 1; b < types.length; ++b)
+        {
+            const d = Math.max (Math.abs (crests[a] - crests[b]), ...bands[a].map ((v, i) => Math.abs (v - levels[a] - bands[b][i] + levels[b])));
+            if (d < closest) { closest = d; pair = `${types[a]} and ${types[b]}`; }
+        }
+    check (closest > 4, `noise types told apart  closest: ${pair}, ${closest.toFixed (1)} dB apart`);
+    [["pink", -3], ["brown", -6], ["blue", 3], ["violet", 6]].forEach (([name, want]) =>
+    {
+        const t = types.indexOf (name);
+        check (Math.abs (slope (bands[t]) - want) < 0.5 && Math.abs (levels[t]) < 0.5, `noise ${name} tilts ${want} dB/oct at white's level`);
+    });
+    const plain = noiseRender ("noise_white_plain", { N_Density: 0.9 }, { sample: null });
+    check (plain.every ((v, i) => v === renders[0][i]), "white noise ignores the density and the sample");
+    const crackle = types.indexOf ("crackle");
+    const sparse = rmsOf (noiseRender ("noise_crackle_sparse", { N_Type: crackle, N_Density: 0.1 }));
+    const dense = rmsOf (noiseRender ("noise_crackle_dense", { N_Type: crackle, N_Density: 0.9 }));
+    check (20 * Math.log10 (dense / sparse) > 15, `crackle grows with its density  +${(20 * Math.log10 (dense / sparse)).toFixed (1)} dB`);
+    const keyed = (name, t, key) =>
+    {
+        const ev = join (dir, `noise_events_${key}.txt`);
+        writeFileSync (ev, `0 144 ${key} 100\n88200 128 ${key} 0\n`);
+        return noiseRender (`noise_${name}_${key}`, { N_Type: t }, { events: ev });
+    };
+    const centroid = x => { const P = powerSpectrum (x, from, to); let s = 0, w = 0; P.forEach ((p, k) => { s += p * k; w += p; }); return s / w * rate / 4096; };
+    const digital = types.indexOf ("digital");
+    const [low, high] = [48, 72].map (k => centroid (keyed ("digital", digital, k)));
+    check (high > 1.5 * low, `digital noise brightens up the keyboard  ${low.toFixed (0)} Hz -> ${high.toFixed (0)} Hz`);
+    const metallic = types.indexOf ("metallic");
+    const m60 = keyed ("metallic", metallic, 60), f60 = 440 * 2 ** (-9 / 12);
+    const onHarmonics = [1, 2, 3, 4, 5, 6].map (h => levelAt (m60, h * f60, 0.3, rate)), between = [1, 2, 3, 4, 5, 6].map (h => levelAt (m60, (h + 0.5) * f60, 0.3, rate));
+    const tonal = onHarmonics.reduce ((a, b) => a + b) / 6 - between.reduce ((a, b) => a + b) / 6;
+    check (tonal > 30, `metallic noise is the note's pitch  harmonics ${tonal.toFixed (1)} dB over what lies between them`);
+    const m96 = keyed ("metallic", metallic, 96), P96 = powerSpectrum (m96, from, to), f96 = 440 * 2 ** (27 / 12);
+    let under = 0, all = 0;
+    P96.forEach ((p, k) => { all += p; if (k * rate / 4096 < 0.8 * f96) under += p; });
+    check (10 * Math.log10 (under / all) < -60, `metallic noise doesn't alias at C7  ${(10 * Math.log10 (under / all)).toFixed (1)} dB under the note`);
+    const sample = types.indexOf ("sample");
+    const at1k = noiseRender ("noise_sample", { N_Type: sample }), at2k = noiseRender ("noise_sample_up", { N_Type: sample, N_Transpose: 12 });
+    check (levelAt (at1k, 1000, 0.3, rate) - levelAt (at1k, 2000, 0.3, rate) > 40 && levelAt (at2k, 2000, 0.3, rate) - levelAt (at2k, 1000, 0.3, rate) > 40,
+           "the sample plays at its speed, an octave up with the transpose at 12");
+    check (noiseRender ("noise_sample_none", { N_Type: sample }, { sample: null }).every (v => v === 0), "the sample type is silent with no sample");
+    const twice = join (dir, "noise_events_twice.txt");
+    writeFileSync (twice, `0 144 60 100\n${rate / 2} 128 60 0\n${rate} 144 60 100\n${rate * 3 / 2} 128 60 0\n`);
+    const again = noiseRender ("noise_sample_twice", { N_Type: sample }, { events: twice, sample: hiss });
+    let ab = 0, aa = 0, bb = 0;
+    for (let i = 2000; i < 6000; ++i) { const a = again[i], b = again[rate + i]; ab += a * b; aa += a * a; bb += b * b; }
+    check (Math.abs (ab / Math.sqrt (aa * bb)) < 0.3, `each note starts the sample at a place of its own  correlation ${(ab / Math.sqrt (aa * bb)).toFixed (3)}`);
+    // through the resonance, with unison spread: bounded; and a colour on a low note with strong
+    // resonance starts at its full level, as white does (its band's level drawn, not rung up): the
+    // first 50 ms of 16 notes against their last 300 ms (the band is a few Hz wide, so one note's
+    // start is one draw of its level)
+    const notes = 16, gap = Math.round (0.6 * rate);
+    const lowEvents = join (dir, "noise_events_low.txt");
+    writeFileSync (lowEvents, Array.from ({ length: notes }, (_, k) => `${k * gap} 144 36 100\n${k * gap + gap - 2000} 128 36 0\n`).join (""));
+    const onset = t =>
+    {
+        const x = render ({ program: init, events: lowEvents, frames: notes * gap, rate, sets: { ...quiet, N_Type: t, N_Resonance: 0.8 },
+                            out: join (dir, `noise_${types[t]}_onset.f32`) })[0];
+        let a = 0, b = 0;
+        for (let k = 0; k < notes; ++k)
+        {
+            for (let i = 441; i < 2646; ++i) a += x[k * gap + i] ** 2 / 2205;
+            for (let i = gap - 2000 - 13230; i < gap - 2000; ++i) b += x[k * gap + i] ** 2 / 13230;
+        }
+        return 10 * Math.log10 (a / b);
+    };
+    const whiteOnset = onset (0);
+    ["pink", "brown", "blue", "violet"].forEach (name =>
+    {
+        const d = onset (types.indexOf (name)) - whiteOnset;
+        check (Math.abs (d) < 3, `resonant ${name} noise starts as white does  ${d.toFixed (1)} dB (white's start against its end ${whiteOnset.toFixed (1)} dB)`);
+    });
+    types.forEach ((name, t) =>
+    {
+        const [l, r] = render ({ program: init, events: one, frames: 2 * rate, rate, args: ["--impulse", `2:48000:${hiss}`],
+                                 sets: { ...quiet, N_Type: t, N_Resonance: 0.7, U_Voices: 4, U_Spread: 1 }, out: join (dir, `noise_${name}_resonant.f32`) });
+        const peak = Math.max (...[l, r].map (x => x.reduce ((m, v) => Math.max (m, Math.abs (v)), 0)));
+        check ([l, r].every (x => x.every (Number.isFinite)) && peak > 1e-3 && peak < 16, `noise ${name.padEnd (9)} resonant, unison spread  peak ${peak.toFixed (3)}`);
+    });
 }
 
 // the noise source, on the pitch and on the cutoff

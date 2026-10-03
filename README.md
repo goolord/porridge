@@ -34,7 +34,13 @@ dsp/                    Cmajor DSP
                           (Voice.cmajor also has the key EQ: a low shelf under each voice's
                           note and bands on its harmonics; Oscillator.cmajor each oscillator's
                           roughness, noise in its phase, and its shape: a morph towards a
-                          second wave and CZ-style phase distortion, both per voice)
+                          second wave and CZ-style phase distortion, both per voice; and the
+                          noise generator's types after Oatmeal's white: pink, brown, blue and
+                          violet, crackle at a density, digital noise (an 8-bit console's shift
+                          register clocked with the note), metallic noise (its short loop at
+                          the note's pitch, from band-limited tables) and a sample of the
+                          user's, one for the whole sound, looped, each voice from a place of
+                          its own at a speed set by the transpose; the resonance after each)
   FxExtra.cmajor          Porridge's flanger, phaser, compressor, bode (the frequency shifter,
                           whose Hilbert pair, oscillator and glides the voice lane's runs too),
                           rack filter and utility
@@ -111,7 +117,8 @@ ui/                     patch view (ReScript)
   FilterTypes.res         the filter types, and their families for the menu; FilterGraph.res
                           their response pictures, with a point to drag for cutoff and resonance
   FxPanels.res            the tabs of Porridge's own effects (CompEditor.res: the compressor's);
-                          Impulse.res the convolvers' impulse files; AmbienceSim.res runs the
+                          Impulse.res the convolvers' impulse files (and the noise's sample,
+                          kept and sent the same way); AmbienceSim.res runs the
                           ambience's models on an impulse for its graphs; SpaceModels.res is
                           the space effects' one model list (reverb, ambience, convolution),
                           swapping an effect for another kind in its place
@@ -133,8 +140,8 @@ tools/
                           CLAP ids in dsp/param-ids.txt (param-ids.mjs)
   bundle.mjs              bundles the compiled view and worker into bundle/
   random-levels.mjs       measures the synth's levels for the random patches' estimate, K-
-                          weighted (--tables writes ui/random/LevelTables.res: waves, noise,
-                          each filter type, each distortion type's curve) and fits the
+                          weighted (--tables writes ui/random/LevelTables.res: waves, noise
+                          and its types, each filter type, each distortion type's curve) and fits the
                           estimate's weights to renders of random patches (uses the test host)
   clap/                   the C++ clap-patch.mjs adds: PorridgeBridge.h (settings, the host's
                           menu, the view's requests), PorridgeLibrary.h (the bank library:
@@ -162,10 +169,12 @@ tools/
                           HQ and Oatmeal's in Oat mode; the
                           oscillator envelopes and the noise source; the key EQ's bands and
                           shelf; oscillator roughness; osc 2 heard in PM; the oscillators'
-                          morph and phase distortion),
+                          morph and phase distortion; the noise types: their spectra, levels,
+                          pitch, speed and starts),
                           host.cpp's --time prints the render's own CPU time, for benchmarks
                           (--timefrom skips the attacks; an events file can also set
-                          parameters at given frames);
+                          parameters at given frames; --impulse sends a convolver's impulse or
+                          the noise's sample);
                           stored.mjs (the view's custom shape points: shaperIn events, the
                           stored state, undo, a host's state),
                           claphost.cpp (a minimal CLAP host: parameters, values, state) and

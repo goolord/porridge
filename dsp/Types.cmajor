@@ -36,7 +36,11 @@ namespace porridge
     /// Frames of a convolver's impulse per chunk.
     let impulseChunkFrames = 2048;
 
-    /// Part of an impulse response loaded from a file, for convolver `which` (0 or 1): frames
+    /// The ImpulseChunk `which` of the noise's sample (ui/Impulse.res's noise slot).
+    let noiseSampleSlot = 2;
+
+    /// Part of an impulse response loaded from a file, for convolver `which` (0 or 1), or of the
+    /// noise's sample (which = noiseSampleSlot, Oscillator.cmajor NoiseSample): frames
     /// offset .. offset + impulseChunkFrames of `length`, at sample rate `rate`, with 1 or 2
     /// channels (a mono impulse leaves `right` unused). The last chunk completes it.
     struct ImpulseChunk

@@ -43,6 +43,8 @@ type t =
   // the delay's reverse switches (D_ReverseL, D_ReverseR)
   | DelayReverse
   | ChorusMode
+  // the noise source's types (N_Type, a parameter of Porridge's)
+  | NoiseType
 
 // Values Porridge adds after Oatmeal's last one. Oatmeal programs never hold them; an Oatmeal
 // export makes each the closest one Oatmeal has, and its warning says what that loses.
@@ -193,6 +195,19 @@ let glideAbout = [
   "The glide time, more for small leaps and more for large ones (Oatmeal's P × (1 + o + 1/o))",
 ]
 
+// What each noise type sounds like, for its menu's hover texts.
+let noiseAbout = [
+  "White: every frequency alike, Oatmeal's noise",
+  "Pink: 3 dB less each octave up, like rain or a waterfall",
+  "Brown: 6 dB less each octave up, a deep rumble like surf",
+  "Blue: 3 dB more each octave up, a fine hiss",
+  "Violet: 6 dB more each octave up, the thinnest hiss",
+  "Crackle: sparse clicks like vinyl or a fire, as many a second as the density",
+  "Digital: an 8-bit console's noise, clocked with the note (brighter up the keyboard)",
+  "Metallic: the 8-bit noise's short loop, buzzing at the note's pitch",
+  "Sample: a recording of your own, looped, each voice from its own place (transpose sets its speed)",
+]
+
 let info = list =>
   switch list {
   // The HQ (anti-aliased) saw, pulse and triangle are the waves; Oatmeal's alias, and are there
@@ -326,6 +341,14 @@ let info = list =>
   | DelayReverse => {names: None, short: Some(["normal", "rev. out", "rev. fb"]), added: None, menu: Plain, about: None}
   // (off is the effect's light, as for the distortion)
   | ChorusMode => {names: None, short: None, added: None, menu: ordered([1, 2, 3, 4]->Array.map(v => (v, None))), about: None}
+  // the colours first, then the characters, then the sample (a rule above each group)
+  | NoiseType => {
+      names: None,
+      short: None,
+      added: None,
+      menu: Entries(_ => [0, 1, 2, 3, 4, 5, 6, 7, 8]->Array.map(value => {value, rule: value == 5 || value == 8})),
+      about: Some(v => noiseAbout[v]->Option.getOr("")),
+    }
   }
 
 // The list each of Oatmeal's list parameters shows, if it's one of these (Porridge's parameters

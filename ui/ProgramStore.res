@@ -603,6 +603,25 @@ let learn = (t, ccId) => {
   t.message("Move a controller to assign it to " ++ String.replace(ccId, "CC", "slot "))
 }
 
+// An audio file as the noise's sample, which it then plays (N_Type "sample").
+let loadNoiseSampleFile = async (t, file) => {
+  let name = file->Web.fileName
+  switch await AudioFile.readFile(file) {
+  | Error(e) => t.message(e)
+  | Ok(audio) =>
+    switch Impulse.noiseFromAudio(name, audio) {
+    | None => t.message(`${name} is silent or too short`)
+    | Some(imp) =>
+      setImpulse(t, Impulse.noiseSlot, Some(imp))
+      t.model->ParamModel.gestureSet("N_Type", Int.toFloat(PorridgeParams.noiseSample))
+      t.message(`Loaded ${name} (${Float.toFixed(Impulse.seconds(imp), ~digits=2)} s, looped) as the noise`)
+    }
+  }
+}
+
+// The noise's sample's name, if it has one.
+let noiseSampleName = t => t.impulses[Impulse.noiseSlot]->Option.flatMap(x => x)->Option.map(imp => imp.name)
+
 // An audio file as convolver `which`'s impulse, which it then plays (Cv_Impulse "file").
 let loadImpulseFile = async (t, which, file) => {
   let name = file->Web.fileName

@@ -10,7 +10,8 @@
 //     "tables": { "wave1": "<base64 float32 LE>", ... },      // only tables that differ from Init
 //     "tuning": { "scl": "<.scl text>", "kbm": "<.kbm text>" }, // microtuning, if any
 //     "impulses": [ { "name": "hall.wav", "rate": 48000, "left": "<base64 float32 LE>",
-//                     "right": "..." }, null ]           // the convolvers' files (Impulse.res), if any
+//                     "right": "..." }, null, null ]     // the convolvers' files and the noise's sample
+//                                                            // (Impulse.res), if any
 //   }
 //
 // The modulation matrix's slot parameters (Mod1_Source ...) are written as "modulations",
@@ -193,6 +194,8 @@ let featureLoss = (feature: PorridgeParams.feature) =>
   // the custom shape and the models' knobs go with the distortion types they're for (the mix,
   // which works on every type, is told apart)
   | CustomShape | DistModels => None
+  // (the type says: a density of white noise loses nothing)
+  | NoiseType => None
   }
 
 // What an Oatmeal export of this preset loses: the lines of its warning.
@@ -242,6 +245,9 @@ let porridgeOnly = p => {
   | copies => add(Some(`the rack's extra effects (${copies->Array.map(e => FxRack.kindName(e.kind))->Array.join(", ")})`))
   }
   features([Curves, Decay1Curves, OscEnvs, KeyEq, OscShape, OscNoise, PairMix, LfoExtras, UnisonExtras])
+  if valueOf(p, "N_Type") != 0. {
+    add(Some("the noise types (exported as white noise)"))
+  }
   oatmealLists(~list=DistType)
   if p.values->Map.get("Sat_Mix")->Option.mapOr(false, x => x != 1.) {
     add(Some("the distortion mix"))

@@ -758,16 +758,47 @@ let oscUnison = (r, w, p, m) => {
   }
 }
 
-let noiseIds = ["N_Amp", "N_Resonance", "N_Transpose", "O1_Noise", "O1_NoiseColour", "O2_Noise", "O2_NoiseColour"]
+// The noise as the oscillators' description says it: "noise", "pink noise", "crackle".
+let noiseText = m =>
+  switch Float.toInt(get(m, "N_Type")) {
+  | 0 => "noise"
+  | t if t == PorridgeParams.noiseCrackle => "crackle"
+  | t if t == PorridgeParams.noiseSample => "sampled noise"
+  | t => PorridgeParams.noiseTypes[t]->Option.mapOr("noise", name => name ++ " noise")
+  }
 
-// the noise source, and roughness (each oscillator's pitch moved by its own noise)
+let noiseIds = ["N_Amp", "N_Resonance", "N_Transpose", "N_Type", "N_Density", "O1_Noise", "O1_NoiseColour", "O2_Noise", "O2_NoiseColour"]
+
+// The noise type's level against white's (LevelTables.noiseTypes; the crackle's grows with its
+// density, from the 20 a second it was measured at; the sample's is a file's, as loud as white).
+let noiseTypeDb = m => {
+  let t = Float.toInt(get(m, "N_Type"))
+  let white = LevelTables.noiseTypes->Array.getUnsafe(0)
+  let db = LevelTables.noiseTypes[t]->Option.mapOr(0., x => x - white)
+  t == PorridgeParams.noiseCrackle
+    ? db + 10. * Math.log10(PorridgeParams.expValue(1., 4000., get(m, "N_Density")) / 20.)
+    : db
+}
+
+// the noise source (now and then a colour, crackle or 8-bit noise: never the sample, which is a
+// file's), and roughness (each oscillator's pitch moved by its own noise)
 let oscNoise = (r, w, k: kind, m) => {
   reset(m, noiseIds)
   if chance(r, 0.06 + 0.35 * w + (k == #pluck || k == #keys ? 0.08 : 0.)) {
     // (a resonant noise rings much louder: 15 dB more at 0.9)
     let res = within(r, w, (0., 0.3), (0., 0.85))
     put(m, "N_Resonance", res)
-    put(m, "N_Amp", ampOfDb(within(r, w, (-34., -24.), (-32., -10.)) - 18. * res * res))
+    if chance(r, 0.15 + 0.25 * w) {
+      // pink, brown, blue, violet, crackle, digital, metallic
+      let t = weighted(r, [(1., 1.), (2., 0.7), (3., 0.25), (4., 0.15), (5., 0.6), (6., 0.4), (7., 0.3)])
+      put(m, "N_Type", t)
+      if t == Int.toFloat(PorridgeParams.noiseCrackle) {
+        put(m, "N_Density", PorridgeParams.expPos(1., 4000., logWithin(r, w, (8., 60.), (2., 1500.))))
+      }
+    }
+    // as loud as white noise would be (the crackle's clicks up to 12 dB louder, not as loud: its
+    // level is in its few clicks)
+    put(m, "N_Amp", ampOfDb(within(r, w, (-34., -24.), (-32., -10.)) - 18. * res * res - Math.max(-12., noiseTypeDb(m))))
     if res > 0.5 {
       put(m, "N_Transpose", pick(r, [0., 12., 19., 24.]))
     }
@@ -1938,7 +1969,7 @@ let sources = (m, ~tables: OatmealFormat.tables) => {
   let n = get(m, "N_Amp")
   bright :=
     bright.contents +
-    n * n * Math.pow(10., ~exp=interpolate(LevelTables.noiseResonances, LevelTables.noise, get(m, "N_Resonance")) / 10.)
+    n * n * Math.pow(10., ~exp=(interpolate(LevelTables.noiseResonances, LevelTables.noise, get(m, "N_Resonance")) + noiseTypeDb(m)) / 10.)
   (bright.contents, pure.contents)
 }
 
@@ -2295,6 +2326,7 @@ let nudges = (a: area) =>
       nudge("Detune", Lin(-12., 12.), ~scale=0.4, ~active=secondSounds),
       nudge("N_Amp", Db(-40., 0.), ~active=nonzero("N_Amp")),
       nudge("N_Resonance", Lin(0., 0.95), ~active=nonzero("N_Amp")),
+      nudge("N_Density", Lin(0., 0.9), ~active=m => get(m, "N_Amp") > 0. && get(m, "N_Type") == Int.toFloat(PorridgeParams.noiseCrackle)),
       nudge("U_Detune", Log(2., 100.), ~active=m => get(m, "U_Voices") > 1.),
       nudge("U_Spread", Lin(0., 1.), ~active=m => get(m, "U_Voices") > 1.),
       nudge("PM_Feedback", Lin(0., 0.95), ~active=m => mixMode(m) == pm || mixMode(m) == pmFeedback),
@@ -2570,7 +2602,7 @@ let oscText = m => {
     Some(pair),
     get(m, "M1_Target_1") != 0. ? Some("swept") : None,
     voices > 1. ? Some(`×${Float.toString(voices)}`) : None,
-    get(m, "N_Amp") > 0. ? Some("+ noise") : None,
+    get(m, "N_Amp") > 0. ? Some("+ " ++ noiseText(m)) : None,
     get(m, "O1_Noise") > 0. || get(m, "O2_Noise") > 0. ? Some("rough") : None,
   ]->Array.filterMap(x => x)->Array.join(" ")
 }

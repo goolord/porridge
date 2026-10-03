@@ -1085,9 +1085,9 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~perVoice, ~w, ~h) => {
       ev->preventDefault
       ev->stopPropagation
     })
+    // (taking it: the view's drop zone leaves a drop whose default is prevented alone)
     fg.root->onDrag(#drop, ev => {
       ev->preventDefault
-      ev->stopPropagation
       ev
       ->dataTransfer
       ->Option.flatMap(d => d->transferredFiles->item(0))

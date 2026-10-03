@@ -219,11 +219,16 @@ if (existsSync (host))
     const within = tame.filter (d => Math.abs (d - median) < 6).length / tame.length;
     check (Math.abs (median) < 3, `patches at 0.3 come out near their level (median ${median.toFixed (1)} dB from it)`);
     check (within >= 0.85, `most of them within 6 dB of each other (${Math.round (100 * within)}%)`);
-    // with the effects at their wildest (heavy distortion among them), none far louder
+    // with the effects at their wildest (heavy distortion among them), few far louder: at most two
+    // of the 70 more than 9 dB over, none more than 18. (The loudest is one draw: over seeds 31 ..
+    // 42 it ranged from 6 to 17 dB before the noise types, the third loudest from 4 to 9, so a
+    // new draw in the generator, which moves every patch after it, mustn't decide it: when the
+    // noise types came, the loudest became a bell with AM and a resonator in each voice, and no
+    // noise, at 12.8 dB.)
     const wild = levelsAt ({ ...wildAt (0.3), fx: 1 }, "with wild effects");
-    const top = wild[wild.length - 1];
+    const [third, , top] = wild.slice (-3);
     check (Math.abs (wild[wild.length >> 1]) < 3, `patches with wild effects come out near their level too (median ${wild[wild.length >> 1].toFixed (1)} dB from it)`);
-    check (top < 9, `none of them much louder (the loudest ${top.toFixed (1)} dB over)`);
+    check (third < 9 && top < 18, `few of them much louder (the loudest ${top.toFixed (1)} dB over, the third ${third.toFixed (1)})`);
 }
 else
     console.log ("(no test host: tools/test/build.sh builds it; the levels weren't checked)");

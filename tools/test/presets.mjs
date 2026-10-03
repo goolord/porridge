@@ -11,6 +11,8 @@
 //     free copy, or without it and a warning;
 //   - the retired key shifter loads as the frequency shifter (a free Bode copy, its ratio of the
 //     note, its offset as the shift), connections and all, or without it and a warning.
+//   - the noise's type, density and sample survive a round trip, and the types that aren't
+//     white are reported for an Oatmeal export, which plays white noise.
 //
 // run: node tools/test/presets.mjs
 
@@ -25,6 +27,7 @@ import * as PorridgeParams from "../../ui/PorridgeParams.res.mjs";
 import * as ModMatrix from "../../ui/ModMatrix.res.mjs";
 import * as ParamDefs from "../../ui/ParamDefs.res.mjs";
 import * as ValueList from "../../ui/ValueList.res.mjs";
+import * as Impulse from "../../ui/Impulse.res.mjs";
 import { root, checker } from "./lib.mjs";
 
 const { fail, done } = checker ();
@@ -317,6 +320,48 @@ else
     if (lane.join () !== [value ("bode", 3), value ("filter", 1), 0, 0].join () || r.get ("VL_FilterAt") !== 2 || r.get ("VL_AmpAt") !== 2
         || r.warnings.length !== 1 || ! r.warnings[0].includes ("Shifter 2") || r.get ("Mod1_Source") !== 0)
         fail (`two shifters, two Bodes: lane ${lane}, filter at ${r.get ("VL_FilterAt")}: ${r.warnings}`);
+}
+
+// the noise's type and density, and its sample (Impulse's noise slot, beside the convolvers'
+// files), through a preset file and the stored bank; a file from before the noise's sample (two
+// impulses) reads with none; an Oatmeal export plays white noise and says so, though not for a
+// density of white noise; the types keep their values; a sample from a file is made mono, loops
+// without a jump and is as loud as the white noise
+{
+    if (PorridgeParams.noiseTypes.join () !== "white,pink,brown,blue,violet,crackle,digital,metallic,sample") fail ("the noise types moved");
+    const n = 6000, rate = 44100;
+    const audio = { samples: Float32Array.from ({ length: n }, (_, i) => 0.3 * Math.sin (i * 0.05) + 0.1 * Math.sin (i * 0.31)), sampleRate: rate,
+                    frameSize: undefined, sides: undefined };
+    const imp = Impulse.noiseFromAudio ("hiss.wav", audio);
+    if (! imp || imp.right !== undefined || imp.rate !== rate) fail ("the noise's sample from a file");
+    else
+    {
+        const d = imp.left, m = d.length;
+        const rms = Math.sqrt (d.reduce ((a, v) => a + v * v, 0) / m);
+        const step = Math.max (...Array.from ({ length: m - 1 }, (_, i) => Math.abs (d[i + 1] - d[i])));
+        if (Math.abs (rms - 0.57735) > 1e-3) fail (`the noise's sample's RMS ${rms}`);
+        if (Math.abs (d[0] - d[m - 1]) > 2 * step) fail (`the noise's sample jumps ${Math.abs (d[0] - d[m - 1])} at its loop (steps ${step})`);
+    }
+    const p = Preset.make ("noisy");
+    p.values.set ("N_Type", 7); p.values.set ("N_Density", 0.75); p.values.set ("N_Amp", 0.3);
+    const withSample = { ...p, impulses: [undefined, undefined, imp] };
+    const back = Preset.parseFile (Preset.writePreset (withSample))._0.presets[0];
+    if (back.values.get ("N_Type") !== 7 || back.values.get ("N_Density") !== 0.75) fail ("the noise's type and density in a preset file");
+    const sample = back.impulses[Impulse.noiseSlot];
+    if (! sample || sample.name !== "hiss.wav" || sample.rate !== rate || sample.left.length !== imp.left.length
+        || ! sample.left.every ((v, i) => v === imp.left[i]) || back.impulses[0] !== undefined)
+        fail ("the noise's sample in a preset file");
+    const stored = Preset.decodeBank (Preset.encodeBank (Preset.fillBank ([withSample])));
+    if (! stored || stored[0].values.get ("N_Type") !== 7 || stored[0].impulses[Impulse.noiseSlot]?.left.length !== imp.left.length)
+        fail ("the noise's sample in the stored bank");
+    const older = Impulse.listFromJson (JSON.parse (JSON.stringify ([Impulse.toJson (imp), null])));
+    if (older.length !== Impulse.slots || older[0]?.name !== "hiss.wav" || older[Impulse.noiseSlot] !== undefined) fail ("two impulses read as the convolvers'");
+    const lost = Preset.porridgeOnly (p);
+    if (! lost.some (l => l.includes ("noise types"))) fail ("porridgeOnly misses the noise type: " + lost);
+    if (Bank.programValues (Preset.toOatmeal (p)).has ("N_Type")) fail ("the noise type goes into an Oatmeal program");
+    const density = Preset.make ("dense");
+    density.values.set ("N_Density", 0.75);
+    if (Preset.porridgeOnly (density).length !== 0) fail ("a density of white noise is reported: " + Preset.porridgeOnly (density));
 }
 
 done (`ok: ${programs.length} programs round-trip`);

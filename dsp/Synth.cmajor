@@ -215,6 +215,12 @@ namespace porridge
         Lcg noiseRng;
         float noiseGlobal;
 
+        // the noise source's types after white (Oscillator.cmajor renderTyped): the colours' filters,
+        // the sample, and their own random numbers (the crackle's, and each voice's start)
+        NoiseTables noiseTables;
+        NoiseSample noiseSample;
+        Lcg noiseTypeRng;
+
         // Porridge's own randomness (drift, unison phases), apart from Oatmeal's rng
         Lcg driftRng;
 
@@ -342,6 +348,8 @@ namespace porridge
         {
             if (c.which >= 0 && c.which < rack::convolveCount)
                 convolvers.at (c.which).loadImpulse (c);
+            else if (c.which == noiseSampleSlot)
+                noiseSample.loadChunk (c);
         }
         event testModeIn (int x)                        { useTestInput = x != 0; }
 
@@ -365,6 +373,7 @@ namespace porridge
 
             ampSmooth = ampSmoothing (sampleRate);
             fmCoefs = makeFmCoefs (float64 (srInt));
+            noiseTables.build (sampleRate);
             let c = pow (10.0, -2.0 / (0.05 * float64 (srInt)));
 
             for (int n = 0; n <= blockSize; ++n)
@@ -437,6 +446,7 @@ namespace porridge
             walkT = 0;
             modRng.state = 12345;
             noiseRng.state = 24680;
+            noiseTypeRng.state = 13579;
             laneRng.state = 97531;
             lastNoteFrame = -(1i64 << 40);      // (the first note's gap is 1)
             driftRng.state = 54321;
@@ -3408,8 +3418,8 @@ namespace porridge
                 if (v.osc1[0].glideOn)
                     v.noise.glideTo (float (float64 (v.osc1[0].glideTarget) * toHzN * float64 (ratioN)), v.osc1[0].glideRem);
 
-                if (stereo) v.noise.renderNoise (rng, P, Rg, at, ampN, noiseResMod, sampleRate, bufNZ, n);
-                else        v.noise.renderNoise (rng, P, Rg, at, ampN, noiseResMod, sampleRate, bufM, n);
+                if (stereo) v.noise.renderNoise (rng, noiseTypeRng, noiseTables, noiseSample, P, Rg, at, ampN, noiseResMod, Rg * ratioN, sampleRate, bufNZ, n);
+                else        v.noise.renderNoise (rng, noiseTypeRng, noiseTables, noiseSample, P, Rg, at, ampN, noiseResMod, Rg * ratioN, sampleRate, bufM, n);
             }
 
             // each oscillator's own envelope, while it's on: its level follows it, at the amp

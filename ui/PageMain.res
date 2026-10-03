@@ -123,16 +123,53 @@ let oscPanel = (ctx: Ctx.t, page) => {
     ~left=true,
   )
 
-  // the noise generator, and each oscillator's roughness (its pitch moved by noise)
-  let noise = Grid.make(ctx, osc->Panel.body(2), ~cw)
-  noise->Grid.param("N_Amp", 0, 0, "noise level")
-  noise->Grid.param("N_Resonance", 1, 0, "resonance")
-  noise->Grid.param("N_Transpose", 2, 0, "transpose")
+  // the noise generator: its type, level and band-pass, the crackle's density or the sample
+  // (a file to load, or drop on the tab); then each oscillator's roughness (its pitch moved by
+  // noise)
+  let noiseBody = osc->Panel.body(2)
+  let noise = Grid.make(ctx, noiseBody, ~cw)
+  let noiseType = () => Float.toInt(model->ParamModel.get("N_Type"))
+  noise->Grid.choice("N_Type", 0, 0, "noise", ~span=2)
+  noise->Grid.param("N_Amp", 2, 0, "level")
   noise->Grid.param("N_Aftertouch", 3, 0, "aftertouch")
-  noise->Grid.param("O1_Noise", 0, 1, "osc 1 rough")
-  noise->Grid.param("O1_NoiseColour", 1, 1, "colour")
-  noise->Grid.param("O2_Noise", 2, 1, "osc 2 rough")
-  noise->Grid.param("O2_NoiseColour", 3, 1, "colour")
+  noise->Grid.param("N_Resonance", 0, 1, "resonance")
+  noise->Grid.param("N_Transpose", 1, 1, "transpose")
+  shownWhile(ctx, noise, ["N_Type"], () => noiseType() == PorridgeParams.noiseCrackle, g => g->Grid.param("N_Density", 2, 1, "density"))
+  let pickSample = FilePicker.make(noiseBody, ~accept=AudioFile.accept, file =>
+    ctx.programs->ProgramStore.loadNoiseSampleFile(file)->Promise.ignore
+  )
+  let sampleGrid = Grid.make(ctx, noiseBody, ~cw)
+  shownWhile(ctx, sampleGrid, ["N_Type"], () => noiseType() == PorridgeParams.noiseSample, g =>
+    g->Grid.at(2, 1, ~span=2, "the noise's sample", b => {
+      let button = Controls.button(ctx, g.el, "", ~x=b.x, ~y=b.y, ~w=b.w, ~h=b.h, ~cls="gc", pickSample)
+      let show = () =>
+        button->setTextContent(
+          ctx.programs->ProgramStore.noiseSampleName->Option.mapOr("load sample…", name => "sample: " ++ name),
+        )
+      ctx.status->Status.hover(button, () =>
+        "The sample the noise loops, each voice from a place of its own (transpose sets its speed): click to load a WAV, AIFF or other audio file, or drop one on this tab"
+      )
+      ctx.programs->ProgramStore.onImpulses(show)
+      show()
+    })
+  )
+  // an audio file dropped on the tab becomes the noise's sample (taken: the view's drop zone
+  // leaves a drop whose default is prevented alone; other files go on to it)
+  noiseBody->onDrag(#dragover, preventDefault)
+  noiseBody->onDrag(#drop, ev =>
+    ev
+    ->dataTransfer
+    ->Option.flatMap(d => d->transferredFiles->item(0))
+    ->Option.filter(f => AudioFile.isAudio(f->fileName))
+    ->Option.forEach(f => {
+      ev->preventDefault
+      ctx.programs->ProgramStore.loadNoiseSampleFile(f)->Promise.ignore
+    })
+  )
+  noise->Grid.param("O1_Noise", 0, 2, "osc 1 rough")
+  noise->Grid.param("O1_NoiseColour", 1, 2, "colour")
+  noise->Grid.param("O2_Noise", 2, 2, "osc 2 rough")
+  noise->Grid.param("O2_NoiseColour", 3, 2, "colour")
 
   let unison = Grid.make(ctx, osc->Panel.body(3), ~cw)
   unison->Grid.param("U_Voices", 0, 0, "voices")

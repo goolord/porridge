@@ -1087,6 +1087,25 @@ let oscShapeSpecs = [1, 2]->Array.flatMap(n => {
   ]
 })
 
+// The noise source's type: Oatmeal's white, the colours (white filtered: pink -3 dB an octave,
+// brown -6, blue +3, violet +6, each as loud as the white), crackle (sparse clicks, as many a
+// second as the density says), digital and metallic noise (a 15-bit shift register clocked
+// with the note, as 8-bit consoles' noise: metallic's short loop repeats once a cycle, so it
+// has the note's pitch) and a sample (Impulse's noise slot, looped, each voice from a place of
+// its own, at its own speed with the transpose). The resonance's band-pass comes after each.
+let noiseTypes = ["white", "pink", "brown", "blue", "violet", "crackle", "digital", "metallic", "sample"]
+let noiseCrackle = 5
+let noiseSample = 8
+let noiseTypeSpecs = [
+  {id: "N_Type", name: "Noise type", kind: Choice({names: noiseTypes, init: 0, list: NoiseType})},
+  {
+    id: "N_Density",
+    name: "Noise density",
+    kind: expKnob(~lo=1., ~hi=4000., ~init=20., ~text=x => Float.toFixed(x, ~digits=x < 10. ? 1 : 0) ++ " /s"),
+    about: "the crackle's clicks a second",
+  },
+]
+
 // In the PM 2 > 1, ring and AM osc mixes, osc 2 heard as well as modulating (at this much of
 // its level, which is also the depth): an oscillator that modulates another and sounds beside
 // it, as Synplant's B does.
@@ -1146,6 +1165,7 @@ type feature =
   | VoiceExtras
   | OscShape
   | BodeRatio
+  | NoiseType
 
 // The voice lane (dsp/VoiceFx.cmajor): up to laneSlots effects in every voice, which each note
 // runs its own copy of, holding the same values as the rack's slots (only the kinds that work in
@@ -1255,6 +1275,7 @@ let groupsAsAdded = [
   (VoiceExtras, voiceExtraSpecs),
   (OscShape, oscShapeSpecs),
   (BodeRatio, bodeRatioSpecs),
+  (NoiseType, noiseTypeSpecs),
 ]
 
 // The retired copies' parameters (and every copy's of a retired kind): no longer the patch's,

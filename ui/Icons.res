@@ -346,6 +346,51 @@ let filterDouble = [
 ]
 
 //==============================================================================
+// noise types (ValueList.NoiseType, in its order): the colours as a jittery spectrum along its
+// tilt (low frequencies on the left), the others as what they look like in time
+
+let noiseJitter = [0., -2.2, 1.6, -0.8, 2.4, -1.9, 0.6, -2.5, 1.9, -1., 2.2, -1.6, 0.9, -2.3, 1.4, -0.6, 2.5, -1.8, 1.1, -2., 0.4]
+
+// a jagged line from height y0 on the left to y1 on the right
+let noisy = (y0, y1, ~scale=1.) => {
+  let f = x => Float.toFixed(x, ~digits=2)
+  let points = noiseJitter->Array.mapWithIndex((j, i) => {
+    let x = 1. +. Int.toFloat(i)
+    `${f(x)} ${f(y0 +. (y1 -. y0) *. (x -. 1.) /. 20. +. j *. scale)}`
+  })
+  wide([Line("M" ++ points->Array.join(" L"))])
+}
+
+// bits held one unit each, repeated: a wave from 1 to 21 between the heights 12 (0) and 4 (1)
+let bitsPath = (bits, repeats) => {
+  let all = Array.fromInitializer(~length=repeats, _ => bits)->Array.flat
+  let step = 20. /. Int.toFloat(Array.length(all))
+  let f = x => Float.toFixed(x, ~digits=2)
+  let y = b => b == 1 ? "4" : "12"
+  "M1 " ++
+  y(all->Array.getUnsafe(0)) ++
+  all
+  ->Array.mapWithIndex((b, i) => ` V${y(b)} H${f(1. +. step *. Int.toFloat(i + 1))}`)
+  ->Array.join("")
+}
+
+let noiseTypes = [
+  noisy(8., 8., ~scale=0.55),
+  noisy(4.5, 11.5, ~scale=0.45),
+  noisy(1.5, 14.5, ~scale=0.45),
+  noisy(11.5, 4.5, ~scale=0.45),
+  noisy(14.5, 1.5, ~scale=0.45),
+  // crackle: sparse clicks on silence
+  wide([Line("M1 8 H4 L4.6 2.5 L5.2 12 L5.8 8 H10 L10.5 10.5 L11 6.5 L11.5 8 H15 L15.6 1.5 L16.2 14.5 L16.8 8 H21")]),
+  // digital: a shift register's bits, held
+  wide([Line(bitsPath([0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 1, 1], 1))]),
+  // metallic: a short run of bits, over and over
+  wide([Line(bitsPath([1, 0, 1, 1, 0, 0], 2))]),
+  // sample: a recording's waveform
+  wide([Line("M2 6.5 V9.5 M4 4 V12 M6 6 V10 M8 2.5 V13.5 M10 5 V11 M12 3.5 V12.5 M14 6.5 V9.5 M16 4.5 V11.5 M18 6 V10 M20 7 V9")]),
+]
+
+//==============================================================================
 // the settings button: a solid gear with a hole (wound the other way, so it stays open)
 
 let gear = {width: 16., marks: [Fill("M6.55 2.69L6.69 0.51H9.31L9.45 2.69A5.5 5.5 0 0 1 10.73 3.22L12.37 1.78L14.22 3.63L12.78 5.27A5.5 5.5 0 0 1 13.31 6.55L15.49 6.69V9.31L13.31 9.45A5.5 5.5 0 0 1 12.78 10.73L14.22 12.37L12.37 14.22L10.73 12.78A5.5 5.5 0 0 1 9.45 13.31L9.31 15.49H6.69L6.55 13.31A5.5 5.5 0 0 1 5.27 12.78L3.63 14.22L1.78 12.37L3.22 10.73A5.5 5.5 0 0 1 2.69 9.45L0.51 9.31V6.69L2.69 6.55A5.5 5.5 0 0 1 3.22 5.27L1.78 3.63L3.63 1.78L5.27 3.22A5.5 5.5 0 0 1 6.55 2.69ZM10.3 8A2.3 2.3 0 1 0 5.7 8A2.3 2.3 0 1 0 10.3 8Z")]}
@@ -389,6 +434,7 @@ let ofList = (list: ValueList.t) =>
   | OscMix => Some(oscMix->byIndex)
   | ArpMode => Some(arpModes->byIndex)
   | ChorusMode => Some((_, name) => chorusModeByName(name))
+  | NoiseType => Some(noiseTypes->byIndex)
   | DistMode | TouchMode | GlideMode | DelayReverse | LfoUnit | DelayUnit | ArpUnit => None
   }
 

@@ -1215,6 +1215,8 @@ processor ParamStore
     input event float Bd_Ratio [[ name: "Bode note ratio", min: -1, max: 1, init: 0 ]];
     input event float Bd2_Ratio [[ name: "Bode 2 note ratio", min: -1, max: 1, init: 0 ]];
     input event float Bd3_Ratio [[ name: "Bode 3 note ratio", min: -1, max: 1, init: 0 ]];
+    input event int N_Type [[ name: "Noise type", min: 0, max: 8, init: 0, text: "white|pink|brown|blue|violet|crackle|digital|metallic|sample" ]];
+    input event float N_Density [[ name: "Noise density", min: 0, max: 1, init: 0.361190527677536 ]];
 
     /// the custom shapes' points, which are stored state rather than endpoints (ui/StoredParams.res)
     input event porridge::ShaperPoints shaperIn;
@@ -2426,6 +2428,8 @@ processor ParamStore
     event Bd_Ratio (float v) { paramOut <- porridge::ParamChange (3658, v); }
     event Bd2_Ratio (float v) { paramOut <- porridge::ParamChange (3659, v); }
     event Bd3_Ratio (float v) { paramOut <- porridge::ParamChange (3660, v); }
+    event N_Type (int v) { paramOut <- porridge::ParamChange (3661, float (v)); }
+    event N_Density (float v) { paramOut <- porridge::ParamChange (3662, v); }
 
     event shaperIn (porridge::ShaperPoints s)
     {
