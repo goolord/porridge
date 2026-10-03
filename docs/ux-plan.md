@@ -467,3 +467,153 @@ user waveforms and the XY pad.
 - Plain Saw/Pulse alias at -24..-32 dB on keys 54-64 (one table for that octave).
 - PZ SVF at morph 1 expands (+12 dB in, about +16 dB out).
 - Lane EQ measured ≈0 CPU in the bench; it may not have been switched on; recheck.
+
+---
+
+## Phase 5b: stacking
+
+2026-10-02, after the rack's pool landed (Phase 5's memory work). The question: can effects stack
+freely (five reverbs, eight delays) without each kind paying a fixed cost per copy, given that
+Cmajor allocates nothing at run time? Sizes are `sizeof` of the generated state (MB = 10^6
+bytes); CPU is the MSVC test host, 8-note saw chord, PolyMode=1, interleaved minimums of 7, % of
+a core at 44.1 kHz.
+
+### Where things stand
+
+The rack has 8 slots. Behind them are fixed instances: Oatmeal's chorus, delay, reverb and EQ,
+two more copies of those four, and three of each Porridge kind (two convolvers). Each copy has
+its own parameter endpoints (577 declared, 430 automatable) and matrix targets (221 live).
+
+Memory now has no per-copy cost for the big buffers. The effects with long lines keep them in one
+pool (`Common.cmajor`'s FxPool: 8,192 blocks of 1,024 floats, 33.5 MB) and borrow their blocks
+while they are in the rack (Synth's `claimPool`). Eight slots can hold at most eight instances,
+so the pool only has to fit the eight largest together:
+
+| Instance | Footprint (blocks) | MB |
+|---|---|---|
+| Oatmeal's delay (30 s a side at any rate, as Oatmeal) | 2,584 | 10.58 |
+| convolver (tail spectra and predelay), x2 | 1,102 | 4.51 |
+| rack delay copy (10 s a side), x2 | 862 | 3.53 |
+| algo reverb, x3 | 512 | 2.10 |
+| Oatmeal's reverb and its copies, x3 | 502 | 2.06 |
+| Bode, x3 | 376 | 1.54 |
+| ambience, x3 | 320 | 1.31 |
+| flanger, x3 | 128 | 0.52 |
+| **all 20** | **12,026** | **49.3** |
+| **the worst eight** (delay, 2 convolvers, 2 delays, 3 algo reverbs) | **8,048** | **33.0** |
+
+Per instance: 70.6 MB before this work, 51.7 MB now (the pool 33.5, wave tables 6.2, voice
+lane 4.3, convolvers' own parts 3.9, voices and their filters 2.2, the rest 1.6). The ≤ 45 MB
+target is not reachable without giving something up: the worst eight alone are 33 MB, and they
+are all reachable (Oatmeal's delay really is 30 s at 44.1 kHz with length 100 x seconds; the
+reverbs' lines are sized for 192 kHz, Cmajor's highest rate). A 24 MiB pool would make 43 MB, at
+the price of a rack holding more than 24 MiB of long lines at once (for example Oatmeal's delay,
+both convolvers and a delay copy) not getting all of them.
+
+What stays per copy: its small state (bytes: delay 68, flanger 40, Bode 656, ambience 2,160,
+algo reverb 5,848, Oatmeal reverb 8,516, distortion 7,664, rack filter 17,996, chorus 262,576 for
+its 0.74 s line, convolver 1,936,912 of which 1.57 MB is the loaded file and its resampled
+copy), and its parameters.
+
+CPU of the pool (base = before, pool = now):
+
+| Case | base | pool |
+|---|---|---|
+| no effects | 1.516 | 1.488 |
+| Oatmeal delay | 1.606 | 1.589 |
+| delay copy | 1.607 | 1.588 |
+| Oatmeal reverb | 1.790 | 1.738 |
+| algo reverb, hall | 2.998 | 2.816 |
+| algo reverb, plate | 2.270 | 2.299 |
+| convolver, hall | 2.728 | 2.687 |
+| Bode with feedback | 1.769 | 1.770 |
+| ambience, room | 2.590 | 2.075 |
+| ambience, verb tiny | 1.771 | 1.672 |
+| flanger | 1.624 | 1.646 |
+| six pooled effects at once | 6.129 | 5.297 |
+| Oatmeal program (Oat mode), f001 / f005 | 1.554 / 8.542 | 1.498 / 8.511 |
+
+A pool access costs about four more instructions than a member array's (block, then float);
+that alone made the algo reverb 20 % slower. Its line tables (40 entries, indexed modulo 40,
+which compiles to a multiply) were cheaper to fix than the pool: at 64 entries a line number is a
+mask, and the algo reverb and ambience now run faster than before. The convolver's spectra are
+whole blocks, so its multiply-accumulates still vectorize.
+
+### Designs for free stacking
+
+**A. Fixed copies over the pool (built).** As now. More copies of a kind cost their parameters
+(a delay copy 15, a compressor 28, an EQ 21) and small state, and pool memory only if they change
+the worst eight: a third delay copy does (8,398 blocks, over 8,192), a fourth reverb or Bode does
+not. A pool whose block count isn't a power of two pays a multiply on every access (the cost the
+line tables had), so the next size up is 16,384 blocks (67 MB). Stacking stays capped per kind,
+and the host list, the matrix's targets and the generated header (80 % of it scales with the
+parameters; 78 s MSVC builds) grow with every copy.
+
+**B. Generic slots.** Each of the 8 slots hosts any kind, with a block of M generic parameters
+(M ≈ 28, the compressor's, once the custom shaper's 49 points are stored state). Cmajor has no
+unions, so a slot holds every kind's small state: about 0.4 MB a slot (0.36 of it the
+convolver's spectra and buffers) once the chorus's line moves into the pool, 3.3 MB for 8 slots.
+The convolver's file and resampled copy (1.57 MB) can't be per slot (12.6 MB): cap convolvers at
+2, or keep the file in the view and send it when a slot becomes a convolver. Pool: Oatmeal's four
+stay fixed instances (Oatmeal compatibility); generic slots hold rack-sized kinds, so the worst
+case is Oatmeal's delay, 2 convolvers and 5 rack delays, 9,098 blocks, which needs the next
+power of two (67 MB); with rack delays capped at 2 it is today's 8,048. Total about 53 MB with
+the delays capped.
+Parameters: 8 x 28 = 224 slot parameters replace 430 automatable copy parameters.
+CPU per sample is unchanged; per block, a switch on the slot's kind and its parameter block moved
+into the kind's slots (what `swapKind` does for copies today: about 2 M floats a slot, under
+0.01 % of a core).
+
+**C. Per-kind instance pools that slots borrow.** Each kind has N instances (small state only);
+a slot holds a kind and the generic parameter block, and borrows a free instance of its kind
+while it holds it. Memory is Σ N x small state plus the pool: with 2 convolvers and 8 of
+everything else (about 45 kB a set) it is 51 MB, the same pool limits as B. Over B it keeps an
+effect's state when slots
+are reordered (the instance stays, only the slot's index moves), where B would have to copy state
+between slots or reset it.
+
+**Parameters, automation and presets (B and C alike).**
+- CLAP parameter IDs are endpoint handles, so endpoints can't be removed or reordered without
+  breaking hosts' saved automation. The copies' 577 endpoints have to stay declared (non-
+  automatable, as aliases the loader reads) and the slot parameters go at the end, so the header
+  only shrinks once IDs stop being handles. Worth doing first: tools/clap-patch.mjs can give the
+  wrapper a table from gen.mjs (today's handles kept as the IDs of today's parameters, new IDs for
+  new ones), after which retired endpoints can go.
+- A slot parameter's meaning follows the slot's kind. Hosts keep automation on "slot 3, knob 2"
+  and it moves whatever kind is there. Names can follow the kind through CLAP's params rescan
+  (`CLAP_PARAM_RESCAN_INFO | CLAP_PARAM_RESCAN_TEXT`), which Cmajor's wrapper doesn't do: a
+  clap-patch.mjs addition, and hosts differ in how they show renamed parameters.
+- Presets: a slot stores its kind and its knobs by name; programs that use copies map each
+  (kind, copy) in the rack to its slot on load (values stay append-only; a load-time migration in
+  `Preset.res` with a test, as for the 4th copies).
+- The matrix: 221 live per-copy targets become 8 x M per-slot targets, appended; old target
+  indices map to the slot their copy sits in when loaded (a copy outside the rack doesn't sound,
+  so its routes have nothing to map to).
+- Oatmeal export: unchanged. Oatmeal's chorus, delay, reverb and EQ stay fixed instances with
+  their own parameters; generic slots are Porridge's, lost on export as copies are now (the
+  export's loss list names them).
+
+### Making stacking actually free: footprints that follow the knobs
+
+Every design above sizes the pool for the worst reachable rack. The cost people would notice is
+the fixed 33 MB, not the per-copy one, and almost no rack is near that worst case: Oatmeal itself
+allocates its delay at the length the knobs ask for. The pool already allocates at run time, so
+it can do the same: a delay claims lenL + lenR (it clears its line on every length change
+anyway), a reverb its lines at the current rate (cleared on a size change), and an effect whose
+claim doesn't fit runs dry with an "out of memory" mark on its card. With footprints like that
+the 32 MiB pool holds eight rack delays at their longest, or reverbs of any kind in every slot
+(at 48 kHz an algo reverb's lines take a quarter of their 192 kHz size); only a rack with
+Oatmeal's delay near 30 s, both convolvers and several long delays could reach the limit, and the
+limit could be a setting.
+
+### Recommendation
+
+1. Keep A (done): the copies' memory is gone, the CPU is level or better.
+2. Make CLAP IDs independent of endpoint order (clap-patch.mjs table), and move the custom
+   shaper's points to stored state; both are needed by any slot design and help the host list on
+   their own.
+3. Then C with B's parameters: 8 generic slots of 28 knobs, per-kind instances (2 convolvers,
+   8 of everything else, the chorus's line in the pool), footprints that follow the knobs, and a
+   memory mark on the cards. Estimate: about 51 MB per instance with no per-kind stacking limit
+   except the convolver's, 224 slot parameters instead of 430, the same per-sample CPU, and the
+   copies' endpoints kept as aliases until step 2 lets them go.

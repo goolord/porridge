@@ -29,13 +29,13 @@
 namespace porridge
 {
     let ambPoolSize = 327680;       // the room at 192 kHz and full size, with 250 ms predelay
-    let ambMaxLines = 34;
+    let ambMaxLines = 64;       // (up to 34 used: a power of two makes a line number a mask)
 
     /// The ambience effect.
     struct Ambience
     {
-        float[ambPoolSize] pool;
-        int[ambMaxLines] base, cap, wp;         // a line's start in the pool, capacity and write index
+        int fxAt;                               // its lines' region in the pool (FxPool): ambPoolSize floats
+        int[ambMaxLines] base, cap, wp;         // a line's start in the region, capacity and write index
         float64[ambMaxLines] d, dInc;           // the room's and predelay's delays (fractional) and ramps
         int numLines;
         int model;                              // -1: not laid out yet
@@ -110,21 +110,21 @@ namespace porridge
     // Delay lines in the pool (Common.cmajor's poolWrite, poolAdvance, poolReadLin)
 
     /// A Schroeder allpass (-g + z^-d) / (1 - g z^-d) on line j at its moving delay.
-    float ambAllpass (Ambience& this, int j, float x, float g)
+    float ambAllpass (Ambience& this, FxPool& pool, int j, float x, float g)
     {
-        let z = this.poolReadLin (j, this.d.at (j));
+        let z = this.poolReadLin (pool, j, this.d.at (j));
         let v = x + g * z;
-        this.poolWrite (j, v);
+        this.poolWrite (pool, j, v);
         this.poolAdvance (j);
         return z - g * v;
     }
 
     /// An Airwindows delay: writes x and returns what was written cap - 1 samples ago.
-    float ambPush (Ambience& this, int j, float x)
+    float ambPush (Ambience& this, FxPool& pool, int j, float x)
     {
-        this.poolWrite (j, x);
+        this.poolWrite (pool, j, x);
         this.poolAdvance (j);
-        return this.pool.at (this.base.at (j) + this.wp.at (j));
+        return poolGet (pool, this.fxAt, this.base.at (j) + this.wp.at (j));
     }
 
     /// A one-pole lowpass (the bilinear transform's, gain g = tan (pi f / sr) / (1 + tan)).
@@ -161,7 +161,7 @@ namespace porridge
     }
 
     /// Lays the model out in the pool (silent).
-    void ambSetup (Ambience& this, int model, int room, float64 sr, float size, float predelayMs)
+    void ambSetup (Ambience& this, FxPool& pool, int model, int room, float64 sr, float size, float predelayMs)
     {
         this.model = model;
         this.room = room;
@@ -209,7 +209,7 @@ namespace porridge
 
         this.d[0] = max (1.0, float64 (predelayMs) * sr * 0.001);
 
-        this.clearPool (top);
+        this.clearPool (pool, top);
 
         for (wrap<4> k) { this.fb[k] = 0; this.hiLp[k] = 0; this.loLp[k] = 0; }
         for (wrap<8> k) { this.awFb[k] = 0; this.sub[k] = 0; }
@@ -226,9 +226,10 @@ namespace porridge
         this.inFade = this.idle ? 1.0f : 0.0f;     // into a running effect, the input fades in
     }
 
+    /// (The pool's region is cleared as the next model is laid out in it.)
     void clearState (Ambience& this)
     {
-        this.resetPool();
+        this.clean = false;
         this.model = -1;
         this.numLines = 0;
         this.idle = true;
@@ -241,7 +242,7 @@ namespace porridge
     //==============================================================================
     // room
 
-    void ambRoom (Ambience& this, const float<2>[blockSize]& pre, float<2>[blockSize]& wet,
+    void ambRoom (Ambience& this, FxPool& pool, const float<2>[blockSize]& pre, float<2>[blockSize]& wet,
                   float densT, float coefT, float pHiT, float pLoT)
     {
         // the loops switch off while the time is at zero; their lines are cleared before they
@@ -251,7 +252,7 @@ namespace porridge
         if (loopWanted && ! this.loopOn)
         {
             for (int i = this.base[14]; i < this.base[25] + this.cap[25]; ++i)
-                this.pool.at (i) = 0;
+                poolSet (pool, this.fxAt, i, 0);
 
             for (wrap<4> k) { this.fb[k] = 0; this.hiLp[k] = 0; this.loLp[k] = 0; }
         }
@@ -278,9 +279,9 @@ namespace porridge
             {
                 var v = (k < 2 ? pre[i][0] : pre[i][1]) + this.fb[k];
                 let j = 2 + 3 * int (k);
-                v = this.ambAllpass (j, v, ambChainG[0] * dens);
-                v = this.ambAllpass (j + 1, v, ambChainG[1] * dens);
-                y[k] = this.ambAllpass (j + 2, v, ambChainG[2] * dens);
+                v = this.ambAllpass (pool, j, v, ambChainG[0] * dens);
+                v = this.ambAllpass (pool, j + 1, v, ambChainG[1] * dens);
+                y[k] = this.ambAllpass (pool, j + 2, v, ambChainG[2] * dens);
             }
 
             wet[i] = float<2> (y[0] + y[1], y[2] + y[3]) * ambRoomGain;
@@ -297,9 +298,9 @@ namespace porridge
                 for (wrap<4> k)
                 {
                     let j = 14 + 3 * int (k);
-                    var v = this.ambAllpass (j, y[k], ambLoopG[0] * dens);
-                    v = this.ambAllpass (j + 1, v, ambLoopG[1] * dens);
-                    v = this.ambAllpass (j + 2, v, ambLoopG[2] * dens);
+                    var v = this.ambAllpass (pool, j, y[k], ambLoopG[0] * dens);
+                    v = this.ambAllpass (pool, j + 1, v, ambLoopG[1] * dens);
+                    v = this.ambAllpass (pool, j + 2, v, ambLoopG[2] * dens);
                     let h = ambLowpass (this.hiLp[k], v, kHi);
                     v = h + gHi * (v - h);
                     let l = ambLowpass (this.loLp[k], v, kLo);
@@ -327,7 +328,7 @@ namespace porridge
     /// One side's four stages of 4x4 Householder matrices from line `first`, fed back from
     /// awFb[fbAt ..]; returns the sum of the last stage / 8. The last stage's first line is
     /// smoothed (3:1 with its previous value) before the feedback is taken.
-    float ambClearCoatSide (Ambience& this, float x, int first, int fbAt, float regen, float& mulch)
+    float ambClearCoatSide (Ambience& this, FxPool& pool, float x, int first, int fbAt, float regen, float& mulch)
     {
         float[4] v, h;
 
@@ -337,7 +338,7 @@ namespace porridge
         for (wrap<4> s)
         {
             for (wrap<4> i)
-                h[i] = this.ambPush (first + 4 * int (s) + int (i), v[i]);
+                h[i] = this.ambPush (pool, first + 4 * int (s) + int (i), v[i]);
 
             if (s < 3)
             {
@@ -375,7 +376,7 @@ namespace porridge
 
     /// `level` scales the input to the plugin's output level (the output gain), where ClearCoat's
     /// clip and SubTight expect it, and the wet back by its inverse.
-    void ambClearCoat (Ambience& this, const float<2>[blockSize]& pre, float<2>[blockSize]& wet, float regen, float level)
+    void ambClearCoat (Ambience& this, FxPool& pool, const float<2>[blockSize]& pre, float<2>[blockSize]& wet, float regen, float level)
     {
         let cycleEnd = ambCycleEnd (this.sr);
         let subRate = float (0.001 * 44100.0 / this.sr);
@@ -388,8 +389,8 @@ namespace porridge
             if (this.cycle >= cycleEnd)
             {
                 // a reverb sample, at about 44.1 kHz; the samples between are drawn straight
-                let yL = this.ambClearCoatSide (pre[i][0] * level, 2, 0, regen, this.mulchL);
-                let yR = this.ambClearCoatSide (pre[i][1] * level, 18, 4, regen, this.mulchR);
+                let yL = this.ambClearCoatSide (pool, pre[i][0] * level, 2, 0, regen, this.mulchL);
+                let yR = this.ambClearCoatSide (pool, pre[i][1] * level, 18, 4, regen, this.mulchR);
                 let oldL = this.refL.at (cycleEnd), oldR = this.refR.at (cycleEnd);
 
                 // (at the full rate the reverb's sample comes out at once)
@@ -424,7 +425,7 @@ namespace porridge
 
     /// One side's four stages from line `first`, fed back from the other side's last stage
     /// (awFb[from ..]); keeps its own last stage's feedback in awFb[to ..]. Returns the sum / 8.
-    float ambVerbTinySide (Ambience& this, float x, int first, int from, int to, float regen)
+    float ambVerbTinySide (Ambience& this, FxPool& pool, float x, int first, int from, int to, float regen)
     {
         float[4] v, h;
 
@@ -434,7 +435,7 @@ namespace porridge
         for (wrap<4> s)
         {
             for (wrap<4> i)
-                h[i] = this.ambPush (first + 4 * int (s) + int (i), v[i]);
+                h[i] = this.ambPush (pool, first + 4 * int (s) + int (i), v[i]);
 
             let sum = h[0] + h[1] + h[2] + h[3];
 
@@ -470,7 +471,7 @@ namespace porridge
         return bb + cb * (1.0f - x) + ba * x;
     }
 
-    void ambVerbTiny (Ambience& this, const float<2>[blockSize]& pre, float<2>[blockSize]& wet,
+    void ambVerbTiny (Ambience& this, FxPool& pool, const float<2>[blockSize]& pre, float<2>[blockSize]& wet,
                       float replace, float size)
     {
         let overall = float (this.sr / 44100.0);
@@ -490,8 +491,8 @@ namespace porridge
             if (this.bez[8] > 1.0f)
             {
                 this.bez[8] = 0;
-                let l = this.ambVerbTinySide (this.bez[6], 2, 4, 0, regen);
-                let r = this.ambVerbTinySide (this.bez[7], 18, 0, 4, regen);
+                let l = this.ambVerbTinySide (pool, this.bez[6], 2, 4, 0, regen);
+                let r = this.ambVerbTinySide (pool, this.bez[7], 18, 0, 4, regen);
                 this.bez[4] = this.bez[2]; this.bez[2] = this.bez[0]; this.bez[0] = l;
                 this.bez[5] = this.bez[3]; this.bez[3] = this.bez[1]; this.bez[1] = r;
                 this.bez[6] = 0; this.bez[7] = 0;
@@ -568,7 +569,7 @@ namespace porridge
         return 0.01 + 0.99 * float64 (size * size);
     }
 
-    bool process (Ambience& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
+    bool process (Ambience& this, FxPool& pool, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
     {
         if (! active && this.idle)
             return false;
@@ -580,7 +581,7 @@ namespace porridge
 
         // a new model (or clear coat room) starts silent once the old one's wet has faded out
         if (this.model < 0 || sr != this.sr || ((want != this.model || wantRoom != this.room) && (this.idle || this.fade <= 0.0f)))
-            this.ambSetup (want, wantRoom, sr, size, predelay);
+            this.ambSetup (pool, want, wantRoom, sr, size, predelay);
 
         let change = want != this.model || wantRoom != this.room;
 
@@ -654,22 +655,22 @@ namespace porridge
         for (wrap<blockSize> i)
         {
             this.inFade = min (this.inFade + inStep, 1.0f);
-            this.poolWrite (0, buf[i][0] * this.inFade + dc);
-            this.poolWrite (1, buf[i][1] * this.inFade + dc);
+            this.poolWrite (pool, 0, buf[i][0] * this.inFade + dc);
+            this.poolWrite (pool, 1, buf[i][1] * this.inFade + dc);
             let pd = this.d[0];
-            pre[i] = float<2> (this.poolReadLin (0, pd), this.poolReadLin (1, pd));
+            pre[i] = float<2> (this.poolReadLin (pool, 0, pd), this.poolReadLin (pool, 1, pd));
             this.d[0] += this.dInc[0];
             this.poolAdvance (0);
             this.wp[1] = this.wp[0];
         }
 
         if (model == ambienceModel::room)
-            this.ambRoom (pre, wet, densT, coefT, pHiT, pLoT);
+            this.ambRoom (pool, pre, wet, densT, coefT, pHiT, pLoT);
         else if (model == ambienceModel::clearCoat)
-            this.ambClearCoat (pre, wet, 0.0625f * 0.999f * timeT,      // (ClearCoat's own is at time 2/3)
+            this.ambClearCoat (pool, pre, wet, 0.0625f * 0.999f * timeT,      // (ClearCoat's own is at time 2/3)
                                max (P[slot::Gain], 0.001f));
         else
-            this.ambVerbTiny (pre, wet, timeT, size);
+            this.ambVerbTiny (pool, pre, wet, timeT, size);
 
         // a runaway (or a NaN) starts the model over, silent, rather than staying in the pool
         float level;
@@ -679,7 +680,7 @@ namespace porridge
 
         if (! (level < 1.0e5f))
         {
-            this.ambSetup (model, this.room, sr, size, predelay);
+            this.ambSetup (pool, model, this.room, sr, size, predelay);
 
             for (wrap<blockSize> i)
                 wet[i] = float<2> (0);

@@ -32,6 +32,8 @@
 //    timed and summarised in porridge-perf.log in the temp folder (tools/clap/PorridgePerf.h).
 //  - The latency is the synth's 64 samples (dsp/Synth.cmajor applies MIDI a block late, on
 //    its own sample). Cmajor's C++ generator reports 0 whatever the patch declares.
+//  - The generated class finds an event's endpoint with a switch instead of trying every
+//    parameter's handle in turn, which cost each MIDI message ~1.7 µs (tools/event-switch.mjs).
 //
 // and to load faster:
 //
@@ -50,6 +52,7 @@
 import { readFileSync, writeFileSync, copyFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { switchAddEvent } from "./event-switch.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const project = process.argv[2] ?? join(root, "build", "clap-project");
@@ -158,6 +161,14 @@ if (open(join(project, "include", "choc", "choc", "javascript", "choc_javascript
 
   insertBefore(`        return returnVal.toChocValue();\n`, `        runPendingJobs();\n`);
 
+  save();
+}
+
+//==============================================================================
+// The generated patch class: addEvent's dispatch as a switch (see tools/event-switch.mjs)
+
+if (open(join(project, "entry.cpp"))) {
+  source = switchAddEvent(source, marker);
   save();
 }
 
