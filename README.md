@@ -25,7 +25,9 @@ dsp/                    Cmajor DSP
                           tools/param-ids.mjs says how, and how branches' additions merge)
   Slots.cmajor            parameter -> program-struct slot constants (generated)
   ModTables.cmajor        modulation sources, targets and knob laws (generated)
-  Synth.cmajor            MIDI, voice manager, arpeggiator, per-voice rendering, effects chain,
+  Synth.cmajor            MIDI (and the pitch and mod wheels' parameters, which join its queue
+                          as channel 1's bend and CC 1), voice manager, arpeggiator, per-voice
+                          rendering, effects chain,
                           a K-weighted level meter the view asks for (levelRequest/levelOut),
                           and reports of the sounding notes for the view (voiceView/voiceViewOut);
                           the rack's and the voice lane's slots, generic: each holds a kind
@@ -74,7 +76,12 @@ ui/                     patch view (ReScript)
                           lives (its page, tab, effect, values) and goes there
   PagePlay.res            the Play page: macros, arpeggiator, XY pad, the patch summary
                           (Summary.res, each line a link to its editor), wheels and the MIDI
-                          input (MidiInput.res); SlotRows.res shows target slots as used rows + "+"
+                          input (MidiInput.res); SlotRows.res shows target slots as used rows + "+".
+                          The pitch and mod wheels (Wheels.res, here and on the synth page) are
+                          host parameters (Wheel_Pitch, Wheel_Mod) that hosts automate and have
+                          their menu for, and play as channel 1's bend and mod wheel; they are
+                          performance state (PorridgeParams.isPerformance): no program, preset,
+                          bank, Oatmeal export, random patch or undo step holds them
   VoiceView.res           the sounding notes as the DSP reports them: a mark per note on the
                           envelopes, LFOs, the filter graph and the modulated controls
   SlotParams.res          the slots' parameters by name ("D_Wet@3": slot 3's delay's wet), which
@@ -171,7 +178,8 @@ tools/
                           golden.mjs (bit-exact factory renders, in Oat mode), presets.mjs
                           (format round trips, and programs from before the slots loading
                           their effects' copies into their slots, two convolvers as one, the
-                          key shifter as the bode; reordering the rack),
+                          key shifter as the bode; reordering the rack; no program holds the
+                          wheels),
                           pickers.mjs (every list value maps to and from its menu),
                           library.mjs (the preset browser's search),
                           smoke.mjs (Porridge's own effects and filter types sound, stay
@@ -182,13 +190,15 @@ tools/
                           oscillator envelopes and the noise source; the key EQ's bands and
                           shelf; oscillator roughness; osc 2 heard in PM; the oscillators'
                           morph and phase distortion; the noise types: their spectra, levels,
-                          pitch, speed and starts),
+                          pitch, speed and starts; the wheels' parameters render as the MIDI
+                          bend and CC 1 they stand for),
                           host.cpp's --time prints the render's own CPU time, for benchmarks
                           (--timefrom skips the attacks; an events file can also set
                           parameters at given frames; --impulse sends a convolver's impulse or
                           the noise's sample);
                           stored.mjs (the view's custom shape points: shaperIn events, the
-                          stored state, undo, a host's state),
+                          stored state, undo, a host's state; and the wheels: gestures, no
+                          undo steps),
                           claphost.cpp (a minimal CLAP host: parameters, values, state) and
                           clap-ids.mjs (a build keeps an earlier build's parameter ids, and
                           loads its state), clap-slots.mjs (the slots' knobs named after

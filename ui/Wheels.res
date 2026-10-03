@@ -1,6 +1,9 @@
-// The pitch bend and mod wheels: drag them like a keyboard's wheels. They send MIDI to the
-// patch on channel 1 (pitch bend, and controller 1), just as a controller would, so they
-// drive the bend range, the mod wheel's CC targets and the modulation matrix's sources.
+// The pitch bend and mod wheels: drag them like a keyboard's wheels. Each is a host parameter
+// (PorridgeParams.wheelSpecs), which plays as channel 1's pitch bend or controller 1 would, so
+// they drive the bend range, the mod wheel's CC targets and the modulation matrix's sources; and
+// hosts record a drag (a gesture) as automation, play it back (the wheels follow), and have their
+// menu for it on a double right-click (in FL Studio: create an automation clip, link a
+// controller). They are playing, not the program: moving them is no undo step and no edit.
 // The pitch wheel springs back to the centre when it's let go; the mod wheel stays put.
 // Middle click (or ctrl-click) resets a wheel; scrolling moves the mod wheel.
 
@@ -8,32 +11,23 @@ open! Web
 
 let signal = Str("var(--signal)")
 
-// Where the wheels were left, so they keep their place when the page is rebuilt, and every
-// drawing of them (the Play page's pair, and any other), to move them together.
-let bend = ref(0.)
-let modWheel = ref(0.)
-let drawings: array<unit => unit> = []
-
+// A MIDI message to the patch, as a controller would send it (the random drawer plays its notes so).
 let send = (ctx: Ctx.t, status, data1, data2) =>
   ctx.pc->PatchConnection.sendEventOrValue("midiIn", {"message": status * 65536 + data1 * 256 + data2})
-
-// pitch bend -1..1 as its 14-bit value (centre 8192) on channel 1
-let sendBend = (ctx, v) => {
-  let b = Math.Int.max(0, Math.Int.min(16383, Float.toInt(Math.round(v * 8192.)) + 8192))
-  send(ctx, 0xe0, mod(b, 128), b / 128)
-}
-
-let sendMod = (ctx, v) => send(ctx, 0xb0, 1, Float.toInt(Math.round(v * 127.)))
 
 type kind = Pitch | Mod
 
 let wheel = (ctx: Ctx.t, parent, box, kind) => {
-  let value = kind == Pitch ? bend : modWheel
+  let model = ctx.model
+  let id = kind == Pitch ? PorridgeParams.pitchWheelId : PorridgeParams.modWheelId
+  let value = () => model->ParamModel.get(id)
   let bipolar = kind == Pitch
   let labelHeight = 16.
   let track = {...box, h: box.h - labelHeight}
   let s = Plots.svg(parent, box)
   s->addClass("draw")
+  // the host's menu for the wheel's parameter on a double right-click (before the drags below)
+  Controls.hostMenuFor(ctx, s, () => [id])
   let svgEl = svgEl(s, ...)
   Plots.background(s, track)
   if bipolar {
@@ -65,19 +59,13 @@ let wheel = (ctx: Ctx.t, parent, box, kind) => {
     bipolar ? 2. * f - 1. : f
   }
 
-  let status = ctx.status->Status.live(s, () => {
-    let v = value.contents
-    switch kind {
-    | Pitch =>
-      let range = ctx.model->ParamModel.get("BendRange")
-      let st = v * range
-      `Pitch wheel ${v > 0. ? "+" : ""}${Float.toFixed(v, ~digits=3)} (${st > 0. ? "+" : ""}${Float.toFixed(st, ~digits=2)} st)`
-    | Mod => `Mod wheel ${Float.toFixed(v * 127., ~digits=0)} of 127`
-    }
-  })
+  // (the pitch wheel's text gives the bend in semitones by the bend range: ParamDefs)
+  let status = ctx.status->Status.live(s, () =>
+    `${kind == Pitch ? "Pitch wheel" : "Mod wheel"} ${(model->ParamModel.def(id)).valueText(value())}`
+  )
 
   let draw = () => {
-    let y = toY(value.contents)
+    let y = toY(value())
     let from = toY(0.)
     fill->setAttribute("y", Num(Math.min(y, from)))
     fill->setAttribute("height", Num(Math.abs(from - y)))
@@ -86,21 +74,16 @@ let wheel = (ctx: Ctx.t, parent, box, kind) => {
     status.refresh()
   }
 
-  let set = v => {
-    let v = bipolar ? Float.clamp(v, ~min=-1., ~max=1.) : Float.clamp(v, ~min=0., ~max=1.)
-    if v != value.contents {
-      value := v
-      kind == Pitch ? sendBend(ctx, v) : sendMod(ctx, v)
-      drawings->Array.forEach(fn => fn())
-    }
-  }
+  // (ParamModel clamps it, sends it, and every drawing of the wheel follows: listen, below)
+  let set = v => model->ParamModel.set(id, v)
 
   s->onPointer(#pointerdown, ev => {
     ev->preventDefault
     if ev->button == 1 || ev->button == 0 && ev->commandKey {
-      set(0.)
+      model->ParamModel.gestureSet(id, 0.)
     } else if ev->button == 0 {
       status.setDragging(true)
+      model->ParamModel.beginGesture(id)
       set(under(ev))
       Controls.dragBy(
         ctx,
@@ -108,10 +91,11 @@ let wheel = (ctx: Ctx.t, parent, box, kind) => {
         ev,
         ~onMove=(_, _, mv) => set(under(mv)),
         ~onUp=() => {
-          status.setDragging(false)
           if kind == Pitch {
             set(0.)
           }
+          model->ParamModel.endGesture(id)
+          status.setDragging(false)
         },
       )
     }
@@ -119,11 +103,12 @@ let wheel = (ctx: Ctx.t, parent, box, kind) => {
   if kind == Mod {
     s->onWheel(ev => {
       ev->preventDefault
-      set(value.contents + (ev->deltaY < 0. ? 1. : -1.) / 127.)
+      model->ParamModel.gestureSet(id, value() + (ev->deltaY < 0. ? 1. : -1.) / 127.)
     })
   }
   s->suppressContextMenu
-  drawings->Array.push(draw)
+  // (the host's automation, and the other page's drawing, move it too)
+  model->ParamModel.listen(id, draw)
   draw()
 }
 

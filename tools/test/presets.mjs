@@ -11,7 +11,8 @@
 //     effect's copy into its slot (connections, shapes and impulse files too), two convolvers
 //     as one with a warning, the key shifter as the Bode; a reorder moves what's in the slots.
 //   - the noise's type, density and sample survive a round trip, and the types that aren't
-//     white are reported for an Oatmeal export, which plays white noise.
+//     white are reported for an Oatmeal export, which plays white noise;
+//   - no program, file or stored bank holds the wheels (Wheel_Pitch, Wheel_Mod).
 //
 // run: node tools/test/presets.mjs
 
@@ -363,6 +364,36 @@ else
     const density = Preset.make ("dense");
     density.values.set ("N_Density", 0.75);
     if (Preset.porridgeOnly (density).length !== 0) fail ("a density of white noise is reported: " + Preset.porridgeOnly (density));
+}
+
+// the wheels (Wheel_Pitch, Wheel_Mod) are host parameters the view knows, but no program holds
+// them: Init and imported programs don't, the view's values (ProgramStore.captureCurrent) leave
+// them out, files and the stored bank neither write nor read them (nor does anything that loads
+// values as a program: loadValue), and an Oatmeal export says nothing of them
+{
+    const wheels = [PorridgeParams.pitchWheelId, PorridgeParams.modWheelId];
+    const byId = new Map (ParamDefs.makeDefs ().map (d => [d.id, d]));
+    if (! wheels.every (id => byId.has (id) && PorridgeParams.isPerformance (id))) fail ("the wheels aren't parameters");
+    if (wheels.some (id => Preset.defaultValues ().has (id) || Preset.make ("x").values.has (id) || Preset.init ("x").values.has (id)))
+        fail ("a new program holds the wheels");
+    if (presets.some (p => wheels.some (id => p.values.has (id)))) fail ("an Oatmeal program holds the wheels");
+    const live = new Map ([...Preset.make ("live").values, [PorridgeParams.pitchWheelId, 0.5], [PorridgeParams.modWheelId, 0.7]]);
+    const kept = Preset.programValues (live);
+    if (wheels.some (id => kept.has (id)) || kept.size !== live.size - 2) fail ("programValues keeps the wheels, or leaves out more");
+    const p = { ...Preset.make ("played"), values: live };
+    const text = new TextDecoder ().decode (Preset.writePreset (p)) + Preset.encodeBank ([p]);
+    if (wheels.some (id => text.includes (id))) fail ("a preset file or the stored bank writes the wheels");
+    const read = Preset.parseFile (new TextEncoder ().encode (
+        `{"porridge":"preset","version":1,"name":"x","params":{"Cutoff":0.25,"Wheel_Pitch":0.5,"Wheel_Mod":0.7}}`));
+    if (read.TAG !== "Ok" || read._0.presets[0].values.get ("Cutoff") !== 0.25 || wheels.some (id => read._0.presets[0].values.has (id)))
+        fail ("a file's wheels are read into its program");
+    if (Preset.porridgeOnly (p).length !== 0) fail ("an Oatmeal export reports the wheels: " + Preset.porridgeOnly (p));
+    if (wheels.some (id => Preset.loadValue (id, 0.5) !== undefined)) fail ("loadValue takes the wheels");
+    // (PorridgeParams' wheels' texts: the pitch wheel's bend in semitones by the bend range)
+    // (compiled, the optional range comes first)
+    const pitchText = PorridgeParams.pitchWheelText (12, 0.5);
+    if (pitchText !== "+0.500 (+6.00 st)" || PorridgeParams.modWheelText (64 / 127) !== "64 of 127")
+        fail (`the wheels' texts: ${pitchText}, ${PorridgeParams.modWheelText (64 / 127)}`);
 }
 
 done (`ok: ${programs.length} programs round-trip`);

@@ -432,4 +432,57 @@ await flush ();
     check (fixed > 0.7 && fixed < 1.4 && oat < 0.3, `legato stereo filter envelopes  R/L ${fixed.toFixed (2)}, in Oat mode ${oat.toFixed (2)}`);
 }
 
+// the wheels' parameters (Wheel_Pitch, Wheel_Mod) play as channel 1's pitch bend and controller
+// 1 do: the same render as the MIDI message at the same frame, with its timing (on its sample, or
+// in Oat mode at the next block, or with MPE at the next piece), whatever MIDI_Channel_n let in;
+// whichever moved last wins; and a value the wheel already has (as a host sends with a state)
+// does nothing
+{
+    const init = join (root, "tools", "re", "init_prog.bin");
+    const sine = { O1_Waveform: 0, O2_Amp: 0, N_Amp: 0, Filter: 0, PolyMode: 1, Attack: 0, Sustain: 1, Release: 0.01, VeloSens: 0,
+                   RandomAmp: 0, RandomPan: 0, RandomFreq: 0, FX_Rack_1: 0, FX_Rack_2: 0, FX_Rack_3: 0, FX_Rack_4: 0 };
+    let n = 0;
+    // a note at 0 on a channel (1-based) and these events ([frame, "status d1 d2" or "Endpoint value"])
+    const wheelRender = (lines, sets = {}, channel = 1) =>
+    {
+        const file = join (dir, `wheels_events${n}.txt`);
+        writeFileSync (file, [[0, `${143 + channel} 69 100`], ...lines].map (([at, e]) => `${at} ${e}\n`).join (""));
+        return render ({ program: init, events: file, frames: 22050, rate, sets: { ...sine, ...sets }, out: join (dir, `wheels${n++}.f32`) });
+    };
+    const same = (a, b) => a.every ((ch, c) => ch.every ((v, i) => v === b[c][i]));
+    const plain = wheelRender ([]);
+    // (bend 4096 of 8192: half way up)
+    const bend = (at, half = 1) => [at, `224 0 ${64 + 32 * half}`];
+    for (const [mode, sets] of [["", {}], [" in Oat mode", { Oat_Mode: 1 }], [" with MPE", { MPE_On: 1 }]])
+    {
+        const midi = wheelRender ([bend (5000)], sets);
+        const wheel = wheelRender ([[5000, "Wheel_Pitch 0.5"]], sets);
+        check (same (midi, wheel) && ! same (midi, wheelRender ([], sets)), `pitch wheel 0.5 is a MIDI bend of 4096${mode}`);
+    }
+    // (channel 1 shut, the note on channel 2: a bend there is channel 2's)
+    const shut = { MIDI_Channel_1: 0, MIDI_Channel_2: 1 };
+    check (same (wheelRender ([[5000, "Wheel_Pitch 0.5"]], shut, 2), wheelRender ([[5000, "225 0 96"]], shut, 2)),
+           "pitch wheel bends with MIDI channel 1 shut");
+    check (same (wheelRender ([bend (5000), [9000, "Wheel_Pitch -0.5"]]), wheelRender ([bend (5000), bend (9000, -1)])) &&
+           same (wheelRender ([[5000, "Wheel_Pitch -0.5"], bend (9000)]), wheelRender ([bend (5000, -1), bend (9000)])),
+           "pitch wheel and MIDI bend: whichever moved last wins");
+
+    // the mod wheel on a connection from the mod wheel source, and on an Oatmeal controller slot
+    // listening to CC 1, and as the X/Y pad's X controller
+    const routes = [
+        ["mod wheel source > volume", { Mod1_Source: ModMatrix.sourceIndex ("modWheel"), Mod1_Target: ModMatrix.targetIndex ("volume"), Mod1_Amount: -0.5 }],
+        ["CC slot on CC 1 > pitch", { CC1: 1, CC1_Target_1: 5, CC1_Depth_1: 0.5 }],
+        ["X/Y pad's X on CC 1 > pitch", { XY_H_CC: 1, XY_H_Target_1: 5, XY_H_Depth_1: 0.5, XY_X: 0.4 }],
+    ];
+    for (const [name, sets] of routes)
+    {
+        const midi = wheelRender ([[5000, "176 1 127"]], sets);
+        const wheel = wheelRender ([[5000, "Wheel_Mod 1"]], sets);
+        check (same (midi, wheel) && ! same (midi, wheelRender ([], sets)), `mod wheel 1 is CC 1 at 127: ${name}`);
+    }
+    check (same (wheelRender ([[0, "Wheel_Mod 0"], [0, "Wheel_Pitch 0"]], routes[2][1]), wheelRender ([], routes[2][1])),
+           "the wheels at the values they have change nothing (the X/Y pad on CC 1 keeps its X)");
+    check (same (plain, wheelRender ([[5000, "Wheel_Mod 1"]])), "the mod wheel with nothing on it changes nothing");
+}
+
 done ("all ok");

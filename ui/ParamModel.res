@@ -5,7 +5,8 @@
 // (a drag between beginGesture and endGesture, or everything a click sets at once) is one step.
 // The program store adds steps of its own (record: loading a program, init, a rename...).
 // Values that arrive from the patch (the host's automation, a loaded state) and whole programs
-// pushed with setAll are not edits, and are not recorded.
+// pushed with setAll are not edits, and are not recorded; nor are the wheels' moves, which are
+// playing, not editing (PorridgeParams.isPerformance), and which setAll leaves where they are.
 
 // One thing a step changed: a parameter, or something else that knows how to go back and forth.
 type change = Param({id: string, before: float, mutable after: float}) | Action({undo: unit => unit, redo: unit => unit})
@@ -433,7 +434,9 @@ let set = (t, id, x) =>
     let x = d.clamp(x)
     let before = get(t, id)
     if before != x {
-      recordParam(t, id, before, x)
+      if !PorridgeParams.isPerformance(id) {
+        recordParam(t, id, before, x)
+      }
       t.values->Map.set(id, x)
       if StoredParams.isStored(id) {
         storedChanged(t, id)
@@ -448,7 +451,7 @@ let set = (t, id, x) =>
   })
 
 let beginGesture = (t, id) => {
-  if t.history.quiet == 0 {
+  if t.history.quiet == 0 && !PorridgeParams.isPerformance(id) {
     t.history.gestures->Set.add(id)
   }
   endpointOf(t, id)->Option.forEach(e => t.pc->PatchConnection.sendParameterGestureStart(e))
@@ -519,6 +522,7 @@ let setAll = (t, values: Bank.values) => {
   values->Map.forEachWithKey((x, id) =>
     t.defs
     ->Map.get(id)
+    ->Option.filter(_ => !PorridgeParams.isPerformance(id))
     ->Option.forEach(d => {
       let x = d.load(x)
       if get(t, id) != x {

@@ -95,7 +95,12 @@ let make = (ctx: Ctx.t, parent, ~x, ~y, ~w, ~h) => {
         update()
       }, throttleMs)->ignore
     }
-  model->ParamModel.listenAny(_ => schedule())
+  // (the wheels aren't part of the program)
+  model->ParamModel.listenAny(id =>
+    if !PorridgeParams.isPerformance(id) {
+      schedule()
+    }
+  )
   ctx.programs->ProgramStore.onChanged(schedule)
   update()
 }

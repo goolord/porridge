@@ -1141,6 +1141,44 @@ let lfo3Specs = [
   {id: "Wander_Rate", name: "Wander rate", kind: expKnob(~lo=0.02, ~hi=10., ~init=0.5, ~text=fixedUnit(2, "Hz"))},
 ]
 
+// The on-screen pitch and mod wheels (Wheels.res) as host parameters, so that hosts can record
+// and play back their moves and link controllers to them (their menu on a double right-click).
+// A change of either plays as channel 1's pitch bend or mod wheel (CC 1) would, whatever channels
+// MIDI_Channel_n let in (dsp/Synth.cmajor handleWheel). They are performance state, not part of
+// the sound (isPerformance): programs, presets, banks, Oatmeal exports, the random patches and
+// undo leave them out, and they don't count as edits.
+let pitchWheelId = "Wheel_Pitch"
+let modWheelId = "Wheel_Mod"
+
+// the pitch wheel's position as a text, with the bend in semitones when the bend range is known
+let pitchWheelText = (~range=?, v) => {
+  let sign = x => x > 0. ? "+" : ""
+  let position = `${sign(v)}${Float.toFixed(v, ~digits=3)}`
+  switch range {
+  | Some(range) => `${position} (${sign(v * range)}${Float.toFixed(v * range, ~digits=2)} st)`
+  | None => position
+  }
+}
+let modWheelText = v => `${Float.toFixed(v * 127., ~digits=0)} of 127`
+
+let wheelSpecs = [
+  {id: pitchWheelId, name: "Pitch wheel", kind: Float({min: -1., max: 1., init: 0., text: v => pitchWheelText(v)})},
+  {
+    id: modWheelId,
+    name: "Mod wheel",
+    kind: Float({
+      min: 0.,
+      max: 1.,
+      init: 0.,
+      text: modWheelText,
+      read: s => typedNumber(s)->Option.map(x => Math.max(0., Math.min(1., x / 127.))),
+    }),
+  },
+]
+
+// Whether a parameter is performance state (the wheels) rather than part of the program.
+let isPerformance = id => id == pitchWheelId || id == modWheelId
+
 type feature =
   | Macros
   | Modulations
@@ -1175,6 +1213,7 @@ type feature =
   | OscShape
   | BodeRatio
   | NoiseType
+  | PlayWheels
 
 // The voice lane (dsp/VoiceFx.cmajor): up to laneSlots effects in every voice, which each note
 // runs its own copy of, holding the same values as the rack's slots (only the kinds that work in
@@ -1372,6 +1411,7 @@ let groupsAsAdded = [
   (OscShape, oscShapeSpecs),
   (BodeRatio, []),
   (NoiseType, noiseTypeSpecs),
+  (PlayWheels, wheelSpecs),
 ]
 
 // The parameters the effects' copies had, and Porridge's own kinds' firsts' (which are the

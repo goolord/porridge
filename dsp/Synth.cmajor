@@ -8,6 +8,8 @@
 //  pieces split at the messages and at arpeggiator steps. With MPE on, only the notes split it:
 //  controllers (bend, pressure, slide, CCs) wait for the next piece (see nextSplit). Oat mode
 //  keeps Oatmeal's timing, with the output delayed by a block so that the latency is the same.
+//  The pitch and mod wheels' parameters join the MIDI queue as they change, and keep its timing
+//  (handleWheel).
 
 namespace porridge
 {
@@ -275,8 +277,11 @@ namespace porridge
         float[16] chBendTarget, chBend, chPressureTarget, chPressure, chSlideTarget, chSlide;
         int[128] noteChan;
 
-        // MIDI arriving during a block, and the sample it arrived on (now: the current frame)
-        std::midi::Message[256] midiQueue;
+        // MIDI arriving during a block, and the sample it arrived on (now: the current frame); the
+        // wheels' parameters' changes go in it too, as wheelMessage + 0 (pitch) or 1 (mod), with
+        // their values in midiValue (see handleWheel)
+        int[256] midiQueue;
+        float[256] midiValue;
         int64[256] midiTime;
         int midiHead, midiCount;                    // the messages not handled yet: [midiHead, midiCount)
         int64 now;
@@ -298,9 +303,22 @@ namespace porridge
         //==============================================================================
         event paramIn (ParamChange c)
         {
-            P.at (c.slot) = c.value;
-            paramsChanged = true;
-            poolDirty = true;
+            if (c.slot == slot::Wheel_Pitch || c.slot == slot::Wheel_Mod)
+            {
+                // the wheels play: a change queues as MIDI does, and moves nothing else (a value
+                // the wheel already has, as a host sends every parameter with a state, does nothing)
+                if (c.value != P.at (c.slot))
+                {
+                    P.at (c.slot) = c.value;
+                    queueMidi (wheelMessage + (c.slot == slot::Wheel_Mod ? 1 : 0), c.value);
+                }
+            }
+            else
+            {
+                P.at (c.slot) = c.value;
+                paramsChanged = true;
+                poolDirty = true;
+            }
         }
 
         event shapeIn (Shape s)
@@ -378,9 +396,16 @@ namespace porridge
 
         event midiIn (std::midi::Message m)
         {
+            queueMidi (m.message, 0.0f);
+        }
+
+        /// A MIDI message (or a wheel's change: value) to handle at its time (see renderBlock).
+        void queueMidi (int message, float value)
+        {
             if (midiCount < 256)
             {
-                midiQueue.at (midiCount) = m;
+                midiQueue.at (midiCount) = message;
+                midiValue.at (midiCount) = value;
                 midiTime.at (midiCount) = now;
                 ++midiCount;
             }
@@ -2347,7 +2372,14 @@ namespace porridge
         void handleMidi (int count)
         {
             for (int i = 0; i < count; ++i)
-                handleMessage (midiQueue.at (midiHead + i).message);
+            {
+                let m = midiQueue.at (midiHead + i);
+
+                if (m >= wheelMessage)
+                    handleWheel (m != wheelMessage, midiValue.at (midiHead + i));
+                else
+                    handleMessage (m);
+            }
 
             midiHead += count;
 
@@ -2371,7 +2403,8 @@ namespace porridge
 
             for (int i = 0; i < due; ++i)
             {
-                let m = midiQueue.at (midiHead + i).message;
+                // (a wheel's change, wheelMessage + 0 or 1, is a controller: its type reads 0)
+                let m = midiQueue.at (midiHead + i);
                 let type = (m >> 16) & 0xf0;
                 let d1 = (m >> 8) & 0x7f;
 
@@ -2391,6 +2424,7 @@ namespace porridge
             for (int i = midiHead; i < midiCount; ++i)
             {
                 midiQueue.at (i - midiHead) = midiQueue.at (i);
+                midiValue.at (i - midiHead) = midiValue.at (i);
                 midiTime.at (i - midiHead) = midiTime.at (i);
             }
 
@@ -2483,6 +2517,37 @@ namespace porridge
             {
                 bendTarget = float (bend14 (d1, d2)) * P[slot::BendRange] * (1.0f / 8192.0f);
                 bendNormTarget = float (bend14 (d1, d2)) * (1.0f / 8192.0f);
+            }
+        }
+
+        /// The wheels' parameters (ui/PorridgeParams.res wheelSpecs) in the MIDI queue: above any
+        /// MIDI message's three bytes.
+        let wheelMessage = 0x1000000;
+
+        /// A wheel's change, from the MIDI queue: the pitch wheel (-1..1) as channel 1's pitch
+        /// bend, the mod wheel (0..1) as its controller 1, at their parameters' full resolution
+        /// and whatever channels MIDI_Channel_n let in. (With MPE, channel 1 is the master
+        /// channel, whose bend every note has.) Whichever moved last, a wheel or MIDI, wins.
+        void handleWheel (bool isMod, float v)
+        {
+            if (isMod)
+            {
+                rawCC[1] = v;
+
+                // (MIDI learn sees it as controller 1, as it did when the wheel sent MIDI)
+                if (! ccReported[1])
+                {
+                    ccReported[1] = true;
+                    ccOut <- 1;
+                }
+
+                if (int (P[slot::XY_H_CC]) == 1) P[slot::XY_X] = 2.0f * v - 1.0f;
+                if (int (P[slot::XY_V_CC]) == 1) P[slot::XY_Y] = 2.0f * v - 1.0f;
+            }
+            else
+            {
+                bendTarget = v * P[slot::BendRange];
+                bendNormTarget = v;
             }
         }
 

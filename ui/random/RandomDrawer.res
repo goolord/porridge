@@ -605,8 +605,9 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
       renderAll()
     })
 
-  ctx.model->ParamModel.listenAny(_ =>
-    if !applying.contents && original.contents != None {
+  // (playing the wheels edits nothing)
+  ctx.model->ParamModel.listenAny(id =>
+    if !applying.contents && original.contents != None && !PorridgeParams.isPerformance(id) {
       edited := true
     }
   )

@@ -57,7 +57,15 @@ let defs = ParamDefs.all
 let defsById = ParamDefs.byId
 let useDefs = ParamDefs.useDefs
 
-let defaultValues = () => Lazy.get(defs)->Array.map(d => (d.ParamDefs.id, d.init))->Map.fromArray
+// A program holds every parameter but the performance state (the wheels: PorridgeParams'
+// isPerformance), which programs, files, A/B and the random patches leave out: its values from
+// a set of parameter values (the view's).
+let inProgram = id => !PorridgeParams.isPerformance(id)
+let programValues = (values: Bank.values): Bank.values =>
+  values->Map.entries->Iterator.toArray->Array.filter(((id, _)) => inProgram(id))->Map.fromArray
+
+let defaultValues = () =>
+  Lazy.get(defs)->Array.filter(d => inProgram(d.ParamDefs.id))->Array.map(d => (d.id, d.init))->Map.fromArray
 
 let defaultTables = Lazy.make(() => extractTables(makeDefaultProgram("Init")))
 
@@ -135,9 +143,10 @@ let canonical = (d: ParamDefs.t, x) =>
   | I32 | Filter1 | Filter2 => x
   }
 
-// A value as a loaded program keeps it (ParamDefs' load), or None for a parameter there isn't.
+// A value as a loaded program keeps it (ParamDefs' load), or None for a parameter there isn't
+// (or one programs don't hold).
 let loadValue = (id, x) =>
-  Lazy.get(defsById)->Map.get(id)->Option.map(d => canonical(d, d.load(x)))
+  inProgram(id) ? Lazy.get(defsById)->Map.get(id)->Option.map(d => canonical(d, d.load(x))) : None
 
 //==============================================================================
 // Oatmeal
@@ -196,6 +205,8 @@ let featureLoss = (feature: PorridgeParams.feature) =>
   | CustomShape | DistModels => None
   // (the type says: a density of white noise loses nothing)
   | NoiseType => None
+  // (not part of a program)
+  | PlayWheels => None
   }
 
 // What an Oatmeal export of this preset loses: the lines of its warning.
@@ -367,7 +378,7 @@ let toJson = (p, ~header=true, ~sparse=false) => {
     | None => true
     }
   let params = Lazy.get(defs)->Array.filterMap(d =>
-    ModMatrix.isSlotParam(d.id) || !inSlot(d.id)
+    ModMatrix.isSlotParam(d.id) || !inSlot(d.id) || !inProgram(d.id)
       ? None
       : p.values
         ->Map.get(d.id)

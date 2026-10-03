@@ -241,10 +241,11 @@ let setShape = (t, table, data, ~commit) => {
   }
 }
 
-// the current program with the live parameter values and shapes
+// the current program with the live parameter values (but the wheels': Preset.programValues)
+// and shapes
 let captureCurrent = (t): Preset.t => {
   ...currentProgram(t),
-  values: Map.fromArray(t.model.values->Map.entries->Array.fromIterator),
+  values: Preset.programValues(t.model.values),
   tables: Preset.copyTables(t.shapes),
   tuning: t.tuning,
   impulses: t.impulses,

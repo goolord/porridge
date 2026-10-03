@@ -363,8 +363,17 @@ let makeDefs = (~context=() => None) => {
     | Some(d) => d
     | None => JsError.panic("no parameter " ++ id ++ " to copy")
     }
+  // the pitch wheel's text gives the bend in semitones, by the context program's bend range
+  let withBend = (d: t) =>
+    if d.id == PorridgeParams.pitchWheelId {
+      let valueText = x =>
+        PorridgeParams.pitchWheelText(x, ~range=?context()->Option.map(prog => Bank.readValue(prog, "BendRange")))
+      {...d, valueText, shortText: valueText, longText: x => `${d.name}: ${valueText(x)}`, dependsOn: ["BendRange"]}
+    } else {
+      d
+    }
   let porridge = PorridgeParams.all->Array.mapWithIndex((spec, i) => {
-    let d = porridgeDef(OatmealParams.paramCount + i, spec, ~like)->withAbout(spec)
+    let d = porridgeDef(OatmealParams.paramCount + i, spec, ~like)->withAbout(spec)->withBend
     byId->Map.set(d.id, d)
     d
   })

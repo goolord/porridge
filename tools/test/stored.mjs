@@ -7,7 +7,9 @@
 //     sets the model without sending anything back; none (a state without them) resets them;
 //   - a program pushed whole sends every distortion's points at once;
 //   - the stored value keeps only what differs from the defaults, and decodes back;
-//   - a preset keeps them, and no stored parameter is an endpoint or a host parameter.
+//   - a preset keeps them, and no stored parameter is an endpoint or a host parameter;
+//   - and the wheels, the other way about: host parameters whose drags are gestures but no undo
+//     steps, which a program pushed whole leaves where they are and the host's values move.
 //
 // run: node tools/test/stored.mjs (after npm run res and tools/gen.mjs)
 
@@ -110,5 +112,34 @@ check (preset?.values.get ("Sat_Y7@2") === -0.5, "a preset keeps them");
 // no endpoints
 const store = readFileSync (join (root, "dsp", "ParamStore.cmajor"), "utf8");
 check (StoredParams.ids.every (id => ! new RegExp (`input event \\w+ ${id} `).test (store)), "none of them is an endpoint");
+
+// The wheels, the other way about: host parameters (endpoints hosts list) that are playing, not
+// the program: a drag is a gesture the host hears, but no undo step; a program pushed whole
+// leaves them where they are; the host's values move them
+{
+    const wheels = [PorridgeParams.pitchWheelId, PorridgeParams.modWheelId];
+    check (wheels.every (id => new RegExp (`input event float ${id} \\[\\[ name: "[^"]+", min`).test (store)),
+           "the wheels are endpoints hosts list (automatable)");
+    ParamModel.seal (model);
+    ParamModel.clearHistory (model);
+    patch.sent = [];
+    ParamModel.beginGesture (model, PorridgeParams.pitchWheelId);
+    ParamModel.set (model, PorridgeParams.pitchWheelId, 0.25);
+    ParamModel.set (model, PorridgeParams.pitchWheelId, 0);
+    ParamModel.endGesture (model, PorridgeParams.pitchWheelId);
+    ParamModel.gestureSet (model, PorridgeParams.modWheelId, 0.5);
+    await tick();
+    const sent = patch.sent.map (([a, b]) => `${a} ${b}`).join (", ");
+    check (sent === "gesture Wheel_Pitch, Wheel_Pitch 0.25, Wheel_Pitch 0, gestureEnd Wheel_Pitch, gesture Wheel_Mod, Wheel_Mod 0.5, gestureEnd Wheel_Mod",
+           `a wheel's drag is a gesture with its values (${sent})`);
+    check (ParamModel.undoLabel (model) === undefined, `and no undo step (${ParamModel.undoLabel (model)})`);
+    patch.sent = [];
+    ParamModel.setAll (model, Preset.init ("program").values);
+    check (ParamModel.get (model, PorridgeParams.modWheelId) === 0.5 && ! patch.sent.some (([id]) => wheels.includes (id)),
+           "a program pushed whole leaves the wheels as they are");
+    model.onParam ({ endpointID: PorridgeParams.modWheelId, value: 0.75 });
+    check (ParamModel.get (model, PorridgeParams.modWheelId) === 0.75 && ParamModel.undoLabel (model) === undefined,
+           "the host's automation moves a wheel");
+}
 
 done ("stored parameters ok");
