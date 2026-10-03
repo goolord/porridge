@@ -29,6 +29,11 @@ namespace porridge
     let convTailParts   = 126;         // tail partitions of 1024 taps (FFT 2048): taps 2048 .. 131071
     let convMaxTaps     = 131072;      // longest impulse per channel, at the processing rate
     let convPredelayMax = 48064;       // 250 ms at 192 kHz, and a little
+
+    // its blocks in the pool (FxPool): the tail's spectra (each two blocks, re and im), then the
+    // predelay's stereo line
+    let convPredelayAt  = convTailParts * 8;
+    let convBlocks      = convPredelayAt + 2 * ((convPredelayMax + 1023) / 1024);
     let convSincZeros   = 8;           // the file resampler's windowed sinc: zero crossings a side
     let convSincRes     = 256;         // table points per zero crossing
 
@@ -101,8 +106,7 @@ namespace porridge
 
         int64 blockCount;                   // blocks processed (time stands still while idle)
 
-        // input: the predelay, then the convolver's input history
-        float[convPredelayMax] pdL, pdR;
+        // input: the predelay (in the pool, see fxAt), then the convolver's input history
         int pdPos, pdCur, pdNext;           // write position; delay, and the one faded to
         float pdFade;
         bool pdFading;
@@ -118,9 +122,11 @@ namespace porridge
         bool headXfade;
         int64 headLo, headB0;               // first frame of the playing side; first block of the crossfade
 
-        // tail
-        ConvSpectrum[252] tailH;            // [part * 2 + channel]
-        ConvSpectrum[252] tailX;            // input frames, [(frame % 126) * 2 + channel]
+        // tail: the impulse's partitions and the input frames are spectra in the pool (FxPool),
+        // each spectrum s at blocks fxAt + 2 s (re) and 2 s + 1 (im): the partitions [part * 2 +
+        // channel], then from convTailParts * 2 the frames [(frame % 126) * 2 + channel]; the
+        // predelay's line follows them (convPredelayAt)
+        int fxAt;
         ConvSpectrum[4] tailE;              // the crossfade's two mixed frames, the old impulse's share
         ConvSpectrum[8] ring;               // new partitions waiting for the old ones' last use
         ConvSpectrum[2] acc;
@@ -185,7 +191,7 @@ namespace porridge
     }
 
     //==============================================================================
-    void prepare (Convolver& this)
+    void prepare (Convolver& this, FxPool& pool)
     {
         for (wrap<1024> k)
         {
@@ -228,13 +234,16 @@ namespace porridge
         this.hpLog = log (20.0f);
         this.lpLog = log (20000.0f);
         this.prepared = true;
-        this.clearState();
+        this.clearState (pool);
     }
 
     /// Silence the history (input, frames, tail output, filters); keeps the impulses.
-    void clearState (Convolver& this)
+    void clearState (Convolver& this, FxPool& pool)
     {
-        for (int i = 0; i < convPredelayMax; ++i) { this.pdL.at (i) = 0; this.pdR.at (i) = 0; }
+        if (this.fxAt >= 0)
+            for (int i = 0; i < convPredelayMax; ++i)
+                setPoolFrame (pool, this.fxAt + convPredelayAt, i, float<2>());
+
         this.pdFading = false;
         for (wrap<4096> i) { this.inL[i] = 0; this.inR[i] = 0; }
         for (wrap<128> i) this.headX[i] = ConvHeadSpectrum();
@@ -361,19 +370,32 @@ namespace porridge
     /// Splits the FFT of left + i * right into the two channels' half spectra (times 2 * scale).
     void convUnpack<W, S> (const W& w, S& l, S& r, float scale)
     {
+        convUnpackTo (w, l.re, l.im, r.re, r.im, scale);
+    }
+
+    /// The same into the halves' arrays (the pool's spectra are pairs of blocks).
+    void convUnpackTo<W, A> (const W& w, A& lre, A& lim, A& rre, A& rim, float scale)
+    {
         let n = w.re.size;
         let h = n / 2;
         let s2 = scale * 2.0f;
-        l.re[0] = w.re[0] * s2;  l.im[0] = w.re.at (h) * s2;
-        r.re[0] = w.im[0] * s2;  r.im[0] = w.im.at (h) * s2;
+        lre[0] = w.re[0] * s2;  lim[0] = w.re.at (h) * s2;
+        rre[0] = w.im[0] * s2;  rim[0] = w.im.at (h) * s2;
 
         for (int k = 1; k < h; ++k)
         {
             let ar = w.re.at (k), ai = w.im.at (k);
             let br = w.re.at (n - k), bi = w.im.at (n - k);
-            l.re.at (k) = (ar + br) * scale;  l.im.at (k) = (ai - bi) * scale;
-            r.re.at (k) = (ai + bi) * scale;  r.im.at (k) = (br - ar) * scale;
+            lre.at (k) = (ar + br) * scale;  lim.at (k) = (ai - bi) * scale;
+            rre.at (k) = (ai + bi) * scale;  rim.at (k) = (br - ar) * scale;
         }
+    }
+
+    /// convUnpack into the pool's spectra s and s + 1 (the region from block at).
+    void convUnpackPool<W> (const W& w, FxPool& pool, int at, int s, float scale)
+    {
+        let b = at + 2 * s;
+        convUnpackTo (w, pool.at (b).v, pool.at (b + 1).v, pool.at (b + 2).v, pool.at (b + 3).v, scale);
     }
 
     /// The reverse: packs two half spectra as the conjugate of left + i * right, bit-reversed,
@@ -404,15 +426,49 @@ namespace porridge
         convMac (acc[1], x.at (i + 1), h.at (j + 1));
     }
 
+    /// The same with the frames, the partition or both in the pool (the region from block at):
+    /// its spectra xs, xs + 1 or hs, hs + 1.
+    void convMacPairPool<A> (A& acc, const FxPool& pool, int at, int xs, int hs)
+    {
+        for (wrap<2> c)
+        {
+            let x = at + 2 * (xs + int (c)), h = at + 2 * (hs + int (c));
+            convMacTo (acc[c], pool.at (x).v, pool.at (x + 1).v, pool.at (h).v, pool.at (h + 1).v);
+        }
+    }
+
+    void convMacPairPoolH<A, X> (A& acc, const X& x, int i, const FxPool& pool, int at, int hs)
+    {
+        for (wrap<2> c)
+        {
+            let h = at + 2 * (hs + int (c));
+            convMacTo (acc[c], x.at (i + int (c)).re, x.at (i + int (c)).im, pool.at (h).v, pool.at (h + 1).v);
+        }
+    }
+
+    void convMacPairPoolX<A, H> (A& acc, const FxPool& pool, int at, int xs, const H& h, int j)
+    {
+        for (wrap<2> c)
+        {
+            let x = at + 2 * (xs + int (c));
+            convMacTo (acc[c], pool.at (x).v, pool.at (x + 1).v, h.at (j + int (c)).re, h.at (j + int (c)).im);
+        }
+    }
+
     /// acc += x * h (bin 0: DC and Nyquist are real).
     void convMac<S> (S& acc, const S& x, const S& h)
     {
-        let dc = acc.re[0] + x.re[0] * h.re[0];
-        let ny = acc.im[0] + x.im[0] * h.im[0];
+        convMacTo (acc, x.re, x.im, h.re, h.im);
+    }
 
-        for (wrap<x.re.size> k)
+    void convMacTo<S, A> (S& acc, const A& xre, const A& xim, const A& hre, const A& him)
+    {
+        let dc = acc.re[0] + xre[0] * hre[0];
+        let ny = acc.im[0] + xim[0] * him[0];
+
+        for (wrap<xre.size> k)
         {
-            let xr = x.re[k], xi = x.im[k], hr = h.re[k], hi = h.im[k];
+            let xr = xre[k], xi = xim[k], hr = hre[k], hi = him[k];
             acc.re[k] += xr * hr - xi * hi;
             acc.im[k] += xr * hi + xi * hr;
         }
@@ -641,7 +697,7 @@ namespace porridge
     }
 
     /// One of the partition FFT's 16 steps: 4 x gather 256 taps, 11 stages, unpack.
-    void pjobStep (Convolver& this)
+    void pjobStep (Convolver& this, FxPool& pool)
     {
         if (! this.pjActive)
         {
@@ -692,7 +748,7 @@ namespace porridge
             }
             else
             {
-                convUnpack (this.workH, this.tailH.at (q * 2), this.tailH.at (q * 2 + 1), scale);
+                convUnpackPool (this.workH, pool, this.fxAt, q * 2, scale);
 
                 if (this.mode == convFill)
                 {
@@ -815,8 +871,10 @@ namespace porridge
     }
 
     /// One step of the segment's job; returns its cost.
-    float tailStep (Convolver& this)
+    float tailStep (Convolver& this, FxPool& pool)
     {
+        let at = this.fxAt;
+        let tailX = convTailParts * 2;                  // the frames' first spectrum (the partitions' is 0)
         let k = this.jobPc;
         let c = this.jobC;
         let S = this.xfS;
@@ -833,8 +891,12 @@ namespace porridge
         {
             let q = int (c - S - 2);
             let i = (q & 3) * 2;
-            this.tailH.at (q * 2) = this.ring.at (i);
-            this.tailH.at (q * 2 + 1) = this.ring.at (i + 1);
+            for (wrap<2> c)
+            {
+                let b = at + 2 * (q * 2 + int (c));
+                pool.at (b).v = this.ring.at (i + int (c)).re;
+                pool.at (b + 1).v = this.ring.at (i + int (c)).im;
+            }
             this.committed = q + 1;
             return convCostCommit;
         }
@@ -866,7 +928,7 @@ namespace porridge
             else
             {
                 let x = int (f % convTailParts) * 2;
-                convUnpack (this.work, this.tailX.at (x), this.tailX.at (x + 1), 1.0f);
+                convUnpackPool (this.work, pool, at, tailX + x, 1.0f);
             }
 
             return convCostUnpack;
@@ -875,7 +937,7 @@ namespace porridge
         if (k < this.jobE3)
         {
             let cost = this.pjActive ? pjobStepCost (this.pjStep) : 1.0f;
-            this.pjobStep();
+            this.pjobStep (pool);
             return cost;
         }
 
@@ -891,9 +953,9 @@ namespace porridge
             let h = q * 2;
 
             if (this.mode == convXfade && f >= S - 1)
-                convMacPair (this.acc, this.tailE, int (f - (S - 1)) * 2, this.tailH, h);
+                convMacPairPoolH (this.acc, this.tailE, int (f - (S - 1)) * 2, pool, at, h);
             else
-                convMacPair (this.acc, this.tailX, int (f % convTailParts) * 2, this.tailH, h);
+                convMacPairPool (this.acc, pool, at, tailX + int (f % convTailParts) * 2, h);
 
             return convCostMac;
         }
@@ -909,9 +971,9 @@ namespace porridge
             let x = int (f % convTailParts) * 2;
 
             if (c < S + 2 + q)
-                convMacPair (this.acc, this.tailX, x, this.ring, (q & 3) * 2);
+                convMacPairPoolX (this.acc, pool, at, tailX + x, this.ring, (q & 3) * 2);
             else
-                convMacPair (this.acc, this.tailX, x, this.tailH, q * 2);
+                convMacPairPool (this.acc, pool, at, tailX + x, q * 2);
 
             return convCostMac;
         }
@@ -948,12 +1010,12 @@ namespace porridge
     }
 
     /// Block b's share of the segment's job (the last block finishes it).
-    void tailWork (Convolver& this, int b)
+    void tailWork (Convolver& this, FxPool& pool, int b)
     {
         let target = b == 15 ? 1.0e30f : this.jobTotal * float (b + 1) * (1.0f / 16.0f);
 
         while (this.jobPc < this.jobEnd && this.jobDone < target)
-            this.jobDone += this.tailStep();
+            this.jobDone += this.tailStep (pool);
     }
 
     //==============================================================================
@@ -1782,15 +1844,15 @@ namespace porridge
     }
 
     /// The input `delay` samples ago.
-    float<2> predelayed (const Convolver& this, int delay)
+    float<2> predelayed (const Convolver& this, const FxPool& pool, int delay)
     {
         let i = this.pdPos >= delay ? this.pdPos - delay : this.pdPos - delay + convPredelayMax;
-        return float<2> (this.pdL.at (i), this.pdR.at (i));
+        return poolFrame (pool, this.fxAt + convPredelayAt, i);
     }
 
     //==============================================================================
     /// The idle effect's work: the build, and filling in a new impulse.
-    void idleWork (Convolver& this, float64 sr)
+    void idleWork (Convolver& this, FxPool& pool, float64 sr)
     {
         if (this.headXfade || this.mode == convXfade)
             this.settle();
@@ -1805,21 +1867,21 @@ namespace porridge
             while (spent < 160.0f && this.mode == convFill)
             {
                 spent += this.pjActive ? pjobStepCost (this.pjStep) : 1.0f;
-                this.pjobStep();
+                this.pjobStep (pool);
             }
         }
     }
 
-    bool process (Convolver& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
+    bool process (Convolver& this, FxPool& pool, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
     {
         if (! this.prepared)
-            this.prepare();
+            this.prepare (pool);
 
         this.updateWanted (P, sr);
 
         if (! active && this.idle)
         {
-            this.idleWork (sr);
+            this.idleWork (pool, sr);
             return false;
         }
 
@@ -1854,8 +1916,7 @@ namespace porridge
         for (wrap<blockSize> i)
         {
             let x = active ? buf[i] : float<2>();
-            this.pdL.at (this.pdPos) = x[0];
-            this.pdR.at (this.pdPos) = x[1];
+            setPoolFrame (pool, this.fxAt + convPredelayAt, this.pdPos, x);
 
             if (! this.pdFading && pdT != this.pdCur)
             {
@@ -1864,11 +1925,11 @@ namespace porridge
                 this.pdFading = true;
             }
 
-            var v = this.predelayed (this.pdCur);
+            var v = this.predelayed (pool, this.pdCur);
 
             if (this.pdFading)
             {
-                v += (this.predelayed (this.pdNext) - v) * this.pdFade;
+                v += (this.predelayed (pool, this.pdNext) - v) * this.pdFade;
                 this.pdFade += fadeStep;
 
                 if (this.pdFade >= 1.0f)
@@ -1894,7 +1955,7 @@ namespace porridge
         if (b == 0)
             this.tailSetup (c);
 
-        this.tailWork (b);
+        this.tailWork (pool, b);
 
         if (this.mode == convFill && this.fillNext < this.newTailParts && this.tailLo + this.fillNext <= c)
         {
@@ -1903,7 +1964,7 @@ namespace porridge
             let quota = (left + 15 - b) / (16 - b);
 
             for (int i = 0; i < quota; ++i)
-                this.pjobStep();
+                this.pjobStep (pool);
         }
 
         let ob = int (c & 1) * 1024 + b * 64;

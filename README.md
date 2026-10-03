@@ -23,8 +23,10 @@ dsp/                    Cmajor DSP
   ModTables.cmajor        modulation sources, targets and knob laws (generated)
   Synth.cmajor            MIDI, voice manager, arpeggiator, per-voice rendering, effects chain,
                           a K-weighted level meter the view asks for (levelRequest/levelOut),
-                          and reports of the sounding notes for the view (voiceView/voiceViewOut)
-  Oscillator, Filter, Modulation, Effects, Tables, Voice, Types
+                          and reports of the sounding notes for the view (voiceView/voiceViewOut);
+                          it lends the rack's pool (Common.cmajor's FxPool, the memory the
+                          effects with long lines share) to the effects in the rack
+  Oscillator, Filter, Modulation, Effects, Tables, Voice, Types, Common
                           (Voice.cmajor also has the key EQ: a low shelf under each voice's
                           note and bands on its harmonics; Oscillator.cmajor each oscillator's
                           roughness, noise in its phase)

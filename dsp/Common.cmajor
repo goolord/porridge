@@ -1,5 +1,6 @@
 //  Small pieces shared by the effects and the voice filters: Simper's state-variable filter,
-//  4-point Hermite interpolation and a one-pole lowpass coefficient.
+//  4-point Hermite interpolation and a one-pole lowpass coefficient; and the rack's pool, the
+//  memory the effects with long lines share.
 
 namespace porridge
 {
@@ -63,10 +64,72 @@ namespace porridge
     }
 
     //==============================================================================
-    // Delay lines laid out in one pool: the algorithmic reverb's (Space.cmajor) and the
-    // ambience's (Ambience.cmajor). Lines is a struct with the pool (`pool`, a float array),
-    // whether it is all zeros (`clean`), and per line its start in the pool (`base`), its
-    // capacity (`cap`) and its write index (`wp`).
+    // The rack's pool: the memory of the effects with the longest lines (Oatmeal's delay and
+    // reverb and their copies, the algo reverbs, the convolvers' tails and predelays, the
+    // ambiences, the Bode shifters and the flangers), which each borrows while it is in the rack
+    // (Synth's claimPool). The rack has eight slots, so at most eight of these 20 run at once:
+    // the pool holds the eight largest together (8,048 blocks: Oatmeal's delay, both convolvers,
+    // the other two delays and three algo reverbs) instead of all 20 (12,026 blocks), 16 MB less
+    // per instance. It is made of blocks of 1024 floats, so that a sample's place is one shift
+    // and two masks away, and a convolver's spectrum half is a whole block, whose
+    // multiply-accumulates run as before. An effect's `fxAt` is its first block (-1: none); a
+    // mono region runs through its blocks in turn, a stereo line alternates a block of each side.
+
+    let fxPoolBlocks = 8192;    // a power of two: a block number wraps with a mask
+
+    struct FxBlock
+    {
+        float[1024] v;
+    }
+
+    using FxPool = FxBlock[fxPoolBlocks];
+
+    /// Blocks for n floats of a mono region, or n frames of a stereo line.
+    int monoBlocks (int n)      { return (n + 1023) / 1024; }
+    int stereoBlocks (int n)    { return 2 * monoBlocks (n); }
+
+    /// Float i of a mono region.
+    float poolGet (const FxPool& pool, int at, int i)
+    {
+        return pool.at (at + (i >> 10)).v[wrap<1024> (i)];
+    }
+
+    void poolSet (FxPool& pool, int at, int i, float x)
+    {
+        pool.at (at + (i >> 10)).v[wrap<1024> (i)] = x;
+    }
+
+    /// One side (0 left, 1 right) of frame i of a stereo line.
+    float poolSide (const FxPool& pool, int at, int i, int side)
+    {
+        return pool.at (at + ((i >> 10) << 1) + side).v[wrap<1024> (i)];
+    }
+
+    void setPoolSide (FxPool& pool, int at, int i, int side, float x)
+    {
+        pool.at (at + ((i >> 10) << 1) + side).v[wrap<1024> (i)] = x;
+    }
+
+    float<2> poolFrame (const FxPool& pool, int at, int i)
+    {
+        let b = at + ((i >> 10) << 1);
+        let k = wrap<1024> (i);
+        return float<2> (pool.at (b).v[k], pool.at (b + 1).v[k]);
+    }
+
+    void setPoolFrame (FxPool& pool, int at, int i, float<2> x)
+    {
+        let b = at + ((i >> 10) << 1);
+        let k = wrap<1024> (i);
+        pool.at (b).v[k] = x[0];
+        pool.at (b + 1).v[k] = x[1];
+    }
+
+    //==============================================================================
+    // Delay lines laid out in a mono region of the pool: the algorithmic reverb's (Space.cmajor)
+    // and the ambience's (Ambience.cmajor). Lines is a struct with its region (`fxAt`), whether
+    // the region is known to be all zeros (`clean`), and per line its start in the region
+    // (`base`), its capacity (`cap`) and its write index (`wp`).
 
     /// Lays line j out at top (moved on past it), empty, with room for `capacity` samples.
     void poolLine<Lines> (Lines& this, int j, int capacity, int& top)
@@ -77,28 +140,20 @@ namespace porridge
         top += capacity;
     }
 
-    /// Clears the lines just laid out (below top), unless the pool is still all zeros.
-    void clearPool<Lines> (Lines& this, int top)
+    /// Clears the lines just laid out (below top), unless the region is still all zeros.
+    void clearPool<Lines> (Lines& this, FxPool& pool, int top)
     {
         if (! this.clean)
             for (int i = 0; i < top; ++i)
-                this.pool.at (i) = 0;
+                poolSet (pool, this.fxAt, i, 0);
 
         this.clean = false;
     }
 
-    /// Zeros the whole pool.
-    void resetPool<Lines> (Lines& this)
+    void poolWrite<Lines> (const Lines& this, FxPool& pool, int j, float x)
     {
-        for (int i = 0; i < this.pool.size; ++i)
-            this.pool.at (i) = 0;
-
-        this.clean = true;
-    }
-
-    void poolWrite<Lines> (Lines& this, int j, float x)
-    {
-        this.pool.at (this.base.at (j) + this.wp.at (j)) = x;
+        let k = this.fxAt * 1024 + this.base.at (j) + this.wp.at (j);
+        pool.at (k >> 10).v.at (k) = x;
     }
 
     /// Moves line j's write index on a sample.
@@ -109,7 +164,7 @@ namespace porridge
     }
 
     /// Line j `delay` samples back (>= 1 when read before the write), linearly interpolated.
-    float poolReadLin<Lines> (const Lines& this, int j, float64 delay)
+    float poolReadLin<Lines> (const Lines& this, const FxPool& pool, int j, float64 delay)
     {
         let di = int (delay);
         let f = float (delay - float64 (di));
@@ -117,8 +172,10 @@ namespace porridge
         let b = this.base.at (j);
         var i = this.wp.at (j) - di;
         if (i < 0) i += c;
-        let newer = this.pool.at (b + i);
-        let older = this.pool.at (b + (i == 0 ? c - 1 : i - 1));
+        let o = this.fxAt * 1024 + b;
+        let kn = o + i, ko = o + (i == 0 ? c - 1 : i - 1);
+        let newer = pool.at (kn >> 10).v.at (kn);
+        let older = pool.at (ko >> 10).v.at (ko);
         return newer + f * (older - newer);
     }
 

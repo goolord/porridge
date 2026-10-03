@@ -162,13 +162,15 @@ namespace porridge
     }
 
     //==============================================================================
-    let delayMax = 1323000;
-    let delayHalf = delayMax / 2;   // each line is stored in two halves: WebAssembly targets cap arrays below 2^20 elements
+    let delayMax = 1323000;         // Oatmeal's longest line: 30 s at 44.1 kHz
+    let rackDelayMax = 441000;      // the rack's other delays': a third of that
 
-    /// Oatmeal's delay: 1323000 samples a side (30 s at 44.1 kHz).
+    /// Oatmeal's delay, and the rack's copies of it with shorter lines. Its lines are a stereo
+    /// line in the pool (FxPool), `capacity` frames long: the left line in its left side, the
+    /// right line in its right.
     struct Delay
     {
-        float[delayHalf] bufL0, bufL1, bufR0, bufR1;
+        int fxAt, capacity;
         int lenL, lenR, posL, posR;
         float<2> lpx, lpy, hpx, hpy;
         bool idle;
@@ -176,48 +178,33 @@ namespace porridge
         float rotCur;
     }
 
-    /// The rack's other delays: the same, with a third of the memory (441000 samples a side, 10 s
-    /// at 44.1 kHz). The functions below take either; a line's longest length is its two halves.
-    let rackDelayHalf = 220500;
-
-    struct RackDelay
-    {
-        float[rackDelayHalf] bufL0, bufL1, bufR0, bufR1;
-        int lenL, lenR, posL, posR;
-        float<2> lpx, lpy, hpx, hpy;
-        bool idle;
-        int silentCount;
-        float rotCur;
-    }
-
-    void prepare<D> (D& this)
+    void prepare (Delay& this, FxPool& pool)
     {
         this.lenL = -1;
         this.lenR = -1;
-        this.clearState();
+        this.clearState (pool);
     }
 
-    void clearState<D> (D& this)
+    void clearState (Delay& this, FxPool& pool)
     {
         this.idle = true;
         this.silentCount = 0;
         this.posL = 0; this.posR = 0;
         this.lpx = float<2>(); this.lpy = float<2>(); this.hpx = float<2>(); this.hpy = float<2>();
         this.rotCur = 0;
-        this.clearL (max (this.lenL, 0));
-        this.clearR (max (this.lenR, 0));
+
+        if (this.fxAt >= 0)
+        {
+            this.clearL (pool, max (this.lenL, 0));
+            this.clearR (pool, max (this.lenR, 0));
+        }
     }
 
-    void clearL<D> (D& this, int n) { for (int i = 0; i < n; ++i) this.writeL (i, 0.0f); }
-    void clearR<D> (D& this, int n) { for (int i = 0; i < n; ++i) this.writeR (i, 0.0f); }
+    void clearL (Delay& this, FxPool& pool, int n)  { for (int i = 0; i < n; ++i) setPoolSide (pool, this.fxAt, i, 0, 0.0f); }
+    void clearR (Delay& this, FxPool& pool, int n)  { for (int i = 0; i < n; ++i) setPoolSide (pool, this.fxAt, i, 1, 0.0f); }
 
-    float readL<D> (const D& this, int i)       { let h = this.bufL0.size; return i < h ? this.bufL0.at (i) : this.bufL1.at (i - h); }
-    float readR<D> (const D& this, int i)       { let h = this.bufR0.size; return i < h ? this.bufR0.at (i) : this.bufR1.at (i - h); }
-    void writeL<D> (D& this, int i, float v)    { let h = this.bufL0.size; if (i < h) this.bufL0.at (i) = v; else this.bufL1.at (i - h) = v; }
-    void writeR<D> (D& this, int i, float v)    { let h = this.bufR0.size; if (i < h) this.bufR0.at (i) = v; else this.bufR1.at (i - h) = v; }
-
-    bool process<D> (D& this, const FxTables& t, float<2>[blockSize]& buf, bool active,
-                     const float[numSlots]& P, float64 sr, float64 spb)
+    bool process (Delay& this, FxPool& pool, const FxTables& t, float<2>[blockSize]& buf, bool active,
+                  const float[numSlots]& P, float64 sr, float64 spb)
     {
         if (this.idle && ! active)
             return false;
@@ -232,12 +219,11 @@ namespace porridge
             lR = floor (lR + 0.5);
         }
 
-        let longest = 2 * this.bufL0.size;
-        let nL = clamp (int (lL * unit + 0.5), 2, longest);
-        let nR = clamp (int (lR * unit + 0.5), 2, longest);
+        let nL = clamp (int (lL * unit + 0.5), 2, this.capacity);
+        let nR = clamp (int (lR * unit + 0.5), 2, this.capacity);
 
-        if (nL != this.lenL) { this.lenL = nL; this.clearL (nL); this.posL = 0; }
-        if (nR != this.lenR) { this.lenR = nR; this.clearR (nR); this.posR = 0; }
+        if (nL != this.lenL) { this.lenL = nL; this.clearL (pool, nL); this.posL = 0; }
+        if (nR != this.lenR) { this.lenR = nR; this.clearR (pool, nR); this.posR = 0; }
 
         let fbL = P[slot::D_FeedbackL];
         let fbR = P[slot::D_FeedbackR];
@@ -280,18 +266,19 @@ namespace porridge
             let inL = buf[i][0];
             let inR = buf[i][1];
 
-            let rL = revL == 2 ? reverseWindow (t, this.posL, invL) * this.readL (this.lenL - 1 - this.posL) : this.readL (this.posL);
-            let rR = revR == 2 ? reverseWindow (t, this.posR, invR) * this.readR (this.lenR - 1 - this.posR) : this.readR (this.posR);
+            let at = this.fxAt;
+            let rL = revL == 2 ? reverseWindow (t, this.posL, invL) * poolSide (pool, at, this.lenL - 1 - this.posL, 0) : poolSide (pool, at, this.posL, 0);
+            let rR = revR == 2 ? reverseWindow (t, this.posR, invR) * poolSide (pool, at, this.lenR - 1 - this.posR, 1) : poolSide (pool, at, this.posR, 1);
 
             let rd = float<2> (rL, rR);
             let y = kl * (rd + this.lpx) + pl * this.lpy + 1e-15f;  this.lpx = rd; this.lpy = y;
             let h = kh * (y - this.hpx) + ph * this.hpy + 1e-15f;  this.hpx = y; this.hpy = h;
 
-            this.writeL (this.posL, sat10 (t, inL * panL + b * h[1] + a * h[0]) + 1e-15f);
-            this.writeR (this.posR, sat10 (t, inR * panR + d * h[1] + c * h[0]) + 1e-15f);
+            setPoolSide (pool, at, this.posL, 0, sat10 (t, inL * panL + b * h[1] + a * h[0]) + 1e-15f);
+            setPoolSide (pool, at, this.posR, 1, sat10 (t, inR * panR + d * h[1] + c * h[0]) + 1e-15f);
 
-            let oL = revL == 1 ? reverseWindow (t, this.posL, invL) * this.readL (this.lenL - 1 - this.posL) : h[0];
-            let oR = revR == 1 ? reverseWindow (t, this.posR, invR) * this.readR (this.lenR - 1 - this.posR) : h[1];
+            let oL = revL == 1 ? reverseWindow (t, this.posL, invL) * poolSide (pool, at, this.lenL - 1 - this.posL, 0) : h[0];
+            let oR = revR == 1 ? reverseWindow (t, this.posR, invR) * poolSide (pool, at, this.lenR - 1 - this.posR, 1) : h[1];
 
             buf[i] = float<2> (oL * wet + inL * dry, oR * wet + inR * dry);
 
@@ -774,30 +761,35 @@ namespace porridge
     let reverbLinesTotal = 321341;
     let predelayMax = 96010;       // SR/2 + 4.5 at 192 kHz
 
+    // its blocks in the pool (FxPool): the lines as a mono region, then the predelay's stereo line
+    let reverbLineBlocks = (reverbLinesTotal + 1023) / 1024;
+    let reverbBlocks = reverbLineBlocks + 2 * ((predelayMax + 1023) / 1024);
+
     struct Reverb
     {
+        int fxAt;
         float dc;
         float[8] lpx, lpy, hpx, hpy, apx, apy, apc;
         float[1024] erL, erR;
         int erPos;
-        float[predelayMax] pdL, pdR;
         int pdSize, pdW, pdRd;
-        float[reverbLinesTotal] lines;      // line j starts at reverbLineStart[j]
         int[8] len, pos;
         float lastSize;
         bool idle;
         int silentCount;
     }
 
-    void prepare (Reverb& this)
+    void prepare (Reverb& this, FxPool& pool)
     {
         this.lastSize = -1.0f;
         this.pdSize = 0;
-        this.clearState();
+        this.clearState (pool);
     }
 
-    void clearState (Reverb& this)
+    void clearState (Reverb& this, FxPool& pool)
     {
+        let at = this.fxAt;
+
         this.dc = 1e-12f;
         this.idle = false;
         this.silentCount = 0;
@@ -811,12 +803,16 @@ namespace porridge
             this.lpx[j] = 0; this.lpy[j] = 0; this.hpx[j] = 0; this.hpy[j] = 0;
             this.apx[j] = 0; this.apy[j] = 0;
 
-            for (int i = 0; i < this.len[j]; ++i)
-                this.lines.at (reverbLineStart[j] + i) = 0;
+            if (at >= 0)
+                for (int i = 0; i < this.len[j]; ++i)
+                    poolSet (pool, at, reverbLineStart[j] + i, 0);
         }
 
         for (wrap<1024> i) { this.erL[i] = 0; this.erR[i] = 0; }
-        for (int i = 0; i < this.pdSize; ++i) { this.pdL.at (i) = 0; this.pdR.at (i) = 0; }
+
+        if (at >= 0)
+            for (int i = 0; i < this.pdSize; ++i)
+                setPoolFrame (pool, at + reverbLineBlocks, i, float<2>());
     }
 
     let reverbMult = float[8] (1.03f, 0.92f, 0.73f, 0.638f, 1.0689f, 0.883f, 0.747f, 0.677f);
@@ -841,10 +837,13 @@ namespace porridge
         return right ? t3R[i] : t3L[i];
     }
 
-    bool process (Reverb& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
+    bool process (Reverb& this, FxPool& pool, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
     {
         if (! active && this.idle)
             return false;
+
+        let at = this.fxAt;
+        let pdAt = at + reverbLineBlocks;
 
         let srI = int (sr);
         let sizeS = float (sr) * P[slot::R_Size] * 0.001f;
@@ -865,7 +864,7 @@ namespace porridge
                 this.pos[j] = 0;
 
                 for (int i = 0; i < this.len[j]; ++i)
-                    this.lines.at (reverbLineStart[j] + i) = 0;
+                    poolSet (pool, at, reverbLineStart[j] + i, 0);
             }
         }
 
@@ -874,7 +873,7 @@ namespace porridge
         if (pdSizeNew != this.pdSize)
         {
             this.pdSize = pdSizeNew;
-            for (int i = 0; i < this.pdSize; ++i) { this.pdL.at (i) = 0; this.pdR.at (i) = 0; }
+            for (int i = 0; i < this.pdSize; ++i) setPoolFrame (pool, pdAt, i, float<2>());
             this.pdW = 0;
             this.pdRd = 0;
         }
@@ -974,7 +973,7 @@ namespace porridge
 
             for (wrap<8> j)
             {
-                let r = this.lines.at (reverbLineStart[j] + this.pos[j]);
+                let r = poolGet (pool, at, reverbLineStart[j] + this.pos[j]);
                 let y = float ((float64 (r) + float64 (this.lpx[j]) + float64 (dc)) * float64 (kLP) + pLP * float64 (this.lpy[j]));
                 this.lpy[j] = y; this.lpx[j] = r;
                 let h = (y + dc - this.hpx[j]) * kHP + pHP * this.hpy[j];
@@ -993,14 +992,14 @@ namespace porridge
             let B2 = aR + M10 * u[4] + M11 * u[5] + M12 * u[6] + M13 * u[7];
             let B3 = M20 * u[4] + M21 * u[5] + M22 * u[6] + M23 * u[7];
 
-            this.lines.at (reverbLineStart[0] + this.pos[0]) = c * A0 - s * B1 + 1e-15f;
-            this.lines.at (reverbLineStart[1] + this.pos[1]) = c * A1 + s * B2 - 1e-15f;
-            this.lines.at (reverbLineStart[2] + this.pos[2]) = s * B3 + c * A2 - 1e-15f;
-            this.lines.at (reverbLineStart[3] + this.pos[3]) = c * A3 - s * B0 - 1e-15f;
-            this.lines.at (reverbLineStart[4] + this.pos[4]) = s * A3 + c * B0 + 1e-15f;
-            this.lines.at (reverbLineStart[5] + this.pos[5]) = c * B1 + s * A0 + 1e-15f;
-            this.lines.at (reverbLineStart[6] + this.pos[6]) = c * B2 - s * A1 - 1e-15f;
-            this.lines.at (reverbLineStart[7] + this.pos[7]) = c * B3 - s * A2 - 1e-15f;
+            poolSet (pool, at, reverbLineStart[0] + this.pos[0], c * A0 - s * B1 + 1e-15f);
+            poolSet (pool, at, reverbLineStart[1] + this.pos[1], c * A1 + s * B2 - 1e-15f);
+            poolSet (pool, at, reverbLineStart[2] + this.pos[2], s * B3 + c * A2 - 1e-15f);
+            poolSet (pool, at, reverbLineStart[3] + this.pos[3], c * A3 - s * B0 - 1e-15f);
+            poolSet (pool, at, reverbLineStart[4] + this.pos[4], s * A3 + c * B0 + 1e-15f);
+            poolSet (pool, at, reverbLineStart[5] + this.pos[5], c * B1 + s * A0 + 1e-15f);
+            poolSet (pool, at, reverbLineStart[6] + this.pos[6], c * B2 - s * A1 - 1e-15f);
+            poolSet (pool, at, reverbLineStart[7] + this.pos[7], c * B3 - s * A2 - 1e-15f);
 
             var wL = ap[0] + ap[1] + ap[2] + ap[3];
             var wR = ap[4] + ap[5] + ap[6] + ap[7];
@@ -1008,13 +1007,15 @@ namespace porridge
 
             if (wetDelay)
             {
-                this.pdL.at (this.pdW) = wL; this.pdR.at (this.pdW) = wR;
-                wL = this.pdL.at (this.pdRd); wR = this.pdR.at (this.pdRd);
+                setPoolFrame (pool, pdAt, this.pdW, float<2> (wL, wR));
+                let d = poolFrame (pool, pdAt, this.pdRd);
+                wL = d[0]; wR = d[1];
             }
             else if (dryDelay)
             {
-                this.pdL.at (this.pdW) = xL; this.pdR.at (this.pdW) = xR;
-                dL = this.pdL.at (this.pdRd); dR = this.pdR.at (this.pdRd);
+                setPoolFrame (pool, pdAt, this.pdW, float<2> (xL, xR));
+                let d = poolFrame (pool, pdAt, this.pdRd);
+                dL = d[0]; dR = d[1];
             }
 
             if (wetDelay || dryDelay)
