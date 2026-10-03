@@ -3051,14 +3051,29 @@ namespace porridge
             return float (pow (2.0, float64 (driftValue (v, osc * maxUnison + k) * P[slot::Drift_Pitch]) / 1200.0));
         }
 
-        /// Unison random phase: every copy but the first starts anywhere in its cycle.
+        /// Unison random phase: every copy but the first starts at a random point in its cycle,
+        /// moved there from its own start phase by the amount (0..1). The phase it is moved by
+        /// is the shortest way round (-1/2 .. 1/2 of the cycle), so an amount spreads the copies
+        /// over that much of the cycle around their own phase (like randomPhase's spread), and
+        /// 1 lands exactly on the random point: the old switch's "on".
         void randomUnisonPhases (Voice& v)
         {
+            let amount = float64 (clamp (P[slot::U_RandomPhase], 0.0f, 1.0f));
+
             for (int k = 1; k < maxUnison; ++k)
             {
-                v.osc1.at (k).phase = int64 ((driftRng.nextSigned() * 0.5f + 0.5f) * float (two32)) & u32;
-                v.osc2.at (k).phase = int64 ((driftRng.nextSigned() * 0.5f + 0.5f) * float (two32)) & u32;
+                let to1 = int64 ((driftRng.nextSigned() * 0.5f + 0.5f) * float (two32)) & u32;
+                let to2 = int64 ((driftRng.nextSigned() * 0.5f + 0.5f) * float (two32)) & u32;
+                v.osc1.at (k).phase = towardsPhase (v.osc1.at (k).phase, to1, amount);
+                v.osc2.at (k).phase = towardsPhase (v.osc2.at (k).phase, to2, amount);
             }
+        }
+
+        /// A uint32 phase moved the shortest way round towards another by a fraction of the way.
+        int64 towardsPhase (int64 from, int64 to, float64 amount)
+        {
+            let d = ((to - from + 0x80000000i64) & u32) - 0x80000000i64;
+            return (from + int64 (float64 (d) * amount)) & u32;
         }
 
         //==============================================================================

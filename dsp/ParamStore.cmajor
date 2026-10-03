@@ -449,7 +449,7 @@ processor ParamStore
     input event int LFO_2_Steps [[ name: "LFO 2 sample & hold", min: 0, max: 9, init: 0, text: "off|2|3|4|6|8|12|16|24|32" ]];
     input event int LFO_2_OneShot [[ name: "LFO 2 one-shot", min: 0, max: 1, init: 0, text: "off|on" ]];
     input event float U_DetuneCurve [[ name: "Unison detune curve", min: 0, max: 1, init: 0 ]];
-    input event int U_RandomPhase [[ name: "Unison random phase", min: 0, max: 1, init: 0, text: "off|on" ]];
+    input event float U_RandomPhase [[ name: "Unison random phase", min: 0, max: 1, init: 0 ]];
     input event float U_Width [[ name: "Unison width", min: 0, max: 2, init: 1 ]];
     input event int FX_Rack_1 [[ name: "FX slot 1", automatable: false, min: 0, max: 64, init: 1, text: "empty|Chorus|Delay|Reverb|EQ|Chorus 2|Chorus 3|Chorus 4 (retired)|Delay 2|Delay 3|Delay 4 (retired)|Reverb 2|Reverb 3|Reverb 4 (retired)|EQ 2|EQ 3|EQ 4 (retired)|Distortion 2|Distortion 3|Distortion 4|Distortion 5 (retired)|Flanger|Flanger 2|Flanger 3|Flanger 4 (retired)|Phaser|Phaser 2|Phaser 3|Phaser 4 (retired)|Compressor|Compressor 2|Compressor 3|Compressor 4 (retired)|Algo reverb|Algo reverb 2|Algo reverb 3|Algo reverb 4 (retired)|Convolve|Convolve 2|Bode|Bode 2|Bode 3|Bode 4 (retired)|Filter|Filter 2|Filter 3|Filter 4 (retired)|Utility|Utility 2|Utility 3|Utility 4 (retired)|Ambience|Ambience 2|Ambience 3|Ambience 4 (retired)|Air|Air 2|Air 3|Air 4 (retired)|Shifter|Shifter 2|Resonator|Resonator 2|Octaver|Octaver 2" ]];
     input event int FX_Rack_2 [[ name: "FX slot 2", automatable: false, min: 0, max: 64, init: 2, text: "empty|Chorus|Delay|Reverb|EQ|Chorus 2|Chorus 3|Chorus 4 (retired)|Delay 2|Delay 3|Delay 4 (retired)|Reverb 2|Reverb 3|Reverb 4 (retired)|EQ 2|EQ 3|EQ 4 (retired)|Distortion 2|Distortion 3|Distortion 4|Distortion 5 (retired)|Flanger|Flanger 2|Flanger 3|Flanger 4 (retired)|Phaser|Phaser 2|Phaser 3|Phaser 4 (retired)|Compressor|Compressor 2|Compressor 3|Compressor 4 (retired)|Algo reverb|Algo reverb 2|Algo reverb 3|Algo reverb 4 (retired)|Convolve|Convolve 2|Bode|Bode 2|Bode 3|Bode 4 (retired)|Filter|Filter 2|Filter 3|Filter 4 (retired)|Utility|Utility 2|Utility 3|Utility 4 (retired)|Ambience|Ambience 2|Ambience 3|Ambience 4 (retired)|Air|Air 2|Air 3|Air 4 (retired)|Shifter|Shifter 2|Resonator|Resonator 2|Octaver|Octaver 2" ]];
@@ -2077,7 +2077,7 @@ processor ParamStore
     event LFO_2_Steps (int v) { paramOut <- porridge::ParamChange (2697, float (v)); }
     event LFO_2_OneShot (int v) { paramOut <- porridge::ParamChange (2698, float (v)); }
     event U_DetuneCurve (float v) { paramOut <- porridge::ParamChange (2699, v); }
-    event U_RandomPhase (int v) { paramOut <- porridge::ParamChange (2700, float (v)); }
+    event U_RandomPhase (float v) { paramOut <- porridge::ParamChange (2700, v); }
     event U_Width (float v) { paramOut <- porridge::ParamChange (2701, v); }
     event FX_Rack_1 (int v) { paramOut <- porridge::ParamChange (2702, float (v)); }
     event FX_Rack_2 (int v) { paramOut <- porridge::ParamChange (2703, float (v)); }

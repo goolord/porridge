@@ -142,7 +142,7 @@ let oscPanel = (ctx: Ctx.t, page) => {
   unison->Grid.param("U_PitchJitter", 0, 1, "pitch jitter")
   unison->Grid.param("U_PanJitter", 1, 1, "pan jitter")
   unison->Grid.param("U_DetuneCurve", 2, 1, "detune curve")
-  unison->Grid.toggle("U_RandomPhase", 3, 1, "rand phase")
+  unison->Grid.param("U_RandomPhase", 3, 1, "rand phase")
   // analog drift: slow random pitch, per unison copy (its cutoff drift is the filter's)
   unison->Grid.param("Drift_Pitch", 0, 2, "drift pitch")
   unison->Grid.param("Drift_Rate", 1, 2, "drift rate")
