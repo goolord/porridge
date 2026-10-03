@@ -32,8 +32,11 @@ type t = {
   mutable shapesKnown: bool,
   mutable tuning: option<Scala.source>,
   mutable impulses: array<option<Impulse.t>>,
+  // each of them as JSON text (Impulse.itemText): what the patch holds, as far as the view knows
+  mutable impulseTexts: array<string>,
   impulseListeners: array<unit => unit>,
-  // what the view last stored under each key, to tell the host's echo from a new value
+  // what the view last stored under each key (and for the impulses, the list the patch last sent
+  // it, if newer), to tell the host's echo from a new value
   stored: Map.t<StoredState.key, string>,
   pendingSend: Set.t<table>,
   mutable learning: option<string>,
@@ -65,6 +68,7 @@ let make = (pc, model, ~onMessage) => {
     shapesKnown: false,
     tuning: None,
     impulses: Impulse.none(),
+    impulseTexts: Impulse.none()->Array.map(Impulse.itemText),
     impulseListeners: [],
     stored: Map.make(),
     pendingSend: Set.make(),
@@ -113,8 +117,15 @@ let onState = (t, {key, value}: PatchConnection.storedStateEvent) =>
   | (Some(StoredState.Tuning), String(s)) =>
     t.tuning = Bank.decodeTuning(s)
     changed(t)
-  | (Some(StoredState.Impulses), String(s)) =>
-    t.impulses = Impulse.decode(s)
+  // (none: a host's session without impulses; the worker sends them all, as it does any list
+  // the view didn't store)
+  | (Some(StoredState.Impulses), (String(_) | Null) as value) =>
+    let s = value->JSON.Decode.string->Option.getOr("")
+    // (what the patch holds now: the view's own list, if it comes back, is news)
+    t.stored->Map.set(StoredState.Impulses, s)
+    let items = Impulse.items(s)
+    t.impulses = items->Array.map(((item, _)) => Impulse.fromJson(item))
+    t.impulseTexts = items->Array.map(Pair.second)
     t.impulseListeners->Array.forEach(fn => fn())
   | (Some(StoredState.Shapes), String(shapes)) =>
     Bank.decodeShapes(shapes)->Option.forEach(shapes => {
@@ -273,12 +284,24 @@ let sendTuning = t => {
 
 let onImpulses = (t, fn) => t.impulseListeners->Array.push(fn)
 
-// Sends the convolvers' impulses that changed (by index) to the patch, and stores them all. An
-// impulse takes a moment to arrive, and sending one again restarts it, so the others are left be.
+// Sends the convolvers' impulses that changed (by index) to the patch, tells the worker it has
+// (Impulse.announceSent, so that it doesn't send them again), and stores them all. An impulse
+// takes a moment to arrive, and sending one again restarts it, so the others, and those that
+// are the same as before (another program's copy of the same file), are left be.
 let sendImpulses = (t, changed) =>
   if changed->Array.length > 0 {
-    changed->Array.forEach(which => Impulse.send(t.pc, which, t.impulses[which]->Option.flatMap(x => x)))
-    store(t, StoredState.Impulses, Impulse.encode(t.impulses))
+    let imp = which => t.impulses[which]->Option.flatMap(x => x)
+    let texts = t.impulseTexts->Array.mapWithIndex((text, which) =>
+      changed->Array.includes(which) ? Impulse.itemText(imp(which)) : text
+    )
+    let sent = changed->Array.filter(which => texts[which] != t.impulseTexts[which])
+    if sent != [] {
+      t.impulseTexts = texts
+      sent->Array.forEach(which => Impulse.send(t.pc, which, imp(which)))
+      let encoded = Impulse.encodeTexts(texts)
+      Impulse.announceSent(t.pc, sent, encoded)
+      store(t, StoredState.Impulses, encoded)
+    }
     t.impulseListeners->Array.forEach(fn => fn())
   }
 

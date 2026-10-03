@@ -140,8 +140,15 @@ let chunkOf = (d: Float32Array.t, offset) => {
 }
 
 // The impulse's chunks, sent a few at a time so that the patch's event queue keeps up. A newer
-// send to the same convolver stops an older one.
+// send to the same convolver stops an older one (from the same sender: the view and the worker
+// each have their own; see sender below).
 let generation = Array.make(~length=slots, 0)
+
+// Stops this sender's send to the slot, if one is under way.
+let stop = which =>
+  if which >= 0 && which < slots {
+    generation->Array.setUnsafe(which, generation->Array.getUnsafe(which) + 1)
+  }
 
 let send = (pc, which, imp: option<t>) =>
   if which >= 0 && which < slots {
@@ -226,7 +233,13 @@ let none = () => Array.make(~length=slots, None)
 
 let isEmpty = (list: array<option<t>>) => list->Array.every(Option.isNone)
 
-let encode = list => isEmpty(list) ? "" : JSON.stringify(listToJson(list))
+// A slot's impulse as JSON text, as the list's encoding has it ("null" for none).
+let itemText = (imp: option<t>) => imp->Option.mapOr("null", imp => JSON.stringify(toJson(imp)))
+
+// The encoding of a list whose slots' texts these are.
+let encodeTexts = texts => texts->Array.every(x => x == "null") ? "" : `[${texts->Array.join(",")}]`
+
+let encode = list => encodeTexts(list->Array.map(itemText))
 
 let decode = s =>
   s == ""
@@ -236,26 +249,82 @@ let decode = s =>
       | exception _ => none()
       }
 
-// Sends the impulses of encoded lists (as the stored state keeps them) to the patch, each only
-// when it differs from what this sender sent for its slot last: an impulse takes a moment to
-// arrive, and sending one again restarts it.
+// An encoded list's items (null where there is none) and their texts.
+let items = s => {
+  let items = switch s == "" ? JSON.Null : JSON.parseOrThrow(s) {
+  | Array(items) => items
+  | _ => []
+  | exception _ => []
+  }
+  Array.fromInitializer(~length=slots, which => {
+    let item = items[which]->Option.getOr(JSON.Null)
+    (item, JSON.stringify(item))
+  })
+}
+
+// Who sends the impulses: the view sends the slots it changes as it stores the list (a file
+// loaded, an undo, another program), and the worker the slots a stored list changes otherwise
+// (a host's session, a session from before the slots), with or without the view open. The
+// worker would be slower: from the view storing a 1 MB stereo impulse to the convolver holding
+// it took 1.8 s against the view's 1.1 s in the plugin, the worker decoding it in QuickJS
+// (0.7 s) and then sending it (0.8 s).
+//
+// So the view announces the slots it has sent just before it stores the list, and the worker
+// skips them in that list. The announcement is a request for a key that is never stored,
+// sentPrefix followed by { slots, length } (the slots, and the encoded list's length): the patch
+// answers a request by broadcasting the key to every view, the worker too, in order with the
+// stores around it, and no session holds it, so a host restoring one has the worker send every
+// slot it changes.
+let sentPrefix = "impulsesSent?"
+
+type announcement = {slots: array<int>, length: int}
+
+let announceSent = (pc, slots, encoded) =>
+  PatchConnection.requestStoredStateValue(
+    pc,
+    sentPrefix ++ JSON.stringifyAny({slots, length: String.length(encoded)})->Option.getOr(""),
+  )
+
+@scope("JSON") external parseAnnouncement: string => announcement = "parse"
+
+// The worker's sender: sends the impulses of encoded lists (as the stored state keeps them) to
+// the patch, each only when it differs from what the patch was sent for its slot last (an
+// impulse takes a moment to arrive, and sending one again restarts it) and the view hasn't
+// sent it. `stored` takes the stored lists, `announced` the view's announcements (keys starting
+// with sentPrefix).
+type sender = {stored: string => unit, announced: string => unit}
+
 let sender = pc => {
-  // each slot's JSON as last sent ("" before the first)
-  let sent = Array.make(~length=slots, "")
-  s => {
-    let items = switch s == "" ? JSON.Null : JSON.parseOrThrow(s) {
-    | Array(items) => items
-    | _ => []
-    | exception _ => []
-    }
-    for which in 0 to slots - 1 {
-      let item = items[which]->Option.getOr(JSON.Null)
-      let text = JSON.stringify(item)
-      if sent->Array.getUnsafe(which) != text {
-        sent->Array.setUnsafe(which, text)
-        send(pc, which, fromJson(item))
+  // each slot's JSON as the patch was last sent it (null: the patch starts with none)
+  let sent = Array.make(~length=slots, "null")
+  // the slots the view says it sent of the list it stores next
+  let fromView = ref(None)
+  {
+    announced: key =>
+      fromView :=
+        switch parseAnnouncement(key->String.slice(~start=String.length(sentPrefix))) {
+        | a => Some(a)
+        | exception _ => None
+        },
+    stored: s => {
+      // (only for the list it was made for: one that changes nothing isn't broadcast)
+      let viewSent = switch fromView.contents {
+      | Some(a) if a.length == String.length(s) => a.slots
+      | _ => []
       }
-    }
+      fromView := None
+      items(s)->Array.forEachWithIndex(((item, text), which) =>
+        if sent->Array.getUnsafe(which) != text {
+          sent->Array.setUnsafe(which, text)
+          if viewSent->Array.includes(which) {
+            // (and what's left of an older send from here would spoil it)
+            stop(which)
+          } else {
+            send(pc, which, fromJson(item))
+          }
+        }
+      )
+    },
   }
 }
 
