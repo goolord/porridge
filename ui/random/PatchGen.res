@@ -1856,7 +1856,8 @@ let xyPad = (r, w, m) => {
         // past that can be far too loud)
         let depth = within(r, w, tame, whole)
         let depth = target == "resonance" ? Math.min(depth, Math.max(0.05, 0.9 - get(m, "Resonance"))) : depth
-        put(m, xyTargetId(axis, n), ParamDefs.choiceValue(xyTargetId(axis, n), target))
+        // (by Oatmeal's own name for it, which stays put while the menu words it its own way)
+        put(m, xyTargetId(axis, n), OatmealParams.xyTargets->Array.indexOf(target)->Int.toFloat)
         put(m, xyDepthId(axis, n), depth * (chance(r, 0.35) ? -1. : 1.))
       }
     }

@@ -23,6 +23,7 @@ import * as FilterTypes from "../ui/FilterTypes.res.mjs";
 import * as FxRack from "../ui/FxRack.res.mjs";
 import * as PorridgeParams from "../ui/PorridgeParams.res.mjs";
 import { choiceValue } from "../ui/ParamDefs.res.mjs";
+import * as OatmealParams from "../ui/oatmeal/OatmealParams.res.mjs";
 
 const root = join (dirname (fileURLToPath (import.meta.url)), "..");
 const author = "Porridge";
@@ -149,8 +150,8 @@ const shifterMode = choices ("Sh_Mode", { up: "up", down: "down", stereo: "stere
 
 // LFO 3 (only the matrix reaches it): { shape, mode, sync } by the names in its lists, rate in
 // Hz, random phase, and delay and fade-in in ms
-const lfo3Shape = choices ("LFO_3_Shape", { sine: "sine", tri: "triangle", sawUp: "saw up", sawDown: "saw down", square: "square",
-                                            sampleHold: "sample & hold", smoothRandom: "smooth random" });
+const lfo3Shape = choices ("LFO_3_Shape", { sine: "Sine", tri: "Triangle", sawUp: "Saw", sawDown: "Saw down", square: "Square",
+                                            sampleHold: "Stepping random", smoothRandom: "Smooth random" });
 const lfo3Mode = choices ("LFO_3_Mode", { perVoice: "per-voice", sharedReset: "shared, reset on note", sharedFree: "shared, free" });
 const lfo3Sync = choices ("LFO_3_Sync", { free: "free", bar: "1 bar", half: "1/2", quarter: "1/4", eighth: "1/8", sixteenth: "1/16" });
 const lfo3 = ({ shape, mode, sync, rate, phaseRand, delay, fade }) => {
@@ -170,11 +171,13 @@ const keyEq = gains => ({ KEQ_On: 1, ...Object.fromEntries (gains.map ((g, i) =>
 // the XY pad's routes, Oatmeal's: { x: [[target, depth], ...], y: [...] } by the names in its
 // target list (depths -1..1: the cutoffs in units of 4 octaves, levels of 60 dB, the rest of their
 // range), and its random walk { radius 0..1, rate Hz } around where the pad sits
-const xyTarget = choices ("XY_H_Target_1", { cutoff1: "cutoff 1", cutoff2: "cutoff 2", resonance: "resonance",
+// (by Oatmeal's own names, which stay put while the menu words them its own way)
+const xyTarget = Object.fromEntries (Object.entries ({ cutoff1: "cutoff 1", cutoff2: "cutoff 2", resonance: "resonance",
                                              envMod: "filter env mod", pitch: "pitch", pan: "pan", distortion: "distortion",
                                              lfo1Speed: "LFO 1 speed", lfo2Speed: "LFO 2 speed", lfo1Depth: "LFO 1 depth",
                                              lfo2Depth: "LFO 2 depth", amp2: "2 amp", noiseAmp: "noise amp",
-                                             filterMix: "filter mix", me1Depth: "ME 1 depth" });
+                                             filterMix: "filter mix", me1Depth: "ME 1 depth" })
+    .map (([k, name]) => [k, OatmealParams.xyTargets.indexOf (name)]));
 const xy = ({ x = [], y = [], walk }) => ({
     ...Object.fromEntries ([["H", x], ["V", y]].flatMap (([axis, routes]) => routes.flatMap (([target, depth], i) =>
         [[`XY_${axis}_Target_${i + 1}`, pick (xyTarget, target)], [`XY_${axis}_Depth_${i + 1}`, depth]]))),
