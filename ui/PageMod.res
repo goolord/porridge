@@ -63,8 +63,6 @@ let cablePath = (a, b, ~sag) => {
   `M${f(a.x)} ${f(a.y)} C${f(a.x + dx * 0.3)} ${f(a.y + sag)} ${f(b.x - dx * 0.3)} ${f(b.y + sag)} ${f(b.x)} ${f(b.y)}`
 }
 
-let sourceOrder = ModEdit.sourceOrder
-
 let isMacro = s => ModEdit.macroOf(s) != None
 let isController = ModEdit.isController
 

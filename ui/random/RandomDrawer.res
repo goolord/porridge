@@ -437,7 +437,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
   }
   // (readings of 512 frames are about 11 ms: 27 of them make 300 ms)
   let windowReadings = 27
-  let db = p => 10. * Math.log10(Math.max(p, 1e-12))
+  let db = PatchGen.dbOfPower
 
   // how long a patch's note is measured for: past its attack, within reason
   let probeMs = (values: Bank.values) =>

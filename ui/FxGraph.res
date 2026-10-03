@@ -97,7 +97,8 @@ let setPath = (e, d) => e->setAttribute("d", Str(d))
 let shown = g => g.root->offsetParent->Option.isSome
 
 // A redraw at the next frame, once however often it is asked for; nothing while hidden (the
-// page calls `now` when the tab is shown).
+// page calls `now` when the tab is shown). Whether it's shown is read in the frame, not as it's
+// asked for, which comes amid the listeners' writes and would make the page lay out each time.
 type redraw = {request: unit => unit, now: unit => unit}
 
 let redraw = (g, draw) => {
@@ -108,11 +109,13 @@ let redraw = (g, draw) => {
   }
   {
     request: () =>
-      if !pending.contents && shown(g) {
+      if !pending.contents {
         pending := true
-        requestAnimationFrame(_ => if pending.contents {
-          now()
-        })
+        requestAnimationFrame(_ =>
+          if pending.contents {
+            shown(g) ? now() : pending := false
+          }
+        )
       },
     now,
   }

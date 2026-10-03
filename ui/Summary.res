@@ -25,12 +25,13 @@ let modText = (ctx: Ctx.t, get) => {
       via == 0 ? r.label : `${r.label} (${ModMatrix.sources[via]->Option.mapOr("", s => name(s, via))})`
     | _ => r.label
     }
+  let connections = Modulators.connections(get)
   let parts = ModMatrix.sources->Array.filterMapWithIndex((s, i) => {
     // (each target once: an LFO can reach the cutoff by its own depth and by a connection)
     let targets =
       i == 0
         ? []
-        : Modulators.from(get, s.key)
+        : Modulators.fromAmong(get, connections, s.key)
           ->Array.filter(r => get(r.amount) != 0. && r.amount != "F_EnvMod")
           ->Array.map(label)
           ->Array.reduce([], (seen, l) => seen->Array.includes(l) ? seen : [...seen, l])

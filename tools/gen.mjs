@@ -23,9 +23,9 @@ import { fileURLToPath } from "node:url";
 import { all as fields } from "../ui/oatmeal/Fields.res.mjs";
 import { xyTargets, modEnvTargets, ccTargets } from "../ui/oatmeal/OatmealParams.res.mjs";
 import { paramInfo } from "../ui/ParamInfo.res.mjs";
-import { all as porridgeParams, slotOf as porridgeSlot, fxOrder, rackId, rackSlots, rackKinds, rackEntries, laneId, laneSlots,
-         knobSpecs, workSpecs, slotCount, knobCount, knobId, rackKnobs, laneKnobs, knobsOf, slotKindId, firstInstance,
-         instanceCount, isLaneSlot } from "../ui/PorridgeParams.res.mjs";
+import { all as porridgeParams, slotOf as porridgeSlot, fxOrder, rackId, rackSlots, rackKinds, rackEntries,
+         knobSpecs, workSpecs, slotCount, knobCount, rackKnobs, knobsOf, slotKindId, firstInstance,
+         instanceCount } from "../ui/PorridgeParams.res.mjs";
 import { makeDefs, choiceValue } from "../ui/ParamDefs.res.mjs";
 import { programSize, tableOffset } from "../ui/oatmeal/OatmealFormat.res.mjs";
 import * as ModMatrix from "../ui/ModMatrix.res.mjs";
@@ -252,9 +252,8 @@ const choices = [
 
 function choiceConstants ({ ns: name, param, doc, values })
 {
-    // (Porridge's own kinds' parameters are the slots': a rack slot's, or for the lane's own kinds a lane slot's)
-    const id = defs.has (param) ? param : defs.has (param + "@1") ? param + "@1" : param + "@L1";
-    return ns (name, doc, Object.entries (values).map (([value, label]) => `    let ${value} = ${choiceValue (id, label)};`));
+    // (choiceValue finds Porridge's own kinds' parameters in the slots)
+    return ns (name, doc, Object.entries (values).map (([value, label]) => `    let ${value} = ${choiceValue (param, label)};`));
 }
 
 const fxOrders = Array.from ({ length: 24 }, (_, k) => fxOrder (k));

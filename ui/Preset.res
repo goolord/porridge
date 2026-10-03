@@ -146,7 +146,7 @@ let canonical = (d: ParamDefs.t, x) =>
 // A value as a loaded program keeps it (ParamDefs' load), or None for a parameter there isn't
 // (or one programs don't hold).
 let loadValue = (id, x) =>
-  inProgram(id) ? Lazy.get(defsById)->Map.get(id)->Option.map(d => canonical(d, d.load(x))) : None
+  inProgram(id) ? ParamDefs.lookup(id)->Option.map(d => canonical(d, d.load(x))) : None
 
 //==============================================================================
 // Oatmeal
@@ -166,7 +166,7 @@ let fromOatmeal = (bytes: Uint8Array.t) => {
 }
 
 let valueOf = (p, id) =>
-  p.values->Map.get(id)->Option.getOr(Lazy.get(defsById)->Map.get(id)->Option.mapOr(0., d => d.init))
+  p.values->Map.get(id)->Option.getOr(ParamDefs.initOf(id))
 
 // The note an Oatmeal export's warning gives for a value list's values that Oatmeal doesn't have.
 let listLoss = (list: ValueList.t) => ValueList.info(list).added->Option.map(a => a.exportNote)
@@ -223,7 +223,7 @@ let porridgeOnly = p => {
     PorridgeParams.groups->Array.some(((f, specs)) =>
       f == feature &&
         specs->Array.some(spec =>
-          switch (p.values->Map.get(spec.id), Lazy.get(defsById)->Map.get(spec.id)) {
+          switch (p.values->Map.get(spec.id), ParamDefs.lookup(spec.id)) {
           | (Some(x), Some(d)) => x != d.init
           | _ => false
           }
@@ -291,7 +291,7 @@ let toOatmeal = p => {
     p.values
     ->Map.entries
     ->Iterator.toArray
-    ->Array.map(((id, x)) => (id, Lazy.get(defsById)->Map.get(id)->Option.mapOr(x, ParamDefs.oatmealValue(_, x))))
+    ->Array.map(((id, x)) => (id, ParamDefs.lookup(id)->Option.mapOr(x, ParamDefs.oatmealValue(_, x))))
     ->Map.fromArray
   // Oatmeal always runs its four effects: those left out of the rack go switched off, and an EQ
   // that is off (Oatmeal's has no switch) loses its bands
@@ -490,17 +490,13 @@ let migrateSlots = (name, params: dict<JSON.t>, modulations: array<JSON.t>) => {
   let idOf = (first, n) => n == 1 ? first : PorridgeParams.copyId(first, n)
   let laneIds = Array.fromInitializer(~length=PorridgeParams.laneSlots, k => PorridgeParams.laneId(k + 1))
   let kindByKey = key => PorridgeParams.allKinds->Array.find(k => k.key == key)
-  let shaper = PorridgeParams.shaperParams->Array.map(Pair.first)
 
   // Moves copy n of kind `old` (as kind `kind`, with the merge's factors) into slot key: its
   // parameters, and the connections to them.
   let moveInto = (~old: PorridgeParams.rackKind, ~kind: PorridgeParams.rackKind, ~n, ~key) => {
     let pairs = switch old.mergedInto {
     | Some(_) => PorridgeParams.mergedParams(old.key)->Array.map(((p, q, f)) => (idOf(p, n), q, f))
-    | None =>
-      [...old.params->Array.map(Pair.first), ...(old.key == "distortion" ? shaper : [])]
-      ->Array.reduce([], (acc, p) => acc->Array.includes(p) ? acc : [...acc, p])
-      ->Array.map(p => (idOf(p, n), p, 1.))
+    | None => old.params->Array.map(((p, _)) => (idOf(p, n), p, 1.))
     }
     // (a merged kind's settings: its own defaults where the program has none)
     if old.mergedInto != None {

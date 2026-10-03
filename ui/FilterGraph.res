@@ -483,7 +483,7 @@ let make = (ctx: Ctx.t, parent, box: box, src: source, ~voices=false) => {
   // at least a quarter as far per unit of resonance as on the plain scale: from the top down,
   // each height is the curve's, or lower (higher for a dip) where the rest needs the room.
   let steps = 64
-  let heights = fc => {
+  let heightsFor = fc => {
     let n = Int.toFloat(steps)
     switch direction(fc) {
     | Some(up) =>
@@ -497,6 +497,19 @@ let make = (ctx: Ctx.t, parent, box: box, src: source, ~voices=false) => {
       }
       ys
     | None => Array.fromInitializer(~length=steps + 1, k => yOfRes(Int.toFloat(k) / n))
+    }
+  }
+  // (kept for what they're worked out from, which the resonance isn't: a drag works them out,
+  // then the redraw it asks for wants the same)
+  let lastHeights = ref(None)
+  let heights = fc => {
+    let key = (fc, src.typeOf(), get(src.morph), src.mix->Option.mapOr(1., get))
+    switch lastHeights.contents {
+    | Some((k, ys)) if k == key => ys
+    | _ =>
+      let ys = heightsFor(fc)
+      lastHeights := Some((key, ys))
+      ys
     }
   }
   // the height of a resonance, and the resonance at a height (they run one way)

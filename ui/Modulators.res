@@ -199,8 +199,7 @@ let connections = (get: string => float) =>
 // one while it stays there: it's no route of the program's (not listed, counted or marked) until
 // it's changed. The Mod page folds those into one row, and the source's own editor shows them
 // quietly (atDefaults).
-let initOf = id => Lazy.get(ParamDefs.byId)->Map.get(id)->Option.mapOr(0., d => d.init)
-let isDefault = (get: string => float, amount) => get(amount) == initOf(amount)
+let isDefault = (get: string => float, amount) => get(amount) == ParamDefs.initOf(amount)
 
 // What source key moves through Oatmeal's own routings, read with get: its slots that have a
 // target (a controller's while it's assigned), then its fixed depths that aren't 0 or at their
@@ -243,15 +242,17 @@ let atDefaults = (get: string => float, key) => {
 
 // Everything source key moves, read with get: Oatmeal's own routings, then the matrix's
 // connections from it.
-let from = (get, key) => [...builtIns(get, key), ...connections(get)->Array.filter(r => r.key == key)]
+// (with the matrix's connections read already, for a caller going through several sources)
+let fromAmong = (get, connections: array<route>, key) => [
+  ...builtIns(get, key),
+  ...connections->Array.filter(r => r.key == key),
+]
+let from = (get, key) => fromAmong(get, connections(get), key)
 
 // Every route, source by source.
 let all = get => {
   let connections = connections(get)
-  Lazy.get(sourceKeys)->Array.flatMap(key => [
-    ...builtIns(get, key),
-    ...connections->Array.filter(r => r.key == key),
-  ])
+  Lazy.get(sourceKeys)->Array.flatMap(fromAmong(get, connections, _))
 }
 
 // Every fixed depth at its Init value, source by source.

@@ -10,7 +10,7 @@ import { join } from "node:path";
 import * as ModMatrix from "../../ui/ModMatrix.res.mjs";
 import * as Preset from "../../ui/Preset.res.mjs";
 import { rackEntries, expPos } from "../../ui/PorridgeParams.res.mjs";
-import { root, outDir, player, rms as rmsOf, levelAt, checker } from "./lib.mjs";
+import { root, outDir, player, rms as rmsOf, levelAt, checker, fft } from "./lib.mjs";
 
 const dir = outDir ("extras");
 const init = join (root, "tools", "re", "init_prog.bin");
@@ -36,7 +36,6 @@ const rms = (x, a, b) => rmsOf (x, a, b, rate);
 const near = (a, b, tol) => Math.abs (a / b - 1) < tol;
 const f = x => x.toFixed (3);
 const keyHz = k => 440 * 2 ** ((k - 69) / 12);
-const db = x => 20 * Math.log10 (x);
 
 //==============================================================================
 // sources, each on the volume (gain 1 + amount x)
@@ -169,29 +168,6 @@ const phaser = more => ({ VL_1: entry ("phaser"), Ph_On: 1, Ph_Depth: 1, Ph_Mix:
 
 // the lo-fi sampler's tracking: on a sine, its output stays on the note's harmonics
 {
-    const fft = (re, im) =>
-    {
-        const n = re.length;
-        for (let i = 1, j = 0; i < n; ++i)
-        {
-            let bit = n >> 1;
-            for (; j & bit; bit >>= 1) j ^= bit;
-            j ^= bit;
-            if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; }
-        }
-        for (let len = 2; len <= n; len <<= 1)
-        {
-            const a = -2 * Math.PI / len;
-            for (let i = 0; i < n; i += len)
-                for (let k = 0; k < len / 2; ++k)
-                {
-                    const c = Math.cos (a * k), s = Math.sin (a * k);
-                    const xr = re[i + k + len / 2] * c - im[i + k + len / 2] * s, xi = re[i + k + len / 2] * s + im[i + k + len / 2] * c;
-                    re[i + k + len / 2] = re[i + k] - xr; im[i + k + len / 2] = im[i + k] - xi;
-                    re[i + k] += xr; im[i + k] += xi;
-                }
-        }
-    };
     // the share of the power within 3 bins of the note's harmonics
     const harmonic = (x, hz) =>
     {

@@ -12,7 +12,7 @@ type t = {
 
 // A parameter away from its default.
 let changed = (get: string => float, id) =>
-  Lazy.get(ParamDefs.byId)->Map.get(id)->Option.mapOr(false, d => get(id) != d.init)
+  ParamDefs.lookup(id)->Option.mapOr(false, d => get(id) != d.init)
 
 let make = (key, name, ids, isActive) => {key, name, ids, isActive}
 
@@ -85,32 +85,5 @@ let tuning = anyChanged(
     "Tune_B",
   ],
 )
-
-let all = [
-  oscShape,
-  noise,
-  oscNoise,
-  unison,
-  drift,
-  oscPhase,
-  lfoPhase,
-  oscEnv(1),
-  oscEnv(2),
-  oscMix,
-  dualFilter,
-  keyEq,
-  voiceLane,
-  distortion,
-  pitchEnv,
-  modEnv1,
-  modEnv2,
-  lfo1,
-  lfo2,
-  lfo3,
-  glide,
-  touch,
-  random,
-  tuning,
-]
 
 let isOn = (model, f) => f.isActive(id => model->ParamModel.get(id))

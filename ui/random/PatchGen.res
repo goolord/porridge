@@ -139,7 +139,7 @@ let tiered = (r, w, options: array<('a, float, float)>) =>
 //==============================================================================
 // Values
 
-let def = id => Lazy.get(Preset.defsById)->Map.get(id)->Option.getOrThrow
+let def = id => ParamDefs.lookup(id)->Option.getOrThrow
 let get = (m: Bank.values, id) => m->Map.get(id)->Option.getOr(0.)
 let put = (m: Bank.values, id, v) => m->Map.set(id, def(id).clamp(v))
 
@@ -157,7 +157,8 @@ let initTables = Lazy.make(() => Preset.make("Init").tables)
 let copyPatch = t => {values: copy(t.values), tables: t.tables}
 
 let ampOfDb = db => Math.pow(10., ~exp=db / 20.)
-let dbOfAmp = a => 20. * Math.log10(Math.max(a, 1e-9))
+let dbOfAmp = FxDsp.db
+let dbOfPower = p => 10. * Math.log10(Math.max(p, 1e-12))
 let noteHz = n => 440. * Math.pow(2., ~exp=(Int.toFloat(n) - 69.) / 12.)
 
 // the waves
@@ -2127,7 +2128,7 @@ let simulated = (m, ~note, ~within=2000., ~tables=?) => {
       | _ => one
       }
     }
-  let db = p => 10. * Math.log10(Math.max(p, 1e-12))
+  let db = dbOfPower
   let power10 = x => Math.pow(10., ~exp=x / 10.)
   let velocity = 20. * Math.log10(velocityScale(get(m, "VeloSens")))
   // the distortions: the voice's (by Sat_Mode: 0 global, 1 after the filter, 2 before it,
@@ -2661,7 +2662,6 @@ let envText = m => {
   ]->Array.filterMap(x => x)->Array.join(", ")
 }
 
-let targetLabel = i => ModMatrix.targets[i]->Option.mapOr("", t => t.label)
 let sourceLabel = i => ModMatrix.sources[i]->Option.mapOr("", s => s.label)
 
 // the XY pad's routes: "XY > cutoff 1, resonance (wandering)"

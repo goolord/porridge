@@ -7,15 +7,15 @@
 // knobs; the others the view keeps (a program's values have every kind's for every slot, and
 // leave out those at their defaults).
 
-let defsById = ParamDefs.byId
-
 // The kind slot g holds, its value read with get.
 let kindAt = (get: string => float, g) =>
   PorridgeParams.entryKind(Float.toInt(get(PorridgeParams.slotKindId(g))))
 
+// The ids that say what the slots hold (a change can change what a connection moves).
+let kindIds = Array.fromInitializer(~length=PorridgeParams.slotCount, PorridgeParams.slotKindId)
+
 // Slot g, if this parameter says what one holds (FX_Rack_n, VL_n).
-let slotOfKindId = id =>
-  Array.fromInitializer(~length=PorridgeParams.slotCount, g => g)->Array.find(g => PorridgeParams.slotKindId(g) == id)
+let slotOfKindId = id => kindIds->Array.findIndexOpt(k => k == id)
 
 // The knob endpoint a slot's parameter is on while its slot holds its kind, if it is.
 let knobOf = (get, id) =>
@@ -53,7 +53,7 @@ let knobValues = (~def, get, g) =>
     )
   )
 
-let lookup = id => Lazy.get(defsById)->Map.get(id)
+let lookup = ParamDefs.lookup
 
 // Every slot's knobs for a program's values.
 let allKnobValues = (~def=lookup, get) =>
@@ -129,6 +129,3 @@ let targetLabel = (get, t) =>
   | Some(target) => target.label
   | None => ""
   }
-
-// The ids that say what the slots hold (a change can change what a connection moves).
-let kindIds = Array.fromInitializer(~length=PorridgeParams.slotCount, PorridgeParams.slotKindId)

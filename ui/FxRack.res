@@ -230,7 +230,7 @@ let layout = (get: string => float, ~rack: array<effect>, ~lane: array<effect>, 
   let present = rack->Array.filter(isFirst)->Array.filterMap(e => firsts->Array.findIndexOpt(f => f == e))
   let absent = [0, 1, 2, 3]->Array.filter(i => !(present->Array.includes(i)))
   set("FX_Order", Int.toFloat(PorridgeParams.fxOrderIndex(Array.concat(present, absent))))
-  let defOf = id => Lazy.get(ParamDefs.byId)->Map.get(id)
+  let defOf = ParamDefs.lookup
   // every slot's new effect: (slot, effect)
   let moves = []
   // the instances kept in the rack, by kind
@@ -282,14 +282,10 @@ let layout = (get: string => float, ~rack: array<effect>, ~lane: array<effect>, 
   set("VL_AmpAt", Int.toFloat(Math.Int.max(filterAt, Math.Int.min(places.ampAt, n))))
 
   // the effects' parameters into their slots (read before anything is written)
-  let shaper = PorridgeParams.shaperParams->Array.map(Pair.first)
   moves->Array.forEach(((g, e)) =>
     if slotOf(e) != Some(g) {
       let key = PorridgeParams.slotKey(g)
-      let ids = [...spec(e.kind).params->Array.map(Pair.first), ...(e.kind == #distortion ? shaper : [])]
-      ids
-      ->Array.reduce([], (acc, first) => acc->Array.includes(first) ? acc : [...acc, first])
-      ->Array.forEach(first => {
+      spec(e.kind).params->Array.forEach(((first, _)) => {
         let to = PorridgeParams.slotParamId(first, key)
         switch slotOf(e) {
         | Some(_) => set(to, get(id(e, first)))

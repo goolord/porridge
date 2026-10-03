@@ -29,7 +29,7 @@ let groupOf = id => groupById->Map.get(id)
 
 let endpoint = "shaperIn"
 
-let init = id => Lazy.get(ParamDefs.byId)->Map.get(id)->Option.mapOr(0., d => d.init)
+let init = ParamDefs.initOf
 
 type payload = {which: int, values: array<float>}
 

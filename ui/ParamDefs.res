@@ -423,6 +423,10 @@ let all = Lazy.make(() =>
 )
 let byId = Lazy.make(() => Lazy.get(all)->Array.map(d => (d.id, d))->Map.fromArray)
 
+// a parameter's definition, and its default (0 for an id it doesn't know), by its id
+let lookup = id => Lazy.get(byId)->Map.get(id)
+let initOf = id => lookup(id)->Option.mapOr(0., d => d.init)
+
 // A list parameter's value by its name, which it must have: choiceValue("Sat_Type", "soft clip")
 // is 2. The UI, the tools and the DSP's constants (tools/gen.mjs) all name values this way.
 // (Porridge's own kinds' lists are the slots' parameters' now: "Rs_Model" is any slot's)

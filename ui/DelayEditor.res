@@ -157,7 +157,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
     let hp = highpass()
     let points = Array.fromInitializer(~length=23, i => {
       let t = Int.toFloat(i) / 22.
-      let f = 20. * Math.pow(1000., ~exp=t)
+      let f = PorridgeParams.expValue(20., 20000., t)
       let db = Int.toFloat(passes) * FxGraph.gainDb(FxDsp.loopGain(~lp, ~hp, f))
       (x - gw / 2. + t * gw, y0 + gh * (1. - FxDsp.clamp((db + 30.) / 30., 0., 1.)))
     })

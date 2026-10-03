@@ -215,33 +215,36 @@ export const loudest = ([l, r], rate) =>
     return 10 * Math.log10 (Math.max (best, 1e-18));
 };
 
+// An in-place radix-2 FFT of re and im (a power-of-2 length).
+export const fft = (re, im) =>
+{
+    const N = re.length;
+    for (let i = 1, j = 0; i < N; ++i)
+    {
+        let bit = N >> 1;
+        for (; j & bit; bit >>= 1) j ^= bit;
+        j ^= bit;
+        if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; }
+    }
+    for (let len = 2; len <= N; len <<= 1)
+    {
+        const w = -2 * Math.PI / len, wr = Math.cos (w), wi = Math.sin (w), h = len / 2;
+        for (let i = 0; i < N; i += len)
+            for (let k = 0, cr = 1, ci = 0; k < h; ++k)
+            {
+                const p = i + k, q = p + h;
+                const vr = re[q] * cr - im[q] * ci, vi = re[q] * ci + im[q] * cr;
+                re[q] = re[p] - vr; im[q] = im[p] - vi; re[p] += vr; im[p] += vi;
+                const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+            }
+    }
+};
+
 // The power spectrum of a channel from sample a to b (Welch: 4096-point Hann frames, half
 // overlapping), each bin's mean power; bin k is k * rate / 4096 Hz.
 export const powerSpectrum = (x, a, b) =>
 {
     const N = 4096, P = new Float64Array (N / 2);
-    const fft = (re, im) =>
-    {
-        for (let i = 1, j = 0; i < N; ++i)
-        {
-            let bit = N >> 1;
-            for (; j & bit; bit >>= 1) j ^= bit;
-            j ^= bit;
-            if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; }
-        }
-        for (let len = 2; len <= N; len <<= 1)
-        {
-            const w = -2 * Math.PI / len, wr = Math.cos (w), wi = Math.sin (w), h = len / 2;
-            for (let i = 0; i < N; i += len)
-                for (let k = 0, cr = 1, ci = 0; k < h; ++k)
-                {
-                    const p = i + k, q = p + h;
-                    const vr = re[q] * cr - im[q] * ci, vi = re[q] * ci + im[q] * cr;
-                    re[q] = re[p] - vr; im[q] = im[p] - vi; re[p] += vr; im[p] += vi;
-                    const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
-                }
-        }
-    };
     let frames = 0;
     for (let s = a; s + N <= b; s += N / 2, ++frames)
     {

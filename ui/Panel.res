@@ -72,7 +72,6 @@ let mark = (p, model, i, features: array<Features.t>, ~also=() => false) => {
 }
 
 let right = p => p.x + p.w + Grid.gap
-let bottom = p => p.y + p.h + Grid.gap
 
 // A switch at the right end of the title row, e.g. an effect's on switch.
 let headerToggle = (p, ctx, id, ~label) =>

@@ -393,22 +393,17 @@ type target = {key: string, label: string, group: string, law: law}
 // retired (presets that have them load them as the slots' targets: Preset).
 let slotOnlyGroups = ["flanger", "phaser", "compressor", "space", "convolve", "bode", "fxfilter", "utility", "ambience", "air", "resonator", "octaver", "shifter"]
 
+// A target Porridge no longer has. It keeps its place (the DSP and the Mod_Target parameters
+// know targets by index), in a group of its own that no menu shows.
+let retired = (id, label) => {key: id, label, group: "retired", law: Retired}
+
 let knob = (id, label, group) =>
-  slotOnlyGroups->Array.includes(group) ? {key: id, label, group: "retired", law: Retired} : {key: id, label, group, law: Knob(id)}
+  slotOnlyGroups->Array.includes(group) ? retired(id, label) : {key: id, label, group, law: Knob(id)}
 
-// The effects' copies Porridge no longer has (PorridgeParams' retired ones: the fourth of each
-// kind, the fifth distortion). Their targets keep their places (the DSP and the Mod_Target
-// parameters know targets by index), in a group of their own that no menu shows.
-// (every copy's, since the slots took them over in October 2026)
-let isRetiredCopy = (_group, _n) => true
-
-// copy n's parameter id as a target in this group
-let copyKnob = (id, label, group, n) =>
-  isRetiredCopy(group, n) ? {key: id, label, group: "retired", law: Retired} : knob(id, label, group)
-
-// Targets of a kind Porridge no longer has (the key shifter, which the frequency shifter took in:
-// PorridgeParams.mergedInto), in their places.
-let retiredTargets = targets => targets->Array.map(t => {...t, group: "retired", law: Retired})
+// copy n's parameter id as a target in this group: retired, as every effect's copies are since
+// the slots took them over in October 2026 (and the key shifter, which the frequency shifter took
+// in: PorridgeParams.mergedInto)
+let copyKnob = (id, label, _group, _n) => retired(id, label)
 
 let targets = [
   {key: "none", label: "none", group: "", law: Volume},
@@ -718,7 +713,7 @@ let targets = [
   knob("LFO_3_Fade", "LFO 3 fade in", "lfo"),
   knob("Wander_Rate", "wander rate", "lfo"),
   ...effectTargets("fxfilter", "FX filter", [2, 3, 4], [("Ff_Track", "tracking")]),
-  ...retiredTargets(effectTargets("shifter", "key shifter", [2], [("Sh_Ratio", "ratio"), ("Sh_Hz", "offset"), ("Sh_Mix", "mix")])),
+  ...effectTargets("shifter", "key shifter", [2], [("Sh_Ratio", "ratio"), ("Sh_Hz", "offset"), ("Sh_Mix", "mix")]),
   ...effectTargets(
     "resonator",
     "resonator",

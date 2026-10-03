@@ -16,7 +16,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { root } from "./lib.mjs";
+import { root, checker } from "./lib.mjs";
 import { readIds } from "../param-ids.mjs";
 import * as PorridgeParams from "../../ui/PorridgeParams.res.mjs";
 import * as ModMatrix from "../../ui/ModMatrix.res.mjs";
@@ -29,8 +29,7 @@ if (! plugin)
     process.exit (1);
 }
 
-let failures = 0;
-const check = (ok, s) => { console.log ((ok ? "ok   " : "FAIL ") + s); if (! ok) ++failures; };
+const { check, done } = checker ({ verbose: true });
 const run = (...commands) => execFileSync (hostExe, [plugin, "wait", "1500", ...commands], { encoding: "utf8", maxBuffer: 1 << 26 });
 const parseList = text => new Map (text.split (/\r?\n/).filter (l => /^\d+\t/.test (l)).map (l =>
 {
@@ -90,5 +89,4 @@ const knob = (g, i) => ids.get (PorridgeParams.knobId (g, i));
            `the stored "params" keeps the shape, and no copy's values (${s.values?.params})`);
 }
 
-console.log (failures ? `${failures} failures` : "slots ok");
-process.exit (failures ? 1 : 0);
+done ("slots ok");

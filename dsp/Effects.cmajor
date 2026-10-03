@@ -200,9 +200,8 @@ namespace porridge
         }
     }
 
-    /// The pool blocks its lines need with these lengths (both sides' longest, as process takes
-    /// them): what it claims (a length change clears its side anyway).
-    int needs (const Delay& this, const float[numSlots]& P, float64 sr, float64 spb)
+    /// The lines' lengths in samples (left, right) for these settings.
+    int<2> lengths (const Delay& this, const float[numSlots]& P, float64 sr, float64 spb)
     {
         let unit = delayUnitSamples (int (P[slot::D_Unit]), sr, spb);
         var lL = float64 (P[slot::D_LengthL]);
@@ -216,7 +215,15 @@ namespace porridge
 
         let nL = clamp (int (lL * unit + 0.5), 2, this.capacity);
         let nR = clamp (int (lR * unit + 0.5), 2, this.capacity);
-        return stereoBlocks (max (nL, nR));
+        return int<2> (nL, nR);
+    }
+
+    /// The pool blocks its lines need with these lengths (both sides' longest): what it claims (a
+    /// length change clears its side anyway).
+    int needs (const Delay& this, const float[numSlots]& P, float64 sr, float64 spb)
+    {
+        let n = this.lengths (P, sr, spb);
+        return stereoBlocks (max (n[0], n[1]));
     }
 
     void clearL (Delay& this, FxPool& pool, int n)  { for (int i = 0; i < n; ++i) setPoolSide (pool, this.fxAt, i, 0, 0.0f); }
@@ -228,18 +235,8 @@ namespace porridge
         if (this.idle && ! active)
             return false;
 
-        let unit = delayUnitSamples (int (P[slot::D_Unit]), sr, spb);
-        var lL = float64 (P[slot::D_LengthL]);
-        var lR = float64 (P[slot::D_LengthR]);
-
-        if (P[slot::D_Quantize] != 0)
-        {
-            lL = floor (lL + 0.5);
-            lR = floor (lR + 0.5);
-        }
-
-        let nL = clamp (int (lL * unit + 0.5), 2, this.capacity);
-        let nR = clamp (int (lR * unit + 0.5), 2, this.capacity);
+        let n = this.lengths (P, sr, spb);
+        let nL = n[0], nR = n[1];
 
         if (nL != this.lenL) { this.lenL = nL; this.clearL (pool, nL); this.posL = 0; }
         if (nR != this.lenR) { this.lenR = nR; this.clearR (pool, nR); this.posR = 0; }

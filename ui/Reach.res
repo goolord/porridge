@@ -52,8 +52,7 @@ let namedPlaces = () => {
   live->Array.filterMap(e => places->WeakMap.get(e)->Option.map(p => (e, p)))
 }
 
-// The parameters that have a control, and a parameter's controls that are still in the view.
-let ids = model => byId(model)->Map.keys->Array.fromIterator
+// A parameter's controls that are still in the view.
 let elements = (model, id) => {
   let m = byId(model)
   let live = m->Map.get(id)->Option.getOr([])->Array.filter(isConnected)

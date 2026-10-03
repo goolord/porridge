@@ -17,7 +17,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as Preset from "../../ui/Preset.res.mjs";
 import * as Scala from "../../ui/Scala.res.mjs";
-import { outDir, renderAsync, pool, readBank } from "./lib.mjs";
+import { outDir, renderAsync, pool, readBank, fft } from "./lib.mjs";
 
 const dir = outDir ("levels");
 
@@ -68,31 +68,6 @@ const peak = ([l, r]) => l.reduce ((m, x, i) => Math.max (m, Math.abs (x), Math.
 
 // energy per band (dB relative to the total) over the held part, from 8192-point FFTs
 const bands = [[20, 120], [120, 500], [500, 2000], [2000, 6000], [6000, 20000]];
-const fft = (re, im) =>
-{
-    const n = re.length;
-    for (let i = 1, j = 0; i < n; ++i)
-    {
-        let bit = n >> 1;
-        for (; j & bit; bit >>= 1) j ^= bit;
-        j ^= bit;
-        if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; }
-    }
-    for (let len = 2; len <= n; len <<= 1)
-    {
-        const a = -2 * Math.PI / len;
-        for (let i = 0; i < n; i += len)
-            for (let k = 0; k < len / 2; ++k)
-            {
-                const c = Math.cos (a * k), s = Math.sin (a * k);
-                const ur = re[i + k], ui = im[i + k];
-                const vr = re[i + k + len / 2] * c - im[i + k + len / 2] * s;
-                const vi = re[i + k + len / 2] * s + im[i + k + len / 2] * c;
-                re[i + k] = ur + vr; im[i + k] = ui + vi;
-                re[i + k + len / 2] = ur - vr; im[i + k + len / 2] = ui - vi;
-            }
-    }
-};
 // the power per bin of N samples of one channel from start, through a Hann window
 const windowedPower = (ch, start, N) =>
 {

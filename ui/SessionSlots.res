@@ -22,7 +22,7 @@ let storedNumbers = (values: dict<JSON.t>) =>
 let isLegacy = (state: PatchConnection.fullState) => {
   let params = state.parameters->Option.getOr([])
   let byName = params->Array.map(p => (p.name, p.value))->Map.fromArray
-  let get = id => byName->Map.get(id)->Option.getOr(Lazy.get(SlotParams.defsById)->Map.get(id)->Option.mapOr(0., d => d.init))
+  let get = id => byName->Map.get(id)->Option.getOr(ParamDefs.initOf(id))
   let stored = storedNumbers(state.values->Option.getOr(Dict.make()))
   stored->Dict.keysToArray->Array.some(PorridgeParams.isLegacyId) ||
     Array.fromInitializer(~length=PorridgeParams.slotCount, g => g)->Array.some(g =>
@@ -48,7 +48,7 @@ let asProgram = (state: PatchConnection.fullState) => {
   )
   storedNumbers(values)->Dict.forEachWithKey((x, id) => params->Dict.set(id, x))
   let byName = state.parameters->Option.getOr([])->Array.map(p => (p.name, p.value))->Map.fromArray
-  let get = id => byName->Map.get(id)->Option.getOr(Lazy.get(SlotParams.defsById)->Map.get(id)->Option.mapOr(0., d => d.init))
+  let get = id => byName->Map.get(id)->Option.getOr(ParamDefs.initOf(id))
   let sourceKey = i => ModMatrix.sources[i]->Option.mapOr("none", x => x.key)
   let targetKey = i => ModMatrix.targets[i]->Option.mapOr("none", x => x.key)
   let modulations = ModMatrix.slotNumbers->Array.filterMap(k => {

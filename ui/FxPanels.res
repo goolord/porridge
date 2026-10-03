@@ -747,7 +747,7 @@ let drawAmbience = (p: FxGraph.plot, get: string => float) => {
   let (own, other) = ambienceWidth(get)
   // each side's response, smoothed over a sixth of an octave
   let steps = 240
-  let hzOf = k => 20. * Math.pow(1000., ~exp=Int.toFloat(k) / Int.toFloat(steps))
+  let hzOf = k => expValue(20., 20000., Int.toFloat(k) / Int.toFloat(steps))
   let side = (a: Float32Array.t, b: Float32Array.t) => {
     let power = Array.fromInitializer(~length=steps + 1, k => {
       // the DFT at this frequency, the phasor turned one sample at a time
@@ -836,7 +836,7 @@ let drawAmbienceImpulse = (p: FxGraph.plot, get: string => float) => {
 // air: the tone it leaves at two levels, from Air4 run on sines; its darkening (Sinew) slows
 // down loud, fast sounds more than quiet ones
 
-let airHz = Array.fromInitializer(~length=49, k => 20. * Math.pow(1000., ~exp=Int.toFloat(k) / 48.))
+let airHz = Array.fromInitializer(~length=49, k => expValue(20., 20000., Int.toFloat(k) / 48.))
 
 // the last curves, by their settings
 let airCache: ref<option<((float, float, float, float), (array<float>, array<float>))>> = ref(None)

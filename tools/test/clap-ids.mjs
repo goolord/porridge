@@ -15,7 +15,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { root } from "./lib.mjs";
+import { root, checker } from "./lib.mjs";
 import { readIds } from "../param-ids.mjs";
 
 const [hostExe, earlier, current] = process.argv.slice (2);
@@ -26,8 +26,7 @@ if (! current)
     process.exit (1);
 }
 
-let failures = 0;
-const fail = s => { console.log ("FAIL " + s); ++failures; };
+const { fail, done } = checker ();
 
 const run = (plugin, ...commands) => execFileSync (hostExe, [plugin, "wait", "1500", ...commands], { encoding: "utf8", maxBuffer: 1 << 26 });
 
@@ -123,5 +122,4 @@ if (storedSet)
     else console.log (`${storedSet.name} kept in the stored value "params"`);
 }
 
-console.log (failures ? `${failures} failures` : "all ids kept");
-process.exit (failures ? 1 : 0);
+done ("all ids kept");
