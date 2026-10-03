@@ -4,6 +4,13 @@
 //
 // Values are append only (presets and hosts keep the number). The menu goes by sound instead
 // (families below), and maps what is picked onto these values.
+//
+// Two values are another type's sound, and the DSP runs them as that type, so every program,
+// whatever shares or moves the filter's morph and resonance, sounds as it did: Sallen-Key is
+// the SVF's lowpass (morph 0) with its own resonance law (2 - 1.98 res for the SVF's 2 - 1.96
+// res), and peak 12 dB is B/P/B at morph 0.5 (the same coefficients). The low EQ is not the high
+// EQ mirrored: their shapes match (a low shelf boost is a high shelf cut), but the low EQ is
+// louder by the shelf's gain, up to 24 dB.
 
 let oatmeal = [
   "off",

@@ -32,8 +32,8 @@ namespace porridge
         float[36] px, py;
 
         // zero-delay-feedback types: last block's coefficients and morph (each block ramps from
-        // them), integrator states, the diode ladder's and Sallen-Key's solved matrix, the comb's
-        // line, delay and feedback
+        // them), integrator states, the diode ladder's solved matrix, the comb's line, delay and
+        // feedback
         bool zFirst;
         float zg, zk, zMorph;
         float[4] zs;
@@ -431,8 +431,8 @@ namespace porridge
     let diodeOsc = 22.1f;
 
     /// Solves (I - g A) M = I and returns M (16) and g M b (4, b = the first unit vector) in m,
-    /// for an N-stage linear system (N = 2 or 4; A row-major, N x N in the top left of 4 x 4).
-    void solveZdf (float[20]& m, const float[16]& A, float g, int N)
+    /// for a 4-stage linear system (A row-major).
+    void solveZdf (float[20]& m, const float[16]& A, float g)
     {
         float64[32] w;
 
@@ -440,7 +440,7 @@ namespace porridge
         {
             for (int c = 0; c < 4; ++c)
             {
-                let a = (r < N && c < N) ? float64 (A.at (r * 4 + c)) : 0.0;
+                let a = float64 (A.at (r * 4 + c));
                 w.at (r * 8 + c) = (r == c ? 1.0 : 0.0) - float64 (g) * a;
                 w.at (r * 8 + 4 + c) = r == c ? 1.0 : 0.0;
             }
@@ -475,10 +475,10 @@ namespace porridge
 
     /// The start of a block's ramp of the solved matrix (solveZdf): m for this block's g, m0 the
     /// last block's (or m on a first block), dm the per-sample step.
-    void zdfRampStart (const Filter& this, float[20]& m, float[20]& m0, float[20]& dm, const float[16]& A, float g, int N,
+    void zdfRampStart (const Filter& this, float[20]& m, float[20]& m0, float[20]& dm, const float[16]& A, float g,
                        bool first, float invN)
     {
-        solveZdf (m, A, g, N);
+        solveZdf (m, A, g);
         m0 = first ? m : this.zm;
 
         for (wrap<20> j)
@@ -537,18 +537,22 @@ namespace porridge
         this.zFirst = false;
         let invN = 1.0f / float (n);
 
-        if (t == filterType::svf || t == filterType::ladder)
+        if (t == filterType::svf || t == filterType::ladder || t == filterType::sallenKey)
         {
             // 16: state-variable filter, lowpass > bandpass > highpass; 17: Moog-style ladder
-            // with the input to the stages saturated
+            // with the input to the stages saturated. 19, Sallen-Key, is the same linear lowpass
+            // as the SVF at morph 0 (1 / (s^2 + (3 - K) s + 1) with its gain K = 1 + 1.98 res),
+            // so it runs as that, with its own resonance law (Q up to 50, the SVF's to 25)
+            let svf = t != filterType::ladder;
             let g = prewarp (hz, sr);
-            let k = t == filterType::svf ? 2.0f - 1.96f * res : res * 4.2f;
+            let k = t == filterType::ladder ? res * 4.2f : 2.0f - (t == filterType::svf ? 1.96f : 1.98f) * res;
+            let mo = t == filterType::sallenKey ? 0.0f : morph;
             let g0 = first ? g : this.zg;
             let k0 = first ? k : this.zk;
-            let m0 = first ? morph : this.zMorph;
+            let m0 = first ? mo : this.zMorph;
             let dg = (g - g0) * invN;
             let dk = (k - k0) * invN;
-            let dm = (morph - m0) * invN;
+            let dm = (mo - m0) * invN;
             var gg = g0, kk = k0, mm = m0;
             var s1 = this.zs[0], s2 = this.zs[1], s3 = this.zs[2], s4 = this.zs[3];
 
@@ -559,7 +563,7 @@ namespace porridge
                 mm += dm;
                 let x = buf.at (i);
 
-                if (t == filterType::svf)
+                if (svf)
                 {
                     let v = svfStepA1 (s1, s2, gg, kk, x);
                     let hp = x - kk * v[0] - v[1];
@@ -584,25 +588,18 @@ namespace porridge
             this.zs[0] = s1; this.zs[1] = s2; this.zs[2] = s3; this.zs[3] = s4;
             this.zg = g;
             this.zk = k;
-            this.zMorph = morph;
+            this.zMorph = mo;
             return;
         }
 
-        if (t == filterType::diodeLadder || t == filterType::sallenKey)
+        if (t == filterType::diodeLadder)
         {
-            // 18: diode ladder (saturated feedback); 19: Sallen-Key lowpass. Both are linear
-            // systems y = M s + (g M b) u, solved per block and ramped per sample.
-            let N = t == filterType::diodeLadder ? 4 : 2;
-            let K = 1.0f + 1.98f * res;                 // Sallen-Key gain: oscillates at 3
-            let A = t == filterType::diodeLadder ? diodeA
-                            : float[16] (-2.0f, 1.0f - 2.0f * K, 0.0f, 0.0f,
-                                          1.0f, K - 1.0f, 0.0f, 0.0f,
-                                          0.0f, 0.0f, 0.0f, 0.0f,
-                                          0.0f, 0.0f, 0.0f, 0.0f);
-            let g = t == filterType::diodeLadder ? prewarp (hz, sr) / diodePeak : prewarp (hz, sr);
-            let k = t == filterType::diodeLadder ? res * diodeOsc * 1.02f : 0.0f;
+            // 18: diode ladder (saturated feedback): a linear system y = M s + (g M b) u, solved
+            // per block and ramped per sample
+            let g = prewarp (hz, sr) / diodePeak;
+            let k = res * diodeOsc * 1.02f;
             float[20] m, m0, dm;
-            this.zdfRampStart (m, m0, dm, A, g, N, first, invN);
+            this.zdfRampStart (m, m0, dm, diodeA, g, first, invN);
 
             let k0 = first ? k : this.zk;
             let dk = (k - k0) * invN;
@@ -614,13 +611,9 @@ namespace porridge
                 var ms = zdfPredict (m0, dm, s);
                 kk += dk;
                 let x = buf.at (i);
-                var u = x;
-
-                if (t == filterType::diodeLadder)
-                    u = softSat (tables, (x - kk * ms[3]) / (1.0f + kk * m0[19]));
-
+                let u = softSat (tables, (x - kk * ms[3]) / (1.0f + kk * m0[19]));
                 zdfCommit (ms, s, m0, u);
-                buf.at (i) = t == filterType::diodeLadder ? ms[3] * (1.0f + 0.5f * kk) : ms[1];
+                buf.at (i) = ms[3] * (1.0f + 0.5f * kk);
             }
 
             this.zs = s;
@@ -805,7 +798,10 @@ namespace porridge
         this.xFirst = false;
         this.xType = t;
 
-        if (t <= filterType::npn || (t >= filterType::lowEq && t <= filterType::highEq))
+        // (peak 12 dB is B/P/B at the middle of its morph: the same coefficients)
+        if (t == filterType::peak12)
+            this.extraSvf (filterType::bpb, hz, res, 0.5f, sr, buf, n, first);
+        else if (t <= filterType::npn || (t >= filterType::lowEq && t <= filterType::highEq))
             this.extraSvf (t, hz, res, morph, sr, buf, n, first);
         else if (t <= filterType::mgDirty)
             this.extraLadder (t, hz, res, drive, sr, buf, n, first);
@@ -832,7 +828,8 @@ namespace porridge
             this.xs[j] = filterFlush (this.xs[j]);
     }
 
-    /// 22..31 and the EQs 53..55: one or two state-variable stages (the second at the same
+    /// 22..31 (but 24, peak 12, which runs as 30) and the EQs 53..55: one or two state-variable
+    /// stages (the second at the same
     /// frequency), each output a mix of the stage's input x, band v1 and low v2 (hp = x - k v1 - v2,
     /// unity band = k v1). c: g kA a0 a1 a2 (stage A: a0 x + a1 v1 + a2 v2), kB bx b0 b1 b2
     /// (stage B: bx x + b0 a + b1 w1 + b2 w2).
@@ -853,10 +850,6 @@ namespace porridge
             let k = 2.0f / float (pow (50.0, float64 (res)));      // Q 0.5 .. 25
             c[1] = k; c[3] = k;
             c[5] = k; c[8] = k;
-        }
-        else if (t == filterType::peak12)
-        {
-            c[1] = kPeak; c[2] = 1.0f; c[3] = boost * kPeak;
         }
         else if (t == filterType::peak24)
         {
@@ -1014,7 +1007,7 @@ namespace porridge
                     float[blockSize]& buf, int n, bool first)
     {
         float[20] m, m0, dm;
-        this.zdfRampStart (m, m0, dm, diodeA, prewarp (hz, sr) / diodePeak, 4, first, 1.0f / float (n));
+        this.zdfRampStart (m, m0, dm, diodeA, prewarp (hz, sr) / diodePeak, first, 1.0f / float (n));
 
         let dg = filterDriveGain (drive);
         let gh = prewarp (min (hz * 0.25f, 120.0f), sr);
@@ -1648,31 +1641,32 @@ namespace porridge
         table.at (1025) = table.at (1024);
     }
 
-    /// Outside Oat mode the oversampling is a cascade of 2x half-band stages (Kaiser windows):
-    /// flat to 20 kHz (within 0.001 dB at 44.1 kHz), at least 80 dB down where an image or an
-    /// alias would land below 20 kHz, and unity gain. A stage's taps either side of its centre
-    /// (0.5) at odd offsets 1, 3, 5 ..: 28 for 2x, then 6 for 4x and 4 for 8x.
-    let distHalfBands = float[38] (
+    /// Outside Oat mode the oversampling is one switch, HQ (any of Oatmeal's 2x, 4x and 8x): 4x,
+    /// as a cascade of two 2x half-band stages (Kaiser windows): flat to 20 kHz (within 0.001 dB
+    /// at 44.1 kHz), at least 80 dB down where an image or an alias would land below 20 kHz, and
+    /// unity gain. (2x alone left aliasing 40 dB down; 8x cost twice 4x for nothing more.) A
+    /// stage's taps either side of its centre (0.5) at odd offsets 1, 3, 5 ..: 28 for the first,
+    /// 6 for the second.
+    let distHalfBands = float[34] (
         0.317917139f, -0.104921363f, 0.0617080228f, -0.0427723322f, 0.0319551892f, -0.0248553881f, 0.0197842298f,
         -0.0159563255f, 0.0129574110f, -0.0105482497f, 0.00858059546f, -0.00695703277f, 0.00561014486f, -0.00449100649f,
         0.00356251283f, -0.00279536884f, 0.00216561476f, -0.00165307312f, 0.00124036565f, -0.000912289283f, 0.000655420831f,
         -0.000457866544f, 0.000309101570f, -0.000199862633f, 0.000122069340f, -0.0000687578499f, 0.0000340165277f, -0.0000129174797f,
-        0.308384648f, -0.0794718779f, 0.0277424919f, -0.00807717057f, 0.00148071917f, -0.0000588106998f,
-        0.297073094f, -0.0555748425f, 0.00871566877f, -0.000213919871f);
+        0.308384648f, -0.0794718779f, 0.0277424919f, -0.00807717057f, 0.00148071917f, -0.0000588106998f);
 
     /// One side's cascade: per stage, the rings of its input (at its lower rate) and of the
     /// shaped sound's even and odd samples at its higher rate (stage 1 at 0 .. 63, 2 at 64 ..
-    /// 79, 3 at 80 .. 95), and where each stage writes next.
+    /// 79), and where each stage writes next.
     struct DistCascade
     {
-        float[96] x, e, o;
-        int[3] at;
+        float[80] x, e, o;
+        int[2] at;
     }
 
     /// A stage's taps (their first in distHalfBands, and how many), and its rings' start and size.
-    int hbFirst (int stage)  { return stage == 0 ? 0 : (stage == 1 ? 28 : 34); }
-    int hbTaps (int stage)   { return stage == 0 ? 28 : (stage == 1 ? 6 : 4); }
-    int hbRing (int stage)   { return stage == 0 ? 0 : (stage == 1 ? 64 : 80); }
+    int hbFirst (int stage)  { return stage == 0 ? 0 : 28; }
+    int hbTaps (int stage)   { return stage == 0 ? 28 : 6; }
+    int hbRing (int stage)   { return stage == 0 ? 0 : 64; }
     int hbMask (int stage)   { return stage == 0 ? 63 : 15; }
 
     /// Stage s up: x (at its lower rate) to two samples at twice the rate, a then b. A late
@@ -1774,14 +1768,15 @@ namespace porridge
         this.mR = DistModel();
     }
 
-    /// The samples the oversampling delays the sound by, at 2x, 4x and 8x (Oatmeal's in Oat
-    /// mode, a half sample short; the cascade's: 55, then 6 and 2 more).
+    /// The samples the oversampling delays the sound by: Oatmeal's at 2x, 4x and 8x in Oat mode
+    /// (a half sample short), the HQ cascade's (4x: 55 for the first stage, 6 for the second)
+    /// otherwise.
     int distLatency (int os, bool oat)
     {
         if (oat)
             return os == 2 ? 15 : (os == 4 ? 7 : (os == 8 ? 3 : 0));
 
-        return os == 2 ? 55 : (os == 4 ? 61 : (os == 8 ? 63 : 0));
+        return os == 4 ? 61 : 0;
     }
 
     int distFirSet (float64 sr)
@@ -1892,40 +1887,19 @@ namespace porridge
         return float (m.runModel (c, float64 (v)));
     }
 
-    /// The cascade at 2x, 4x or 8x around the shaper (x: after the pregain).
-    float distCascade (const DistTables& t, const float[1026]& custom, int type, const DistCoefs& k, DistModel& m, int os,
+    /// The HQ cascade (4x) around the shaper (x: after the pregain).
+    float distCascade (const DistTables& t, const float[1026]& custom, int type, const DistCoefs& k, DistModel& m,
                        DistCascade& c, float x)
     {
         float a0, a1;
         c.hbUp (0, x, false, a0, a1);
-
-        if (os == 2)
-            return c.hbDown (0, shapeAt (t, custom, type, k, m, a0), shapeAt (t, custom, type, k, m, a1), false);
-
         float[2] r;
 
         for (wrap<2> i)
         {
             float b0, b1;
             c.hbUp (1, i == 0 ? a0 : a1, true, b0, b1);
-
-            if (os == 4)
-            {
-                r[i] = c.hbDown (1, shapeAt (t, custom, type, k, m, b0), shapeAt (t, custom, type, k, m, b1), true);
-            }
-            else
-            {
-                float[2] q;
-
-                for (wrap<2> j)
-                {
-                    float c0, c1;
-                    c.hbUp (2, j == 0 ? b0 : b1, true, c0, c1);
-                    q[j] = c.hbDown (2, shapeAt (t, custom, type, k, m, c0), shapeAt (t, custom, type, k, m, c1), true);
-                }
-
-                r[i] = c.hbDown (1, q[0], q[1], true);
-            }
+            r[i] = c.hbDown (1, shapeAt (t, custom, type, k, m, b0), shapeAt (t, custom, type, k, m, b1), true);
         }
 
         return c.hbDown (0, r[0], r[1], false);
@@ -1938,7 +1912,7 @@ namespace porridge
             return shapeAt (t, custom, type, c, m, x * preS) * postS;
 
         if (! oat)
-            return distCascade (t, custom, type, c, m, os, cascade, x * preS) * postS;
+            return distCascade (t, custom, type, c, m, cascade, x * preS) * postS;
 
         let base = (firSet * 3 + (os == 2 ? 0 : (os == 4 ? 1 : 2))) * 32;
         h.at (idx) = x * preS * float (os);
@@ -1962,10 +1936,19 @@ namespace porridge
         return float (y) * postS;
     }
 
+    /// The oversampling factor: Oatmeal's value (off, 2x, 4x, 8x) in Oat mode; outside it, off or
+    /// HQ (4x) for any of the others.
     int distOversampling (const float[numSlots]& P)
     {
         let o = int (P[slot::Sat_Oversample]);
-        return o == 1 ? 2 : (o == 2 ? 4 : (o == 3 ? 8 : 1));
+
+        if (o <= 0)
+            return 1;
+
+        if (P[slot::Oat_Mode] == 0)
+            return 4;
+
+        return o == 1 ? 2 : (o == 2 ? 4 : 8);
     }
 
     /// The mix of the distorted y with the dry x, which waits `latency` samples in `dry`.

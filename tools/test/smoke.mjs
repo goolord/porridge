@@ -82,14 +82,17 @@ const air = rackEntries.findIndex (e => e && e[0] === "air" && e[1] === 1);
 sounds ("air pushed", { FX_Rack_5: air, Ai_On: 1, Ai_Air: 1, Ai_Body: 0.2, Ai_DarkFreq: 0.2, Ai_Darken: 0.8 }, { tail: true });
 
 // the distortion's types, in every voice and on the whole sound, gently and pushed; the models
-// once more at 8x oversampling
+// once more with HQ oversampling (4x), and in Oat mode at Oatmeal's 8x
 for (let t = 1; t < DistTypes.all.length; ++t)
     for (const [mode, where] of [[1, "voice"], [0, "global"]])
         for (const drive of [0.2, 0.9])
             sounds (`dist ${DistTypes.all[t].short} ${where} ${drive}`, { Sat_Type: t, Sat_Mode: mode, Sat_Drive: drive, Sat_Tone: 0.7,
                                                                       Sat_Character: 0.3, Sat_Pregain: drive * 12 }, { tail: true });
 for (let t = DistTypes.firstModel; t < DistTypes.all.length; ++t)
-    sounds (`dist ${DistTypes.all[t].short} 8x`, { Sat_Type: t, Sat_Mode: 1, Sat_Oversample: 3 }, { tail: true });
+{
+    sounds (`dist ${DistTypes.all[t].short} HQ`, { Sat_Type: t, Sat_Mode: 1, Sat_Oversample: 2 }, { tail: true });
+    sounds (`dist ${DistTypes.all[t].short} Oat 8x`, { Sat_Type: t, Sat_Mode: 1, Sat_Oversample: 3, Oat_Mode: 1 }, { tail: true });
+}
 // the models' knobs gliding under the mod envelope, and the air's amount under an LFO
 for (const t of [DistTypes.firstModel + 4, DistTypes.firstModel + 8])
     sounds (`dist ${DistTypes.all[t].short} gliding`, { Sat_Type: t, Sat_Mode: 0, Mod1_Source: ModMatrix.sourceIndex ("modEnv1"),
@@ -99,21 +102,27 @@ sounds ("air under an LFO", { FX_Rack_5: air, Ai_On: 1, Mod1_Source: ModMatrix.s
 await flush ();
 
 // the mix: the dry waits as long as the oversampling delays the distorted sound, so that the
-// two line up (hard clipping, below its limit, is the sound as it was)
-for (const os of [0, 1, 2, 3])
-{
-    const linear = { Sat_Type: 1, Sat_Mode: 0, Sat_Oversample: os, Sat_Pregain: -30, Sat_Postgain: 30 };
-    const [wet] = render ({ program: prog, events, frames: rate, rate, sets: { ...linear, Sat_Mix: 1 }, out: join (dir, `mix_wet_${os}.f32`) });
-    const [dry] = render ({ program: prog, events, frames: rate, rate, sets: { ...linear, Sat_Mix: 0 }, out: join (dir, `mix_dry_${os}.f32`) });
-    let best = 0, bestLag = 0;
-    for (let lag = -8; lag <= 8; ++lag)
+// two line up (hard clipping, below its limit, is the sound as it was): HQ, and Oatmeal's 2x, 4x
+// and 8x in Oat mode. Outside Oat mode every one of Oatmeal's values is HQ.
+const hq = [];
+for (const oat of [0, 1])
+    for (const os of [0, 1, 2, 3])
     {
-        let c = 0;
-        for (let i = 1000; i < rate - 1000; ++i) c += wet[i] * dry[i + lag];
-        if (c > best) { best = c; bestLag = lag; }
+        const linear = { Sat_Type: 1, Sat_Mode: 0, Sat_Oversample: os, Sat_Pregain: -30, Sat_Postgain: 30, Oat_Mode: oat };
+        const [wet] = render ({ program: prog, events, frames: rate, rate, sets: { ...linear, Sat_Mix: 1 }, out: join (dir, `mix_wet_${oat}${os}.f32`) });
+        const [dry] = render ({ program: prog, events, frames: rate, rate, sets: { ...linear, Sat_Mix: 0 }, out: join (dir, `mix_dry_${oat}${os}.f32`) });
+        let best = 0, bestLag = 0;
+        for (let lag = -8; lag <= 8; ++lag)
+        {
+            let c = 0;
+            for (let i = 1000; i < rate - 1000; ++i) c += wet[i] * dry[i + lag];
+            if (c > best) { best = c; bestLag = lag; }
+        }
+        const what = oat ? `${[1, 2, 4, 8][os]}x in Oat mode` : os ? `HQ (value ${os})` : "off";
+        check (bestLag === 0, `distortion mix ${what} lines up (best lag ${bestLag})`);
+        if (! oat && os) hq.push (wet);
     }
-    check (bestLag === 0, `distortion mix at ${[1, 2, 4, 8][os]}x lines up (best lag ${bestLag})`);
-}
+check (hq.every (w => w.every ((v, i) => v === hq[0][i])), "outside Oat mode 2x, 4x and 8x are all HQ");
 
 // the oscillators' own envelopes: with a short decay to silence, the chord dies away under the
 // amp envelope's sustain; switched on at their defaults (a gate), it sounds as before
