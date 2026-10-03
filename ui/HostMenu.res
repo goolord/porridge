@@ -11,7 +11,10 @@
 //
 // On Windows the host's menu never hears a click or a key in the view, whose window belongs to
 // the web view's own process, so it would stay open until a click somewhere else in the host.
-// The next press or Escape in the view after the menu opens asks the plugin to close it.
+// The next press or Escape in the view after the menu opens asks the plugin to close it, which
+// it does from inside the host's menu loop (in FL Studio, by posting the WM_CLOSE its menus
+// close on; see porridge::dismissHostMenu in tools/clap/PorridgeBridge.h). The press goes on
+// to do what it does in the view.
 
 open! Web
 

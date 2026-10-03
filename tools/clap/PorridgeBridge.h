@@ -109,16 +109,40 @@ namespace porridge
         return nullptr;
     }
 
-    /// Closes the menu the host is showing for the plugin. On Windows a press or a key in the
-    /// view never reaches it, since the web view's window belongs to another process: a host's
-    /// own menu window (FL Studio's) holds the mouse capture of the host's thread, which only
-    /// sees presses on that thread's windows, and a Win32 menu sees none either.
-    inline void dismissHostMenu()
+    /// Closes the menu the host is showing for the plugin, after a press or Escape in the view.
+    /// On Windows the menu never hears those: the web view's window belongs to its browser
+    /// process, whose thread gets the view's input, while a host's menu watches the input of
+    /// the host's thread. This runs on that thread (the web view calls back on the thread that
+    /// made it, the host's main thread, the one that calls on_main_thread and so popup()), and
+    /// often while popup() is still running: hosts show the menu modally, and their menu loop
+    /// dispatches the web view's messages to us.
+    ///
+    ///  - A Win32 menu (TrackPopupMenu) ends with EndMenu.
+    ///  - A menu that holds the mouse capture closes when it loses it (WM_CANCELMODE).
+    ///  - FL Studio's menus (TQuickPopupMenu in FLEngine_x64.dll) are windows of its own with a
+    ///    PeekMessage loop inside popup() that takes the mouse and key messages of FL's thread
+    ///    (Escape closes a level), closes when FL is deactivated (a WM_ACTIVATEAPP hook), and
+    ///    closes entirely on a WM_CLOSE, WM_QUIT or non-client press message for any window,
+    ///    or for none. They hold no capture (unless something had it when they opened), so
+    ///    while popup() is running and no Win32 menu is, a WM_CLOSE is posted to the thread.
+    ///    With no window it closes nothing else: a loop that doesn't look for it dispatches it
+    ///    to nowhere.
+    inline void dismissHostMenu (bool popupRunning)
     {
        #if CHOC_WINDOWS
-        EndMenu();
+        GUITHREADINFO info {};
+        info.cbSize = sizeof (info);
 
-        if (auto capture = GetCapture())
+        if (! GetGUIThreadInfo (GetCurrentThreadId(), &info))
+            info = {};
+
+        if ((info.flags & (GUI_INMENUMODE | GUI_POPUPMENUMODE | GUI_SYSTEMMENUMODE)) != 0)
+        {
+            EndMenu();
+            return;
+        }
+
+        if (auto capture = info.hwndCapture)
         {
             DWORD process = 0;
             GetWindowThreadProcessId (capture, &process);
@@ -127,6 +151,11 @@ namespace porridge
             if (process == GetCurrentProcessId())
                 SendMessageW (capture, WM_CANCELMODE, 0, 0);
         }
+
+        if (popupRunning)
+            PostThreadMessageW (GetCurrentThreadId(), WM_CLOSE, 0, 0);
+       #else
+        (void) popupRunning;
        #endif
     }
 

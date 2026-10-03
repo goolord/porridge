@@ -25,7 +25,9 @@
 //    the parameter with that endpoint ID, at a point in the view (CSS pixels, and the view's
 //    device pixel ratio); ?dismiss closes it, for a press or Escape in the view, which the
 //    menu never hears on Windows. The menu is shown from on_main_thread, once the view's
-//    message has been handled. See ui/HostMenu.res.
+//    message has been handled; hosts run it modally inside popup(), and the dismiss request
+//    arrives while it runs (porridge::dismissHostMenu says how each kind of menu is closed).
+//    See ui/HostMenu.res.
 //  - Only the transport's tempo reaches the patch, and only when it changes (the rest costs
 //    more than a small block's synth work, and the patch doesn't read it).
 //  - A CPU diagnostic, off unless PORRIDGE_PERF is set: the process calls of each instance are
@@ -313,6 +315,10 @@ insertAfter(
 
     std::optional<HostMenuRequest> pendingHostMenu;
 
+    // how many popup() calls haven't returned: hosts show the menu modally, so it is open
+    // while this is above 0 (and may stay open after, if a host doesn't)
+    int hostMenusRunning = 0;
+
     bool canShowHostMenu() const;
     void handleHostRequest (std::string_view);
     void sendHostInfoToView();
@@ -480,7 +486,9 @@ inline bool Plugin::Impl::canShowHostMenu() const
 ${marker} ?get answers with what the host offers; ?menu=<json> { id, x, y, scale } shows the
 // host's menu for the parameter with that endpoint ID, at a point in the view in CSS pixels,
 // scale being the view's device pixel ratio; ?dismiss closes it. The menu is left to
-// on_main_thread rather than shown here, inside the web view's message handler.
+// on_main_thread rather than shown here, inside the web view's message handler. A dismiss
+// usually comes while popup() is still running (the host's menu loop dispatches the web view's
+// messages), which tells dismissHostMenu the menu is open.
 inline void Plugin::Impl::handleHostRequest (std::string_view request)
 {
     if (! editor)
@@ -520,7 +528,7 @@ inline void Plugin::Impl::handleHostRequest (std::string_view request)
     if (request == "dismiss")
     {
         pendingHostMenu = {};
-        porridge::dismissHostMenu();
+        porridge::dismissHostMenu (hostMenusRunning > 0);
         return;
     }
 
@@ -546,7 +554,9 @@ inline void Plugin::Impl::showPendingHostMenu()
         return;
 
     const clap_context_menu_target_t target { CLAP_CONTEXT_MENU_TARGET_KIND_PARAM, request->param };
+    ++hostMenusRunning;
     porridge::hostContextMenu (host)->popup (std::addressof (host), std::addressof (target), 0, request->x, request->y);
+    --hostMenusRunning;
 }
 
 `,
