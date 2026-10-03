@@ -64,13 +64,13 @@ let default = pc => {
   let checkedBank = ref(false)
   let sendShapes = shapeSender(pc)
   let sendStored = storedSender(pc)
+  let sendImpulses = Impulse.sender(pc)
 
   pc->addStoredStateValueListener(({key, value}) => {
     switch (StoredState.keyOf(key), value) {
     | (Some(Shapes), String(shapes)) => Bank.decodeShapes(shapes)->Option.forEach(sendShapes)
     | (Some(Tuning), String(tuning)) => Bank.sendTuning(pc, Bank.decodeTuning(tuning))
-    | (Some(Impulses), String(s)) =>
-      Impulse.decode(s)->Array.forEachWithIndex((imp, which) => Impulse.send(pc, which, imp))
+    | (Some(Impulses), String(s)) => sendImpulses(s)
     // (none: a state without custom shapes, whose points are at their defaults)
     | (Some(Params), value) => sendStored(value)
     // The patch answers the request below even when there is no bank, which is a new

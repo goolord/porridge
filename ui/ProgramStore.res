@@ -273,22 +273,26 @@ let sendTuning = t => {
 
 let onImpulses = (t, fn) => t.impulseListeners->Array.push(fn)
 
-// Sends the convolvers' impulses to the patch, and stores them.
-let sendImpulses = t => {
-  t.impulses->Array.forEachWithIndex((imp, which) => Impulse.send(t.pc, which, imp))
-  store(t, StoredState.Impulses, Impulse.encode(t.impulses))
-  t.impulseListeners->Array.forEach(fn => fn())
-}
+// Sends the convolvers' impulses that changed (by index) to the patch, and stores them all. An
+// impulse takes a moment to arrive, and sending one again restarts it, so the others are left be.
+let sendImpulses = (t, changed) =>
+  if changed->Array.length > 0 {
+    changed->Array.forEach(which => Impulse.send(t.pc, which, t.impulses[which]->Option.flatMap(x => x)))
+    store(t, StoredState.Impulses, Impulse.encode(t.impulses))
+    t.impulseListeners->Array.forEach(fn => fn())
+  }
 
 let apply = (t, preset: Preset.t) => {
   t.tuning = preset.tuning
   sendTuning(t)
-  // (an impulse is sent again only when it changes: it takes a moment to arrive)
-  let changedImpulses = preset.impulses->Array.someWithIndex((imp, i) => t.impulses[i]->Option.flatMap(x => x) !== imp)
+  let changed = []
+  preset.impulses->Array.forEachWithIndex((imp, i) =>
+    if t.impulses[i]->Option.flatMap(x => x) !== imp {
+      changed->Array.push(i)
+    }
+  )
   t.impulses = preset.impulses
-  if changedImpulses {
-    sendImpulses(t)
-  }
+  sendImpulses(t, changed)
   t.model->ParamModel.setAll(preset.values)
   let before = t.shapes
   t.shapes = Preset.copyTables(preset.tables)
@@ -388,7 +392,7 @@ let setTuning = (t, tuning) =>
 let setImpulse = (t, which, imp) =>
   step(t, "impulse", () => {
     t.impulses = t.impulses->Array.mapWithIndex((x, i) => i == which ? imp : x)
-    sendImpulses(t)
+    sendImpulses(t, [which])
     keepCurrent(t)
     bankChanged(t)
   })

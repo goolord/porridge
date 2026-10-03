@@ -194,6 +194,29 @@ let decode = s =>
       | exception _ => none()
       }
 
+// Sends the impulses of encoded lists (as the stored state keeps them) to the patch, each only
+// when it differs from what this sender sent for its slot last: an impulse takes a moment to
+// arrive, and sending one again restarts it.
+let sender = pc => {
+  // each slot's JSON as last sent ("" before the first)
+  let sent = Array.make(~length=slots, "")
+  s => {
+    let items = switch s == "" ? JSON.Null : JSON.parseOrThrow(s) {
+    | Array(items) => items
+    | _ => []
+    | exception _ => []
+    }
+    for which in 0 to slots - 1 {
+      let item = items[which]->Option.getOr(JSON.Null)
+      let text = JSON.stringify(item)
+      if sent->Array.getUnsafe(which) != text {
+        sent->Array.setUnsafe(which, text)
+        send(pc, which, fromJson(item))
+      }
+    }
+  }
+}
+
 // The envelope of an impulse for drawing: the peak of each of `n` pieces, 0..1.
 let envelope = (imp: t, n) => {
   let length = frames(imp)
