@@ -208,7 +208,8 @@ let css = `
 .fnd.dist { box-shadow: inset 0 0 0 1px var(--signal); }
 .fnd.add { flex: none; background: transparent; box-shadow: none; border: 1.5px dashed var(--edge); font-size: 14px; line-height: 17px; }
 .fnd.fx { flex: 0 1 auto; }
-.fnd.fx.off { color: var(--ink-faint); }
+.fnd.fx.off, .fnd.osc.off { color: var(--ink-faint); }
+.fnd.osc.off { background: transparent; }
 .fnd.drag { z-index: 3; cursor: grabbing; box-shadow: inset 0 0 0 1.5px var(--signal), 3px 3px 0 rgba(31,26,14,0.25); }
 .fnd.drop-before { box-shadow: inset 0 0 0 1px var(--edge), inset 3px 0 0 var(--signal); }
 .fnd.drop-after { box-shadow: inset 0 0 0 1px var(--edge), inset -3px 0 0 var(--signal); }
