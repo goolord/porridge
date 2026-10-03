@@ -1002,6 +1002,7 @@ let css = `
 .rd-lock:hover { background: var(--panel-hi); color: var(--ink); }
 .rd-lock.on { background: var(--signal); color: var(--paper); box-shadow: none; }
 .rd-lock.on .ic { opacity: 1; }
+.rd-steady { flex: none; padding: 0 7px; white-space: nowrap; }
 .rd-knobs { display: flex; align-items: center; gap: 16px; height: 24px; padding: 0 14px 2px 12px; flex: none; font-size: 12px; }
 .rd-klabel { color: var(--ink-soft); white-space: nowrap; }
 .rd-knob { flex: 1; display: flex; align-items: center; gap: 7px; min-width: 0; }

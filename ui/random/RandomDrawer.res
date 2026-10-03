@@ -4,12 +4,16 @@
 //  - Generate makes four patches of a kind (or of four kinds). Clicking a card plays it on the
 //    synth at its kind's note; the program isn't changed until Keep, and closing the drawer puts
 //    back what was playing before (unless the card was edited meanwhile, which keeps the edits).
-//    Keep can be undone while the drawer is open.
+//    Keep can be undone while the drawer is open. Each card played is an undo step: undo puts
+//    back what played before it (the card it is a variation of, with any edits, or the program
+//    itself, which plays again as it is, the drawer's cards only tried).
 //  - Vary makes four variations of a card, a little, some or a lot apart, which can be varied in
 //    turn; the row above the cards goes back. "Vary program" does the same to the program as it
 //    is, whatever made it.
 //  - The wildness knobs say how far each area may go from the usual: the oscillators, the
 //    filter, the envelopes, the modulation and the effects (saved with the settings).
+//  - "Steady pitch" keeps the notes of new patches and variations in tune and held where they're
+//    played, however wild the knobs are (saved with them).
 //  - The locks keep areas of what is playing (the chosen card, or else the program) while the
 //    rest is made again or varied.
 //  - Every card plays at the same loudness: the first time it plays (or is kept), its note is
@@ -57,6 +61,10 @@ type patch = {
 
 // A row of cards: new patches, or variations of one.
 type generation = {label: string, patches: array<patch>}
+
+// A card as it played on the synth, for undo to put back: its row and slot, the program it
+// played as (with any edits made to it), whether it was edited and the meta it goes in with.
+type played = {gen: generation, slot: int, preset: Preset.t, edited: bool, meta: option<Preset.meta>}
 
 type t = {
   show: unit => unit,
@@ -119,6 +127,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
   let generations: array<generation> = []
   let locks: Set.t<PatchGen.area> = Set.make()
   let wild = ref(PatchGen.defaultWildness)
+  let steady = ref(false)
   let kind: ref<option<PatchGen.kind>> = ref(None)
   // the card being played, in the shown generation
   let chosen = ref(None)
@@ -128,6 +137,10 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
   // the meta a played card goes in with, for keeping it when it has been edited
   let triedMeta = ref(None)
   let applying = ref(false)
+  // the card last played, while the program isn't playing (None: it is), and whether a card's
+  // play has been an undo step since the drawer opened
+  let heard: ref<option<played>> = ref(None)
+  let recorded = ref(false)
   // what Keep replaced, to undo it
   let undo: ref<option<(Preset.t, int)>> = ref(None)
   let keptSlot = ref(None)
@@ -155,6 +168,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
         | Some(String(k)) => PatchGen.kinds->Array.find(x => PatchGen.kindName(x) == k)
         | _ => None
         }
+      steady := saved->Dict.get("steady") == Some(Boolean(true))
     | _ => ()
     }
   let saveTimer = ref(None)
@@ -172,6 +186,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
         Dict.fromArray([
           ...PatchGen.areas->Array.map(a => (PatchGen.areaShort(a), JSON.Number(PatchGen.wildOf(w, a)))),
           ("kind", String(kind.contents->Option.mapOr("any", PatchGen.kindName))),
+          ("steady", Boolean(steady.contents)),
         ]),
       ),
     )
@@ -257,6 +272,10 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
     })
     render
   })
+  let steadyChip = el("div", ~cls="rd-lock rd-steady", ~text="steady pitch", ~parent=knobs)
+  status->Status.hover(steadyChip, () =>
+    `Steady pitch ${steady.contents ? "on" : "off"}: new patches and variations play their notes in tune and hold them where they're played, as any synth does, however wild the knobs (a vibrato and quick sweeps at a note's start still come, and an oscillator mixed in quieter than the other may go anywhere). No drift, wandering or stepping pitch, slow pitch sweeps, clanging ratios, frequency shifting or wide detuning`
+  )
 
   //==============================================================================
   // the cards
@@ -348,6 +367,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
     kindButton->setTextContent(kind.contents->Option.mapOr("any kind", PatchGen.kindName) ++ " ▾")
     undoButton->toggleClass("hidden", undo.contents == None)
     lockChips->Array.forEach(((a, chip)) => chip->toggleClass("on", locks->Set.has(a)))
+    steadyChip->toggleClass("on", steady.contents)
     knobControls->Array.forEach(render => render())
   }
 
@@ -418,9 +438,10 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
     }
   )
   // the measurement under way, if any (a newer one, a new row or closing the drawer stops it,
-  // and puts back what was playing: the measured patch was on, silent)
+  // and puts back what was playing before it: the measured patch was on, silent)
   let probe = ref(0)
   let probing = ref(false)
+  let probeBack = ref(None)
   let stopProbe = () => {
     probe := probe.contents + 1
     measuring := None
@@ -430,7 +451,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
       ctx.pc->PatchConnection.sendEventOrValue("levelRequest", 0)
       original.contents->Option.forEach(((before, index)) =>
         if index == programs.current {
-          apply(before)
+          apply(probeBack.contents->Option.getOr(before))
         }
       )
     }
@@ -450,6 +471,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
   let measure = (preset: Preset.t, ~note, ~ms, done) => {
     stopProbe()
     let token = probe.contents
+    probeBack := Some(ProgramStore.captureCurrent(programs))
     probing := true
     noteOff()
     let silent = PatchGen.copy(preset.values)
@@ -525,8 +547,55 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
     | _ => next()
     }
 
+  // what is playing, as undo would put it back: the card last played, with its edits (as they
+  // were before a measurement put the measured card on), or the program (None)
+  let nowPlaying = () =>
+    switch (original.contents, heard.contents) {
+    | (Some(_), Some(c)) =>
+      Some({
+        ...c,
+        preset: probing.contents
+          ? probeBack.contents->Option.getOr(c.preset)
+          : ProgramStore.captureCurrent(programs),
+        edited: edited.contents,
+      })
+    | _ => None
+    }
+
+  // Plays what a card's undo step goes back to or its redo plays again: a card (in its row, if
+  // that is shown), or the program as it was before the cards, which ends their trying.
+  let putBack = (to: option<played>) => {
+    stopProbe()
+    noteOff()
+    switch to {
+    | Some(c) =>
+      if original.contents == None {
+        original := Some((ProgramStore.captureCurrent(programs), programs.current))
+      }
+      apply(c.preset)
+      chosen := (shown()->Option.mapOr(false, gen => gen === c.gen) ? Some(c.slot) : None)
+      edited := c.edited
+      triedMeta := c.meta
+    | None =>
+      original.contents->Option.forEach(((before, index)) =>
+        if index == programs.current {
+          applying := true
+          programs->ProgramStore.restore(before)
+          applying := false
+        }
+      )
+      original := None
+      chosen := None
+      edited := false
+    }
+    heard := to
+    keptSlot := None
+    renderAll()
+  }
+
   let tryCard = slot =>
     patchAt(slot)->Option.forEach(_ => {
+      let before = nowPlaying()
       if original.contents == None {
         original := Some((ProgramStore.captureCurrent(programs), programs.current))
       }
@@ -536,16 +605,29 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
       keptSlot := None
       renderAll()
       let play = () =>
-        patchAt(slot)->Option.forEach(p => {
+        switch (shown(), patchAt(slot)) {
+        | (Some(gen), Some(p)) =>
           if fresh {
             let preset = presetOf(p)
             apply(preset)
             triedMeta := Some(preset.meta)
             edited := false
+            // one undo step, unless it was playing already
+            let now = {gen, slot, preset, edited: false, meta: Some(preset.meta)}
+            heard := Some(now)
+            if before->Option.mapOr(true, b => b.gen !== gen || b.slot != slot || b.edited) {
+              recorded := true
+              ctx.model->ParamModel.record(
+                ~label=`play “${p.name}”`,
+                ~undo=() => putBack(before),
+                ~redo=() => putBack(Some(now)),
+              )
+            }
           }
           playNote(p)
           renderAll()
-        })
+        | _ => ()
+        }
       fresh ? withMeasured(slot, play) : play()
     })
 
@@ -567,6 +649,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
     | _ => ()
     }
     original := None
+    heard := None
     edited := false
   }
 
@@ -584,6 +667,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
       programs->ProgramStore.loadIntoCurrent(preset)
       undo := Some((before, programs.current))
       original := None
+      heard := None
       edited := false
       keptSlot := Some(slot)
       ctx.toast(`Kept “${Preset.name(preset)}” in program ${ProgramStore.number(programs.current)}`)
@@ -616,6 +700,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
     switch original.contents {
     | Some((_, index)) if index != programs.current =>
       original := None
+      heard := None
       chosen := None
       renderAll()
     | _ => ()
@@ -691,7 +776,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
     | (None, _) => Array.make(~length=slotCount, referenceKind)
     }
     let patches = kinds->Array.map(k => {
-      let made = PatchGen.generate(~wild=wild.contents, ~kind=k, ~random=r, ~keep?)
+      let made = PatchGen.generate(~wild=wild.contents, ~kind=k, ~random=r, ~keep?, ~steady=steady.contents)
       {
         values: made.values,
         tables: made.tables,
@@ -721,6 +806,7 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
         ~locks=locked,
         ~kind=from.kind,
         ~random=r,
+        ~steady=steady.contents,
       )
       {
         ...from,
@@ -812,6 +898,11 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
       }
       stopProbe()
       settle()
+      // (with the drawer closed, a card's step can't be done again)
+      if recorded.contents {
+        recorded := false
+        ctx.model->ParamModel.forgetRedo
+      }
       chosen := None
       undo := None
       keptSlot := None
@@ -853,6 +944,11 @@ let make = (ctx: Ctx.t, stage, settings: Settings.t): t => {
       renderHead()
     })
   )
+  steadyChip->onMouse(#click, _ => {
+    steady := !steady.contents
+    save()
+    renderHead()
+  })
   undoButton->onMouse(#click, _ => undoKeep())
   close->onMouse(#click, _ => hide())
 

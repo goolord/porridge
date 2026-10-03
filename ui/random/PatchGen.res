@@ -27,6 +27,9 @@
 // drawn wave, the filter type, the pitch envelope, a routing, the XY pad, an effect). Locked
 // areas stay as they are.
 //
+// Either may keep the pitch steady (`steady`): notes in tune and held where they're played, as
+// on any synth, whatever the wildness; a vibrato and quick sweeps at a note's start still come.
+//
 // A patch is its values and its tables: the oscillators' drawn waves are the osc area's.
 //
 // The output gain follows an estimate of how loud the patch plays (`loudness`: K-weighted, as a
@@ -565,6 +568,34 @@ let drawnPower = (table: Float32Array.t, ~width=?) => {
 }
 
 //==============================================================================
+// Steady pitch
+
+// A steady patch plays its notes as any synth would, in tune and held where they're played (a
+// vibrato, or a quick blip or sweep at the start, still let in; and an oscillator mixed in under
+// the other may do as it likes). It has no more drift than steadyDrift (cents), osc 2 (unless
+// it's underneath) detuned by no more than steadyDetune (Hz), unison spread no wider
+// than steadyUnison (cents), pitch envelopes over within steadyEnvMs, and a chorus whose rate
+// times depth (Hz ms) is within steadySway (about 25 cents of sway); and none of the routings,
+// ratios, filters and effects that move a held note's pitch or sound off it.
+let steadyDrift = 3.
+let steadyDetune = 1.5
+let steadyUnison = 25.
+let steadyEnvMs = 120.
+let steadySway = 5.
+
+// the modulators' ratios a steady patch may have: whole ones, and the octave below
+let harmonicRatios = [0.5, 1., 2., 3., 4., 7.]
+
+// Whether an oscillator (1 or 2) is mixed in under the other, quieter than it (not modulating
+// it): the louder one is the note, and the quieter one's pitch is free, steady or not (its
+// detune, its roughness, routings that move it).
+let underneath = (m, osc) => {
+  let mode = mixMode(m)
+  let (mine, other) = osc == 1 ? ("O1_Amp", "O2_Amp") : ("O2_Amp", "O1_Amp")
+  (mode == normal || mode == pmFeedback) && get(m, mine) < get(m, other)
+}
+
+//==============================================================================
 // Oscillators
 
 let oscModeIds = [
@@ -618,7 +649,7 @@ let oscWave = (r, w, k, p, t) => {
 // The mix mode and osc 2: at its interval and level, or as the modulator (its ratio and depth),
 // with mod env 1 sweeping the depth or the synced interval. Osc 2 playing osc 1's drawn wave plays
 // it from its own table; now and then it draws one of its own.
-let oscPair = (r, w, k: kind, p, t) => {
+let oscPair = (r, w, k: kind, p, t, ~steady=false) => {
   let m = t.values
   reset(m, oscModeIds)
   let mode = if k == #bell {
@@ -679,7 +710,7 @@ let oscPair = (r, w, k: kind, p, t) => {
           (7., 0.7, 0.4),
           (5.19, 0.75, 0.4),
           (0.71, 0.8, 0.3),
-        ],
+        ]->Array.filter(((ratio, _, _)) => !steady || harmonicRatios->Array.includes(ratio)),
       )
       12. * Math.log2(ratio)
     } else if chance(r, Math.max(0.4, 1. - w)) {
@@ -814,11 +845,11 @@ let oscNoise = (r, w, k: kind, m) => {
   }
 }
 
-let makeOsc = (r, w, k, t) => {
+let makeOsc = (r, w, k, t, ~steady) => {
   let m = t.values
   let p = profile(k)
   oscWave(r, w, k, p, t)
-  oscPair(r, w, k, p, t)
+  oscPair(r, w, k, p, t, ~steady)
   // (a modulating mode leans towards a sine carrier)
   if modulating(mixMode(m)) {
     oscWave(r, w, k, p, t)
@@ -894,17 +925,33 @@ let familyOf = t => {
 
 let morphs = ["SVF LP > BP > HP", "PZ SVF", "L/B/H 24 (morph)", "B/P/B (morph)"]
 
+// The types to pick from, as `tiered` takes them. A steady patch has none whose partials are off
+// the note (the ring mod's, the sample & hold's), nor a comb unless it's to be tuned to the note.
+let filterOptions = (k, ~steady=false, ~combs=true) =>
+  filterChoices(k)
+  ->Array.filter(((name, family, _, _)) =>
+    !steady || (name != "ring mod" && name != "sample & hold" && (combs || family != Comb))
+  )
+  ->Array.map(((name, family, from, weight)) => ((name, family), from, weight))
+
+// the harmonic of the note (or the octave below) nearest a multiple of it
+let harmonicNear = x =>
+  [0.5, 1., 2., 3., 4.]->Array.reduce(1., (best, h) =>
+    Math.abs(Math.log(h / x)) < Math.abs(Math.log(best / x)) ? h : best
+  )
+
 let filterTypeIds = ["Filter", "Filter2", "Cutoff", "Resonance", "F_Track", "Tune_CutReference", "F_Morph", "F_Double", "F_Split", "F_Mix", "F_Drive"]
 
 // The type, the cutoff (a multiple of the note's frequency at the audition note, followed by the
-// keys from there), the resonance, a second filter and the drive.
-let filterType = (r, w, k: kind, m) => {
+// keys from there), the resonance, a second filter and the drive. A steady patch's comb follows
+// the keys at a harmonic of the note, so that it rings with it.
+let filterType = (r, w, k: kind, m, ~steady=false) => {
   reset(m, filterTypeIds)
   let p = profile(k)
   if chance(r, p.unfiltered * (1. - 0.5 * w)) {
     put(m, "Filter", 0.)
   } else {
-    let choices = filterChoices(k)->Array.map(((name, family, from, weight)) => ((name, family), from, weight))
+    let choices = filterOptions(k, ~steady)
     let (name, family) = tiered(r, w, choices)
     let t = FilterTypes.index(name)
     put(m, "Filter", Int.toFloat(t))
@@ -916,6 +963,7 @@ let filterType = (r, w, k: kind, m) => {
     | Odd => logBetween(r, 1., 16.)
     }
     let track = within(r, w, (0.4, 0.9), (0., 1.2))
+    let (bright, track) = steady && family == Comb ? (harmonicNear(bright), 1.) : (bright, track)
     let f0 = noteHz(p.note)
     let hz = Math.max(30., Math.min(16000., bright * f0)) / Math.pow(f0 / 440., ~exp=track)
     put(m, "F_Track", track)
@@ -941,7 +989,7 @@ let filterType = (r, w, k: kind, m) => {
       put(m, "F_Split", within(r, w, (0.2, 0.5), (0., 1.)))
       put(m, "F_Mix", 0.5)
       if w > 0.6 && chance(r, 0.5) {
-        let (other, _) = tiered(r, w, choices)
+        let (other, _) = tiered(r, w, filterOptions(k, ~steady, ~combs=false))
         put(m, "Filter2", Int.toFloat(FilterTypes.index(other)))
       }
     }
@@ -992,8 +1040,8 @@ let liftCutoff = (m, ~note, ~floor) => {
   }
 }
 
-let makeFilter = (r, w, k, m) => {
-  filterType(r, w, k, m)
+let makeFilter = (r, w, k, m, ~steady) => {
+  filterType(r, w, k, m, ~steady)
   filterEnv(r, w, k, m)
   liftCutoff(m, ~note=profile(k).note, ~floor=-8. - 10. * w)
 }
@@ -1021,8 +1069,8 @@ let ampEnv = (r, w, k: kind, m) => {
 
 let pitchEnvIds = ["PEnv_On", "PEnv_Start", "PEnv_Attack", "PEnv_Peak", "PEnv_Decay", "PEnv_Sustain", "PEnv_Release"]
 
-// a sweep to the note, mostly from above
-let pitchEnv = (r, w, k: kind, m) => {
+// a sweep to the note, mostly from above (a steady patch's a quick one)
+let pitchEnv = (r, w, k: kind, m, ~steady=false) => {
   reset(m, pitchEnvIds)
   if chance(r, 0.5 * w + (k == #bass || k == #pluck ? 0.08 : 0.)) {
     let st = within(r, w, (2., 12.), (1., 36.)) * (chance(r, 0.75) ? 1. : -1.)
@@ -1030,7 +1078,7 @@ let pitchEnv = (r, w, k: kind, m) => {
     put(m, "PEnv_Start", st)
     put(m, "PEnv_Attack", 0.2)
     put(m, "PEnv_Peak", st)
-    put(m, "PEnv_Decay", logWithin(r, w, (15., 80.), (10., 2500.)))
+    put(m, "PEnv_Decay", logWithin(r, w, (15., 80.), (10., steady ? steadyEnvMs : 2500.)))
     put(m, "PEnv_Sustain", 0.)
     put(m, "PEnv_Release", 0.)
   }
@@ -1046,9 +1094,9 @@ let mono = (r, w, k: kind, m) => {
   }
 }
 
-let makeEnv = (r, w, k, m) => {
+let makeEnv = (r, w, k, m, ~steady) => {
   ampEnv(r, w, k, m)
-  pitchEnv(r, w, k, m)
+  pitchEnv(r, w, k, m, ~steady)
   mono(r, w, k, m)
 }
 
@@ -1295,13 +1343,18 @@ let addEffect = (r, w, m, kind: FxRack.kind, ~shuffled=false) =>
   | None => false
   }
 
-// the next kind of effect for the rack as it is, if any may go in
-let nextEffect = (r, w, k, m) => {
+// the next kind of effect for the rack as it is, if any may go in (a steady patch's, not the
+// frequency shifter, which moves the partials off the note)
+let nextEffect = (r, w, k, m, ~steady=false) => {
   let rack = rackOf(m)
   let spaces = rack->Array.filter(e => isSpace(e.kind))->Array.length
   let options =
     rackChoices(k)->Array.filter(((kind, from, weight, space)) =>
-      w >= from && weight > 0. && !(rack->Array.some(e => e.kind == kind)) && (!space || spaces < (w > 0.75 ? 2 : 1))
+      w >= from &&
+      weight > 0. &&
+      !(rack->Array.some(e => e.kind == kind)) &&
+      (!space || spaces < (w > 0.75 ? 2 : 1)) &&
+      !(steady && kind == #bode)
     )
   options == [] ? None : Some(weighted(r, options->Array.map(((kind, _, weight, _)) => (kind, weight))))
 }
@@ -1360,7 +1413,7 @@ let addToLane = (r, w, m, kind: FxRack.kind) =>
   })
 
 // Now and then (the likelier the wilder) an effect in every voice; wild, two of different kinds.
-let voiceFx = (r, w, k, m) => {
+let voiceFx = (r, w, k, m, ~steady=false) => {
   laneOf(m)->Array.forEach(e => put(m, FxRack.switchId(e), 0.))
   reset(m, laneIds)
   if w >= 0.15 && chance(r, 0.1 + 0.45 * (w - 0.15) / 0.85) {
@@ -1368,6 +1421,7 @@ let voiceFx = (r, w, k, m) => {
     for _ in 1 to count {
       let options = laneChoices(k)->Array.filter(((kind, from, _)) =>
         w >= from &&
+        !(steady && kind == #bode) &&
         !(laneOf(m)->Array.some(e => e.kind == kind)) &&
         FxRack.free(rackOf(m), ~lane=laneOf(m), ~forLane=true, kind) != None
       )
@@ -1378,7 +1432,7 @@ let voiceFx = (r, w, k, m) => {
   }
 }
 
-let makeFx = (r, w, k: kind, m) => {
+let makeFx = (r, w, k: kind, m, ~steady) => {
   drive(r, w, k, m)
   // an empty rack, then up to five effects (pads and bells always get a space)
   FxRack.values(get(m, ...), [])->Array.forEach(((id, v)) => put(m, id, v))
@@ -1391,9 +1445,9 @@ let makeFx = (r, w, k: kind, m) => {
   let tries = ref(0)
   while Array.length(rackOf(m)) < count && tries.contents < 8 {
     tries := tries.contents + 1
-    nextEffect(r, w, k, m)->Option.forEach(kind => addEffect(r, w, m, kind, ~shuffled)->ignore)
+    nextEffect(r, w, k, m, ~steady)->Option.forEach(kind => addEffect(r, w, m, kind, ~shuffled)->ignore)
   }
-  voiceFx(r, w, k, m)
+  voiceFx(r, w, k, m, ~steady)
 }
 
 //==============================================================================
@@ -1526,7 +1580,8 @@ let laneTargets = m =>
   ->Array.filter(id => laneOf(m)->Array.some(e => FxRack.params(e)->Array.includes(id)) && SlotParams.targetOfParam(id) > 0)
 
 // A kind of routing: the wildness it needs, how likely it is for each kind of patch, whether the
-// patch can take it, and what it adds (false if it couldn't).
+// patch can take it, and what it adds (false if it couldn't). A steady patch takes none that
+// moves a held note's pitch, or each note's (a vibrato, or a quick blip at the start, it does).
 type route = {
   key: string,
   from: float,
@@ -1538,7 +1593,7 @@ type route = {
 let always = _ => true
 let evenly = _ => 1.
 
-let routes: array<route> = [
+let routes = (~steady): array<route> => [
   // a vibrato that fades in, or comes in with the mod wheel
   {
     key: "vibrato",
@@ -1568,7 +1623,7 @@ let routes: array<route> = [
     key: "note drift",
     from: 0.,
     weight: evenly,
-    fits: always,
+    fits: _ => !steady,
     add: (r, w, m) => connect(m, "random", "finePitch", within(r, w, (0.02, 0.06), (0.02, 0.4))),
   },
   {
@@ -1678,7 +1733,8 @@ let routes: array<route> = [
     key: "blip",
     from: 0.3,
     weight: k => k == #bass ? 1.2 : k == #pluck ? 1. : 0.5,
-    fits: always,
+    // (steady, not on a slower envelope another routing has taken)
+    fits: m => !steady || !sourceUsed(m, "modEnv2") || get(m, "M2_Decay2") <= steadyEnvMs,
     add: (r, w, m) => {
       let env = takeModEnv(m, ~attack=0.2, ~decay=logBetween(r, 15., 80.))
       connect(m, env, "pitch", within(r, w, (0.1, 0.3), (0.1, 1.)) * (chance(r, 0.7) ? 1. : -1.))
@@ -1696,9 +1752,11 @@ let routes: array<route> = [
       let targets = [
         modulating(mode) ? Some((depthOf(mode), (0.1, 0.3), (0.1, 0.5))) : None,
         secondSounds(m) && !modulating(mode) ? Some(("O2_Amp", (0.05, 0.1), (0.05, 0.2))) : None,
-        secondSounds(m) && !modulating(mode) ? Some(("Detune", (0.01, 0.04), (0.01, 0.15))) : None,
+        secondSounds(m) && !modulating(mode) && (!steady || underneath(m, 2))
+          ? Some(("Detune", (0.01, 0.04), (0.01, 0.15)))
+          : None,
         mode == pm || mode == pmFeedback ? Some(("PM_Feedback", (0.1, 0.3), (0.1, 0.6))) : None,
-        get(m, "U_Voices") > 1. ? Some(("U_Detune", (0.03, 0.1), (0.03, 0.3))) : None,
+        get(m, "U_Voices") > 1. && !steady ? Some(("U_Detune", (0.03, 0.1), (0.03, 0.3))) : None,
         filtered(m) ? Some(("Resonance", (0.1, 0.2), (0.1, 0.4))) : None,
       ]->Array.filterMap(t => t)
       if targets == [] {
@@ -1722,7 +1780,7 @@ let routes: array<route> = [
     key: "beating",
     from: 0.3,
     weight: _ => 0.6,
-    fits: m => secondSounds(m) && !modulating(mixMode(m)),
+    fits: m => (!steady || underneath(m, 2)) && secondSounds(m) && !modulating(mixMode(m)),
     add: (r, w, m) =>
       switch takeLfo(m, ~prefer=2, ~rate=Hz(logBetween(r, 0.1, 1.)), ~shape=pick(r, [0., 4.]), ~mode=0.) {
       | Some((_, lfo)) => connect(m, lfo, "Detune", within(r, w, (0.01, 0.04), (0.01, 0.15)))
@@ -1761,11 +1819,11 @@ let routes: array<route> = [
     key: "sample & hold",
     from: 0.6,
     weight: evenly,
-    fits: always,
+    fits: m => !steady || filtered(m),
     add: (r, w, m) =>
       switch takeLfo(m, ~prefer=2, ~rate=Beats(5., 1.), ~shape=5., ~mode=1.) {
       | Some((_, lfo)) =>
-        filtered(m) && chance(r, 0.7)
+        filtered(m) && (steady || chance(r, 0.7))
           ? connect(m, lfo, "Cutoff", within(r, w, (0.15, 0.3), (0.15, 0.5)))
           : connect(m, lfo, "finePitch", within(r, w, (0.3, 0.6), (0.3, 1.)))
       | None => false
@@ -1775,9 +1833,9 @@ let routes: array<route> = [
     key: "grit",
     from: 0.6,
     weight: _ => 0.6,
-    fits: always,
+    fits: m => !steady || filtered(m),
     add: (r, w, m) =>
-      filtered(m) && chance(r, 0.5)
+      filtered(m) && (steady || chance(r, 0.5))
         ? connect(m, "noise", "Cutoff", within(r, w, (0.1, 0.2), (0.1, 0.4)))
         : connect(m, "noise", "finePitch", within(r, w, (0.1, 0.25), (0.1, 0.5))),
   },
@@ -1786,7 +1844,7 @@ let routes: array<route> = [
     key: "laser",
     from: 0.65,
     weight: _ => 0.6,
-    fits: always,
+    fits: _ => !steady,
     add: (r, w, m) => {
       let env = takeModEnv(m, ~attack=0.2, ~decay=logBetween(r, 100., 800.))
       connect(m, env, "pitch", within(r, w, (0.3, 0.5), (0.3, 1.)) * (chance(r, 0.8) ? 1. : -1.))
@@ -1796,7 +1854,7 @@ let routes: array<route> = [
     key: "siren",
     from: 0.7,
     weight: _ => 0.5,
-    fits: always,
+    fits: _ => !steady,
     add: (r, w, m) =>
       switch takeLfo(m, ~rate=Hz(logBetween(r, 0.3, 4.)), ~shape=pick(r, [0., 3.]), ~mode=0.) {
       | Some((_, lfo)) => connect(m, lfo, "pitch", within(r, w, (0.03, 0.1), (0.03, 0.4)))
@@ -1827,15 +1885,15 @@ let routes: array<route> = [
     key: "chaos",
     from: 0.8,
     weight: _ => 0.4,
-    fits: secondSounds,
+    fits: m => (!steady || underneath(m, 2)) && secondSounds(m),
     add: (r, w, m) => connect(m, "random", "Transpose", within(r, w, (0.05, 0.1), (0.05, 0.2))),
   },
 ]
 
 // One more routing of a kind the patch can take, if there is one (`taken`: the kinds it has).
-let addRoute = (r, w, k, m, ~taken: array<string>=[]) => {
+let addRoute = (r, w, k, m, ~taken: array<string>=[], ~steady=false) => {
   let left = ref(
-    routes->Array.filter(route =>
+    routes(~steady)->Array.filter(route =>
       w >= route.from && route.weight(k) > 0. && !(taken->Array.includes(route.key)) && route.fits(m)
     ),
   )
@@ -1910,12 +1968,12 @@ let xyPad = (r, w, m) => {
   }
 }
 
-let makeMod = (r, w, k, m) => {
+let makeMod = (r, w, k, m, ~steady) => {
   reset(m, Lazy.get(modIds))
   let count = w < 0.03 ? 0 : Math.Int.max(1, Float.toInt(Math.round(w * (1.5 + 4. * r()))))
   let taken = []
   for _ in 1 to count {
-    addRoute(r, w, k, m, ~taken)->Option.forEach(key => taken->Array.push(key))
+    addRoute(r, w, k, m, ~taken, ~steady)->Option.forEach(key => taken->Array.push(key))
   }
   xyPad(r, w, m)
 }
@@ -2262,12 +2320,96 @@ let gainFor = (t, ~note) =>
   )
 
 //==============================================================================
+// Steadying
+
+let pitchTargets = ["pitch", "finePitch"]->Array.map(t => Int.toFloat(SlotParams.targetIndex(t)))
+// whether a routing moves the pitch by this source
+let pitchedBy = (m, source) =>
+  usedSlots(m)->Array.some(k =>
+    get(m, ModMatrix.sourceId(k)) == sourceValue(source) && pitchTargets->Array.includes(get(m, ModMatrix.targetId(k)))
+  )
+// a vibrato's LFO, whose shape and speed a steady patch's variations keep
+let vibratoLfo = (m, n) => pitchedBy(m, `lfo${Int.toString(n)}`)
+
+// A patch held steady in pitch, as far as `before` (what it was made from) was: its drift, osc 2's
+// detune and the unison's spread no wider than steadyDrift and the rest (or than they were), no
+// more roughness and no new routings to osc 2's pitch (but in an oscillator mixed in under the
+// other, which is free), its pitch envelope and a pitched mod envelope over within steadyEnvMs, a
+// chorus swaying by a sine or at random, within steadySway, and a comb tuned as it was. (What
+// was made steady stays so as it's varied; a program's own wavering stays as it was.)
+let steadied = (m, ~before) => {
+  let was = id => get(before, id)
+  let hold = (~had=true, id, limit) => {
+    let most = had ? Math.max(limit, Math.abs(was(id))) : limit
+    put(m, id, Math.max(-.most, Math.min(most, get(m, id))))
+  }
+  hold("Drift_Pitch", steadyDrift)
+  hold("U_Detune", steadyUnison)
+  // (an oscillator mixed in under the other is free; come up above it, what it had then goes,
+  // and so do new routings to osc 2's pitch)
+  if !underneath(m, 2) {
+    let free = underneath(before, 2)
+    hold("Detune", steadyDetune, ~had=!free)
+    let osc2 = ["Detune", "Transpose"]->Array.map(t => Int.toFloat(SlotParams.targetIndex(t)))
+    usedSlots(m)->Array.forEach(k => {
+      let routing = [ModMatrix.sourceId(k), ModMatrix.targetId(k), ModMatrix.viaId(k)]
+      if osc2->Array.includes(get(m, ModMatrix.targetId(k))) && (free || routing->Array.some(id => get(m, id) != was(id))) {
+        reset(m, ModMatrix.slotIds(k))
+      }
+    })
+  }
+  [1, 2]->Array.forEach(osc => {
+    let id = `O${Int.toString(osc)}_Noise`
+    let most = underneath(before, osc) ? 0. : was(id)
+    if get(m, id) > most && !underneath(m, osc) {
+      put(m, id, most)
+      put(m, id ++ "Colour", most == 0. ? get(Lazy.get(initValues), id ++ "Colour") : was(id ++ "Colour"))
+    }
+  })
+  if get(m, "PEnv_On") != 0. {
+    hold("PEnv_Decay", steadyEnvMs, ~had=was("PEnv_On") != 0.)
+  }
+  if pitchedBy(m, "modEnv2") {
+    hold("M2_Decay2", steadyEnvMs, ~had=pitchedBy(before, "modEnv2"))
+  }
+  // (a ramp's or FM's sway is a pitch held off the note; the rack's slots are any effect's, so
+  // what was there counts only if it was a chorus)
+  rackOf(m)
+  ->Array.filter(e => e.kind == #chorus)
+  ->Array.forEach(e => {
+    let id = first => FxRack.id(e, first)
+    let had = rackOf(before)->Array.some(b => b.kind == #chorus && FxRack.id(b, "C_Mode") == id("C_Mode"))
+    let was = first => had ? was(id(first)) : 0.
+    let mode = get(m, id("C_Mode"))
+    if (mode == 2. || mode == 3.) && mode != was("C_Mode") {
+      put(m, id("C_Mode"), 1.)
+    }
+    let sway = get(m, id("C_Rate")) * get(m, id("C_Depth"))
+    let most = Math.max(steadySway, was("C_Rate") * was("C_Depth"))
+    if sway > most {
+      put(m, id("C_Depth"), get(m, id("C_Depth")) * most / sway)
+    }
+  })
+  let t = get(m, "Filter")
+  if t != 0. && t == was("Filter") && familyOf(Float.toInt(t)) == Comb {
+    put(m, "Cutoff", was("Cutoff"))
+    put(m, "F_Track", was("F_Track"))
+  }
+}
+
+//==============================================================================
 // Making patches
 
 // A random patch: Init with each area made at its wildness, except the locked ones (`keep`:
 // the patch they come from, and which), which keep what that patch has (the oscillators their
-// drawn waves too). `note` is where it will be auditioned.
-let generate = (~wild: wildness, ~kind: kind, ~random as r: rng, ~keep: option<(patch, array<area>)>=?) => {
+// drawn waves too). `note` is where it will be auditioned. `steady`: its pitch held steady.
+let generate = (
+  ~wild: wildness,
+  ~kind: kind,
+  ~random as r: rng,
+  ~keep: option<(patch, array<area>)>=?,
+  ~steady=false,
+) => {
   let m = copy(Lazy.get(initValues))
   let locked = a => keep->Option.mapOr(false, ((_, areas)) => areas->Array.includes(a))
   let t = {values: m, tables: Lazy.get(initTables)}
@@ -2283,20 +2425,23 @@ let generate = (~wild: wildness, ~kind: kind, ~random as r: rng, ~keep: option<(
     }
   })
   if !locked(#osc) {
-    makeOsc(r, wild.osc, kind, t)
+    makeOsc(r, wild.osc, kind, t, ~steady)
   }
   if !locked(#filter) {
-    makeFilter(r, wild.filter, kind, m)
+    makeFilter(r, wild.filter, kind, m, ~steady)
   }
   if !locked(#env) {
-    makeEnv(r, wild.env, kind, m)
+    makeEnv(r, wild.env, kind, m, ~steady)
   }
   // (the routings may move the rack's effects)
   if !locked(#fx) {
-    makeFx(r, wild.fx, kind, m)
+    makeFx(r, wild.fx, kind, m, ~steady)
   }
   if !locked(#mod) {
-    makeMod(r, wild.mod, kind, m)
+    makeMod(r, wild.mod, kind, m, ~steady)
+  }
+  if steady {
+    steadied(m, ~before=Lazy.get(initValues))
   }
   // (a new rack takes the connections to its slots' knobs with what it moves: locked ones stay)
   keep->Option.forEach(((from, _)) =>
@@ -2450,34 +2595,34 @@ let tamedFeedback = m => {
 }
 
 // A part of an area made again, added or taken away.
-let restructure = (r, w, k: kind, t, a: area) => {
+let restructure = (r, w, k: kind, t, a: area, ~steady) => {
   let m = t.values
   let p = profile(k)
   switch a {
   | #osc =>
     switch weighted(r, [(0, 1.), (1, 0.5), (2, 0.5), (3, 0.4)]) {
-    | 0 => oscPair(r, w, k, p, t)
+    | 0 => oscPair(r, w, k, p, t, ~steady)
     | 1 => oscWave(r, w, k, p, t)
     | 2 => oscUnison(r, w, p, m)
     | _ => oscNoise(r, w, k, m)
     }
-  | #filter => chance(r, 0.6) ? filterType(r, w, k, m) : filterEnv(r, w, k, m)
-  | #env => chance(r, 0.7) ? pitchEnv(r, w, k, m) : mono(r, w, k, m)
+  | #filter => chance(r, 0.6) ? filterType(r, w, k, m, ~steady) : filterEnv(r, w, k, m)
+  | #env => chance(r, 0.7) ? pitchEnv(r, w, k, m, ~steady) : mono(r, w, k, m)
   | #mod =>
     switch usedSlots(m) {
     | _ if chance(r, 0.2) => xyPad(r, w, m)
-    | [] => addRoute(r, w, k, m)->ignore
+    | [] => addRoute(r, w, k, m, ~steady)->ignore
     | used =>
       if chance(r, 0.4) {
         reset(m, ModMatrix.slotIds(pick(r, used)))
       } else {
-        addRoute(r, w, k, m)->ignore
+        addRoute(r, w, k, m, ~steady)->ignore
       }
     }
   | #fx =>
     let rack = rackOf(m)
     if chance(r, 0.2) {
-      voiceFx(r, w, k, m)
+      voiceFx(r, w, k, m, ~steady)
     } else if rack != [] && chance(r, 0.4) {
       let gone = pick(r, rack)
       FxRack.values(get(m, ...), rack->Array.filter(e => e != gone))->Array.forEach(((id, v)) => put(m, id, v))
@@ -2485,14 +2630,14 @@ let restructure = (r, w, k: kind, t, a: area) => {
     } else if chance(r, 0.25) {
       drive(r, w, k, m)
     } else {
-      nextEffect(r, w, k, m)->Option.forEach(kind => addEffect(r, w, m, kind)->ignore)
+      nextEffect(r, w, k, m, ~steady)->Option.forEach(kind => addEffect(r, w, m, kind)->ignore)
     }
   }
 }
 
 // Choices picked again now and then: the waves, the filter type within its family's wildness,
 // the LFOs' shapes, the distortion's type, the spaces' models.
-let repick = (r, w, k: kind, t, a: area, amount) => {
+let repick = (r, w, k: kind, t, a: area, amount, ~steady) => {
   let m = t.values
   let often = () => chance(r, amount * 0.3)
   switch a {
@@ -2505,7 +2650,7 @@ let repick = (r, w, k: kind, t, a: area, amount) => {
     }
   | #filter =>
     if filtered(m) && often() {
-      let (name, _) = tiered(r, w, filterChoices(k)->Array.map(((name, family, from, weight)) => ((name, family), from, weight)))
+      let (name, _) = tiered(r, w, filterOptions(k, ~steady, ~combs=false))
       let t = FilterTypes.index(name)
       // (at the same frequency)
       let hz = FilterTypes.cutoffHz(~filterType=Float.toInt(get(m, "Filter")), get(m, "Cutoff"))
@@ -2515,7 +2660,7 @@ let repick = (r, w, k: kind, t, a: area, amount) => {
   | #env => ()
   | #mod =>
     [1, 2]->Array.forEach(n =>
-      if !lfoFree(m, n) && often() {
+      if !lfoFree(m, n) && !(steady && vibratoLfo(m, n)) && often() {
         put(m, `LFO_${Int.toString(n)}_Shape`, tiered(r, w, [(0., 0., 2.), (3., 0., 1.5), (4., 0., 1.), (1., 0.4, 0.6), (2., 0.4, 0.6), (5., 0.6, 0.6)]))
       }
     )
@@ -2535,8 +2680,16 @@ let repick = (r, w, k: kind, t, a: area, amount) => {
 
 // A variation of any patch: its unlocked areas moved by `amount` (0..1: 0.15 is a little, 0.7 a
 // lot), each now and then made again in part, more often the wilder it may go. The output gain
-// moves by what the estimate says the change in level is.
-let vary = (from: patch, ~amount, ~wild: wildness, ~locks: array<area>, ~kind: kind, ~random as r: rng) => {
+// moves by what the estimate says the change in level is. `steady`: its pitch no less steady.
+let vary = (
+  from: patch,
+  ~amount,
+  ~wild: wildness,
+  ~locks: array<area>,
+  ~kind: kind,
+  ~random as r: rng,
+  ~steady=false,
+) => {
   let t = copyPatch(from)
   let m = t.values
   let src = from.values
@@ -2544,17 +2697,22 @@ let vary = (from: patch, ~amount, ~wild: wildness, ~locks: array<area>, ~kind: k
   free->Array.forEach(a => {
     let w = wildOf(wild, a)
     let moves = a == #fx ? Array.concat(nudges(a), rackNudges(m)) : nudges(a)
+    // (steady, a vibrato keeps its speed)
+    let held = id => steady && [1, 2]->Array.some(k => id == `LFO_${Int.toString(k)}_Speed` && vibratoLfo(m, k))
     moves->Array.forEach(n =>
-      if n.active(m) {
+      if n.active(m) && !held(n.id) {
         moveBy(r, m, n, amount)
       }
     )
-    repick(r, w, kind, t, a, amount)
+    repick(r, w, kind, t, a, amount, ~steady)
     if chance(r, amount * (0.25 + 0.6 * w)) {
-      restructure(r, w, kind, t, a)
+      restructure(r, w, kind, t, a, ~steady)
     }
   })
   tamedFeedback(m)
+  if steady {
+    steadied(m, ~before=src)
+  }
   // (the rack's changes leave the locked areas' values as they were: its connections too)
   src->Map.forEachWithKey((v, id) =>
     switch owner(id) {

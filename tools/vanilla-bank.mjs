@@ -2552,5 +2552,9 @@ for (const p of parsed._0.presets)
 }
 
 const out = join (root, "presets", "vanilla.porridge");
-writeFileSync (out, Preset.writeBank (parsed._0.presets, "Vanilla"));
+// compact, a program to a line, which the plugin embeds at a third less than indented JSON
+const bank = JSON.parse (Buffer.from (Preset.writeBank (parsed._0.presets, "Vanilla")).toString ("utf8"));
+const { presets, ...fields } = bank;
+if (Object.keys (bank).at (-1) !== "presets") throw new Error ("the bank's presets aren't its last field");
+writeFileSync (out, JSON.stringify (fields).slice (0, -1) + ',"presets":[\n' + presets.map (p => JSON.stringify (p)).join (",\n") + "\n]}\n");
 console.log (`wrote ${parsed._0.presets.length} programs to presets/vanilla.porridge`);

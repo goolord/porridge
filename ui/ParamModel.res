@@ -340,9 +340,13 @@ let clearHistory = t => {
 
 // While something is only being tried (a program from the browser, a random patch), undo stops
 // at what came before it: hold marks that point, and drop forgets the steps made since then.
+// (A step undone or done again can start or end a preview, the random drawer's played cards:
+// then redo keeps what it has.)
 let hold = t => {
   seal(t)
-  t.history.redo = []
+  if t.history.quiet == 0 {
+    t.history.redo = []
+  }
   t.history.floor = Some(Array.length(t.history.undo))
 }
 
@@ -351,8 +355,13 @@ let drop = t => {
   let h = t.history
   h.floor->Option.forEach(floor => h.undo->Array.splice(~start=floor, ~remove=Array.length(h.undo) - floor, ~insert=[]))
   h.floor = None
-  h.redo = []
+  if h.quiet == 0 {
+    h.redo = []
+  }
 }
+
+// Forgets what redo would do again (steps that can't be done any more).
+let forgetRedo = t => t.history.redo = []
 
 // What undo and redo would take back or do again, if anything.
 let undoLabel = t => {

@@ -5,7 +5,8 @@
 // What changes a program as a whole (loading one, init, a rename, the tuning, switching between
 // its A and B...) is one undo step in ParamModel's history: the bank as it was and as it is after
 // (with the A/B versions waiting beside it). Previews (the browser's,
-// the random drawer's) are not steps; undo stops at the program they started from.
+// the random drawer's) are not steps; undo stops at the program they started from (the random
+// drawer adds steps of its own above that, for the cards it plays, back to the program).
 
 open OatmealFormat
 

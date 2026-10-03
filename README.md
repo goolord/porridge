@@ -112,7 +112,7 @@ ui/                     patch view (ReScript)
   PresetBrowser.res       the preset browser; Library.res searches and filters for it, and
                           BankLibrary.res asks the plugin for the banks it keeps
   random/                 random patches: RandomDrawer.res (the drawer: the wildness knobs,
-                          the locks, four cards to play, keep or vary, each card's level
+                          steady pitch, the locks, four cards to play, keep or vary, each card's level
                           metered silently as it first plays and its output gain set from
                           that), PatchGen.res (making a patch of a kind with each area as wild
                           as its knob, varying any patch, naming and describing one, and an
@@ -207,7 +207,7 @@ tools/
                           banklibrary.cpp (the plugin's bank library on real files), oneshot.mjs (one-shot LFOs hold their
                           end), levels.mjs (the Vanilla bank's gains, levels and motion),
                           random.mjs (random patches: sound values, the wildness knobs, the
-                          locks, varying the banks, and their levels), modulation.mjs (the
+                          locks, varying the banks, steady pitch, and their levels), modulation.mjs (the
                           matrix's hold, slew, curve, later sources and slots, and what
                           per-note sources follow on the whole sound, and the view's reports of
                           the sounding notes, which the host writes with --voices), lane.mjs

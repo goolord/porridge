@@ -21,6 +21,7 @@ import { join } from "node:path";
 import * as Lazy from "@rescript/runtime/lib/es6/Stdlib_Lazy.js";
 import * as Preset from "../../ui/Preset.res.mjs";
 import * as FxRack from "../../ui/FxRack.res.mjs";
+import * as FilterTypes from "../../ui/FilterTypes.res.mjs";
 import * as ModMatrix from "../../ui/ModMatrix.res.mjs";
 import * as OatmealFormat from "../../ui/oatmeal/OatmealFormat.res.mjs";
 import * as PatchGen from "../../ui/random/PatchGen.res.mjs";
@@ -182,6 +183,75 @@ for (const p of banks)
     }
 }
 check (true, `${banks.length} programs varied ${varied} times`);
+
+//==============================================================================
+// steady pitch
+
+// Patches made and varied steady, at any wildness up to the wildest, hold their notes' pitch
+// (but in an oscillator mixed in under the other, which is free). (Their own seed: the phases
+// before and after keep their sample.)
+{
+    const rs = PatchGen.seeded (99);
+    const wilds = i => i % 3 === 0 ? wildAt (1) : { osc: rs (), filter: rs (), env: rs (), mod: rs (), fx: rs () };
+    const target = key => ModMatrix.targets.findIndex (t => t.key === key);
+    const source = key => ModMatrix.sourceIndex (key);
+    const pitch = [target ("pitch"), target ("finePitch")];
+    const unsteady = (m, kind) =>
+    {
+        const get = id => m.get (id) ?? 0;
+        const free = PatchGen.underneath (m, 2);
+        const found = [];
+        if (get ("Drift_Pitch") > PatchGen.steadyDrift) found.push ("drift");
+        if (! free && Math.abs (get ("Detune")) > PatchGen.steadyDetune) found.push ("osc 2 detuned");
+        if (get ("U_Detune") > PatchGen.steadyUnison) found.push ("unison wide");
+        for (const osc of [1, 2])
+            if (get (`O${osc}_Noise`) && ! PatchGen.underneath (m, osc)) found.push (`osc ${osc} rough`);
+        if (get ("PEnv_On") && get ("PEnv_Decay") > PatchGen.steadyEnvMs) found.push ("slow pitch envelope");
+        if ([2, 3, 5, 6].includes (get ("OscMix")) && ! [0.5, 1, 2, 3, 4, 7].some (x => Math.abs (x - 2 ** get ("Transpose")) < 1e-3))
+            found.push (`ratio ${(2 ** get ("Transpose")).toFixed (2)}`);
+        for (const t of ["Filter", "Filter2"])
+            if (["ring mod", "sample & hold"].includes (FilterTypes.all[get (t)])) found.push (FilterTypes.all[get (t)]);
+        if (get ("Filter") && PatchGen.familyOf (get ("Filter")) === "Comb")
+        {
+            const note = PatchGen.profile (kind).note;
+            const multiple = PatchGen.cutoffAt (m, note) / PatchGen.noteHz (note);
+            if (get ("F_Track") !== 1 || ! [0.5, 1, 2, 3, 4].some (x => Math.abs (x / multiple - 1) < 0.01))
+                found.push (`a comb at ${multiple.toFixed (2)}x the note`);
+        }
+        for (const e of [...FxRack.read (get), ...FxRack.readLane (get)])
+        {
+            if (e.kind === "bode") found.push ("a frequency shifter");
+            if (e.kind === "chorus" && (! [1, 4].includes (get (FxRack.id (e, "C_Mode")))
+                || get (FxRack.id (e, "C_Rate")) * get (FxRack.id (e, "C_Depth")) > PatchGen.steadySway + 1e-4))
+                found.push ("a chorus swaying");
+        }
+        for (const k of PatchGen.usedSlots (m))
+        {
+            const s = get (ModMatrix.sourceId (k)), t = get (ModMatrix.targetId (k));
+            const lfo = [source ("lfo1"), source ("lfo2")].indexOf (s);
+            if (pitch.includes (t) && [source ("random"), source ("noise")].includes (s)) found.push ("each note's pitch random");
+            if (pitch.includes (t) && s === source ("modEnv2") && get ("M2_Decay2") > PatchGen.steadyEnvMs) found.push ("a slow pitch sweep");
+            if (pitch.includes (t) && lfo >= 0 && (t === target ("pitch") || get (`LFO_${lfo + 1}_Shape`) === 5)) found.push ("a siren or stepping pitch");
+            if (t === target ("U_Detune") || (! free && [target ("Detune"), target ("Transpose")].includes (t))) found.push ("osc 2's pitch routed");
+        }
+        return found;
+    };
+    let steadied = 0;
+    for (let i = 0; i < 300; ++i)
+        for (const kind of PatchGen.kinds)
+        {
+            const wild = wilds (i);
+            let t = PatchGen.generate (wild, kind, rs, undefined, true);
+            for (let j = 0; j < 3; ++j)
+            {
+                const found = [...unsteady (t.values, kind), ...problems (t.values, { tables: t.tables })];
+                if (found.length) fail (`${kind} steady${j ? `, varied ${j}x` : ""}: ${found.slice (0, 3).join ("; ")}`);
+                ++steadied;
+                t = PatchGen.vary (t, 0.7, wild, [], kind, rs, true);
+            }
+        }
+    check (true, `${steadied} steady patches and variations hold their pitch`);
+}
 
 //==============================================================================
 // levels, through the test host

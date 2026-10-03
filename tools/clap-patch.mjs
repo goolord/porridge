@@ -67,6 +67,11 @@
 //  - Cmajor's Engine keeps the program details it last parsed (cmaj_Engine.h): Porridge's are
 //    about 175 kB of JSON, and every build asked for them about five times.
 //
+// and to be smaller:
+//
+//  - The generated class's program details are embedded without the whitespace the generator
+//    indents them with, which was three quarters of their 700 kB.
+//
 //   node tools/clap-patch.mjs [path to the generated project]
 
 import { readFileSync, writeFileSync, copyFileSync } from "node:fs";
@@ -211,9 +216,40 @@ if (open(join(project, "include", "choc", "choc", "gui", "choc_MessageLoop.h")))
 }
 
 //==============================================================================
-// The generated patch class: addEvent's dispatch as a switch (see tools/event-switch.mjs)
+// The generated patch class: its program details without whitespace, and addEvent's dispatch
+// as a switch (see tools/event-switch.mjs)
+
+// The program details, a char array of the JSON's UTF-8 bytes, without the whitespace between
+// its tokens
+const compactProgramDetails = () => {
+  const start = "static constexpr const char programDetailsJSON[] = {";
+  const at = source.indexOf(start);
+  const end = source.indexOf("};", at);
+  if (at < 0 || end < 0) fail("programDetailsJSON");
+  const bytes = source.slice(at + start.length, end).match(/-?\d+/g).map((b) => (Number(b) + 256) % 256);
+  if (bytes.pop() !== 0) fail("programDetailsJSON's terminating 0");
+  const json = Buffer.from(bytes).toString("utf8");
+  let compact = "";
+  for (let i = 0, inString = false; i < json.length; i++) {
+    const c = json[i];
+    if (inString) {
+      compact += c;
+      if (c === "\\") compact += json[++i];
+      else if (c === '"') inString = false;
+    } else if (!/\s/.test(c)) {
+      compact += c;
+      inString = c === '"';
+    }
+  }
+  JSON.parse(compact);
+  const values = [...Buffer.from(compact, "utf8")].map((b) => (b > 127 ? b - 256 : b));
+  const lines = [];
+  for (let i = 0; i < values.length; i += 64) lines.push("            " + values.slice(i, i + 64).join(",") + ",");
+  source = source.slice(0, at) + start + "\n" + lines.join("\n") + " 0 " + source.slice(end);
+};
 
 if (open(join(project, "entry.cpp"))) {
+  compactProgramDetails();
   source = switchAddEvent(source, marker);
   save();
 }

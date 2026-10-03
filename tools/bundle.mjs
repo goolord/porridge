@@ -3,14 +3,20 @@
 // encodes Oatmeal's factory bank as a new instance's stored state keeps it, which the worker
 // installs (worker/PatchWorker.res).
 //
+// bundle/ is emptied first: Cmajor's generator embeds every file in the view's folder in the
+// plugin, not only the ones the manifest names, so a file left over there makes it bigger.
+//
 // run: npm run build   (compiles the ReScript sources, then bundles)
 
 import { build } from "esbuild";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join (dirname (fileURLToPath (import.meta.url)), "..");
+
+rmSync (join (root, "bundle"), { recursive: true, force: true });
+mkdirSync (join (root, "bundle"));
 
 await build ({
     entryPoints: { view: join (root, "ui", "Index.res.mjs"), worker: join (root, "worker", "PatchWorker.res.mjs") },
@@ -19,6 +25,7 @@ await build ({
     format: "esm",
     platform: "browser",
     target: "es2020",
+    minify: true,
     legalComments: "none",
     logLevel: "warning",
 });
