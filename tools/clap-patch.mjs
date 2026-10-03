@@ -44,8 +44,14 @@
 //    values and texts, the host's and the editor's value and gesture events, the host's menu)
 //    uses it. The table is generated into PorridgeParamIds.h.
 //  - A saved state that names parameters the patch no longer has (the custom shapes' points,
-//    which became stored state) keeps their values under the stored-state key "params", where
-//    the view and the worker read them (ui/StoredParams.res).
+//    which became stored state, and the effects' copies, whose values the rack's slots took
+//    over) keeps their values under the stored-state key "params", merged with what that holds,
+//    where the view and the worker read them (ui/StoredParams.res, worker/PatchWorker.res).
+//  - The rack's and the voice lane's slots' knobs (FX3_1 .., VL1_1 ..) are named after the kind
+//    each slot holds ("FX 3 delay wet"), with that kind's value texts; the knobs a kind doesn't
+//    use, and an empty slot's, are hidden. When a slot's kind changes the host is asked to
+//    rescan the parameters' info and texts (CLAP_PARAM_RESCAN_INFO | CLAP_PARAM_RESCAN_TEXT).
+//    The tables are generated into PorridgeSlots.h from ui/PorridgeParams.res and ParamDefs.
 //
 // and to load faster:
 //
@@ -66,6 +72,8 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { switchAddEvent } from "./event-switch.mjs";
 import { readIds } from "./param-ids.mjs";
+import * as PorridgeParams from "../ui/PorridgeParams.res.mjs";
+import { makeDefs } from "../ui/ParamDefs.res.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const project = process.argv[2] ?? join(root, "build", "clap-project");
@@ -262,10 +270,26 @@ ${endpoints.map((name) => `        { "${name}", ${ids.get(name)}u },`).join("\n"
         auto values = state.hasObjectMember ("values") && state["values"].isObject()
                         ? choc::value::Value (state["values"]) : choc::value::createObject ({});
 
-        if (! parameters.isArray() || values.hasObjectMember (storedKey))
+        if (! parameters.isArray())
             return false;
 
+        // (merged into the value the state has, if it has one: what's there wins)
         auto kept = choc::value::createObject ({});
+
+        if (values.hasObjectMember (storedKey))
+        {
+            try
+            {
+                auto had = choc::json::parse (values[storedKey].toString());
+
+                if (had.isObject())
+                    for (uint32_t i = 0; i < had.size(); ++i)
+                        kept.addMember (had.getObjectMemberAt (i).name, had.getObjectMemberAt (i).value);
+            }
+            catch (...) {}
+        }
+
+        bool moved = false;
         auto remaining = choc::value::createEmptyArray();
 
         for (const auto& parameter : parameters)
@@ -274,16 +298,166 @@ ${endpoints.map((name) => `        { "${name}", ${ids.get(name)}u },`).join("\n"
             const auto value = parameter.isObject() && parameter.hasObjectMember ("value") ? parameter["value"] : choc::value::ValueView();
 
             if (! name.empty() && (value.isFloat() || value.isInt()) && clapIdFor (name) == CLAP_INVALID_ID)
-                kept.addMember (name, value.getWithDefault<double> (0.0));
+            {
+                if (! kept.hasObjectMember (name))
+                    kept.addMember (name, value.getWithDefault<double> (0.0));
+
+                moved = true;
+            }
             else
+            {
                 remaining.addArrayElement (parameter);
+            }
         }
 
-        if (kept.size() == 0)
+        if (! moved)
             return false;
 
-        values.addMember (storedKey, choc::json::toString (kept, false));
+        if (values.hasObjectMember (storedKey))
+            values.setMember (storedKey, choc::json::toString (kept, false));
+        else
+            values.addMember (storedKey, choc::json::toString (kept, false));
         state = choc::json::create ("parameters", remaining, "values", values);
+        return true;
+    }
+}
+`,
+  );
+}
+
+// The slots' knobs: their names and texts by the kind each slot holds (PorridgeSlots.h)
+{
+  const defs = new Map(makeDefs().map((d) => [d.id, d]));
+  const cs = (x) => JSON.stringify(x);
+  const kinds = PorridgeParams.rackKinds;
+  const kindOf = PorridgeParams.rackEntries.map((e, v) => (e && v > 4 ? kinds.findIndex((k) => k.key === e[0]) : -1));
+  // each kind's knobs: name, then texts (a list's every value, from its lowest; a float's at 51
+  // knob positions), and whether it's a list
+  const knobLines = [], textLines = [];
+  const kindLines = kinds.map((k) => {
+    const key = k.runsIn === "LaneOnly" ? "L1" : "1";
+    const kindName = k.menuName ?? k.name.toLowerCase();
+    const first = knobLines.length;
+    for (const [id, label] of PorridgeParams.knobsOf(k)) {
+      const d = defs.get(PorridgeParams.slotParamId(id, key));
+      const texts = d.isInt
+        ? Array.from({ length: d.max - d.min + 1 }, (_, i) => d.valueText(d.min + i))
+        : Array.from({ length: 51 }, (_, i) => d.valueText(d.fromNorm(i / 50)));
+      textLines.push(`    inline constexpr std::string_view texts${knobLines.length}[] = { ${texts.map(cs).join(", ")} };`);
+      knobLines.push(`        { ${cs(kindName + " " + label)}, ${d.isInt}, ${cs(d.min)}, ${cs(d.max)}, ${texts.length}, texts${knobLines.length} },`);
+    }
+    return `        { ${first}, ${knobLines.length - first} },`;
+  });
+  const knobs = Array.from({ length: PorridgeParams.slotCount }, (_, g) =>
+    Array.from({ length: PorridgeParams.knobCount(g) }, (_, i) => `        { ${cs(PorridgeParams.knobId(g, i + 1))}, ${g}, ${i} },`),
+  ).flat();
+  writeFileSync(
+    join(project, "helpers", "clap", "PorridgeSlots.h"),
+    `// Generated by tools/clap-patch.mjs from ui/PorridgeParams.res - do not edit.
+// Included inside cmaj_CLAPPlugin.h's cmaj::plugin::clap::detail namespace, after PorridgeParamIds.h.
+
+#pragma once
+
+namespace porridge::slots
+{
+    struct Knob
+    {
+        std::string_view name;      // "delay wet": the kind's, with its label
+        bool isList;
+        double min, max;            // a list's lowest and highest value
+        int numTexts;
+        const std::string_view* texts;   // a list's values' names; a float's at 51 knob positions
+    };
+
+    struct Kind { int firstKnob, numKnobs; };
+
+${textLines.join("\n")}
+
+    inline const Knob knobs[] =
+    {
+${knobLines.join("\n")}
+    };
+
+    inline constexpr Kind kinds[] =
+    {
+${kindLines.join("\n")}
+    };
+
+    /// the kind each rack value holds (-1: none)
+    inline constexpr int kindOfValue[] = { ${kindOf.join(", ")} };
+
+    /// each slot's kind parameter and its name in the knobs' names
+    inline constexpr std::string_view kindEndpoints[] = { ${Array.from({ length: PorridgeParams.slotCount }, (_, g) => cs(PorridgeParams.slotKindId(g))).join(", ")} };
+    inline constexpr std::string_view titles[] = { ${Array.from({ length: PorridgeParams.slotCount }, (_, g) => cs(PorridgeParams.slotTitle(g))).join(", ")} };
+
+    struct KnobEndpoint { std::string_view endpoint; int slot, knob; };
+
+    inline constexpr KnobEndpoint knobEndpoints[] =
+    {
+${knobs.join("\n")}
+    };
+
+    /// The slot and knob of a knob's CLAP id, if it is one.
+    inline const KnobEndpoint* knobOf (clap_id id)
+    {
+        static const auto byId = []
+        {
+            std::unordered_map<clap_id, const KnobEndpoint*> map;
+
+            for (const auto& k : knobEndpoints)
+                map.emplace (porridge::params::clapIdFor (k.endpoint), std::addressof (k));
+
+            return map;
+        }();
+
+        const auto found = byId.find (id);
+        return found != byId.end() ? found->second : nullptr;
+    }
+
+    /// The knob a slot's kind (its value) has there, if it has one.
+    inline const Knob* kindKnob (const KnobEndpoint& k, float value)
+    {
+        const auto v = static_cast<int> (value);
+        const auto kind = v >= 0 && v < static_cast<int> (std::size (kindOfValue)) ? kindOfValue[v] : -1;
+
+        if (kind < 0 || k.knob >= kinds[kind].numKnobs)
+            return nullptr;
+
+        return std::addressof (knobs[kinds[kind].firstKnob + k.knob]);
+    }
+
+    /// A knob's info for what its slot holds (its kind parameter's value read by kindValue):
+    /// named after the kind's parameter there, or hidden.
+    template <typename KindValue>
+    void describe (clap_param_info_t& info, KindValue&& kindValue)
+    {
+        if (const auto* k = knobOf (info.id))
+        {
+            const auto* knob = kindKnob (*k, kindValue (kindEndpoints[k->slot]));
+            const auto name = std::string (titles[k->slot]) + " " + (knob ? std::string (knob->name) : "knob " + std::to_string (k->knob + 1));
+            std::snprintf (info.name, sizeof (info.name), "%s", name.c_str());
+
+            if (knob) info.flags &= ~static_cast<clap_param_info_flags> (CLAP_PARAM_IS_HIDDEN);
+            else      info.flags |= CLAP_PARAM_IS_HIDDEN;
+        }
+    }
+
+    /// A knob's value's text for what its slot holds: the kind's (false: not a knob, or one its
+    /// slot's kind doesn't use).
+    template <typename KindValue>
+    bool text (clap_id id, double value, char* out, uint32_t capacity, KindValue&& kindValue)
+    {
+        const auto* k = knobOf (id);
+        const auto* knob = k ? kindKnob (*k, kindValue (kindEndpoints[k->slot])) : nullptr;
+
+        if (! knob || capacity == 0)
+            return false;
+
+        const auto v = std::clamp (value, 0.0, 1.0);
+        const auto i = knob->isList ? static_cast<int> (std::floor (knob->min + v * (knob->max - knob->min) + 0.5) - knob->min)
+                                    : static_cast<int> (std::floor (v * 50.0 + 0.5));
+        const auto t = knob->texts[std::clamp (i, 0, knob->numTexts - 1)];
+        std::snprintf (out, capacity, "%.*s", static_cast<int> (t.size()), t.data());
         return true;
     }
 }
@@ -336,6 +510,9 @@ ${marker} user settings shared by every instance, the host's parameter menu, and
 
 ${marker} the parameters' CLAP ids (dsp/param-ids.txt), generated by tools/clap-patch.mjs
 #include "PorridgeParamIds.h"
+
+${marker} the slots' knobs' names and texts by kind, generated by tools/clap-patch.mjs
+#include "PorridgeSlots.h"
 `,
 );
 
@@ -725,6 +902,80 @@ replace(
             const auto text = choc::json::toString (state, false);
             serialised = Bytes (text.begin(), text.end());
         }
+`,
+);
+
+//==============================================================================
+// The slots' knobs: named and worded after what their slots hold, and rescanned when that changes
+insertAfter(
+  `    std::optional<double> editorZoom;
+`,
+  `
+    ${marker} a slot's kind changed: the host rescans the knobs' names and texts (on the main thread)
+    std::atomic<bool> slotKindsChanged { false };
+
+    float slotKindValue (std::string_view endpoint) const
+    {
+        if (auto p = patch.findParameter (cmaj::EndpointID::create (endpoint)))
+            return p->currentValue;
+
+        return 0.0f;
+    }
+`,
+);
+
+replace(
+  `    *out = automatableParameterInfo[index];
+    return true;
+}`,
+  `    *out = automatableParameterInfo[index];
+
+    ${marker} a slot's knob is named after what the slot holds (PorridgeSlots.h)
+    porridge::slots::describe (*out, [this] (std::string_view e) { return slotKindValue (e); });
+    return true;
+}`,
+);
+
+replace(
+  `inline bool Plugin::Impl::clapParameters_valueToText (clap_id id, double value, char* out, uint32_t capacity)
+{
+`,
+  `inline bool Plugin::Impl::clapParameters_valueToText (clap_id id, double value, char* out, uint32_t capacity)
+{
+    ${marker} a slot's knob's text is its kind's (PorridgeSlots.h)
+    if (porridge::slots::text (id, value, out, capacity, [this] (std::string_view e) { return slotKindValue (e); }))
+        return true;
+
+`,
+);
+
+insertBefore(
+  `    // it isn't possible to distinguish an update from the audio thread vs the editor
+`,
+  `    ${marker} a slot that holds another kind: its knobs' names and texts change
+    for (auto endpoint : porridge::slots::kindEndpoints)
+    {
+        if (auto p = patch.findParameter (cmaj::EndpointID::create (endpoint)))
+        {
+            p->valueChanged = [this] (auto)
+            {
+                if (! slotKindsChanged.exchange (true))
+                    host.request_callback (std::addressof (host));
+            };
+        }
+    }
+
+`,
+);
+
+insertAfter(
+  `    showPendingHostMenu();
+`,
+  `
+    ${marker} the slots' knobs' names and texts, when a slot's kind changed
+    if (slotKindsChanged.exchange (false))
+        if (const auto* hostParameters = getExtension<clap_host_params_t> (host, CLAP_EXT_PARAMS))
+            hostParameters->rescan (std::addressof (host), CLAP_PARAM_RESCAN_INFO | CLAP_PARAM_RESCAN_TEXT);
 `,
 );
 

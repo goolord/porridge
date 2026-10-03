@@ -23,7 +23,9 @@ import { fileURLToPath } from "node:url";
 import { all as fields } from "../ui/oatmeal/Fields.res.mjs";
 import { xyTargets, modEnvTargets, ccTargets } from "../ui/oatmeal/OatmealParams.res.mjs";
 import { paramInfo } from "../ui/ParamInfo.res.mjs";
-import { all as porridgeParams, slotOf as porridgeSlot, fxOrder, rackId, rackSlots, rackKinds, rackEntries, copyId } from "../ui/PorridgeParams.res.mjs";
+import { all as porridgeParams, slotOf as porridgeSlot, fxOrder, rackId, rackSlots, rackKinds, rackEntries, laneId, laneSlots,
+         knobSpecs, workSpecs, slotCount, knobCount, knobId, rackKnobs, laneKnobs, knobsOf, slotKindId, firstInstance,
+         instanceCount, isLaneSlot } from "../ui/PorridgeParams.res.mjs";
 import { makeDefs, choiceValue } from "../ui/ParamDefs.res.mjs";
 import { programSize, tableOffset } from "../ui/oatmeal/OatmealFormat.res.mjs";
 import * as ModMatrix from "../ui/ModMatrix.res.mjs";
@@ -45,8 +47,22 @@ function writeGenerated (path, text)
 
 // The synth mirrors the program struct as float P[NUM_SLOTS], slot = chunk offset / 4.
 // Filter 1 and filter 2 share one int in the chunk; they get their own virtual slots, the two
-// after the struct's. Porridge's own parameters follow from slot 2600.
-const NUM_SLOTS = porridgeSlot (porridgeParams.length);
+// after the struct's. Porridge's own parameters follow from slot 2600, then the slots' knobs
+// (endpoints), the slots' custom shapes' points (stored), the working parameters of Porridge's
+// own kinds (no endpoints: a slot's values are swapped into them to run it), and each slot's
+// knobs' values as its kind's parameters take them (Q, which the modulation matrix moves).
+const M = rackKnobs;
+const knobsFrom = porridgeSlot (porridgeParams.length);
+const knobBase = [];
+{
+    let s = knobsFrom;
+    for (let g = 0; g < slotCount; ++g) { knobBase.push (s); s += knobCount (g); }
+}
+const slotShaperIds = storedGroups.slice (1).flat();
+const shaperFrom = knobsFrom + knobSpecs.length;
+const workFrom = shaperFrom + slotShaperIds.length;
+const qBase = workFrom + workSpecs.length;
+const NUM_SLOTS = qBase + slotCount * M;
 const VIRTUAL = { filter1: programSize / 4, filter2: programSize / 4 + 1 };
 if (VIRTUAL.filter2 >= porridgeSlot (0)) throw new Error ("the virtual slots run into Porridge's own");
 
@@ -83,7 +99,13 @@ const all = [
     ...fields.map (f => ({ ...f, slot: slotOf (f) })),
     ...porridgeParams.map ((p, i) => ({ index: fields.length + i, id: p.id, slot: porridgeSlot (i), porridge: true })),
 ];
-const byId = new Map (all.map (f => [f.id, f]));
+// the slots' knobs (endpoints), their shapes' points (stored) and the working parameters (slots only)
+const knobInfo = s => ({ hostName: s.name, min: 0, max: 1, init: 0, automatable: true });
+const knobs = knobSpecs.map ((s, i) => ({ id: s.id, slot: knobsFrom + i, porridge: true, info: knobInfo (s), isInt: false }));
+const slotShapers = slotShaperIds.map ((id, i) => ({ id, slot: shaperFrom + i, porridge: true, ident: false,
+    info: { hostName: defs.get (id).name, min: defs.get (id).min, max: defs.get (id).max, init: defs.get (id).init, automatable: false }, isInt: false }));
+const work = workSpecs.map ((s, i) => ({ id: s.id, slot: workFrom + i, porridge: true, work: true }));
+const byId = new Map ([...all, ...knobs, ...slotShapers, ...work].map (f => [f.id, f]));
 const slotById = id =>
 {
     const f = byId.get (id);
@@ -91,11 +113,20 @@ const slotById = id =>
     return f.slot;
 };
 
-for (const f of all)
+for (const f of [...all, ...knobs, ...slotShapers, ...work])
 {
     const { index, id, offset, kind, slot } = f;
-    const info = paramInfo (index);
-    const { isInt } = defs.get (id);
+
+    if (f.work)
+    {
+        slots.push (`    let ${id} = ${slot};`);
+        const k = workSpecs.find (s => s.id === id).kind;
+        slotDefaults[slot] = k.init ?? 0;
+        continue;
+    }
+
+    const info = f.info ?? paramInfo (index);
+    const isInt = f.info ? f.isInt : defs.get (id).isInt;
     // (the stored parameters have slots but no endpoints: they come in shaperIn, below)
     const endpoint = ! isStored (id);
     const ann = [`name: ${cmajString (info.hostName)}`];
@@ -127,7 +158,7 @@ for (const f of all)
         slotDefaults[slot] = info.init;
     }
 
-    slots.push (`    let ${id} = ${slot};`);
+    if (f.ident !== false) slots.push (`    let ${id} = ${slot};`);
     if (endpoint)
         cfields.push (f.porridge ? `    { "${id}", -1, FieldType::${isInt ? "i32" : "f32"}, ${isInt} },`
                                  : `    { "${id}", ${offset}, FieldType::${kind}, ${isInt} },`);
@@ -145,7 +176,7 @@ const storedFields = storedGroups.flatMap ((g, k) => g.map ((id, i) => `    { "$
 // number don't matter to hosts.
 const idsPath = join (root, "dsp", "param-ids.txt");
 const clapIds = readIds (idsPath);
-const newIds = assignIds (clapIds, all.filter (f => ! isStored (f.id)).map (f => f.id));
+const newIds = assignIds (clapIds, [...all, ...knobs].filter (f => ! isStored (f.id)).map (f => f.id));
 writeGenerated (idsPath, idsText (clapIds));
 if (newIds.length) console.log (`new CLAP ids (dsp/param-ids.txt): ${newIds.join (", ")}`);
 
@@ -221,51 +252,105 @@ const choices = [
 
 function choiceConstants ({ ns: name, param, doc, values })
 {
-    return ns (name, doc, Object.entries (values).map (([value, label]) => `    let ${value} = ${choiceValue (param, label)};`));
+    // (Porridge's own kinds' parameters are the slots': a rack slot's, or for the lane's own kinds a lane slot's)
+    const id = defs.has (param) ? param : defs.has (param + "@1") ? param + "@1" : param + "@L1";
+    return ns (name, doc, Object.entries (values).map (([value, label]) => `    let ${value} = ${choiceValue (id, label)};`));
 }
 
 const fxOrders = Array.from ({ length: 24 }, (_, k) => fxOrder (k));
 
-// The rack's kinds as tables (porridge::rack), so that the synth runs every copy with one
-// piece of code: each kind's index, the kind a rack value runs (-1 for none: empty, or one of
-// Oatmeal's four firsts), and every kind's first and copies' parameters one after another.
+// The knob laws' table (porridge::mods::table): each row is a law, the internal value at knob
+// positions 0..1 in TABLE - 1 steps. The modulation matrix's parameter targets and the slots'
+// knobs share it; laws that are the same share a row.
+const TABLE = 257;
+const rows = [], rowNames = [];
+const rowOf = new Map();    // row text -> row index
+
+function rowFor (id, d)
+{
+    const row = Array.from ({ length: TABLE }, (_, k) => cf (d.fromNorm (k / (TABLE - 1))));
+    // a pulse width (ParamDefs' isPw) is a 32-bit phase, so the top of its knob (100 %) wraps
+    // to 0, as Oatmeal's does: end the table on its last step instead, or the inverse lookup
+    // lands at the wrong end
+    if (d.kind === "pw") row[TABLE - 1] = row[TABLE - 2];
+    const text = row.join (", ");
+    if (! rowOf.has (text))
+    {
+        rowOf.set (text, rows.length);
+        rows.push (row);
+        rowNames.push ([]);
+    }
+    rowNames[rowOf.get (text)].push (id);
+    return rowOf.get (text);
+}
+
+// The rack's kinds as tables (porridge::rack), so that the synth runs every slot with one piece
+// of code: each kind's index, the kind and instance a rack value runs (-1 for none: empty, one of
+// Oatmeal's four, or retired), and each kind's knobs: the working parameter each one's value is
+// swapped into, and its law (a table row for a float, or rounding between lo and hi for a list).
 function rackKindTables ()
 {
-    const firstOffset = [], copiesOffset = [], allFirst = [], allCopies = [];
+    const kindOf = rackEntries.map ((e, v) => e && v > 4 ? rackKinds.findIndex (k => k.key === e[0]) : -1);
+    const instOf = rackEntries.map ((e, v) => kindOf[v] >= 0 ? e[1] - firstInstance (rackKinds[kindOf[v]]) : -1);
+    const knobs = [], work = [], row = [], lo = [], hi = [];
 
     for (const k of rackKinds)
     {
-        firstOffset.push (allFirst.length);
-        copiesOffset.push (allCopies.length);
-        allFirst.push (...k.params.map (([id]) => slotById (id)));
-        allCopies.push (...k.copies.flatMap (n => k.params.map (([id]) => slotById (copyId (id, n)))));
+        const list = knobsOf (k);
+        if (list.length > M) throw new Error (`${k.key} has more knobs than a slot`);
+        knobs.push (list.length);
+
+        // (a lane-only kind's parameters are in the lane's slots' defs)
+        const key = k.runsIn === "LaneOnly" ? "L1" : "1";
+
+        for (let i = 0; i < M; ++i)
+        {
+            const id = list[i]?.[0];
+            const d = id && defs.get (`${id}@${key}`);
+            if (id && ! d) throw new Error (`no def for ${id}@${key}`);
+            work.push (id ? slotById (id) : 0);
+            row.push (d && ! d.isInt ? rowFor (id, d) : -1);
+            lo.push (cf (d && d.isInt ? d.min : 0));
+            hi.push (cf (d && d.isInt ? d.max : 0));
+        }
     }
 
-    const kindValue = rackKinds.map (k => rackEntries.findIndex (e => e && e[0] === k.key && e[1] === (k.firstInRack ? 1 : k.copies[0])));
-    const kindOf = rackEntries.map ((e, v) =>
-    {
-        const i = e ? rackKinds.findIndex (k => k.key === e[0] && (k.firstInRack || k.copies.includes (e[1]))) : -1;
-        const k = rackKinds[i];
-        if (i >= 0 && v - kindValue[i] !== k.copies.indexOf (e[1]) + (k.firstInRack ? 1 : 0))
-            throw new Error (`rack entry ${v} is out of order`);
-        return i;
-    });
-
     return `
-    /// the kinds above as tables: their indices, the kind each rack value runs (-1: none),
-    /// each kind's first value, whether its first is in the rack (entry 0 runs unswapped),
-    /// where it runs, and where its parameters start in allFirst and its copies' in allCopies
+    /// the kinds above as tables: their indices, the kind and instance (0 ..) each rack value
+    /// runs (-1: none), where each kind runs, and each kind's knobs (knobs: how many; work: the
+    /// slot its value is swapped into; row: its law's row of mods::table, or -1 for a list,
+    /// whose value is lo + the knob's position * (hi - lo), rounded)
 ${rackKinds.map ((k, i) => `    let ${k.key}Kind = ${i};`).join ("\n")}
+    let numKinds = ${rackKinds.length};
     let kindOf = int[${kindOf.length}] (${kindOf.join (", ")});
-    let kindValue = int[${kindValue.length}] (${kindValue.join (", ")});
-    let kindOwn = bool[${rackKinds.length}] (${rackKinds.map (k => k.firstInRack).join (", ")});
+    let instOf = int[${instOf.length}] (${instOf.join (", ")});
     /// whether each kind runs in the rack, and in the voice lane (PorridgeParams' runsIn)
     let inRack = bool[${rackKinds.length}] (${rackKinds.map (k => k.runsIn !== "LaneOnly").join (", ")});
     let inLane = bool[${rackKinds.length}] (${rackKinds.map (k => k.runsIn !== "Rack").join (", ")});
-    let firstOffset = int[${rackKinds.length + 1}] (${[...firstOffset, allFirst.length].join (", ")});
-    let copiesOffset = int[${rackKinds.length}] (${copiesOffset.join (", ")});
-    let allFirst = int[${allFirst.length}] (${allFirst.join (", ")});
-    let allCopies = int[${allCopies.length}] (${allCopies.join (", ")});`;
+    /// whether a kind's working parameters are its alone (Porridge's own kinds), or one of
+    /// Oatmeal's effects' (its chorus, delay, reverb, EQ and distortion)
+    let own = bool[${rackKinds.length}] (${rackKinds.map (k => k.firstInRack).join (", ")});
+    let knobs = int[${knobs.length}] (${knobs.join (", ")});
+    let work = int[${work.length}] (${work.join (", ")});
+    let row = int[${row.length}] (${row.join (", ")});
+    let lo = float[${lo.length}] (${lo.join (", ")});
+    let hi = float[${hi.length}] (${hi.join (", ")});`;
+}
+
+// The slots (the rack's, then the voice lane's): the parameter holding each one's value, where
+// its knobs' endpoints start, how many it has, and Q, its knobs' values as its kind takes them.
+function slotTables ()
+{
+    return `
+    /// the slots, the rack's then the lane's: the parameter that says what each holds, its
+    /// knobs' first endpoint slot and how many it has; q: the first of the values its knobs
+    /// give its kind's parameters (slotKnobs per slot, which the modulation matrix moves)
+    let numSlots = ${slotCount};
+    let slotKnobs = ${M};
+    let kindSlot = int[${slotCount}] (${Array.from ({ length: slotCount }, (_, g) => slotById (slotKindId (g))).join (", ")});
+    let knobBase = int[${slotCount}] (${knobBase.join (", ")});
+    let knobCount = int[${slotCount}] (${Array.from ({ length: slotCount }, (_, g) => knobCount (g)).join (", ")});
+    let q = ${qBase};`;
 }
 
 const header = `//  Generated by tools/gen.mjs - do not edit by hand.\n\n`;
@@ -335,13 +420,15 @@ namespace porridge::slot
 ${slots.join ("\n")}
 }
 
-/// The effects rack (ui/PorridgeParams.res): its slots, and for each kind of effect how many
-/// entries it has. Oatmeal's chorus, delay, reverb and EQ are values 1..4, so their entries here
-/// are the copies; Porridge's own effects' entries are the first (run unswapped), then the copies.
+/// The effects rack and the voice lane (ui/PorridgeParams.res): their slots, and for each kind of
+/// effect how many instances the rack can run at once. Oatmeal's chorus, delay, reverb and EQ
+/// are values 1..4 (fixed effects with parameters of their own); every other value is a kind and
+/// an instance, run with its slot's knobs.
 namespace porridge::rack
 {
     let slots = int[${rackSlots}] (${Array.from ({ length: rackSlots }, (_, k) => slotById (rackId (k + 1))).join (", ")});
-${rackKinds.map (k => `    let ${k.key}Count = ${k.copies.length + (k.firstInRack ? 1 : 0)};`).join ("\n")}
+${rackKinds.map (k => `    let ${k.key}Count = ${instanceCount (k)};`).join ("\n")}
+${slotTables()}
 
     /// how many values a rack slot can hold
     let numEntries = ${rackEntries.length};
@@ -390,12 +477,10 @@ writeGenerated (join (root, "tools", "test", "PorridgeTest.cmajorpatch"), JSON.s
 //==============================================================================
 // modulation tables
 
-const TABLE = 257;
-
-// (a retired copy's targets move nothing, like none's)
-const kinds = { Knob: 1, Pitch: 2, Volume: 3, Pan: 4, Retired: 0 };
-const targetKind = [], targetSlot = [], targetRow = [], targetScale = [], rows = [], rowNames = [];
-const rowOf = new Map();    // row text -> row index
+// (a retired copy's targets move nothing, like none's; a slot's knob moves what its kind has
+// there, by the kind's law: the synth works its row out, porridge::rack::row)
+const kinds = { Knob: 1, Pitch: 2, Volume: 3, Pan: 4, Retired: 0, Slot: 5 };
+const targetKind = [], targetSlot = [], targetRow = [], targetScale = [], targetKnob = [];
 
 ModMatrix.targets.forEach ((t, i) =>
 {
@@ -410,26 +495,23 @@ ModMatrix.targets.forEach ((t, i) =>
         const f = byId.get (law._0);
         if (! d || ! f) throw new Error (`unknown modulation target ${law._0}`);
         targetSlot.push (f.slot);
-        const row = Array.from ({ length: TABLE }, (_, k) => cf (d.fromNorm (k / (TABLE - 1))));
-        // a pulse width (ParamDefs' isPw) is a 32-bit phase, so the top of its knob (100 %) wraps
-        // to 0, as Oatmeal's does: end the table on its last step instead, or the inverse lookup
-        // lands at the wrong end
-        if (d.kind === "pw") row[TABLE - 1] = row[TABLE - 2];
-        // targets with the same law (an effect and its copies, say) share a row
-        const text = row.join (", ");
-        if (! rowOf.has (text))
-        {
-            rowOf.set (text, rows.length);
-            rows.push (row);
-            rowNames.push ([]);
-        }
-        targetRow.push (rowOf.get (text));
-        rowNames[rowOf.get (text)].push (law._0);
+        // (targets with the same law share a row)
+        targetRow.push (rowFor (law._0, d));
+        targetKnob.push (-1);
+    }
+    else if (tag === "Slot")
+    {
+        const [g, k] = [law._0, law._1];
+        if (k > knobCount (g)) throw new Error (`slot ${g} has no knob ${k}`);
+        targetSlot.push (qBase + g * M + k - 1);
+        targetRow.push (-1);
+        targetKnob.push (g * M + k - 1);
     }
     else
     {
         targetSlot.push (-1);
         targetRow.push (-1);
+        targetKnob.push (-1);
     }
 });
 
@@ -452,6 +534,7 @@ namespace porridge::mods
     let pitch = 2;
     let volume = 3;
     let pan = 4;
+    let slotKnob = 5;
 
     /// each connection's parameters' slots (the later slots' come after the first ones' apart)
 ${[["Source", "sourceId"], ["Target", "targetId"], ["Amount", "amountId"], ["Via", "viaId"], ["Hold", "holdId"], ["Slew", "slewId"], ["Curve", "curveId"], ["Steps", "stepsId"]].map (([name, fn]) =>
@@ -464,6 +547,8 @@ ${[["Source", "sourceId"], ["Target", "targetId"], ["Amount", "amountId"], ["Via
     let targetSlot  = int[${targetSlot.length}] (${targetSlot.join (", ")});
     let targetRow   = int[${targetRow.length}] (${targetRow.join (", ")});
     let targetScale = float[${targetScale.length}] (${targetScale.join (", ")});
+    /// a slot knob target's slot and knob (slot * rack::slotKnobs + knob), -1 for the others
+    let targetKnob  = int[${targetKnob.length}] (${targetKnob.join (", ")});
 
     let table = float[${rows.length * TABLE}] (
 ${rows.map ((r, i) => `        ${r.join (", ")}${i + 1 < rows.length ? "," : ""}  // ${names (rowNames[i])}`).join ("\n")}
@@ -483,4 +568,4 @@ ${ModMatrix.targets.map ((t, i) => `    let ${ident (t.key)} = ${i};`).join ("\n
 }
 `);
 
-console.log (`generated ${endpoints.length} parameter endpoints (${hostListed} listed by hosts) and ${all.length - endpoints.length} stored parameters, ${ModMatrix.targets.length} modulation targets`);
+console.log (`generated ${endpoints.length} parameter endpoints (${hostListed} listed by hosts) (${knobs.length} of them the slots' knobs) and ${storedGroups.flat ().length} stored parameters, ${ModMatrix.targets.length} modulation targets, ${NUM_SLOTS} slots`);

@@ -363,13 +363,41 @@ let makeDefs = (~context=() => None) => {
     | Some(d) => d
     | None => JsError.panic("no parameter " ++ id ++ " to copy")
     }
-  oatmeal->Array.concat(
-    PorridgeParams.all->Array.mapWithIndex((spec, i) => {
-      let d = porridgeDef(OatmealParams.paramCount + i, spec, ~like)->withAbout(spec)
-      byId->Map.set(d.id, d)
-      d
-    }),
+  let porridge = PorridgeParams.all->Array.mapWithIndex((spec, i) => {
+    let d = porridgeDef(OatmealParams.paramCount + i, spec, ~like)->withAbout(spec)
+    byId->Map.set(d.id, d)
+    d
+  })
+  // Porridge's own kinds' parameters, which only the slots have (PorridgeParams.workSpecs)
+  let work = Map.fromArray(
+    PorridgeParams.workSpecs->Array.map(spec => (spec.id, porridgeDef(-1, spec, ~like)->withAbout(spec))),
   )
+  let base = id =>
+    switch work->Map.get(id) {
+    | Some(d) => d
+    | None => like(id)
+    }
+  // every slot's parameters, for every kind it can hold: the kind's own (its first's) def, under
+  // the slot's id and name
+  let next = ref(OatmealParams.paramCount + Array.length(porridge))
+  let slots = PorridgeParams.slotKeys->Array.flatMapWithIndex((key, g) =>
+    PorridgeParams.slotKinds(g)->Array.flatMap(k => {
+      let kindName = k.menuName->Option.getOr(String.toLowerCase(k.name))
+      k.params->Array.map(((first, label)) => {
+        let d = base(first)
+        let name = `${PorridgeParams.slotTitle(g)} ${kindName} ${label}`
+        next := next.contents + 1
+        {
+          ...d,
+          id: PorridgeParams.slotParamId(first, key),
+          index: next.contents - 1,
+          name,
+          longText: x => `${name}: ${d.valueText(x)}`,
+        }
+      })
+    })
+  )
+  Array.concat(oatmeal, Array.concat(porridge, slots))
 }
 
 // Every definition, made once without a context program (for names, ranges and laws).
@@ -388,8 +416,12 @@ let byId = Lazy.make(() => Lazy.get(all)->Array.map(d => (d.id, d))->Map.fromArr
 
 // A list parameter's value by its name, which it must have: choiceValue("Sat_Type", "soft clip")
 // is 2. The UI, the tools and the DSP's constants (tools/gen.mjs) all name values this way.
+// (Porridge's own kinds' lists are the slots' parameters' now: "Rs_Model" is any slot's)
 let choiceValue = (id, label) =>
-  switch Lazy.get(byId)->Map.get(id)->Option.flatMap(d => d.names)->Option.map(Array.indexOf(_, label)) {
+  switch [id, id ++ "@1", id ++ "@L1"]
+  ->Array.findMap(id => Lazy.get(byId)->Map.get(id))
+  ->Option.flatMap(d => d.names)
+  ->Option.map(Array.indexOf(_, label)) {
   | Some(i) if i >= 0 => Int.toFloat(i)
   | _ => JsError.panic(`${id} has no choice "${label}"`)
   }

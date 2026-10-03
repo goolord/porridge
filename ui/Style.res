@@ -153,6 +153,10 @@ let css = `
 .fxtab.on .led { border-color: var(--paper); }
 .fxtab.on .led.lit { background: var(--paper); }
 .fxtab .fxic { display: none; }
+/* an effect the rack's pool has no room for: it runs dry */
+.fxtab.oom { box-shadow: inset 0 0 0 1.5px var(--mod); }
+.fxtab.oom .fxname::after { content: " · out of memory"; font-weight: 400; color: var(--mod); }
+.fxtab.oom.on .fxname::after { color: var(--paper); }
 .fxtab .x { font-weight: 400; font-size: 14px; margin: 0 -4px 0 1px; opacity: 0; }
 .fxtab:hover .x { opacity: 0.6; }
 .fxtab .x:hover { opacity: 1; }

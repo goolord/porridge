@@ -200,13 +200,15 @@ let choose = (ctx: Ctx.t, e: FxRack.effect, i) =>
       switch FxRack.free(others, ~lane=VoiceLane.lane(model), m.kind) {
       | Some(to) =>
         let carried = wasCabinet ? {mix: None, predelay: None, decay: None} : carriedFrom(get, e)
-        VoiceLane.setAll(model, FxRack.values(rack->Array.map(x => x == e ? to : x)))
+        let next = rack->Array.map(x => x == e ? to : x)
+        VoiceLane.setAll(model, FxRack.values(get, next))
+        let to = FxRack.placed(next)->Array.getUnsafe(rack->Array.findIndex(x => x == e))
         VoiceLane.switchOn(model, to)
         setModel(to)
         carriedTo(to, carried)->Array.forEach(((id, x)) => set(id, x))
         model->ParamModel.nameStep(`${m.label} ${FxRack.kindName(m.kind)}`)
         ctx.openEffect(to)
-      | None => ctx.toast(`Every ${FxRack.kindName(m.kind)} the rack has is in use`)
+      | None => ctx.toast(`The rack has a ${FxRack.kindName(m.kind)} already, and Porridge runs one at a time`)
       }
     }
   })

@@ -83,7 +83,7 @@ let withoutIdleEffects = (values: Bank.values) => {
     (!FxRack.isOn(e, get) || e.kind == #eq && FxRack.eqBandTypes(e)->Array.every(id => get(id) == 0.))
   let rack = FxRack.read(get)
   if rack->Array.some(idle) {
-    FxRack.values(rack->Array.filter(e => !idle(e)))->Array.forEach(((id, x)) => values->Map.set(id, x))
+    FxRack.values(get, rack->Array.filter(e => !idle(e)))->Array.forEach(((id, x)) => values->Map.set(id, x))
   }
   values
 }
@@ -336,11 +336,38 @@ let decodeTable = (s, length) => {
 let str = s => JSON.String(s)
 let num = x => JSON.Number(x)
 
+// A target's key in a file: a slot's knob's by what it moves ("Fl_Rate@3"), the others' own.
+let targetKey = (get, t, target: ModMatrix.target) =>
+  switch target.law {
+  | Slot(_, _) => SlotParams.targetParam(get, t)->Option.getOr("none")
+  | _ => target.key
+  }
+
+// A file's target key as a target, with the program's values (a slot's parameter's is its
+// slot's knob while the slot holds its kind).
+let targetIndexIn = (values: Bank.values, key) =>
+  switch PorridgeParams.parseSlotParam(key) {
+  | Some((first, g)) =>
+    let get = id => values->Map.get(id)->Option.getOr(0.)
+    SlotParams.kindAt(get, g)->Option.mapOr(-1, k =>
+      k.params->Array.some(((p, _)) => p == first) ? SlotParams.targetOfParam(key) : -1
+    )
+  | None => ModMatrix.targetIndex(key)
+  }
+
 // ~sparse leaves out the parameters that read back as their default (a missing parameter has
 // its default value), which shrinks the bank in the stored state to a fraction of its size
 let toJson = (p, ~header=true, ~sparse=false) => {
+  let get = id => p.values->Map.get(id)->Option.getOr(0.)
+  // a slot's parameters: those of the kind it holds
+  let inSlot = id =>
+    switch PorridgeParams.parseSlotParam(id) {
+    | Some((first, g)) =>
+      SlotParams.kindAt(get, g)->Option.mapOr(false, k => k.params->Array.some(((p, _)) => p == first))
+    | None => true
+    }
   let params = Lazy.get(defs)->Array.filterMap(d =>
-    ModMatrix.isSlotParam(d.id)
+    ModMatrix.isSlotParam(d.id) || !inSlot(d.id)
       ? None
       : p.values
         ->Map.get(d.id)
@@ -367,7 +394,7 @@ let toJson = (p, ~header=true, ~sparse=false) => {
         JSON.Object(
           Dict.fromArray([
             ("source", str(source.key)),
-            ("target", str(target.key)),
+            ("target", str(targetKey(get, slot.target, target))),
             ("amount", num(Math.fround(slot.amount)->shortFloat)),
             ...via,
             ...options,
@@ -415,79 +442,64 @@ let getNumber = (d, key) =>
   | _ => 0.
   }
 
-// A program from before the rack's fourth copies were retired (PorridgeParams) may hold one in a
-// rack or voice slot. It moves onto a free copy of its kind, with its parameters and the
-// connections to them: a copy that no slot holds and no connection moves, so the program sounds
-// as it did. With none free, it's left out with its connections, and the warning says so.
-// Connections to retired copies that no slot held moved nothing, and go. Returns the program's
-// params and modulations as they load, and the warnings.
+// A program from before the slots (October 2026) has its effects' parameters as copies' (D2_Wet,
+// Fl3_Rate, and Porridge's own kinds' firsts, Fl_Rate): each effect in a rack or voice slot
+// takes its parameters (and its custom shape's points, and the connections to them) into that
+// slot ("D_Wet@3"), and keeps its rack value where that is an instance still (the old fourth
+// copies are again). Copies in no slot sounded nothing: they go, with their connections.
 //
 // A kind retired as a whole (the key shifter, which became the frequency shifter's ratio of the
-// note: PorridgeParams.mergedInto) loads the same way, onto a free copy of the kind it became,
-// its settings read as that kind's (PorridgeParams.mergedParams: each parameter, the one it
-// becomes and the factor on its knob, which scales the connections' amounts too); the new
-// kind's other parameters keep their defaults.
-let retireCopies = (name, params: dict<JSON.t>, modulations: array<JSON.t>) => {
+// note: PorridgeParams.mergedInto) loads as the kind it became, its settings read as that kind's
+// (PorridgeParams.mergedParams: each parameter, the one it becomes and the factor on its knob,
+// which scales the connections' amounts too); the new kind's other parameters keep their
+// defaults.
+//
+// The convolver has one instance now: a program with two keeps the first in the rack (with its
+// impulse file, which moves to the first file's place) and leaves the second out, and the warning
+// says so. Returns the program's params and modulations as they load, the warnings, and which of
+// the old impulse files (0, 1) the convolver keeps, if it moved.
+type migrated = {
+  params: dict<JSON.t>,
+  modulations: array<JSON.t>,
+  warnings: array<string>,
+  convolverFile: option<int>,
+}
+
+let migrateSlots = (name, params: dict<JSON.t>, modulations: array<JSON.t>) => {
   let params = params->Dict.copy
   let modulations = ref(modulations)
   let warnings = []
+  let convolverFile = ref(None)
   let number = id =>
     switch params->Dict.get(id) {
     | Some(Number(x)) => Some(x)
     | _ => None
     }
   let setNumber = (id, x) => params->Dict.set(id, JSON.Number(x))
-  let rackIds = Array.fromInitializer(~length=PorridgeParams.rackSlots, k => PorridgeParams.rackId(k + 1))
-  let laneIds = Array.fromInitializer(~length=PorridgeParams.laneSlots, k => PorridgeParams.laneId(k + 1))
-  let slotIds = Array.concat(rackIds, laneIds)
-  let holding = v => slotIds->Array.filter(id => number(id) == Some(Int.toFloat(v)))
-  let targetOf = m =>
-    switch m {
-    | JSON.Object(m) => getString(m, "target")
-    | _ => ""
-    }
   let idOf = (first, n) => n == 1 ? first : PorridgeParams.copyId(first, n)
+  let laneIds = Array.fromInitializer(~length=PorridgeParams.laneSlots, k => PorridgeParams.laneId(k + 1))
+  let kindByKey = key => PorridgeParams.allKinds->Array.find(k => k.key == key)
+  let shaper = PorridgeParams.shaperParams->Array.map(Pair.first)
 
-  // its parameters, and the connections to them, go to copy `to`'s; the slots that held it
-  // hold `value`
-  // (each connection to one of from's parameters scaled by its factor)
-  let move = (v, ~from, ~to, ~value, ~factors=?) => {
-    from->Array.forEachWithIndex((id, i) => {
-      let id2 = to->Array.getUnsafe(i)
-      switch params->Dict.get(id) {
-      | Some(x) => params->Dict.set(id2, x)
-      | None => params->Dict.delete(id2)
-      }
-      params->Dict.delete(id)
-    })
-    holding(v)->Array.forEach(id => setNumber(id, Int.toFloat(value)))
-    modulations :=
-      modulations.contents->Array.map(m =>
-        switch m {
-        | Object(o) if from->Array.includes(getString(o, "target")) =>
-          let o = o->Dict.copy
-          let i = from->Array.indexOf(getString(o, "target"))
-          o->Dict.set("target", str(to->Array.getUnsafe(i)))
-          factors->Option.forEach(f => o->Dict.set("amount", num(getNumber(o, "amount") * f->Array.getUnsafe(i))))
-          JSON.Object(o)
-        | m => m
-        }
-      )
-  }
-
-  // a retired kind's copy `old` as copy n of the kind it became: its settings read as that
-  // kind's (with its own defaults where the program has none), the rest of copy n at theirs
-  let merge = (v, ~retired: PorridgeParams.rackKind, ~old, ~kind: PorridgeParams.rackKind, ~n, ~value) => {
-    let pairs = PorridgeParams.mergedParams(retired.key)
-    let from = pairs->Array.map(((p, _, _)) => idOf(p, old))
-    // (the key shifter's offset stopped at ±1 kHz, the end of its knob, where the shift goes on
-    // to ±5 kHz: connections that took it there now take it further)
-    if retired.key == "shifter" {
-      let id = idOf("Sh_Hz", old)
-      let base = number(id)->Option.getOr(PorridgeParams.retiredInit("Sh_Hz"))
+  // Moves copy n of kind `old` (as kind `kind`, with the merge's factors) into slot key: its
+  // parameters, and the connections to them.
+  let moveInto = (~old: PorridgeParams.rackKind, ~kind: PorridgeParams.rackKind, ~n, ~key) => {
+    let pairs = switch old.mergedInto {
+    | Some(_) => PorridgeParams.mergedParams(old.key)->Array.map(((p, q, f)) => (idOf(p, n), q, f))
+    | None =>
+      [...old.params->Array.map(Pair.first), ...(old.key == "distortion" ? shaper : [])]
+      ->Array.reduce([], (acc, p) => acc->Array.includes(p) ? acc : [...acc, p])
+      ->Array.map(p => (idOf(p, n), p, 1.))
+    }
+    // (a merged kind's settings: its own defaults where the program has none)
+    if old.mergedInto != None {
+      // (the key shifter's offset stopped at ±1 kHz, the end of its knob, where the shift goes on
+      // to ±5 kHz: connections that took it there now take it further)
+      let hz = idOf("Sh_Hz", n)
+      let base = number(hz)->Option.getOr(PorridgeParams.retiredInit("Sh_Hz"))
       let reach = modulations.contents->Array.reduce(0., (sum, m) =>
         switch m {
-        | Object(o) if getString(o, "target") == id => sum + 2. * Math.abs(getNumber(o, "amount"))
+        | Object(o) if getString(o, "target") == hz => sum + 2. * Math.abs(getNumber(o, "amount"))
         | _ => sum
         }
       )
@@ -496,100 +508,139 @@ let retireCopies = (name, params: dict<JSON.t>, modulations: array<JSON.t>) => {
           `"${name}" has a key shifter whose offset its connections take past ±1 kHz, where it used to stop: as the frequency shifter's shift it goes on, up to ±1.7 kHz`,
         )
       }
+      PorridgeParams.mergedParams(old.key)->Array.forEach(((p, _, _)) =>
+        if number(idOf(p, n)) == None {
+          setNumber(idOf(p, n), PorridgeParams.retiredInit(p))
+        }
+      )
     }
-    // its settings on the new kind's knobs
-    pairs->Array.forEachWithIndex(((p, _, factor), i) => {
-      let id = from->Array.getUnsafe(i)
-      setNumber(id, number(id)->Option.getOr(PorridgeParams.retiredInit(p)) * factor)
+    pairs->Array.forEach(((from, first, factor)) => {
+      let to = PorridgeParams.slotParamId(first, key)
+      switch number(from) {
+      | Some(x) => setNumber(to, x * factor)
+      | None => params->Dict.delete(to)
+      }
+      params->Dict.delete(from)
+      modulations :=
+        modulations.contents->Array.map(m =>
+          switch m {
+          | Object(o) if getString(o, "target") == from =>
+            let o = o->Dict.copy
+            o->Dict.set("target", str(to))
+            o->Dict.set("amount", num(getNumber(o, "amount") * factor))
+            JSON.Object(o)
+          | m => m
+          }
+        )
     })
-    kind.params->Array.forEach(((first, _)) => params->Dict.delete(idOf(first, n)))
-    move(
-      v,
-      ~from,
-      ~to=pairs->Array.map(((_, q, _)) => idOf(q, n)),
-      ~value,
-      ~factors=pairs->Array.map(((_, _, factor)) => factor),
-    )
-    // (its other parameters go with it)
-    retired.params->Array.forEach(((first, _)) => params->Dict.delete(idOf(first, old)))
+    ignore(kind)
   }
 
-  // out of the rack, or the lane, which is kept without gaps and whose places count the effects
-  // before them
-  let leaveOut = v =>
-    holding(v)->Array.toReversed->Array.forEach(id =>
-      switch laneIds->Array.indexOf(id) {
-      | -1 => setNumber(id, 0.)
-      | i =>
-        laneIds->Array.forEachWithIndex((id, k) =>
-          if k >= i {
-            setNumber(id, laneIds[k + 1]->Option.flatMap(number)->Option.getOr(0.))
-          }
-        )
-        ["VL_FilterAt", "VL_AmpAt"]->Array.forEach(place =>
-          number(place)->Option.forEach(at =>
-            if at > Int.toFloat(i) {
-              setNumber(place, at - 1.)
-            }
-          )
-        )
+  // out of the lane, which is kept without gaps and whose places count the effects before them
+  let leaveLane = i => {
+    laneIds->Array.forEachWithIndex((id, k) =>
+      if k >= i {
+        setNumber(id, laneIds[k + 1]->Option.flatMap(number)->Option.getOr(0.))
       }
     )
+    ["VL_FilterAt", "VL_AmpAt"]->Array.forEach(place =>
+      number(place)->Option.forEach(at =>
+        if at > Int.toFloat(i) {
+          setNumber(place, at - 1.)
+        }
+      )
+    )
+  }
 
-  slotIds
-  ->Array.filterMap(number)
-  ->Array.reduce([], (acc, v) => acc->Array.includes(v) ? acc : [...acc, v])
-  ->Array.forEach(v => {
-    let v = Float.toInt(v)
-    PorridgeParams.retiredEntry(v)->Option.forEach(((key, old)) => {
-      let retired = PorridgeParams.allKinds->Array.find(k => k.key == key)->Option.getOrThrow
-      // (the kind it became, for a kind retired as a whole)
-      let kind = switch retired.mergedInto {
-      | Some(into) => PorridgeParams.rackKinds->Array.find(k => k.key == into)->Option.getOrThrow
-      | None => retired
+  // the old copy a slot's value names (a value from before the slots), as (its kind, its number)
+  let oldEntry = v =>
+    switch PorridgeParams.rackHistory[v]->Option.flatMap(e => e) {
+    | Some((key, n)) => kindByKey(key)->Option.map(k => (k, n))
+    | None => None
+    }
+  let isOld = ((k: PorridgeParams.rackKind, n)) =>
+    // (a copy that had parameters of its own: Porridge's kinds' every one, Oatmeal's from 2)
+    PorridgeParams.historyOf(k)->Array.includes(n) && (k.firstInRack || n > 1)
+  // (a program written since then has its slots' parameters by name, and nothing to move)
+  let legacy = !(params->Dict.keysToArray->Array.some(id => String.includes(id, "@")))
+
+  // the rack
+  let convolvers = ref(0)
+  for slot in 0 to PorridgeParams.rackSlots - 1 {
+    let id = PorridgeParams.rackId(slot + 1)
+    let v = number(id)->Option.mapOr(0, Float.toInt)
+    switch oldEntry(v) {
+    | Some((k, n)) if v > 4 =>
+      let key = PorridgeParams.slotKey(slot)
+      if legacy && isOld((k, n)) {
+        moveInto(~old=k, ~kind=k, ~n, ~key)
       }
-      let key = kind.key
-      let ids = n => kind.params->Array.map(((first, _)) => idOf(first, n))
-      // a copy of its kind (not Oatmeal's chorus, delay, reverb or EQ, which FX_Order places)
-      // that no slot holds and no connection moves
-      let free =
-        PorridgeParams.rackEntries
-        ->Array.mapWithIndex((e, value) => (value, e))
-        ->Array.find(((value, e)) =>
-          switch e {
-          | Some((k, n)) if k == key && (n > 1 || kind.firstInRack) =>
-            holding(value) == [] &&
-              !(modulations.contents->Array.some(m => ids(n)->Array.includes(targetOf(m))))
-          | _ => false
-          }
-        )
-      switch (free, retired.mergedInto) {
-      | (Some((value, Some((_, n)))), None) => move(v, ~from=ids(old), ~to=ids(n), ~value)
-      | (Some((value, Some((_, n)))), Some(_)) => merge(v, ~retired, ~old, ~kind, ~n, ~value)
-      | (_, None) =>
-        let what = `${kind.name} ${Int.toString(old)}`
-        warnings->Array.push(
-          `"${name}" has ${what}, which Porridge no longer has, and no other ${kind.name->String.toLowerCase} free to take it: it's left out`,
-        )
-        leaveOut(v)
-      | (_, Some(_)) =>
-        let what = old == 1 ? retired.name : `${retired.name} ${Int.toString(old)}`
-        let into = kind.menuName->Option.getOr(kind.name)
-        warnings->Array.push(
-          `"${name}" has ${what}, which Porridge now has as its ${into}, and no ${into} free to take it: it's left out`,
-        )
-        leaveOut(v)
+      if k.key == "convolve" {
+        convolvers := convolvers.contents + 1
+        if convolvers.contents > 1 {
+          warnings->Array.push(
+            `"${name}" has two convolvers, and Porridge runs one: the second (FX slot ${Int.toString(slot + 1)}) is left out`,
+          )
+          setNumber(id, 0.)
+        } else if n != 1 {
+          // (the only convolver was the second: it's the convolver now, with its file)
+          setNumber(id, Int.toFloat(PorridgeParams.entryValue("convolve", 1)))
+          convolverFile := Some(n - 1)
+        }
       }
-    })
+    | _ => ()
+    }
+  }
+
+  // the lane: values name kinds (any of their entries); a retired kind loads as what it became
+  laneIds->Array.forEachWithIndex((id, l) => {
+    let v = number(id)->Option.mapOr(0, Float.toInt)
+    switch oldEntry(v) {
+    | Some((k, n)) =>
+      let key = PorridgeParams.slotKey(PorridgeParams.rackSlots + l)
+      let kind = switch k.mergedInto {
+      | Some(into) => kindByKey(into)->Option.getOr(k)
+      | None => k
+      }
+      if legacy && isOld((k, n)) {
+        moveInto(~old=k, ~kind, ~n, ~key)
+      }
+      setNumber(id, Int.toFloat(PorridgeParams.laneValue(kind)))
+    | None => ()
+    }
   })
-  let kept = modulations.contents->Array.filter(m => !PorridgeParams.isRetiredId(targetOf(m)))
-  (params, kept, warnings)
+  // (an empty lane slot before others: none in a program the view wrote, but keep it gapless)
+  let rec closeGaps = i =>
+    if i < PorridgeParams.laneSlots - 1 {
+      if number(laneIds->Array.getUnsafe(i))->Option.getOr(0.) == 0. && laneIds->Array.slice(~start=i + 1, ~end=PorridgeParams.laneSlots)->Array.some(id => number(id)->Option.getOr(0.) != 0.) {
+        leaveLane(i)
+        closeGaps(i)
+      } else {
+        closeGaps(i + 1)
+      }
+    }
+  closeGaps(0)
+
+  // what's left of the old copies sounded nothing
+  params->Dict.keysToArray->Array.forEach(id =>
+    if PorridgeParams.isLegacyId(id) {
+      params->Dict.delete(id)
+    }
+  )
+  let kept = modulations.contents->Array.filter(m => {
+    let t = switch m {
+    | JSON.Object(m) => getString(m, "target")
+    | _ => ""
+    }
+    !PorridgeParams.isLegacyId(t)
+  })
+  {params, modulations: kept, warnings, convolverFile: convolverFile.contents}
 }
 
 // A preset, and what loading it couldn't keep.
 let fromJsonChecked = (d: dict<JSON.t>) => {
   let values = defaultValues()
-  let (params, modulations, warnings) = retireCopies(
+  let {params, modulations, warnings, convolverFile} = migrateSlots(
     getString(d, "name"),
     switch d->Dict.get("params") {
     | Some(Object(params)) => params
@@ -632,7 +683,7 @@ let fromJsonChecked = (d: dict<JSON.t>) => {
     switch item {
     | Object(m) if slot.contents <= ModMatrix.slots =>
       let source = ModMatrix.sourceIndex(getString(m, "source"))
-      let target = ModMatrix.targetIndex(getString(m, "target"))
+      let target = targetIndexIn(values, getString(m, "target"))
       let via = ModMatrix.sourceIndex(getString(m, "via"))
       let number = getNumber(m, ...)
       let amount = number("amount")
@@ -690,7 +741,14 @@ let fromJsonChecked = (d: dict<JSON.t>) => {
     ->Dict.get("tuning")
     ->Option.flatMap(Scala.fromJson)
     ->Option.filter(source => Scala.table(source)->Result.isOk),
-    impulses: d->Dict.get("impulses")->Option.mapOr(Impulse.none(), Impulse.listFromJson),
+    impulses: {
+      // (one convolver: a second one's file goes, and the only one's, if it was the second's,
+      // takes the first's place; the noise's sample keeps its own)
+      let list = d->Dict.get("impulses")->Option.mapOr(Impulse.none(), Impulse.listFromJson)
+      convolverFile->Option.forEach(i => list->Array.setUnsafe(0, list[i]->Option.flatMap(x => x)))
+      list->Array.setUnsafe(1, None)
+      list
+    },
   }
   (preset, warnings)
 }

@@ -60,10 +60,28 @@ let installFactoryBank = async (pc, sendShapes) =>
   | None => Console.log("Porridge: the factory bank is missing (" ++ factoryBankPath ++ ")")
   }
 
+// A host's session from before the rack's slots loads into them (SessionSlots): checked whenever
+// the stored parameters arrive (a session's state brings them), once they've settled.
+let slotChecker = pc => {
+  let pending = ref(false)
+  () =>
+    if !pending.contents {
+      pending := true
+      setTimeout(() =>
+        pc->requestFullStoredState(state => {
+          pending := false
+          if SessionSlots.isLegacy(state) {
+            SessionSlots.migrate(pc, state)->Array.forEach(w => Console.log("Porridge: " ++ w))
+          }
+        }), 50)->ignore
+    }
+}
+
 let default = pc => {
   let checkedBank = ref(false)
   let sendShapes = shapeSender(pc)
   let sendStored = storedSender(pc)
+  let checkSlots = slotChecker(pc)
   let sendImpulses = Impulse.sender(pc)
 
   pc->addStoredStateValueListener(({key, value}) => {
@@ -72,7 +90,9 @@ let default = pc => {
     | (Some(Tuning), String(tuning)) => Bank.sendTuning(pc, Bank.decodeTuning(tuning))
     | (Some(Impulses), String(s)) => sendImpulses(s)
     // (none: a state without custom shapes, whose points are at their defaults)
-    | (Some(Params), value) => sendStored(value)
+    | (Some(Params), value) =>
+      sendStored(value)
+      checkSlots()
     // The patch answers the request below even when there is no bank, which is a new
     // instance. (A host restores a session before the worker starts, or later, replacing
     // the factory bank.)

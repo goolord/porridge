@@ -200,6 +200,25 @@ namespace porridge
         }
     }
 
+    /// The pool blocks its lines need with these lengths (both sides' longest, as process takes
+    /// them): what it claims (a length change clears its side anyway).
+    int needs (const Delay& this, const float[numSlots]& P, float64 sr, float64 spb)
+    {
+        let unit = delayUnitSamples (int (P[slot::D_Unit]), sr, spb);
+        var lL = float64 (P[slot::D_LengthL]);
+        var lR = float64 (P[slot::D_LengthR]);
+
+        if (P[slot::D_Quantize] != 0)
+        {
+            lL = floor (lL + 0.5);
+            lR = floor (lR + 0.5);
+        }
+
+        let nL = clamp (int (lL * unit + 0.5), 2, this.capacity);
+        let nR = clamp (int (lR * unit + 0.5), 2, this.capacity);
+        return stereoBlocks (max (nL, nR));
+    }
+
     void clearL (Delay& this, FxPool& pool, int n)  { for (int i = 0; i < n; ++i) setPoolSide (pool, this.fxAt, i, 0, 0.0f); }
     void clearR (Delay& this, FxPool& pool, int n)  { for (int i = 0; i < n; ++i) setPoolSide (pool, this.fxAt, i, 1, 0.0f); }
 
@@ -434,9 +453,12 @@ namespace porridge
     }
 
     //==============================================================================
+    /// The chorus's line: 32768 frames (0.74 s at 44.1 kHz), a stereo line in the pool.
+    let chorusBlocks = 64;
+
     struct Chorus
     {
-        float[32769] bufL, bufR;
+        int fxAt;                   // its line's first block in the pool (-1: none, it runs dry)
         int wpos;
         float lastSpeed;
         bool idle;
@@ -447,15 +469,22 @@ namespace porridge
         float x1L, y1L, x1R, y1R;
     }
 
-    void clearState (Chorus& this, Rand& rng, const float[numSlots]& P, float64 sr)
+    /// Clears its line (given it, or given it back).
+    void clearLine (Chorus& this, FxPool& pool)
+    {
+        if (this.fxAt >= 0)
+            for (int i = 0; i < 32768; ++i)
+                setPoolFrame (pool, this.fxAt, i, float<2>());
+    }
+
+    void clearState (Chorus& this, FxPool& pool, Rand& rng, const float[numSlots]& P, float64 sr)
     {
         this.x1L = 0; this.y1L = 0; this.x1R = 0; this.y1R = 0;
         this.idle = true;
         this.tailCount = 0;
         this.wpos = 0;
         this.phase = 0;
-
-        for (wrap<32769> i) { this.bufL[i] = 0; this.bufR[i] = 0; }
+        this.clearLine (pool);
 
         let delayMs = P[slot::C_MinDelay];
         let depthMs = P[slot::C_Depth];
@@ -492,7 +521,7 @@ namespace porridge
         return int64 (two32 * x * x + 0.5) & u32;
     }
 
-    float chorusTap (const FxTables& t, const float[32769]& line, int mode, int64 offset, int64 phase,
+    float chorusTap (const FxTables& t, const FxPool& pool, int at, int side, int mode, int64 offset, int64 phase,
                      int wpos, float minD, float range)
     {
         let ph = (offset + phase) & u32;
@@ -503,15 +532,15 @@ namespace porridge
         let pos = (float64 (wpos) - float64 (minD)) - lfo * float64 (range) + 65536.0;
         let ip = int (pos);
         let fr = pos - float64 (ip);
-        return float ((1.0 - fr) * float64 (line.at (ip & 0x7fff)) + fr * float64 (line.at ((ip + 1) & 0x7fff)));
+        return float ((1.0 - fr) * float64 (poolSide (pool, at, ip & 0x7fff, side)) + fr * float64 (poolSide (pool, at, (ip + 1) & 0x7fff, side)));
     }
 
-    float chorusRead (const float[32769]& line, int64 rp)
+    float chorusRead (const FxPool& pool, int at, int side, int64 rp)
     {
         let p = rp & u32;
         let fr = float (p & 0x1ffff) * (1.0f / 131072.0f);
         let j = int (p >> 17);
-        return (1.0f - fr) * line.at (j & 0x7fff) + fr * line.at ((j + 1) & 0x7fff);
+        return (1.0f - fr) * poolSide (pool, at, j & 0x7fff, side) + fr * poolSide (pool, at, (j + 1) & 0x7fff, side);
     }
 
     /// Irregular mode: voice v of side c drifts on, bouncing off the ends of the range.
@@ -552,12 +581,14 @@ namespace porridge
         return y;
     }
 
-    bool process (Chorus& this, const FxTables& t, Rand& rng, float<2>[blockSize]& buf, bool active,
+    bool process (Chorus& this, FxPool& pool, const FxTables& t, Rand& rng, float<2>[blockSize]& buf, bool active,
                   const float[numSlots]& P, float64 sr)
     {
         let speed = P[slot::C_Rate];
         let inc = int64 (float64 (speed) / sr * two32 + 0.5) & u32;
-        let mode = int (P[slot::C_Mode]);
+        // (without its line, out of memory, it runs dry)
+        let mode = this.fxAt >= 0 ? int (P[slot::C_Mode]) : 0;
+        let at = this.fxAt;
 
         if (mode == 0 || (this.idle && ! active))
         {
@@ -623,7 +654,7 @@ namespace porridge
                     for (wrap<16> v)
                     {
                         if (v >= nv) break;
-                        acc += chorusTap (t, this.bufL, mode, offL[v], this.phase, this.wpos, minD, range);
+                        acc += chorusTap (t, pool, at, 0, mode, offL[v], this.phase, this.wpos, minD, range);
                     }
 
                     let w = norm * float (acc);
@@ -634,8 +665,7 @@ namespace porridge
 
                     let y = dcBlock (float (acc), this.x1L, this.y1L);
                     let s = sat10 (t, y * fb3 * norm + (inL + inR) * 0.5f);
-                    this.bufR.at (this.wpos) = s;
-                    this.bufL.at (this.wpos) = s;
+                    setPoolFrame (pool, at, this.wpos, float<2> (s, s));
                 }
                 else
                 {
@@ -644,8 +674,8 @@ namespace porridge
                     for (wrap<16> v)
                     {
                         if (v >= nv) break;
-                        aL += chorusTap (t, this.bufL, mode, offL[v], this.phase, this.wpos, minD, range);
-                        aR += chorusTap (t, this.bufR, mode, offR[v], this.phase, this.wpos, minD, range);
+                        aL += chorusTap (t, pool, at, 0, mode, offL[v], this.phase, this.wpos, minD, range);
+                        aR += chorusTap (t, pool, at, 1, mode, offR[v], this.phase, this.wpos, minD, range);
                     }
 
                     buf[i] = float<2> ((norm * float (aL) - inL) * mix + inL, (norm * float (aR) - inR) * mix + inR);
@@ -655,8 +685,7 @@ namespace porridge
 
                     let yL = dcBlock (float (aL), this.x1L, this.y1L);
                     let yR = dcBlock (float (aR), this.x1R, this.y1R);
-                    this.bufL.at (this.wpos) = sat10 (t, yL * fb3 * norm + inL);
-                    this.bufR.at (this.wpos) = sat10 (t, yR * fb3 * norm + inR);
+                    setPoolFrame (pool, at, this.wpos, float<2> (sat10 (t, yL * fb3 * norm + inL), sat10 (t, yR * fb3 * norm + inR)));
                 }
             }
         }
@@ -689,16 +718,16 @@ namespace porridge
                     if (v >= nv) break;
 
                     this.chorusStep (rng, 0, v, minF, maxF, r);
-                    aL += chorusRead (this.bufL, wF - this.dpos[0][v]);
+                    aL += chorusRead (pool, at, 0, wF - this.dpos[0][v]);
 
                     if (stereo == 1)
                     {
                         this.chorusStep (rng, 1, v, minF, maxF, r);
-                        aR += chorusRead (this.bufR, wF - this.dpos[1][v]);
+                        aR += chorusRead (pool, at, 1, wF - this.dpos[1][v]);
                     }
                     else if (stereo == 2)
                     {
-                        aR += chorusRead (this.bufR, wF + this.dpos[0][v] - maxF - 1);
+                        aR += chorusRead (pool, at, 1, wF + this.dpos[0][v] - maxF - 1);
                     }
                 }
 
@@ -719,15 +748,13 @@ namespace porridge
                 {
                     let y = dcBlock (aL, this.x1L, this.y1L);
                     let s = sat10 (t, y * fb3 + (inL + inR) * 0.5f);
-                    this.bufR.at (this.wpos) = s;
-                    this.bufL.at (this.wpos) = s;
+                    setPoolFrame (pool, at, this.wpos, float<2> (s, s));
                 }
                 else
                 {
                     let yL = dcBlock (aL, this.x1L, this.y1L);
                     let yR = dcBlock (aR, this.x1R, this.y1R);
-                    this.bufL.at (this.wpos) = sat10 (t, yL * fb3 * norm + inL);
-                    this.bufR.at (this.wpos) = sat10 (t, yR * fb3 * norm + inR);
+                    setPoolFrame (pool, at, this.wpos, float<2> (sat10 (t, yL * fb3 * norm + inL), sat10 (t, yR * fb3 * norm + inR)));
                 }
 
                 this.phase = (this.phase + inc) & u32;
@@ -757,13 +784,27 @@ namespace porridge
     //==============================================================================
     // each line's longest (reverbMult[j] * 250 ms at 192 kHz, and a little), and where it starts
     let reverbLineSize = int[8] (49444, 44164, 35044, 30628, 51312, 42388, 35860, 32501);
-    let reverbLineStart = int[8] (0, 49444, 93608, 128652, 159280, 210592, 252980, 288840);
-    let reverbLinesTotal = 321341;
     let predelayMax = 96010;       // SR/2 + 4.5 at 192 kHz
 
-    // its blocks in the pool (FxPool): the lines as a mono region, then the predelay's stereo line
-    let reverbLineBlocks = (reverbLinesTotal + 1023) / 1024;
-    let reverbBlocks = reverbLineBlocks + 2 * ((predelayMax + 1023) / 1024);
+    // its blocks in the pool (FxPool): the predelay's stereo line (half a second at the rate),
+    // then the lines as a mono region, as long as its size makes them (they're cleared when it
+    // changes), one after another
+    int reverbPredelayBlocks (float64 sr)       { return stereoBlocks (min (int (sr * 0.5 + 4.5), predelayMax)); }
+
+    /// Line j's length at this size (samples).
+    int reverbLength (int j, float sizeS)        { return clamp (int (sizeS * reverbMult.at (j)), 2, reverbLineSize.at (j)); }
+
+    /// The pool blocks it needs at this size and rate: what it claims.
+    int reverbNeeds (const float[numSlots]& P, float64 sr)
+    {
+        let sizeS = float (sr) * P[slot::R_Size] * 0.001f;
+        int n = 0;
+
+        for (wrap<8> j)
+            n += reverbLength (j, sizeS);
+
+        return reverbPredelayBlocks (sr) + monoBlocks (n);
+    }
 
     struct Reverb
     {
@@ -773,7 +814,7 @@ namespace porridge
         float[1024] erL, erR;
         int erPos;
         int pdSize, pdW, pdRd;
-        int[8] len, pos;
+        int[8] len, pos, start;     // each line's length, place and start in the region
         float lastSize;
         bool idle;
         int silentCount;
@@ -805,14 +846,14 @@ namespace porridge
 
             if (at >= 0)
                 for (int i = 0; i < this.len[j]; ++i)
-                    poolSet (pool, at, reverbLineStart[j] + i, 0);
+                    poolSet (pool, at, this.start[j] + i, 0);
         }
 
         for (wrap<1024> i) { this.erL[i] = 0; this.erR[i] = 0; }
 
         if (at >= 0)
             for (int i = 0; i < this.pdSize; ++i)
-                setPoolFrame (pool, at + reverbLineBlocks, i, float<2>());
+                setPoolFrame (pool, at, i, float<2>());
     }
 
     let reverbMult = float[8] (1.03f, 0.92f, 0.73f, 0.638f, 1.0689f, 0.883f, 0.747f, 0.677f);
@@ -843,7 +884,7 @@ namespace porridge
             return false;
 
         let at = this.fxAt;
-        let pdAt = at + reverbLineBlocks;
+        let pdAt = at;
 
         let srI = int (sr);
         let sizeS = float (sr) * P[slot::R_Size] * 0.001f;
@@ -852,6 +893,7 @@ namespace porridge
         if (abs (sizeS - this.lastSize) > 0.1f)
         {
             this.lastSize = sizeS;
+            var top = reverbPredelayBlocks (sr) * 1024;
 
             for (wrap<8> j)
             {
@@ -860,11 +902,13 @@ namespace porridge
                 var fr = Lj - float (li);
                 fr = clamp (fr, 0.1f, 1.1f);
                 this.apc[j] = (1.0f - fr) / (1.0f + fr);
-                this.len[j] = clamp (li, 2, reverbLineSize[j]);
+                this.len[j] = reverbLength (j, sizeS);
                 this.pos[j] = 0;
+                this.start[j] = top;
+                top += this.len[j];
 
                 for (int i = 0; i < this.len[j]; ++i)
-                    poolSet (pool, at, reverbLineStart[j] + i, 0);
+                    poolSet (pool, at, this.start[j] + i, 0);
             }
         }
 
@@ -973,7 +1017,7 @@ namespace porridge
 
             for (wrap<8> j)
             {
-                let r = poolGet (pool, at, reverbLineStart[j] + this.pos[j]);
+                let r = poolGet (pool, at, this.start[j] + this.pos[j]);
                 let y = float ((float64 (r) + float64 (this.lpx[j]) + float64 (dc)) * float64 (kLP) + pLP * float64 (this.lpy[j]));
                 this.lpy[j] = y; this.lpx[j] = r;
                 let h = (y + dc - this.hpx[j]) * kHP + pHP * this.hpy[j];
@@ -992,14 +1036,14 @@ namespace porridge
             let B2 = aR + M10 * u[4] + M11 * u[5] + M12 * u[6] + M13 * u[7];
             let B3 = M20 * u[4] + M21 * u[5] + M22 * u[6] + M23 * u[7];
 
-            poolSet (pool, at, reverbLineStart[0] + this.pos[0], c * A0 - s * B1 + 1e-15f);
-            poolSet (pool, at, reverbLineStart[1] + this.pos[1], c * A1 + s * B2 - 1e-15f);
-            poolSet (pool, at, reverbLineStart[2] + this.pos[2], s * B3 + c * A2 - 1e-15f);
-            poolSet (pool, at, reverbLineStart[3] + this.pos[3], c * A3 - s * B0 - 1e-15f);
-            poolSet (pool, at, reverbLineStart[4] + this.pos[4], s * A3 + c * B0 + 1e-15f);
-            poolSet (pool, at, reverbLineStart[5] + this.pos[5], c * B1 + s * A0 + 1e-15f);
-            poolSet (pool, at, reverbLineStart[6] + this.pos[6], c * B2 - s * A1 - 1e-15f);
-            poolSet (pool, at, reverbLineStart[7] + this.pos[7], c * B3 - s * A2 - 1e-15f);
+            poolSet (pool, at, this.start[0] + this.pos[0], c * A0 - s * B1 + 1e-15f);
+            poolSet (pool, at, this.start[1] + this.pos[1], c * A1 + s * B2 - 1e-15f);
+            poolSet (pool, at, this.start[2] + this.pos[2], s * B3 + c * A2 - 1e-15f);
+            poolSet (pool, at, this.start[3] + this.pos[3], c * A3 - s * B0 - 1e-15f);
+            poolSet (pool, at, this.start[4] + this.pos[4], s * A3 + c * B0 + 1e-15f);
+            poolSet (pool, at, this.start[5] + this.pos[5], c * B1 + s * A0 + 1e-15f);
+            poolSet (pool, at, this.start[6] + this.pos[6], c * B2 - s * A1 - 1e-15f);
+            poolSet (pool, at, this.start[7] + this.pos[7], c * B3 - s * A2 - 1e-15f);
 
             var wL = ap[0] + ap[1] + ap[2] + ap[3];
             var wR = ap[4] + ap[5] + ap[6] + ap[7];

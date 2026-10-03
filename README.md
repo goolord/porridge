@@ -28,8 +28,12 @@ dsp/                    Cmajor DSP
   Synth.cmajor            MIDI, voice manager, arpeggiator, per-voice rendering, effects chain,
                           a K-weighted level meter the view asks for (levelRequest/levelOut),
                           and reports of the sounding notes for the view (voiceView/voiceViewOut);
-                          it lends the rack's pool (Common.cmajor's FxPool, the memory the
-                          effects with long lines share) to the effects in the rack
+                          the rack's and the voice lane's slots, generic: each holds a kind
+                          (and in the rack one of the kind's eight instances, its state, one
+                          convolver) and has knobs (FX3_1 .. FX3_28, VL1_1 ..) whose values
+                          it swaps into the kind's working parameters to run it; and it lends
+                          the rack's pool (Common.cmajor's FxPool, the memory the effects with
+                          long lines share) to the effects in the rack
   Oscillator, Filter, Modulation, Effects, Tables, Voice, Types, Common
                           (Voice.cmajor also has the key EQ: a low shelf under each voice's
                           note and bands on its harmonics; Oscillator.cmajor each oscillator's
@@ -73,6 +77,10 @@ ui/                     patch view (ReScript)
                           input (MidiInput.res); SlotRows.res shows target slots as used rows + "+"
   VoiceView.res           the sounding notes as the DSP reports them: a mark per note on the
                           envelopes, LFOs, the filter graph and the modulated controls
+  SlotParams.res          the slots' parameters by name ("D_Wet@3": slot 3's delay's wet), which
+                          the view, programs and presets keep, and the patch's knobs for them
+                          (FX3_15: the knob position of whatever slot 3's kind has there), which
+                          ParamModel keeps in step with them; and the matrix's slot targets
   StoredParams.res        the parameters that aren't endpoints (the custom shapes' points): the
                           view and presets treat them as parameters, but they reach the DSP in
                           one shaperIn event per distortion and the host saves them in the
@@ -127,8 +135,9 @@ ui/                     patch view (ReScript)
                           Airwindows models on a sine (and the air on sines) for their graphs
   oatmeal/                file formats, parameter table, value texts
   bindings/               Cmajor PatchConnection and browser API bindings
-worker/PatchWorker.res  restores shapes/curves and the custom shapes' points, and installs the
-                          factory bank
+worker/PatchWorker.res  restores shapes/curves and the custom shapes' points, installs the
+                          factory bank, and loads a host's session from before the rack's
+                          slots into them (ui/SessionSlots.res)
 bundle/                 view.js, worker.js and the factory bank as a new instance stores it
                         (factory-bank.json), built by `npm run build`
 presets/oatmealprs.dat  Oatmeal's factory bank
@@ -147,7 +156,9 @@ tools/
                           menu, the view's requests), PorridgeLibrary.h (the bank library:
                           bank folders scanned and copied, files opened in the browser kept)
   clap-patch.mjs          patches the generated CLAP wrapper: parameter ids from
-                          dsp/param-ids.txt (not endpoint handles), aspect-locked resizing,
+                          dsp/param-ids.txt (not endpoint handles), the slots' knobs named
+                          and worded after the kinds they hold (a rescan when that changes),
+                          aspect-locked resizing,
                           the interface size setting, the host's parameter menu, the
                           64-sample latency, and a faster start (a QuickJS worker, one
                           rebuild per activation)
@@ -158,8 +169,9 @@ tools/
                           what changed
   test/                   native C++ test host built from the patch (cmaj generate --target=cpp),
                           golden.mjs (bit-exact factory renders, in Oat mode), presets.mjs
-                          (format round trips, and retired values loading as what replaced
-                          them: the rack's fourth copies, the key shifter as the bode),
+                          (format round trips, and programs from before the slots loading
+                          their effects' copies into their slots, two convolvers as one, the
+                          key shifter as the bode; reordering the rack),
                           pickers.mjs (every list value maps to and from its menu),
                           library.mjs (the preset browser's search),
                           smoke.mjs (Porridge's own effects and filter types sound, stay
@@ -179,7 +191,9 @@ tools/
                           stored state, undo, a host's state),
                           claphost.cpp (a minimal CLAP host: parameters, values, state) and
                           clap-ids.mjs (a build keeps an earlier build's parameter ids, and
-                          loads its state),
+                          loads its state), clap-slots.mjs (the slots' knobs named after
+                          their kinds, the host asked to rescan, a session from before the
+                          slots loading into them),
                           banklibrary.cpp (the plugin's bank library on real files), oneshot.mjs (one-shot LFOs hold their
                           end), levels.mjs (the Vanilla bank's gains, levels and motion),
                           random.mjs (random patches: sound values, the wildness knobs, the
@@ -188,6 +202,9 @@ tools/
                           per-note sources follow on the whole sound, and the view's reports of
                           the sounding notes, which the host writes with --voices), lane.mjs
                           (the voice lane's effects, its key tracking, tails and amp place),
+                          pool.mjs (the rack's pool: what effects claim follows their
+                          settings, a rack that asks too much runs one dry and says which,
+                          a growing line keeps what it holds),
                           extras.mjs (chord position, gap, legato, pitch, steps, the random
                           starts, rate and delay tracking, the lo-fi tracking, the octaver);
                           lib.mjs has what they

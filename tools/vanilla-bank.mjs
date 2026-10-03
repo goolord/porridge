@@ -115,12 +115,21 @@ const mod = (source, target, amount, via) => via ? { source, target, amount, via
 // the effects rack, slot by slot, by the names in its menu (with FX_Order, which orders the slots
 // holding Oatmeal's four); Oatmeal's chorus, delay, reverb and EQ stay in their slots unless
 // they're left out, or do nothing there (see the end)
-const rack = (...names) => Object.fromEntries (FxRack.values (names.map (name =>
+// (written as a program from before the slots, with the copies' parameters: D2_Wet, Fl_Rate; loading
+// the bank below puts each effect's into its slot, Preset.migrateSlots)
+const rack = (...names) =>
 {
-    const e = FxRack.ofValue (PorridgeParams.rackNames.indexOf (name));
-    if (! e) throw new Error ("no rack entry " + name);
-    return e;
-})));
+    const values = names.map (name =>
+    {
+        const v = PorridgeParams.rackNames.indexOf (name);
+        if (v <= 0) throw new Error ("no rack entry " + name);
+        return v;
+    });
+    const present = values.filter (v => v <= 4).map (v => v - 1);
+    const order = PorridgeParams.fxOrderIndex ([...present, ...[0, 1, 2, 3].filter (i => ! present.includes (i))]);
+    return { ...Object.fromEntries (Array.from ({ length: PorridgeParams.rackSlots }, (_, k) => [PorridgeParams.rackId (k + 1), values[k] ?? 0])),
+             FX_Order: order };
+};
 
 // the voice lane: effects in every voice, slot by slot by the names in its menu, and how many of
 // them come before the filter and before the amp envelope (the rest come after the amp, and
@@ -2520,7 +2529,7 @@ const known = new Set (Preset.make ("x").values.keys());
 for (const p of doc.presets)
 {
     for (const id of Object.keys (p.params))
-        if (! known.has (id)) throw new Error (`${p.name}: unknown parameter ${id}`);
+        if (! known.has (id) && ! PorridgeParams.isLegacyId (id)) throw new Error (`${p.name}: unknown parameter ${id}`);
     if (p.modulations.length > 16) throw new Error (`${p.name}: too many modulations`);
 }
 parsed._0.presets.forEach ((p, i) =>

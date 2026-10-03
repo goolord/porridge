@@ -26,6 +26,7 @@ graph Porridge  [[ main ]]
     output event porridge::ImpulseView impulseViewOut;
     output event float levelOut;
     output event porridge::VoiceView voiceViewOut;
+    output event int poolOut;
 
     node params = ParamStore;
     node synth  = porridge::Synth;
@@ -50,5 +51,6 @@ graph Porridge  [[ main ]]
         synth.impulseViewOut -> impulseViewOut;
         synth.levelOut  -> levelOut;
         synth.voiceViewOut -> voiceViewOut;
+        synth.poolOut   -> poolOut;
     }
 }

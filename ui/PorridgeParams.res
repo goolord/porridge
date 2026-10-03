@@ -282,21 +282,22 @@ let shaperSpecs = [
   })->Array.flat,
 ]
 
-// The effects rack: up to eight effects on the whole sound, in any order, each of them up to
-// three times. The first chorus, delay, reverb and EQ are Oatmeal's; the others are copies, with
-// Oatmeal's parameters again under numbered ids (D_Wet: D2_Wet, D3_Wet). The rack's distortions
-// are copies of Oatmeal's distortion (Sat2_ .. Sat4_), which itself stays in the voices or
-// before the rack.
+// The effects rack: up to eight effects on the whole sound, in any order, any kind any number of
+// times (but one convolver). Oatmeal's chorus, delay, reverb and EQ are fixed effects with
+// their own parameters (C_, D_, R_, EQ_), which FX_Order orders; Oatmeal's distortion stays in
+// the voices or before the rack. Every other effect sits in a slot, generic: since October 2026
+// each slot (the rack's eight and the voice lane's four) has knobs of its own, which mean the
+// parameters of the kind it holds (slotKnobs below), and the view keeps them by name ("Fl_Rate@3"
+// is slot 3's flanger rate).
 //
-// There were four of each (five distortions) until October 2026: every copy costs memory and
-// host parameters whether it's used or not. The fourth copies are retired: their parameters are
-// gone, but their rack values and modulation targets keep their places (presets and the DSP
-// know those by number), and a program that used one loads it onto a free copy (Preset).
+// Before that each kind had numbered copies with parameters of their own (D2_Wet, Fl3_Rate),
+// three of each (four, until earlier in October 2026). Their parameters are gone (their CLAP ids
+// stay reserved); a program that has copies loads each into the slot it sits in (Preset).
 //
-// A rack slot holds one effect (rackEntries). Slots holding one of Oatmeal's four take them in
-// FX_Order's order, so FX_Order still orders them, and programs from before the rack, which
-// leave it at its default, keep their order. The DSP runs a copy by swapping its parameters into
-// the first's slots.
+// A rack slot's value is an effect: one of Oatmeal's four (in FX_Order's order), or a kind and
+// one of its instances (rackEntries), the state the DSP keeps for it (its lines, its LFO), which
+// moves with the value when the rack is reordered. The DSP runs a slot by swapping its knobs'
+// values into its kind's working parameters (the first's, as it ran the copies).
 let rackSlots = 8
 let rackId = k => `FX_Rack_${Int.toString(k)}`
 
@@ -316,9 +317,10 @@ type rackKind = {
   // out): a chorus comes on as a sine, a distortion as soft clipping
   onLabel?: string,
   runsIn: runsIn,
-  // the first's parameters, with names for the copies' host parameters
+  // its parameters (the first's ids, which the slots' parameters are named after), with their
+  // labels; in this order on a slot's knobs (the distortion's custom shape's points aside)
   params: array<(string, string)>,
-  // the copies' numbers
+  // the copies it had, by number (rack values keep their places in this order)
   copies: array<int>,
   // the copies it had once, after those: retired (see above)
   retired?: array<int>,
@@ -917,12 +919,23 @@ let allKinds = [
   ...voiceKinds,
 ]
 
+// Each kind's parameters' labels as a slot's knob's name ends: without the kind's name, which
+// Porridge's own kinds' specs start with ("Flanger rate": "rate").
+let shortLabel = (k, label) => {
+  let lower = String.toLowerCase(label)
+  switch [String.toLowerCase(k.name) ++ " ", "fx filter ", "dist "]->Array.find(p => String.startsWith(lower, p)) {
+  | Some(p) => String.slice(label, ~start=String.length(p))
+  | None => label
+  }
+}
+let allKinds = allKinds->Array.map(k => {...k, params: k.params->Array.map(((id, label)) => (id, shortLabel(k, label)))})
+
 let isRetiredKind = k => k.mergedInto != None
 
 // The kinds there are.
 let rackKinds = allKinds->Array.filter(k => !isRetiredKind(k))
 
-// The id of copy n's parameter (D_Wet, 3: D3_Wet).
+// The id a copy's parameter had (D_Wet, 3: D3_Wet): presets from before the slots have them.
 let copyId = (id, n) =>
   switch String.indexOf(id, "_") {
   | i if i > 0 => String.slice(id, ~start=0, ~end=i) ++ Int.toString(n) ++ String.slice(id, ~start=i)
@@ -930,19 +943,41 @@ let copyId = (id, n) =>
   }
 
 let retiredOf = k => k.retired->Option.getOr([])
-let isRetired = ((key, n)) =>
-  allKinds->Array.some(k => k.key == key && (isRetiredKind(k) || retiredOf(k)->Array.includes(n)))
 
-// Every value a rack slot has had, by value: nothing, Oatmeal's four, then every copy (the
-// retired ones too, which keep their values).
+// How many of a kind the rack can hold at once, each with its own state (the DSP's instances):
+// any number up to the rack's eight, but one convolver (its file and spectra are most of its
+// memory). The voice lane's own kinds keep the two values they had.
+let instanceCount = k =>
+  switch (k.key, k.runsIn) {
+  | ("convolve", _) => 1
+  | (_, LaneOnly) => 2
+  | _ => rackSlots
+  }
+
+// A kind's instances, by the number its rack value has: Oatmeal's chorus, delay, reverb, EQ
+// and distortion from 2 (their copies' numbers: 1 is the fixed one), Porridge's own from 1.
+let firstInstance = k => k.firstInRack ? 1 : 2
+let instanceNumbers = k => Array.fromInitializer(~length=instanceCount(k), i => firstInstance(k) + i)
+
+// (Oatmeal's own chorus, delay, reverb and EQ, number 1, are fixed effects: never retired)
+let isRetired = ((key, n)) =>
+  allKinds->Array.some(k =>
+    k.key == key && (isRetiredKind(k) || !(instanceNumbers(k)->Array.includes(n) || n == 1 && !k.firstInRack))
+  )
+
+// Every value a rack slot has had, by value: nothing, Oatmeal's four, then every kind's copies as
+// they were (the retired ones too, which keep their values), then the instances added in
+// October 2026 (fifth to eighth).
+let historyOf = k => [...(k.firstInRack ? [1] : []), ...k.copies, ...retiredOf(k)]
 let rackHistory: array<option<(string, int)>> = [
   None,
   Some(("chorus", 1)),
   Some(("delay", 1)),
   Some(("reverb", 1)),
   Some(("eq", 1)),
+  ...allKinds->Array.flatMap(k => historyOf(k)->Array.map(n => Some((k.key, n)))),
   ...allKinds->Array.flatMap(k =>
-    [...(k.firstInRack ? [1] : []), ...k.copies, ...retiredOf(k)]->Array.map(n => Some((k.key, n)))
+    isRetiredKind(k) ? [] : instanceNumbers(k)->Array.filter(n => !(historyOf(k)->Array.includes(n)))->Array.map(n => Some((k.key, n)))
   ),
 ]
 
@@ -951,6 +986,9 @@ let rackEntries = rackHistory->Array.map(entry => entry->Option.filter(e => !isR
 
 // The retired copy a rack value was, if it was one.
 let retiredEntry = v => rackHistory[v]->Option.flatMap(e => e)->Option.filter(isRetired)
+
+// The value of a kind's instance n (-1: none).
+let entryValue = (key, n) => rackEntries->Array.findIndex(e => e == Some((key, n)))
 
 let rackNames = rackHistory->Array.map(entry =>
   switch entry {
@@ -971,37 +1009,8 @@ let rackSpecs = Array.fromInitializer(~length=rackSlots, i => {
   kind: Choice({names: rackNames, init: rackDefault->Array.getUnsafe(i)}),
 })
 
-// Oatmeal's EQ has no switch; Porridge's switches it (and its copies) off without losing its bands.
+// Oatmeal's EQ has no switch; Porridge's switches it (and the slots' EQs) off without losing its bands.
 let eqOnSpecs = [{id: "EQ_On", name: "EQ on", kind: Choice({names: onOff, init: 1})}]
-
-// (only: the parameters to copy; the retired copies have none)
-let copySpecsOf = (kinds, ~only=_ => true) => kinds->Array.flatMap(k =>
-  k.copies->Array.flatMap(n =>
-    k.params
-    ->Array.filter(((id, _)) => only(id))
-    ->Array.map(((id, label)) => {
-      id: copyId(id, n),
-      name: `${k.name} ${Int.toString(n)} ${label}`,
-      kind: Like(id),
-    })
-  )
-)
-
-// Oatmeal's effects' copies, and Porridge's own effects' copies (which come after them; the
-// ambience's, the distortion's model knobs' and the air's are in groups of their own)
-let laterKinds = ["ambience", "air", "shifter", "resonator", "octaver"]
-let laterParams = ["Ff_Track", "Bd_Ratio"]
-let copySpecs = copySpecsOf(
-  rackKinds->Array.filter(k => !k.firstInRack),
-  ~only=id => !isDistModelParam(id) && !isLaterKindParam(id),
-)
-let newCopySpecs = copySpecsOf(
-  rackKinds->Array.filter(k => k.firstInRack && !(laterKinds->Array.includes(k.key))),
-  ~only=id => !(laterParams->Array.includes(id)) && !isLaterKindParam(id),
-)
-let ambienceCopySpecs = copySpecsOf(rackKinds->Array.filter(k => k.key == "ambience"))
-let distModelCopySpecs = copySpecsOf(rackKinds->Array.filter(k => k.key == "distortion"), ~only=isDistModelParam)
-let airCopySpecs = copySpecsOf(rackKinds->Array.filter(k => k.key == "air"))
 
 // Each oscillator's own envelope: while it's on, the oscillator's level follows it (under the
 // amp envelope, which still ends the note). Its stages are like the amp envelope's, with curves
@@ -1185,16 +1194,7 @@ let laneSpecs = [
   {id: "VL_AmpAt", name: "Voice FX before the amp", kind: Choice({names: lanePositions, init: 0})},
 ]
 
-let voiceLaneSpecs = Array.concat(
-  laneSpecs,
-  Array.concat(
-    Array.concat(filterTrackSpecs, copySpecsOf(rackKinds->Array.filter(k => k.key == "filter"), ~only=id => id == "Ff_Track")),
-    Array.concat(
-      Array.concat(shifterSpecs, resonatorSpecs),
-      copySpecsOf(allKinds->Array.filter(k => k.key == "shifter" || k.key == "resonator"), ~only=id => id != "Rs_Gain"),
-    ),
-  ),
-)
+let voiceLaneSpecs = laneSpecs
 
 // Each connection's steps: its source snapped to that many levels across its range (after the
 // curve), 0 or 1 for none. 25 steps of a bipolar source on pitch ±24 st at half the amount are
@@ -1206,15 +1206,9 @@ let stepSpecs = Array.fromInitializer(~length=ModMatrix.slots, i => {
   kind: Float({min: 0., max: 49., init: 0., text: stepsText}),
 })
 
-// The voices' extras: the phaser's, flanger's and lo-fi sampler's tracking and random starts
-// (firsts, then copies), the octaver and its copy, and the connections' steps.
-let voiceExtraSpecs = [
-  ...laterKindSpecs->Array.flatMap(((_, specs)) => specs),
-  ...copySpecsOf(rackKinds->Array.filter(k => laterKindSpecs->Array.some(((key, _)) => key == k.key)), ~only=isLaterKindParam),
-  ...octaverSpecs,
-  ...copySpecsOf(rackKinds->Array.filter(k => k.key == "octaver")),
-  ...stepSpecs,
-]
+// The voices' extras: the lo-fi sampler's tracking (and the phaser's and flanger's tracking and
+// random starts and the octaver, in the slots now), and the connections' steps.
+let voiceExtraSpecs = [...laterKindSpecs->Array.flatMap(((_, specs)) => specs), ...stepSpecs]
 
 // The frequency shifter's ratio of the note (the key shifter's, which the Bode took in): the
 // note's frequency, times the knob cubed, times 2, added to the shift. In the voice lane each
@@ -1229,12 +1223,118 @@ let bodeRatioSpecs = [
     kind: Float({min: -1., max: 1., init: 0., text: shifterRatioText}),
     about: "the shift as a part of the note: each note's partials keep their places (on the whole sound, the newest note's)",
   },
-  ...[2, 3]->Array.map(n => {
-    id: copyId("Bd_Ratio", n),
-    name: `Bode ${Int.toString(n)} note ratio`,
-    kind: Like("Bd_Ratio"),
-  }),
 ]
+
+//==============================================================================
+// The slots' parameters
+
+// Porridge's own kinds' parameters, as the first of each had them: the view knows a slot's
+// parameter by one of these ids (slotParamId), with its range, law and text, and the DSP's code
+// reads its knobs' values from their slots (the slot's values are swapped in to run it). They
+// aren't the patch's endpoints or presets' parameters any more.
+let workSpecs = [
+  ...newKindSpecs->Array.flat,
+  ...ambienceSpecs,
+  ...airSpecs,
+  ...filterTrackSpecs,
+  ...resonatorSpecs,
+  ...resonatorGainSpecs,
+  ...octaverSpecs,
+  ...laterKindSpecs->Array.filter(((k, _)) => k != "distortion")->Array.flatMap(((_, specs)) => specs),
+  ...bodeRatioSpecs,
+]
+let workIds = Set.fromArray(workSpecs->Array.map(s => s.id))
+let isWorkId = id => workIds->Set.has(id)
+
+// The slots: the rack's eight, then the voice lane's four, by key ("1".."8", "L1".."L4").
+let slotCount = rackSlots + laneSlots
+let isLaneSlot = g => g >= rackSlots
+let slotKey = g => isLaneSlot(g) ? `L${Int.toString(g - rackSlots + 1)}` : Int.toString(g + 1)
+let slotKeys = Array.fromInitializer(~length=slotCount, slotKey)
+let slotOfKey = key => slotKeys->Array.indexOf(key)
+
+// The parameter that says what a slot holds (FX_Rack_n, VL_n).
+let slotKindId = g => isLaneSlot(g) ? laneId(g - rackSlots + 1) : rackId(g + 1)
+
+// A slot's parameter: the first's id, @, the slot's key ("Fl_Rate@3", "EQ_1_Freq@L2").
+let slotParamId = (first, key) => `${first}@${key}`
+let parseSlotParam = id =>
+  switch String.indexOf(id, "@") {
+  | i if i > 0 =>
+    let key = String.slice(id, ~start=i + 1)
+    let g = slotOfKey(key)
+    g >= 0 ? Some((String.slice(id, ~start=0, ~end=i), g)) : None
+  | _ => None
+  }
+let isSlotParam = id => parseSlotParam(id) != None
+
+// A kind's knobs: its parameters in order, but the custom shape's points (stored state of the
+// slot's own: StoredParams).
+let isShaperParam = id => shaperParams->Array.some(((s, _)) => s == id)
+let knobsOf = (k: rackKind) => k.params->Array.filter(((id, _)) => !isShaperParam(id))
+let knobIndex = (k: rackKind, first) => knobsOf(k)->Array.findIndex(((id, _)) => id == first)
+
+// The kinds each slot can hold: the rack's every kind a voice lane doesn't only have, the lane's
+// the kinds a voice can run.
+let rackSlotKinds = rackKinds->Array.filter(k => k.runsIn != LaneOnly)
+let laneSlotKinds = rackKinds->Array.filter(k => k.runsIn != Rack)
+let slotKinds = g => isLaneSlot(g) ? laneSlotKinds : rackSlotKinds
+
+// How many knobs a slot has: the most any kind it can hold needs (the compressor's 28 in the rack,
+// the EQ's 21 in the lane).
+let maxKnobs = kinds => kinds->Array.reduce(0, (m, k) => Math.Int.max(m, Array.length(knobsOf(k))))
+let rackKnobs = maxKnobs(rackSlotKinds)
+let laneKnobs = maxKnobs(laneSlotKinds)
+let knobCount = g => isLaneSlot(g) ? laneKnobs : rackKnobs
+
+// Slot g's knob i (1-based): the patch's endpoint, which holds the knob position (0..1, the
+// parameter's knob law: ParamDefs' toNorm) of the parameter its kind has there. Hosts automate
+// these: "FX 3 knob 2" moves whatever slot 3 holds.
+let knobId = (g, i) =>
+  isLaneSlot(g) ? `VL${Int.toString(g - rackSlots + 1)}_${Int.toString(i)}` : `FX${Int.toString(g + 1)}_${Int.toString(i)}`
+// a slot's name in parameter names: "FX 3", "Voice FX 2"
+let slotTitle = g =>
+  isLaneSlot(g) ? `Voice FX ${Int.toString(g - rackSlots + 1)}` : `FX ${Int.toString(g + 1)}`
+let knobName = (g, i) => `${slotTitle(g)} knob ${Int.toString(i)}`
+
+// Every slot's knobs, as the patch's endpoints (not the view's parameters: those are the slots'
+// parameters by name).
+let knobSpecs = Array.fromInitializer(~length=slotCount, g =>
+  Array.fromInitializer(~length=knobCount(g), i => {
+    id: knobId(g, i + 1),
+    name: knobName(g, i + 1),
+    kind: Float({min: 0., max: 1., init: 0., text: percent}),
+  })
+)->Array.flat
+
+// The slot and knob (1-based) of a knob's endpoint.
+let parseKnobId = id => {
+  let lane = String.startsWith(id, "VL") && !String.startsWith(id, "VL_")
+  let fx = String.startsWith(id, "FX") && !String.startsWith(id, "FX_")
+  if !lane && !fx {
+    None
+  } else {
+    switch String.split(String.slice(id, ~start=2), "_") {
+    | [n, i] =>
+      switch (Int.fromString(n), Int.fromString(i)) {
+      | (Some(n), Some(i)) =>
+        let g = lane ? rackSlots + n - 1 : n - 1
+        n >= 1 && i >= 1 && i <= knobCount(g) && (lane ? n <= laneSlots : n <= rackSlots) ? Some((g, i)) : None
+      | _ => None
+      }
+    | _ => None
+    }
+  }
+}
+
+// The kind of effect a rack or lane value is (None: empty, Oatmeal's four, or retired).
+let entryKind = v =>
+  v <= 4 ? None : rackEntries[v]->Option.flatMap(e => e)->Option.flatMap(((key, _)) => rackKinds->Array.find(k => k.key == key))
+
+// A lane slot's value for a kind (its first instance's: the lane keeps no instances).
+let laneValue = (k: rackKind) => entryValue(k.key, firstInstance(k))
+
+//==============================================================================
 
 // Porridge's parameters by feature, in the order they were added (with the retired ones, which
 // `groups` leaves out)
@@ -1253,44 +1353,42 @@ let groupsAsAdded = [
   (EffectsRack, rackSpecs),
   (EqSwitch, eqOnSpecs),
   (CustomShape, shaperSpecs),
-  (RackCopies, copySpecs),
+  (RackCopies, []),
   (FilterDrive, filterDriveSpecs),
-  // Porridge's own effects, then their copies
-  (RackEffects, Array.concat(newKindSpecs->Array.flat, newCopySpecs)),
+  (RackEffects, []),
   (Decay1Curves, decay1CurveSpecs),
   (OscEnvs, oscEnvSpecs),
-  (Ambience, Array.concat(ambienceSpecs, ambienceCopySpecs)),
-  (DistModels, Array.concat(distModelSpecs, distModelCopySpecs)),
-  (AirEffect, Array.concat(airSpecs, airCopySpecs)),
+  (Ambience, []),
+  (DistModels, distModelSpecs),
+  (AirEffect, []),
   (KeyEq, keyEqSpecs),
   (OscNoise, oscNoiseSpecs),
   (PairMix, pairMixSpecs),
   (MoreModulations, Array.concat(moreSlotSpecs, Array.concat(slotOptionSpecs, followSpecs))),
   (Lfo3, lfo3Specs),
   (VoiceLane, voiceLaneSpecs),
-  (
-    ResonatorGain,
-    Array.concat(resonatorGainSpecs, copySpecsOf(rackKinds->Array.filter(k => k.key == "resonator"), ~only=id => id == "Rs_Gain")),
-  ),
+  (ResonatorGain, []),
   (VoiceExtras, voiceExtraSpecs),
   (OscShape, oscShapeSpecs),
-  (BodeRatio, bodeRatioSpecs),
+  (BodeRatio, []),
   (NoiseType, noiseTypeSpecs),
 ]
 
-// The retired copies' parameters (and every copy's of a retired kind): no longer the patch's,
-// presets' or hosts' (their CLAP ids stay reserved in dsp/param-ids.txt).
-let retiredIds = Set.fromArray(
+// The parameters the effects' copies had, and Porridge's own kinds' firsts' (which are the
+// slots' now): no longer the patch's, presets' or hosts' (their CLAP ids stay reserved in
+// dsp/param-ids.txt). Presets that have them load them into the slots (Preset).
+let legacyIds = Set.fromArray(
   allKinds->Array.flatMap(k =>
-    (isRetiredKind(k) ? [1, ...k.copies, ...retiredOf(k)] : retiredOf(k))->Array.flatMap(n =>
-      k.params->Array.map(((id, _)) => n == 1 ? id : copyId(id, n))
-    )
+    historyOf(k)
+    ->Array.filter(n => isRetiredKind(k) || k.firstInRack || n > 1)
+    ->Array.flatMap(n => k.params->Array.map(((id, _)) => n == 1 ? id : copyId(id, n)))
   ),
 )
-let isRetiredId = id => retiredIds->Set.has(id)
+let isLegacyId = id => legacyIds->Set.has(id) || isWorkId(id)
+let isRetiredId = isLegacyId
 
 // Porridge's parameters by feature, in the order they were added (the order of their slots).
-let groups = groupsAsAdded->Array.map(((f, specs)) => (f, specs->Array.filter(s => !isRetiredId(s.id))))
+let groups = groupsAsAdded->Array.map(((f, specs)) => (f, specs->Array.filter(s => !isLegacyId(s.id))))
 
 let all = groups->Array.flatMap(((_, specs)) => specs)
 

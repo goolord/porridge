@@ -18,6 +18,7 @@ graph PorridgeTest  [[ main ]]
 
     output stream float<2> out;
     output event porridge::VoiceView voiceViewOut;
+    output event int poolOut;
 
     node params = ParamStore;
     node synth  = porridge::Synth;
@@ -37,5 +38,6 @@ graph PorridgeTest  [[ main ]]
         voiceView       -> synth.voiceViewIn;
         synth.out       -> out;
         synth.voiceViewOut -> voiceViewOut;
+        synth.poolOut   -> poolOut;
     }
 }

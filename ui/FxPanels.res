@@ -1031,14 +1031,14 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~perVoice, ~w, ~h) => {
   let fg = FxGraph.make(ctx, panel.el, e.kind == #filter ? {...graphBox, h: 0.} : graphBox)
   let layer = FxGraph.group(fg.svg)
   let p: FxGraph.plot = {layer, left: 40., right: fg.w - 16., top: 8., bottom: fg.h - 18.}
-  let impulse = () => ctx.programs.impulses[e.copy - 1]->Option.flatMap(x => x)
+  let impulse = () => ctx.programs.impulses[0]->Option.flatMap(x => x)
   let draw = () => {
     layer->setTextContent("")
     switch e.kind {
     | #flanger => drawFlanger(p, get)
     | #phaser => drawPhaser(p, get)
     | #space => drawSpace(p, get)
-    | #convolve => drawConvolve(p, get, ~which=e.copy - 1, ~file=impulse())
+    | #convolve => drawConvolve(p, get, ~which=0, ~file=impulse())
     | #bode => drawBode(p, get, ~perVoice)
     | #utility => drawUtility(p, get)
     | #ambience => drawAmbience(p, get)
@@ -1091,7 +1091,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~perVoice, ~w, ~h) => {
       ev
       ->dataTransfer
       ->Option.flatMap(d => d->transferredFiles->item(0))
-      ->Option.forEach(f => ctx.programs->ProgramStore.loadImpulseFile(e.copy - 1, f)->Promise.ignore)
+      ->Option.forEach(f => ctx.programs->ProgramStore.loadImpulseFile(0, f)->Promise.ignore)
     })
   }
   () => {

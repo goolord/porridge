@@ -77,8 +77,10 @@ let dismissOnNextInput = t => {
 // Whether the host has a menu for the parameter id: it can show one, and lists the parameter.
 let has = (t, id) => t.available && !ParamInfo.isSetup(id)
 
-// Shows the menu for the parameter id at a point in the view (client coordinates).
-let showAt = (t, id, ~x, ~y) => {
+// Shows the menu for the parameter id at a point in the view (client coordinates): for a slot's
+// parameter, its knob's (SlotParams), which is what hosts know.
+let showAt = (t, model, id, ~x, ~y) => {
+  let id = model->ParamModel.endpointOf(id)->Option.getOr(id)
   t->dismissOnNextInput
   t.channel->HostChannel.request(
     "menu=" ++
@@ -128,7 +130,7 @@ let attach = (t, model, e, id) => {
     ev->preventDefault
     if armed.contents {
       armed := false
-      showAt(t, id, ~x=ev->clientX, ~y=ev->clientY)
+      showAt(t, model, id, ~x=ev->clientX, ~y=ev->clientY)
     }
   })
 }

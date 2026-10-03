@@ -166,12 +166,14 @@ let sourceKeys = Lazy.make(() => [
 
 // A matrix connection's target as a route moves it: its knob, or for the voice's pitch and
 // volume, where those show.
-let connectionTargets = (t: ModMatrix.target) =>
-  switch t.law {
-  | Knob(id) => [id]
-  | Pitch(_) => [pitchKnob]
-  | Volume => [ampEnvMark]
-  | Pan | Retired => []
+// (a slot's knob: what the slot's kind has there, read with get)
+let connectionTargets = (get, t) =>
+  switch ModMatrix.targets[t]->Option.map(t => t.law) {
+  | Some(Knob(id)) => [id]
+  | Some(Slot(_, _)) => SlotParams.targetParam(get, t)->Option.mapOr([], id => [id])
+  | Some(Pitch(_)) => [pitchKnob]
+  | Some(Volume) => [ampEnvMark]
+  | Some(Pan | Retired) | None => []
   }
 
 // The matrix's connections, read with get, in slot order.
@@ -179,14 +181,14 @@ let connections = (get: string => float) =>
   ModMatrix.slotNumbers->Array.filterMap(k => {
     let s = ModMatrix.readSlot(get, k)
     switch (ModMatrix.sources[s.source], ModMatrix.targets[s.target]) {
-    | (Some(source), Some(t)) if s.source > 0 && s.target > 0 =>
+    | (Some(source), Some(_)) if s.source > 0 && s.target > 0 =>
       Some({
         key: source.key,
         source: s.source,
         via: Connection(k),
-        label: t.label,
+        label: SlotParams.targetLabel(get, s.target),
         amount: ModMatrix.amountId(k),
-        targets: connectionTargets(t),
+        targets: connectionTargets(get, s.target),
       })
     | _ => None
     }
@@ -267,6 +269,8 @@ let fromIds = key => [
   ),
   ...fixedDepths(key)->Array.map(((amount, _, _)) => amount),
   ...ModMatrix.slotNumbers->Array.flatMap(k => [ModMatrix.sourceId(k), ModMatrix.targetId(k), ModMatrix.amountId(k)]),
+  // (what the slots hold: what their knobs' connections move)
+  ...SlotParams.kindIds,
 ]
 
 // Whether source key moves anything: a route with an amount.
@@ -295,7 +299,8 @@ let slotOf = m =>
 
 // a parameter's name as a matrix target ("" for one the matrix can't reach)
 let ownLabel = id =>
-  switch ModMatrix.targetOfParam(id) {
+  switch SlotParams.targetOfParam(id) {
+  | _ if PorridgeParams.isSlotParam(id) => SlotParams.slotParamLabel(id)
   | t if t >= 0 => (ModMatrix.targets->Array.getUnsafe(t)).label
   | _ => ""
   }

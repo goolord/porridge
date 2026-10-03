@@ -1286,7 +1286,8 @@ let addEffect = (r, w, m, kind: FxRack.kind, ~shuffled=false) =>
       : rack->Array.findIndex(x => rank(x.kind) > rank(kind))
     let at = at < 0 ? Array.length(rack) : at
     let next = Array.concat(Array.concat(rack->Array.slice(~start=0, ~end=at), [e]), rack->Array.slice(~start=at))
-    FxRack.values(next)->Array.forEach(((id, v)) => put(m, id, v))
+    FxRack.values(get(m, ...), next)->Array.forEach(((id, v)) => put(m, id, v))
+    let e = FxRack.placed(next)->Array.getUnsafe(at)
     put(m, FxRack.switchId(e), FxRack.onValue(e))
     effectSettings(r, w, m, e)
     true
@@ -1329,7 +1330,8 @@ let addToLane = (r, w, m, kind: FxRack.kind) =>
   FxRack.free(rackOf(m), ~lane=laneOf(m), ~forLane=true, kind)->Option.forEach(e => {
     let lane = Array.concat(laneOf(m), [e])
     let ampAt = lane->Array.some(x => x.kind == #resonator) ? Array.length(lane) : 0
-    FxRack.laneValues(lane, {filterAt: 0, ampAt})->Array.forEach(((id, v)) => put(m, id, v))
+    FxRack.laneValues(get(m, ...), lane, {filterAt: 0, ampAt})->Array.forEach(((id, v)) => put(m, id, v))
+    let e = FxRack.placed(lane, ~lane=true)->Array.getUnsafe(Array.length(lane) - 1)
     put(m, FxRack.switchId(e), FxRack.onValue(e))
     effectSettings(r, w, m, e, ~lane=true)
     let s = (first, v) => put(m, FxRack.id(e, first), v)
@@ -1378,7 +1380,7 @@ let voiceFx = (r, w, k, m) => {
 let makeFx = (r, w, k: kind, m) => {
   drive(r, w, k, m)
   // an empty rack, then up to five effects (pads and bells always get a space)
-  FxRack.values([])->Array.forEach(((id, v)) => put(m, id, v))
+  FxRack.values(get(m, ...), [])->Array.forEach(((id, v)) => put(m, id, v))
   let count = w < 0.05 ? 0 : Math.Int.min(5, Float.toInt(Math.round(w * (1. + 3. * r()) + 0.3)))
   let count = (k == #pad || k == #bell) && w >= 0.05 ? Math.Int.max(1, count) : count
   let shuffled = w > 0.7 && chance(r, 0.3)
@@ -1429,7 +1431,7 @@ let sourceUsed = (m, key) =>
 
 // A routing in the first free slot of the matrix, unless the same one is there already.
 let connect = (m, source, target, amount, ~via=?) => {
-  let t = Int.toFloat(ModMatrix.targetIndex(target))
+  let t = Int.toFloat(SlotParams.targetIndex(target))
   let v = via->Option.mapOr(0., sourceValue)
   let same = usedSlots(m)->Array.some(k =>
     get(m, ModMatrix.sourceId(k)) == sourceValue(source) &&
@@ -1509,7 +1511,7 @@ let fxTargets = m =>
       FxRack.id(e, f)
     )
   )
-  ->Array.filter(id => FxRack.all->Array.some(e => FxRack.params(e)->Array.includes(id)) && ModMatrix.targetIndex(id) > 0)
+  ->Array.filter(id => rackOf(m)->Array.some(e => FxRack.params(e)->Array.includes(id)) && SlotParams.targetOfParam(id) > 0)
 
 // the parameters of the voice lane's effects that a routing can move, each note its own (their
 // tones and depths, not feedback, which can ring on, nor a distortion's gains)
@@ -1520,7 +1522,7 @@ let laneTargets = m =>
       FxRack.id(e, f)
     )
   )
-  ->Array.filter(id => laneOf(m)->Array.some(e => FxRack.params(e)->Array.includes(id)) && ModMatrix.targetIndex(id) > 0)
+  ->Array.filter(id => laneOf(m)->Array.some(e => FxRack.params(e)->Array.includes(id)) && SlotParams.targetOfParam(id) > 0)
 
 // A kind of routing: the wildness it needs, how likely it is for each kind of patch, whether the
 // patch can take it, and what it adds (false if it couldn't).
@@ -2295,6 +2297,15 @@ let generate = (~wild: wildness, ~kind: kind, ~random as r: rng, ~keep: option<(
   if !locked(#mod) {
     makeMod(r, wild.mod, kind, m)
   }
+  // (a new rack takes the connections to its slots' knobs with what it moves: locked ones stay)
+  keep->Option.forEach(((from, _)) =>
+    from.values->Map.forEachWithKey((v, id) =>
+      switch owner(id) {
+      | Some(a) if locked(a) => m->Map.set(id, v)
+      | _ => ()
+      }
+    )
+  )
   m->Map.set("Gain", gainFor(t, ~note=profile(kind).note))
   t
 }
@@ -2468,7 +2479,7 @@ let restructure = (r, w, k: kind, t, a: area) => {
       voiceFx(r, w, k, m)
     } else if rack != [] && chance(r, 0.4) {
       let gone = pick(r, rack)
-      FxRack.values(rack->Array.filter(e => e != gone))->Array.forEach(((id, v)) => put(m, id, v))
+      FxRack.values(get(m, ...), rack->Array.filter(e => e != gone))->Array.forEach(((id, v)) => put(m, id, v))
       put(m, FxRack.switchId(gone), 0.)
     } else if chance(r, 0.25) {
       drive(r, w, k, m)
@@ -2543,6 +2554,13 @@ let vary = (from: patch, ~amount, ~wild: wildness, ~locks: array<area>, ~kind: k
     }
   })
   tamedFeedback(m)
+  // (the rack's changes leave the locked areas' values as they were: its connections too)
+  src->Map.forEachWithKey((v, id) =>
+    switch owner(id) {
+    | Some(a) if locks->Array.includes(a) => m->Map.set(id, v)
+    | _ => ()
+    }
+  )
   // a distortion's pregain or type moved: its postgain follows, as far as the curves differ
   let (t0, t1) = (Float.toInt(get(src, "Sat_Type")), Float.toInt(get(m, "Sat_Type")))
   let (p0, p1) = (get(src, "Sat_Pregain"), get(m, "Sat_Pregain"))
@@ -2661,7 +2679,7 @@ let modText = m =>
   switch Array.concat(
     usedSlots(m)->Array.map(k => {
       let slot = ModMatrix.readSlot(get(m, ...), k)
-      `${sourceLabel(slot.source)} > ${targetLabel(slot.target)}` ++ (slot.via == 0 ? "" : ` (${sourceLabel(slot.via)})`)
+      `${sourceLabel(slot.source)} > ${SlotParams.targetLabel(get(m, ...), slot.target)}` ++ (slot.via == 0 ? "" : ` (${sourceLabel(slot.via)})`)
     }),
     xyText(m),
   ) {
@@ -2709,7 +2727,7 @@ let nameOf = (m, ~kind, ~random as r: rng) => {
   // (the rack's effects and the voices')
   let rack = Array.concat(rackOf(m), laneOf(m))
   let has = kind => rack->Array.some(e => e.kind == kind)
-  let routed = target => usedSlots(m)->Array.some(k => get(m, ModMatrix.targetId(k)) == Int.toFloat(ModMatrix.targetIndex(target)))
+  let routed = target => usedSlots(m)->Array.some(k => get(m, ModMatrix.targetId(k)) == Int.toFloat(SlotParams.targetIndex(target)))
   let words = [
     (["Glassy", "Crystal"], (mode == pm || mode == fm) && get(m, "O1_Waveform") == sine),
     (["Metallic", "Clangy"], mode == ring || mode == am),
