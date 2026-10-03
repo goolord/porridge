@@ -109,14 +109,15 @@ const delay = ({ unit, length, feedback, wet }) => {
 
 const mod = (source, target, amount, via) => via ? { source, target, amount, via } : { source, target, amount };
 
-// the effects rack, slot by slot, by the names in its menu; Oatmeal's chorus, delay, reverb and
-// EQ stay in their slots unless they're left out, or do nothing there (see the end)
-const rack = (...names) => Object.fromEntries (Array.from ({ length: PorridgeParams.rackSlots }, (_, i) =>
+// the effects rack, slot by slot, by the names in its menu (with FX_Order, which orders the slots
+// holding Oatmeal's four); Oatmeal's chorus, delay, reverb and EQ stay in their slots unless
+// they're left out, or do nothing there (see the end)
+const rack = (...names) => Object.fromEntries (FxRack.values (names.map (name =>
 {
-    const k = names[i] === undefined ? 0 : PorridgeParams.rackNames.indexOf (names[i]);
-    if (k < 0) throw new Error ("no rack entry " + names[i]);
-    return [PorridgeParams.rackId (i + 1), k];
-}));
+    const e = FxRack.ofValue (PorridgeParams.rackNames.indexOf (name));
+    if (! e) throw new Error ("no rack entry " + name);
+    return e;
+})));
 
 // the voice lane: effects in every voice, slot by slot by the names in its menu, and how many of
 // them come before the filter and before the amp envelope (the rest come after the amp, and
