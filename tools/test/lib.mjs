@@ -9,6 +9,10 @@ import { availableParallelism } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as Preset from "../../ui/Preset.res.mjs";
+import * as SlotParams from "../../ui/SlotParams.res.mjs";
+import * as StoredParams from "../../ui/StoredParams.res.mjs";
+import * as PorridgeParams from "../../ui/PorridgeParams.res.mjs";
+import * as ModMatrix from "../../ui/ModMatrix.res.mjs";
 
 export const root = join (dirname (fileURLToPath (import.meta.url)), "..", "..");
 const build = join (root, "tools", "test", "build");
@@ -22,9 +26,42 @@ export const outDir = name =>
     return dir;
 };
 
+// A slot's parameter ("Fl_Rate@3") as the knob the patch has for it, for the kind the sets put in
+// its slot (the rack and lane values, read from the sets, 0 where they don't say): SlotParams.
+export const toEndpoints = sets =>
+{
+    // (sets that name the old copies' parameters, D2_Wet or Fl_Rate for the effect in a slot,
+    // load into the slots as a program from before them would: Preset.migrateSlots)
+    const targetKeys = Object.keys (sets).filter (k => /^Mod\d+_Target$/.test (k));
+    const keyOf = k => ModMatrix.targets[sets[k]]?.key;
+    if (Object.keys (sets).some (k => PorridgeParams.isLegacyId (k)) || targetKeys.some (k => PorridgeParams.isLegacyId (keyOf (k))))
+    {
+        // (connections to them too)
+        const m = Preset.migrateSlots ("test", sets, targetKeys.map (k => ({ source: "x", target: keyOf (k), amount: 1 })));
+        if (m.modulations.length !== targetKeys.length) throw new Error ("a test's connection to a copy in no slot");
+        sets = { ...m.params };
+        targetKeys.forEach ((k, i) => { sets[k] = SlotParams.targetIndex (m.modulations[i].target); });
+    }
+    const get = id => sets[id] ?? 0;
+    // (every knob of a slot the sets fill: its kind's defaults, as the view sets them)
+    const filled = {};
+    for (let g = 0; g < PorridgeParams.slotCount; ++g)
+        if (sets[PorridgeParams.slotKindId (g)])
+            for (const [knob, v] of SlotParams.knobValues (SlotParams.lookup, id => sets[id] ?? SlotParams.lookup (id)?.init ?? 0, g))
+                filled[knob] = v;
+    return Object.fromEntries (Object.entries ({ ...filled, ...sets }).flatMap (([k, v]) =>
+    {
+        if (! k.includes ("@") || StoredParams.isStored (k)) return [[k, v]];
+        const knob = SlotParams.knobOf (get, k);
+        // (its slot holds another kind: the patch doesn't hear it, as from the view)
+        if (knob === undefined) return [];
+        return [[knob, SlotParams.toKnob (SlotParams.lookup (k), v)]];
+    }));
+};
+
 const hostArgs = ({ program, events, frames, rate = 44100, sets = {}, args = [], out }) =>
     [...(program ? ["--program", program] : []), "--events", events, "--frames", String (frames), "--rate", String (rate), ...args,
-     ...Object.entries (sets).flatMap (([k, v]) => ["--set", `${k}=${v}`]), "--out", out];
+     ...Object.entries (toEndpoints (sets)).flatMap (([k, v]) => ["--set", `${k}=${v}`]), "--out", out];
 
 // the channels of a host output file's contents
 const channelsOf = b =>

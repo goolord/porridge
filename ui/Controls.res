@@ -48,11 +48,11 @@ let clipboard = ref(None)
 let contextMenu = (c, e, ~x, ~y) => {
   let {ctx, id, def} = c
   let model = ctx.model
-  let target = ModMatrix.targetOfParam(id)
+  let target = SlotParams.targetOfParam(id)
   let modulators = Modulators.on(model, id)
   let get = id => model->ParamModel.get(id)
   let connect = s => {
-    let name = `${ModEdit.sourceName(ctx.programs, s)} → ${(ModMatrix.targets->Array.getUnsafe(target)).label}`
+    let name = `${ModEdit.sourceName(ctx.programs, s)} → ${Modulators.ownLabel(id)}`
     switch ModEdit.connect(model, s, target, ~amount=ModEdit.defaultAmount) {
     | Ok(_) =>
       model->ParamModel.nameStep(name)
@@ -349,7 +349,7 @@ let modMarks = (ctx: Ctx.t, e, track, id, ~norm) => {
 // has moved it; an alt-drag changes its first connection's amount, and a source dropped on it
 // from the tray (ModTray) connects to it.
 let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
-  let target = ModMatrix.targetOfParam(id)
+  let target = SlotParams.targetOfParam(id)
   let (c, e) = frame(ctx, parent, id, ~cls="p", ~x, ~y, ~w, ~label?, ~labelCls="l", ~more=() =>
     modulationText(ctx, id)
   )
@@ -412,7 +412,7 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
         let amountId = ModMatrix.amountId(k)
         let amountDef = ctx.model->ParamModel.def(amountId)
         let source = ModEdit.sourceName(ctx.programs, ModMatrix.readSlot(get, k).source)
-        let route = `${source} → ${(ModMatrix.targets->Array.getUnsafe(target)).label}`
+        let route = `${source} → ${Modulators.ownLabel(id)}`
         let show = () => ctx.status->Status.show(`${route}: ${amountDef.valueText(get(amountId))}`)
         e->addClass("drag")
         ctx.model->ParamModel.beginGesture(amountId)

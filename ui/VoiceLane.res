@@ -39,8 +39,12 @@ let setAll = (model, values: array<(string, float)>) =>
     }
   )
 
-// Writes the lane as these items say (an amp before the filter goes right after it).
-let write = (model, list: array<item>) => {
+let get = (model, id) => model->ParamModel.get(id)
+let lane = model => FxRack.readLane(get(model, ...))
+let rack = model => FxRack.read(get(model, ...))
+
+// The lane's effects and places as these items say (an amp before the filter goes right after it).
+let laneOf = (list: array<item>) => {
   let lane = list->Array.filterMap(x =>
     switch x {
     | Fx(e) => Some(e)
@@ -52,12 +56,18 @@ let write = (model, list: array<item>) => {
     i < 0 ? Array.length(lane) : list->Array.slice(~start=0, ~end=i)->Array.filter(x => x != FilterNode && x != AmpNode)->Array.length
   }
   let filterAt = before(FilterNode)
-  setAll(model, FxRack.laneValues(lane, {filterAt, ampAt: Math.Int.max(filterAt, before(AmpNode))}))
+  (lane, {FxRack.filterAt, ampAt: Math.Int.max(filterAt, before(AmpNode))})
 }
 
-let get = (model, id) => model->ParamModel.get(id)
-let lane = model => FxRack.readLane(get(model, ...))
-let rack = model => FxRack.read(get(model, ...))
+// Writes the lane as these items say, and the rack as this list (as it is if left out).
+let write = (model, list: array<item>, ~rack=?) => {
+  let (lane, places) = laneOf(list)
+  let rack = rack->Option.getOr(FxRack.read(get(model, ...)))
+  setAll(model, FxRack.layout(get(model, ...), ~rack, ~lane, ~places))
+}
+
+// Where the lane's effect at index i is once written.
+let placedAt = i => ({kind}: FxRack.effect) => {FxRack.kind, place: Lane(i)}
 
 let switchOn = (model, e: FxRack.effect) => {
   let id = FxRack.switchId(e)
@@ -70,7 +80,8 @@ let switchOn = (model, e: FxRack.effect) => {
 // following each note's key fully). Returns it.
 let add = (model, kind) =>
   FxRack.free(rack(model), ~lane=lane(model), ~forLane=true, kind)->Option.map(e => {
-    write(model, [...items(get(model, ...)), Fx(e)])
+    let e = placedAt(Array.length(lane(model)))(e)
+    write(model, [...items(get(model, ...)), Fx({...e, place: Fresh})])
     switchOn(model, e)
     if kind == #filter {
       model->ParamModel.gestureSet(FxRack.id(e, "Ff_Track"), 1.)
@@ -88,30 +99,32 @@ let copySettings = (model, ~from, ~to) =>
 
 // A copy with the same settings, right after it.
 let duplicate = (model, e: FxRack.effect) =>
-  FxRack.free(rack(model), ~lane=lane(model), ~forLane=true, e.kind)->Option.map(copy => {
-    copySettings(model, ~from=e, ~to=copy)
+  FxRack.free(rack(model), ~lane=lane(model), ~forLane=true, e.kind)->Option.map(fresh => {
     let list = items(get(model, ...))
     let i = list->Array.findIndex(x => x == Fx(e))
-    list->Array.splice(~start=i + 1, ~remove=0, ~insert=[Fx(copy)])
+    list->Array.splice(~start=i + 1, ~remove=0, ~insert=[Fx(fresh)])
     write(model, list)
+    let n = lane(model)->Array.findIndex(x => x == e)
+    let copy = placedAt(n + 1)(e)
+    copySettings(model, ~from=e, ~to=copy)
     copy
   })
 
 // From the lane to the end of the rack, keeping its settings.
-let toRack = (model, e: FxRack.effect) =>
-  if !FxRack.laneOnly(e.kind) && !FxRack.isFull(rack(model)) {
-    remove(model, e)
-    setAll(model, FxRack.values([...rack(model), e]))
+let toRack = (model, e: FxRack.effect) => {
+  let r = rack(model)
+  if !FxRack.laneOnly(e.kind) && FxRack.free(r, e.kind) != None {
+    write(model, items(get(model, ...))->Array.filter(x => x != Fx(e)), ~rack=[...r, e])
     true
   } else {
     false
   }
+}
 
 // From the rack to the end of the lane.
 let fromRack = (model, e: FxRack.effect) =>
   if FxRack.canBeInLane(e) && !FxRack.laneFull(lane(model)) {
-    setAll(model, FxRack.values(rack(model)->Array.filter(x => x != e)))
-    write(model, [...items(get(model, ...)), Fx(e)])
+    write(model, [...items(get(model, ...)), Fx(e)], ~rack=rack(model)->Array.filter(x => x != e))
     true
   } else {
     false
@@ -129,26 +142,32 @@ let label = (model, e) => FxRack.label(lane(model), e)
 // An add menu's entries that can be added, in their groups (FxRack.menuGroups): what each adds
 // (the first of its kinds that can be added, and how to set it up), and the menu's items, each
 // with its icon.
-let kindMenu = (~addable) => {
+// (atLimit: the kinds the rack can't take another of, shown greyed out with why: the convolver,
+// one at a time)
+let kindMenu = (~addable, ~atLimit=[]) => {
   let entries = FxRack.menuGroups->Array.flatMap(((title, entries)) =>
     entries
     ->Array.filterMap((entry: FxRack.addEntry) =>
-      entry.kinds->Array.find(k => addable->Array.includes(k))->Option.map(k => (entry, k))
+      switch entry.kinds->Array.find(k => addable->Array.includes(k)) {
+      | Some(k) => Some((entry, k, false))
+      | None => entry.kinds->Array.find(k => atLimit->Array.includes(k))->Option.map(k => (entry, k, true))
+      }
     )
-    ->Array.mapWithIndex(((entry, k), i) => (entry, k, i == 0 ? Some(title) : None))
+    ->Array.mapWithIndex(((entry, k, full), i) => (entry, k, full, i == 0 ? Some(title) : None))
   )
-  let items = entries->Array.mapWithIndex(((entry, _, heading), i) => {
-    Menu.label: entry.name,
+  let items = entries->Array.mapWithIndex(((entry, _, full, heading), i) => {
+    Menu.label: full ? entry.name ++ " (one at a time)" : entry.name,
     value: i,
+    disabled: full,
     icon: ?Icons.rackKind(entry.icon)->Option.map(icon => {
       let wrap = el("span", ~cls="icw")
       wrap->appendChild(Icons.render(icon))
       wrap
     }),
     ?heading,
-    hint: entry.about,
+    hint: full ? `Porridge runs one ${FxRack.kindName(Array.getUnsafe(entry.kinds, 0))} at a time (its impulse and spectra are most of its memory), and the rack has one` : entry.about,
   })
-  (entries->Array.map(((entry, k, _)) => (k, entry.setup)), items)
+  (entries->Array.map(((entry, k, _, _)) => (k, entry.setup)), items)
 }
 
 // Sets an effect up as its add menu entry says.
@@ -178,7 +197,7 @@ let addMenu = (ctx: Ctx.t, anchor, ~onAdded) => {
 let menu = (ctx: Ctx.t, e: FxRack.effect, anchor, ~onRemoved=() => ()) => {
   let model = ctx.model
   let canCopy = FxRack.free(rack(model), ~lane=lane(model), ~forLane=true, e.kind) != None
-  let canMove = !FxRack.laneOnly(e.kind) && !FxRack.isFull(rack(model))
+  let canMove = !FxRack.laneOnly(e.kind) && FxRack.free(rack(model), e.kind) != None
   ctx.menu->Menu.show(
     anchor,
     [

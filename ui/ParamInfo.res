@@ -59,14 +59,12 @@ let unitFor = (d: ParamDefs.t) =>
 let oatmealSetup = /^(M[12]_Target_\d|XY_[HV]_(Target_\d|CC)|CC\d(_Target_\d)?|MIDI_Channel_\d+|Tune_\w+)$/
 
 let porridgeSetup = Lazy.make(() => {
-  let distortion = PorridgeParams.rackKinds->Array.find(k => k.key == "distortion")->Option.getOrThrow
   let shaper = PorridgeParams.shaperParams->Array.map(Pair.first)
   Set.fromArray([
     ...ModMatrix.slotNumbers->Array.flatMap(k =>
       ModMatrix.slotIds(k)->Array.filter(id => id != ModMatrix.amountId(k))
     ),
     ...shaper,
-    ...distortion.copies->Array.flatMap(n => shaper->Array.map(PorridgeParams.copyId(_, n))),
     ...Array.fromInitializer(~length=PorridgeParams.rackSlots, k => PorridgeParams.rackId(k + 1)),
     ...PorridgeParams.laneSpecs->Array.map(s => s.id),
     "FX_Order",

@@ -380,17 +380,27 @@ type law =
   | Pan
   // a parameter of a copy Porridge no longer has: moves nothing
   | Retired
+  // slot g's knob i (0-based g: the rack's 0..7, the lane's 8..11; i from 1): the parameter the
+  // slot's kind has there (PorridgeParams.knobsOf), whichever it is
+  | Slot(int, int)
 
 // label: the knob's own label, with its block where that alone is ambiguous ("osc 1 level"):
 // every route to it is named so, whatever system it's in (OatmealParams.targetName)
 type target = {key: string, label: string, group: string, law: law}
 
-let knob = (id, label, group) => {key: id, label, group, law: Knob(id)}
+// The groups of Porridge's own effects, whose parameters only the slots have since October 2026:
+// their targets are the slots' (Slot, below), and the ones by parameter keep their places,
+// retired (presets that have them load them as the slots' targets: Preset).
+let slotOnlyGroups = ["flanger", "phaser", "compressor", "space", "convolve", "bode", "fxfilter", "utility", "ambience", "air", "resonator", "octaver", "shifter"]
+
+let knob = (id, label, group) =>
+  slotOnlyGroups->Array.includes(group) ? {key: id, label, group: "retired", law: Retired} : {key: id, label, group, law: Knob(id)}
 
 // The effects' copies Porridge no longer has (PorridgeParams' retired ones: the fourth of each
 // kind, the fifth distortion). Their targets keep their places (the DSP and the Mod_Target
 // parameters know targets by index), in a group of their own that no menu shows.
-let isRetiredCopy = (group, n) => n == (group == "distortion" ? 5 : 4)
+// (every copy's, since the slots took them over in October 2026)
+let isRetiredCopy = (_group, _n) => true
 
 // copy n's parameter id as a target in this group
 let copyKnob = (id, label, group, n) =>
@@ -725,6 +735,39 @@ let targets = [
   knob("O2_PD", "osc 2 phase dist", "osc"),
   ...effectTargets("bode", "freq shifter", [2, 3], [("Bd_Ratio", "× note")]),
 ]
+
+// The slots' knobs (PorridgeParams.knobId: FX1_1 .. FX8_28, then VL1_1 .. VL4_21), whatever
+// each slot holds: a connection to one moves the parameter the slot's kind has there.
+let rackSlotCount = 8
+let laneSlotCount = 4
+let rackKnobCount = 28
+let laneKnobCount = 21
+let slotKnobs = g => g < rackSlotCount ? rackKnobCount : laneKnobCount
+let slotTargetKey = (g, i) =>
+  g < rackSlotCount
+    ? `FX${Int.toString(g + 1)}_${Int.toString(i)}`
+    : `VL${Int.toString(g - rackSlotCount + 1)}_${Int.toString(i)}`
+let targets = [
+  ...targets,
+  ...Array.fromInitializer(~length=rackSlotCount + laneSlotCount, g =>
+    Array.fromInitializer(~length=slotKnobs(g), i => {
+      key: slotTargetKey(g, i + 1),
+      label: slotTargetKey(g, i + 1),
+      group: "slot",
+      law: Slot(g, i + 1),
+    })
+  )->Array.flat,
+]
+
+// The target of slot g's knob i.
+let firstSlotTarget = targets->Array.findIndex(t => t.group == "slot")
+let slotTarget = (g, i) => {
+  let before = ref(0)
+  for k in 0 to g - 1 {
+    before := before.contents + slotKnobs(k)
+  }
+  firstSlotTarget + before.contents + i - 1
+}
 
 // The target groups, by the key in each target's group, with their titles.
 let groups = [

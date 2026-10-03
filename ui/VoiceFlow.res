@@ -107,7 +107,7 @@ let make = (ctx: Ctx.t, parent, box: box, ~show: block => unit) => {
   let laneNodes = Map.make()
   let itemEl = ref((_: VoiceLane.item) => filterNode)
   let laneNode = (e: FxRack.effect) =>
-    switch laneNodes->Map.get(FxRack.value(e)) {
+    switch laneNodes->Map.get(FxRack.tabKey(e)) {
     | Some(n) => n
     | None =>
       let n = node(~cls="lane grab", "")
@@ -138,7 +138,7 @@ let make = (ctx: Ctx.t, parent, box: box, ~show: block => unit) => {
         `${VoiceLane.label(model, e)}, in every voice: ${FxPanels.summary(model, e)->String.replaceAll("\n", ", ")}. Click to open it, drag it sideways to move it, right-click for more`
       )
       let made = (n, name, led)
-      laneNodes->Map.set(FxRack.value(e), made)
+      laneNodes->Map.set(FxRack.tabKey(e), made)
       made
     }
   itemEl :=

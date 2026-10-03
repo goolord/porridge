@@ -68,18 +68,41 @@ let sourceOrder = ModEdit.sourceOrder
 let isMacro = s => ModEdit.macroOf(s) != None
 let isController = ModEdit.isController
 
-let effectOf = ModScope.effectOf
-let copyOf = ModScope.copyOf
+// The one of Oatmeal's four effects whose parameter a target moves, if any.
+let fixedEffectOf = t =>
+  switch ModMatrix.targets[t] {
+  | Some({law: Knob(id)}) => FxRack.firsts->Array.find(e => FxRack.params(e)->Array.includes(id))
+  | _ => None
+  }
 
-// The target groups, by index: an effect's own targets first, then each copy's.
-let targetGroups = ModMatrix.groups->Array.map(((key, title)) => (
-  title,
-  ModMatrix.targets
-  ->Array.mapWithIndex((t, i) => (t, i))
-  ->Array.filter(((t, i)) => i > 0 && t.group == key)
-  ->Array.map(Pair.second)
-  ->Array.toSorted((a, b) => Int.toFloat(copyOf(a) - copyOf(b))),
-))
+// The target groups, by index: the voice's and Oatmeal's effects' (each group's title), then each
+// slot's knobs (titled by what the slot holds, as the picker shows them).
+let targetGroups = [
+  ...ModMatrix.groups->Array.map(((key, title)) => (
+    title,
+    ModMatrix.targets
+    ->Array.mapWithIndex((t, i) => (t, i))
+    ->Array.filter(((t, i)) => i > 0 && t.group == key)
+    ->Array.map(Pair.second),
+  )),
+  ...Array.fromInitializer(~length=PorridgeParams.slotCount, g => (
+    PorridgeParams.slotTitle(g),
+    Array.fromInitializer(~length=PorridgeParams.knobCount(g), i => ModMatrix.slotTarget(g, i + 1)),
+  )),
+]
+
+// A slot group's title: what the slot holds, and where ("delay · FX 3").
+let groupTitle = (get, gi) => {
+  let fixed = Array.length(ModMatrix.groups)
+  if gi < fixed {
+    targetGroups->Array.getUnsafe(gi)->Pair.first
+  } else {
+    let g = gi - fixed
+    SlotParams.kindAt(get, g)->Option.mapOr("", k =>
+      `${k.menuName->Option.getOr(String.toLowerCase(k.name))} · ${PorridgeParams.slotTitle(g)}`
+    )
+  }
+}
 
 // the picker's two sections
 let sections: array<(string, ModMatrix.scope, string)> = [
@@ -106,7 +129,7 @@ let build = (ctx: Ctx.t, page) => {
   let macroOf = ModEdit.macroOf
   let sourceLabel = s => ModEdit.sourceName(ctx.programs, s)
   let keyLabel = key => ModEdit.keyName(ctx.programs, key)
-  let targetLabel = t => ModMatrix.targets[t]->Option.mapOr("", t => t.label)
+  let targetLabel = t => SlotParams.targetLabel(get, t)
   let connectionText = k => {
     let {source, target, amount, via} = slot(k)
     let amountText = (model->ParamModel.def(ModMatrix.amountId(k))).valueText(amount)
@@ -114,9 +137,9 @@ let build = (ctx: Ctx.t, page) => {
   }
   // (in the route's words, not the parameter's own name)
   let targetText = t =>
-    switch ModMatrix.targets->Array.getUnsafe(t) {
-    | {law: Knob(id), label} => `${label}: ${(model->ParamModel.def(id)).valueText(get(id))}`
-    | {label} => label
+    switch SlotParams.targetParam(get, t) {
+    | Some(id) => `${targetLabel(t)}: ${(model->ParamModel.def(id)).valueText(get(id))}`
+    | None => targetLabel(t)
     }
 
   let hover = (e, text) => ctx.status->Status.hover(e, text)
@@ -317,6 +340,8 @@ let build = (ctx: Ctx.t, page) => {
   let mode = ref(Closed)
   // by target index
   let targetChips = Map.make()
+  // the slots' targets' chips, whose labels follow what the slots hold
+  let chipLabels = Map.make()
   let pickTargetRef = ref((_: int) => ())
 
   // whether the source being connected already reaches target t
@@ -335,6 +360,7 @@ let build = (ctx: Ctx.t, page) => {
       chip->setTabIndex(0)
       el("i", ~cls="jk", ~parent=chip)->ignore
       el("span", ~cls="lbl", ~text=targetLabel(t), ~parent=chip)->ignore
+      chipLabels->Map.set(t, chip)
       chip->onPointer(#pointerdown, ev => {
         ev->preventDefault
         if ev->button == 0 {
@@ -374,12 +400,23 @@ let build = (ctx: Ctx.t, page) => {
   let layoutPicker = () => {
     let words = search->value->String.toLowerCase->String.split(" ")->Array.filter(w => w != "")
     let rack = FxRack.read(get)
-    let lane = FxRack.readLane(get)
+    // (a slot's knob shows only while the slot's kind has a parameter there that can be moved)
+    let isSlot = t => ModScope.slotOf(t) != None
+    chipLabels->Map.forEachWithKey((chip, t) =>
+      if isSlot(t) {
+        let label = SlotParams.targetParam(get, t)->Option.flatMap(id =>
+          PorridgeParams.parseSlotParam(id)->Option.flatMap(((first, _)) =>
+            SlotParams.kindOfFirst(first)->Option.flatMap(k => k.params->Array.find(((p, _)) => p == first))->Option.map(Pair.second)
+          )
+        )
+        chip->querySelector(".lbl")->Option.forEach(l => l->setTextContent(label->Option.getOr("")))
+      }
+    )
     let shows = (title, t) =>
-      if words == [] {
-        allEffects.contents ||
-        reaches(t) ||
-        effectOf(t)->Option.mapOr(true, e => FxRack.holds(rack, e) || FxRack.holds(lane, e))
+      if isSlot(t) && SlotParams.targetParam(get, t) == None {
+        false
+      } else if words == [] {
+        allEffects.contents || reaches(t) || fixedEffectOf(t)->Option.mapOr(true, e => FxRack.holds(rack, e))
       } else {
         let text = String.toLowerCase(`${title} ${targetLabel(t)}`)
         words->Array.every(w => text->String.includes(w))
@@ -391,8 +428,8 @@ let build = (ctx: Ctx.t, page) => {
     sections->Array.forEachWithIndex(((_, scope, _), si) => {
       let sectionHead = sectionHeads->Array.getUnsafe(si)
       let heads = groupHeads->Array.getUnsafe(si)
-      let shownGroups = targetGroups->Array.map(((title, members)) =>
-        members->Array.filter(t => ModScope.targetScope(get, t) == scope && shows(title, t))
+      let shownGroups = targetGroups->Array.mapWithIndex(((_, members), gi) =>
+        members->Array.filter(t => ModScope.targetScope(get, t) == scope && shows(groupTitle(get, gi), t))
       )
       heads->Array.forEach(h => h->setStyle("display", "none"))
       if shownGroups->Array.every(g => g == []) {
@@ -404,12 +441,13 @@ let build = (ctx: Ctx.t, page) => {
         shownGroups->Array.forEachWithIndex((shown, i) =>
           if shown != [] {
             let head = heads->Array.getUnsafe(i)
+            head->setTextContent(groupTitle(get, i))
             head->setStyle("display", "")
             head->place(Grid.padX + 1., y.contents)->ignore
             let g = Grid.make(ctx, picks, ~y=y.contents + headingHeight, ~cw=pg)
             let (c, r) = (ref(0), ref(0))
             shown->Array.forEachWithIndex((t, k) => {
-              if k > 0 && (c.contents == pickerColumns || copyOf(t) != copyOf(shown->Array.getUnsafe(k - 1))) {
+              if k > 0 && c.contents == pickerColumns {
                 c := 0
                 r := r.contents + 1
               }

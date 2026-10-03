@@ -7,10 +7,9 @@
 //   - a preset missing parameters and tables reads back with their defaults;
 //   - modulations, macro names and microtunings survive a round trip;
 //   - Porridge's extra list values export as Oatmeal's nearest, and are reported;
-//   - the retired fourth copies keep their numbers, and programs that used one load it onto a
-//     free copy, or without it and a warning;
-//   - the retired key shifter loads as the frequency shifter (a free Bode copy, its ratio of the
-//     note, its offset as the shift), connections and all, or without it and a warning.
+//   - rack values and targets keep their numbers, and programs from before the slots load each
+//     effect's copy into its slot (connections, shapes and impulse files too), two convolvers
+//     as one with a warning, the key shifter as the Bode; a reorder moves what's in the slots.
 //   - the noise's type, density and sample survive a round trip, and the types that aren't
 //     white are reported for an Oatmeal export, which plays white noise.
 //
@@ -189,137 +188,139 @@ else
     if (menu !== "0,6,7,8,4,5,[Oat (aliasing)] 1,2,3") fail ("the waveform menu: " + menu);
 }
 
-// The rack's fourth copies (the fifth distortion) are retired: their rack values and modulation
-// targets keep their numbers and run or move nothing, and no menu offers them
+// The slots (October 2026): rack values keep their numbers, the copies' ones and the old fourth
+// copies' naming instances now, and the instances added after them; only the key shifter's and
+// the second convolver's are retired. The copies' and Porridge's kinds' firsts' targets keep their
+// places, retired, and the slots' knobs' come after them.
 {
-    // (and the key shifter's two, which the frequency shifter took in)
-    const retiredValues = [7, 10, 13, 16, 20, 24, 28, 32, 36, 42, 46, 50, 54, 58, 59, 60];
-    if (PorridgeParams.rackEntries.length !== 65) fail (`the rack has ${PorridgeParams.rackEntries.length} values, not 65`);
-    PorridgeParams.rackEntries.forEach ((e, v) =>
-    {
-        const retired = PorridgeParams.retiredEntry (v) !== undefined;
-        if (retired !== retiredValues.includes (v)) fail (`rack value ${v} (${PorridgeParams.rackNames[v]}) retired: ${retired}`);
-        if (retired && (e !== undefined || FxRack.ofValue (v) !== undefined)) fail (`retired rack value ${v} still runs`);
-    });
-    if (FxRack.all.some (e => e.copy > (e.kind === "distortion" ? 4 : 3))) fail ("the add menus offer a fourth copy");
-    // (their indices before they were retired)
-    const targets = { C4_Mix: 65, D4_Wet: 68, Sat5_Pregain: 75, D4_Rotation: 144, Ff4_Track: 449, Fl4_Track: 477 };
+    const value = (kind, n) => PorridgeParams.entryValue (kind, n);
+    const retiredValues = PorridgeParams.rackEntries.map ((_, v) => v).filter (v => PorridgeParams.retiredEntry (v) !== undefined);
+    const names = retiredValues.map (v => PorridgeParams.rackNames[v]).join ();
+    if (names !== "Convolve 2 (retired),Shifter (retired),Shifter 2 (retired)") fail ("retired rack values: " + names);
+    if (value ("delay", 4) !== 10 || value ("distortion", 5) !== 20 || value ("flanger", 4) !== 24 || PorridgeParams.rackEntries.length !== 125) fail ("the old fourth copies aren't instances");
+    for (const k of PorridgeParams.rackKinds)
+        if (k.runsIn !== "LaneOnly" && PorridgeParams.instanceNumbers (k).some (n => value (k.key, n) < 0)) fail (`${k.key} lacks an instance`);
+    if (PorridgeParams.instanceNumbers (PorridgeParams.rackKinds.find (k => k.key === "convolve")).length !== 1) fail ("more than one convolver");
+    // (their indices before the slots)
+    const targets = { C4_Mix: 65, D4_Wet: 68, Sat5_Pregain: 75, D4_Rotation: 144, Ff4_Track: 449, Fl4_Track: 477, D2_Wet: 66, Fl_Rate: 77 };
     for (const [key, i] of Object.entries (targets))
         if (ModMatrix.targetIndex (key) !== i || ModMatrix.targets[i].law !== "Retired") fail (`target ${key} isn't retired at ${i}`);
-    // (the oscillators' morph and phase distortion came after, at 484 .. 487, then the frequency
-    // shifter's ratio of the note; the key shifter's targets are retired in their places)
-    if (ModMatrix.targets.length !== 491) fail (`${ModMatrix.targets.length} targets, not 491`);
-    if (ModMatrix.targetIndex ("O1_Morph") !== 484 || ModMatrix.targetIndex ("O2_PD") !== 487) fail ("the osc shape targets moved");
-    if (ModMatrix.targetIndex ("Bd_Ratio") !== 488 || ModMatrix.targetIndex ("Bd3_Ratio") !== 490) fail ("the frequency shifter's ratio targets");
-    for (const [key, i] of Object.entries ({ Sh_Ratio: 450, Sh_Hz: 451, Sh_Mix: 452, Sh2_Mix: 455 }))
-        if (ModMatrix.targetIndex (key) !== i || ModMatrix.targets[i].law !== "Retired") fail (`target ${key} isn't retired at ${i}`);
-    if (! ModMatrix.targets.every (t => (t.law === "Retired") === PorridgeParams.isRetiredId (t.key))) fail ("a retired copy's target moves something");
-    if (ParamDefs.makeDefs ().some (d => PorridgeParams.isRetiredId (d.id))) fail ("a retired copy keeps its parameters");
+    for (const key of ["C_Mix", "D_Wet", "R_Wet", "EQ_3_Amp", "Sat_Pregain", "Sat_Mix", "O1_Morph"])
+        if (ModMatrix.targets[ModMatrix.targetIndex (key)].law.TAG !== "Knob") fail (`target ${key} doesn't move its knob`);
+    if (ModMatrix.firstSlotTarget !== 491 || ModMatrix.targets.length !== 491 + 8 * 28 + 4 * 21) fail (`${ModMatrix.targets.length} targets`);
+    if (PorridgeParams.rackKnobs !== 28 || PorridgeParams.laneKnobs !== 21) fail ("the slots' knobs");
+    if (ParamDefs.makeDefs ().some (d => PorridgeParams.isLegacyId (d.id))) fail ("a copy keeps its parameters");
 }
 
-// a program that used a fourth copy loads it onto a free copy of its kind, with its parameters,
-// its connections and its place, or without it and a warning
+// a program from before the slots loads each effect in a slot into it: its parameters (its
+// shape's points too) and connections; copies in no slot, and their connections, go; two
+// convolvers keep the first; the key shifter becomes the Bode
 {
-    const value = (kind, copy) => FxRack.value ({ kind, copy });
-    const retired = name => PorridgeParams.rackNames.indexOf (`${name} (retired)`);
-    const load = (params, modulations = []) =>
+    const value = (kind, n) => PorridgeParams.entryValue (kind, n);
+    const named = name => PorridgeParams.rackNames.indexOf (name);
+    const load = (params, modulations = [], impulses) =>
     {
-        const doc = { porridge: "preset", version: 1, name: "old", params, modulations };
+        const doc = { porridge: "preset", version: 1, name: "old", params, modulations, ...(impulses ? { impulses } : {}) };
         const r = Preset.parseJson (JSON.stringify (doc))._0;
         return { p: r.presets[0], warnings: r.warnings, get: id => r.presets[0].values.get (id) };
     };
-    const target = key => ModMatrix.targetIndex (key);
+    const knob = (g, first) =>
+    {
+        const k = PorridgeParams.rackKinds.find (k => k.params.some (([p]) => p === first));
+        return ModMatrix.slotTarget (g, PorridgeParams.knobIndex (k, first) + 1);
+    };
+    const f = Math.fround;
 
-    // onto delay 2, whose old values go; the connection follows it
-    let r = load ({ FX_Rack_1: retired ("Delay 4"), D4_Wet: 0.8, D4_LengthL: 0.3, D2_Wet: 0.1, D2_Rotation: 0.6 },
-                  [{ source: "lfo1", target: "D4_Wet", amount: 0.5 }]);
-    if (r.get ("FX_Rack_1") !== value ("delay", 2) || r.get ("D2_Wet") !== Math.fround (0.8) || r.get ("D2_LengthL") !== Math.fround (0.3)
-        || r.get ("D2_Rotation") !== Preset.defaultValues ().get ("D2_Rotation") || r.warnings.length)
-        fail (`delay 4 loads as rack ${r.get ("FX_Rack_1")}, wet ${r.get ("D2_Wet")}: ${r.warnings}`);
-    if (r.get ("Mod1_Target") !== target ("D2_Wet") || r.get ("Mod1_Source") !== 1) fail ("delay 4's connection doesn't follow it");
+    // a delay copy in slot 1: its values and connection there, a copy outside the rack gone
+    let r = load ({ FX_Rack_1: value ("delay", 2), D2_Wet: 0.8, D2_LengthL: 0.3, D3_Wet: 0.1, FX_Rack_2: value ("flanger", 1), Fl_Rate: 0.7 },
+                  [{ source: "lfo1", target: "D2_Wet", amount: 0.5 }, { source: "lfo2", target: "D3_Wet", amount: 0.2 },
+                   { source: "macro1", target: "Fl_Mix", amount: 0.3 }]);
+    if (r.get ("FX_Rack_1") !== value ("delay", 2) || r.get ("D_Wet@1") !== f (0.8) || r.get ("D_LengthL@1") !== f (0.3)
+        || r.get ("FX_Rack_2") !== value ("flanger", 1) || r.get ("Fl_Rate@2") !== f (0.7) || r.warnings.length)
+        fail (`a delay copy loads as rack ${r.get ("FX_Rack_1")}, wet ${r.get ("D_Wet@1")}: ${r.warnings}`);
+    if (r.get ("Mod1_Target") !== knob (0, "D_Wet") || r.get ("Mod2_Target") !== knob (1, "Fl_Mix") || r.get ("Mod3_Source") !== 0)
+        fail (`the copies' connections: ${r.get ("Mod1_Target")}, ${r.get ("Mod2_Target")}`);
     const json = new TextDecoder ().decode (Preset.writePreset (r.p));
-    if (/D4_/.test (json)) fail ("a retired copy's parameters are written");
+    const doc = JSON.parse (json);
+    if (/"(D[23]|Fl)_[A-Za-z]+"/.test (json) || doc.params["D_Wet@1"] !== 0.8 || "Fl_Rate@1" in doc.params || "D_Wet@2" in doc.params)
+        fail ("the slots' parameters are written as " + Object.keys (doc.params).filter (k => k.includes ("@")).join ());
+    if (doc.modulations.map (m => m.target).join () !== "D_Wet@1,Fl_Mix@2") fail ("the slots' connections are written as " + json);
+    const again = Preset.parseJson (json)._0.presets[0];
+    if (! sameValues (r.p.values, again.values)) fail ("a program with slots doesn't read back");
 
-    // with delay 2 in the rack and delay 3 modulated, it has nowhere to go
-    r = load ({ FX_Rack_1: value ("delay", 2), FX_Rack_2: retired ("Delay 4"), FX_Rack_3: value ("air", 1) },
-              [{ source: "lfo1", target: "D4_Wet", amount: 0.5 }, { source: "lfo2", target: "D3_Wet", amount: 0.2 }]);
-    if (r.get ("FX_Rack_2") !== 0 || r.get ("FX_Rack_3") !== value ("air", 1) || r.warnings.length !== 1 || ! r.warnings[0].includes ("Delay 4"))
-        fail (`delay 4 with no free delay: rack ${r.get ("FX_Rack_2")}, ${r.warnings}`);
-    if (r.get ("Mod1_Target") !== target ("D3_Wet") || r.get ("Mod2_Source") !== 0) fail ("delay 4's connection outlives it");
+    // the old fourth copies are instances again; a distortion in the lane keeps its shape
+    r = load ({ FX_Rack_1: named ("Delay 4"), D4_Wet: 0.8, VL_1: value ("filter", 2), VL_2: named ("Distortion 5"), VL_FilterAt: 1, VL_AmpAt: 2,
+                Ff2_Cutoff: 0.4, Sat5_Type: 3, Sat5_X2: 0.25 });
+    if (r.get ("FX_Rack_1") !== value ("delay", 4) || r.get ("D_Wet@1") !== f (0.8) || r.get ("VL_1") !== PorridgeParams.laneValue (FxRack.spec ("filter"))
+        || r.get ("Ff_Cutoff@L1") !== f (0.4) || r.get ("VL_2") !== PorridgeParams.laneValue (FxRack.spec ("distortion"))
+        || r.get ("Sat_Type@L2") !== 3 || r.get ("Sat_X2@L2") !== 0.25 || r.get ("VL_AmpAt") !== 2 || r.warnings.length)
+        fail (`delay 4 and distortion 5: rack ${r.get ("FX_Rack_1")}, lane ${r.get ("VL_2")}, type ${r.get ("Sat_Type@L2")}: ${r.warnings}`);
 
-    // the fifth distortion, in the voice lane after the filter, becomes the second
-    r = load ({ VL_1: value ("filter", 2), VL_2: retired ("Distortion 5"), VL_FilterAt: 1, VL_AmpAt: 2, Sat5_Type: 3, Sat5_X2: 0.25 });
-    if (r.get ("VL_2") !== value ("distortion", 2) || r.get ("Sat2_Type") !== 3 || r.get ("Sat2_X2") !== 0.25 || r.get ("VL_AmpAt") !== 2)
-        fail (`distortion 5 loads as lane ${r.get ("VL_2")}, type ${r.get ("Sat2_Type")}`);
-
-    // three flangers in use: the fourth leaves the lane, which closes up around the filter and amp
-    r = load ({ VL_1: value ("flanger", 1), VL_2: retired ("Flanger 4"), VL_3: value ("flanger", 2), VL_FilterAt: 2, VL_AmpAt: 3,
-                FX_Rack_1: value ("flanger", 3) });
-    const lane = [1, 2, 3, 4].map (k => r.get ("VL_" + k));
-    if (lane.join () !== [value ("flanger", 1), value ("flanger", 2), 0, 0].join () || r.get ("VL_FilterAt") !== 1 || r.get ("VL_AmpAt") !== 2
-        || r.warnings.length !== 1)
-        fail (`flanger 4 left out of the lane: ${lane}, filter at ${r.get ("VL_FilterAt")}, amp at ${r.get ("VL_AmpAt")}`);
-
-    // a connection to a fourth copy that no slot held moved nothing, and goes without a word
-    r = load ({}, [{ source: "lfo1", target: "Am4_Mix", amount: 0.5 }, { source: "lfo2", target: "Cutoff", amount: 0.2 }]);
-    if (r.get ("Mod1_Target") !== target ("Cutoff") || r.get ("Mod2_Source") !== 0 || r.warnings.length) fail ("a dead connection to a retired copy stays");
+    // two convolvers: the first stays, with its file, the second goes, its file too; the noise's
+    // sample keeps its place
+    const imp = name => ({ name, rate: 48000, left: Bank.floatsToBase64 (new Float32Array ([1, 0.5, 0.25])) });
+    r = load ({ FX_Rack_1: value ("convolve", 1), FX_Rack_2: named ("Convolve 2 (retired)"), Cv_Mix: 0.6, Cv2_Mix: 0.2 }, [],
+              [imp ("a.wav"), imp ("b.wav"), imp ("n.wav")]);
+    if (r.get ("FX_Rack_1") !== value ("convolve", 1) || r.get ("FX_Rack_2") !== 0 || r.get ("Cv_Mix@1") !== f (0.6)
+        || r.warnings.length !== 1 || ! r.warnings[0].includes ("two convolvers")
+        || r.p.impulses[0]?.name !== "a.wav" || r.p.impulses[1] !== undefined || r.p.impulses[2]?.name !== "n.wav")
+        fail (`two convolvers: rack ${r.get ("FX_Rack_2")}, files ${r.p.impulses.map (x => x?.name)}: ${r.warnings}`);
+    // the second alone is the convolver
+    r = load ({ FX_Rack_3: named ("Convolve 2 (retired)"), Cv2_Mix: 0.2 }, [], [null, imp ("b.wav")]);
+    if (r.get ("FX_Rack_3") !== value ("convolve", 1) || r.get ("Cv_Mix@3") !== f (0.2) || r.p.impulses[0]?.name !== "b.wav" || r.warnings.length)
+        fail (`the second convolver alone: rack ${r.get ("FX_Rack_3")}, file ${r.p.impulses[0]?.name}: ${r.warnings}`);
 
     // the stored bank says what it couldn't keep too
     const stored = Preset.decodeNamedBank (JSON.stringify ({ porridge: "bank", version: 1, name: "b", presets: [
-        { name: "full", params: { FX_Rack_1: value ("air", 1), FX_Rack_2: value ("air", 2), FX_Rack_3: value ("air", 3), FX_Rack_4: retired ("Air 4") } } ] }));
-    if (! stored || stored[2].length !== 1 || stored[1][0].values.get ("FX_Rack_4") !== 0) fail ("the stored bank's warnings");
+        { name: "two", params: { FX_Rack_1: value ("convolve", 1), FX_Rack_2: named ("Convolve 2 (retired)") } } ] }));
+    if (! stored || stored[2].length !== 1 || stored[1][0].values.get ("FX_Rack_2") !== 0) fail ("the stored bank's warnings");
+
+    // the key shifter (retired: the frequency shifter took it in) loads as the lane's Bode: its
+    // ratio of the note, its offset (±1 kHz) as the shift (±5 kHz) at cbrt (1/5) of its turn, its
+    // mode and mix; its connections follow it, an offset's amount scaled as its knob
+    const k = Math.cbrt (0.2), near = (a, b) => Math.abs (a - b) < 1e-6;
+    r = load ({ VL_1: named ("Shifter (retired)"), VL_AmpAt: 1, Sh_On: 1, Sh_Ratio: 0.3, Sh_Hz: -0.5, Sh_Mode: 2, Sh_Mix: 0.7 },
+             [{ source: "lfo1", target: "Sh_Hz", amount: 0.2 }, { source: "wander", target: "Sh_Ratio", amount: 0.1 },
+              { source: "lfo2", target: "Sh2_Mix", amount: 0.3 }]);
+    if (r.get ("VL_1") !== PorridgeParams.laneValue (FxRack.spec ("bode")) || r.get ("VL_AmpAt") !== 1 || r.get ("Bd_On@L1") !== 1
+        || r.get ("Bd_Ratio@L1") !== f (0.3) || ! near (r.get ("Bd_Shift@L1"), -0.5 * k) || r.get ("Bd_Mode@L1") !== 2
+        || r.get ("Bd_Mix@L1") !== f (0.7) || r.warnings.length)
+        fail (`the shifter loads as lane ${r.get ("VL_1")}, ratio ${r.get ("Bd_Ratio@L1")}, shift ${r.get ("Bd_Shift@L1")}: ${r.warnings}`);
+    if (r.get ("Mod1_Target") !== knob (8, "Bd_Shift") || ! near (r.get ("Mod1_Amount"), 0.2 * k)
+        || r.get ("Mod2_Target") !== knob (8, "Bd_Ratio") || r.get ("Mod3_Source") !== 0)
+        fail ("the shifter's connections don't follow it (or a dead one stays)");
+    // its defaults (ratio 0.5 of the note)
+    r = load ({ VL_1: named ("Shifter (retired)"), Sh_On: 1 });
+    if (r.get ("Bd_Ratio@L1") !== f (0.5) || r.get ("Bd_Shift@L1") !== 0 || r.get ("Bd_Mix@L1") !== f (0.5)) fail ("the shifter's defaults");
+    // an offset its connections took past ±1 kHz, where the knob ended, goes further now: said
+    r = load ({ VL_1: named ("Shifter (retired)"), Sh_On: 1, Sh_Hz: 0.4 }, [{ source: "lfo1", target: "Sh_Hz", amount: 0.4 }]);
+    if (r.warnings.length !== 1 || ! r.warnings[0].includes ("±1 kHz")) fail (`a shifter's offset modulated past its end: ${r.warnings}`);
 }
 
-// a program with the key shifter (retired: the frequency shifter took it in) loads it as a free
-// Bode copy: its ratio of the note, its offset (±1 kHz) as the shift (±5 kHz) at cbrt (1/5) of its
-// turn, its mode and mix, no feedback; its connections follow it, an offset's amount scaled as
-// its knob. With no Bode free it's left out, and the warning says so.
+// reordering the rack moves each effect's parameters, instance and connections with it; one taken
+// out takes its connections; one added gets its kind's defaults and a free instance
 {
-    const value = (kind, copy) => FxRack.value ({ kind, copy });
-    const shifter = n => PorridgeParams.rackNames.indexOf (n === 1 ? "Shifter (retired)" : `Shifter ${n} (retired)`);
-    const load = (params, modulations = []) =>
-    {
-        const doc = { porridge: "preset", version: 1, name: "old", params, modulations };
-        const r = Preset.parseJson (JSON.stringify (doc))._0;
-        return { p: r.presets[0], warnings: r.warnings, get: id => r.presets[0].values.get (id) };
-    };
-    const target = key => ModMatrix.targetIndex (key);
-    const f = Math.fround, k = Math.cbrt (0.2);
-    const def = id => Preset.defaultValues ().get (id);
-    const near = (a, b) => Math.abs (a - b) < 1e-6;
-
-    // onto the Bode, with every setting and connection
-    let r = load ({ VL_1: shifter (1), VL_AmpAt: 1, Sh_On: 1, Sh_Ratio: 0.3, Sh_Hz: -0.5, Sh_Mode: 2, Sh_Mix: 0.7, Bd_Feedback: 0.6 },
-                  [{ source: "lfo1", target: "Sh_Hz", amount: 0.2 }, { source: "wander", target: "Sh_Ratio", amount: 0.1 },
-                   { source: "lfo2", target: "Sh2_Mix", amount: 0.3 }]);
-    if (r.get ("VL_1") !== value ("bode", 1) || r.get ("VL_AmpAt") !== 1 || r.get ("Bd_On") !== 1 || r.get ("Bd_Ratio") !== f (0.3)
-        || ! near (r.get ("Bd_Shift"), -0.5 * k) || r.get ("Bd_Mode") !== 2 || r.get ("Bd_Mix") !== f (0.7)
-        || r.get ("Bd_Feedback") !== def ("Bd_Feedback") || r.warnings.length)
-        fail (`the shifter loads as lane ${r.get ("VL_1")}, ratio ${r.get ("Bd_Ratio")}, shift ${r.get ("Bd_Shift")}, feedback ${r.get ("Bd_Feedback")}: ${r.warnings}`);
-    if (r.get ("Mod1_Target") !== target ("Bd_Shift") || ! near (r.get ("Mod1_Amount"), 0.2 * k)
-        || r.get ("Mod2_Target") !== target ("Bd_Ratio") || r.get ("Mod2_Amount") !== f (0.1) || r.get ("Mod3_Source") !== 0)
-        fail ("the shifter's connections don't follow it (or a dead one stays)");
-    if (/"Sh2?_/.test (new TextDecoder ().decode (Preset.writePreset (r.p)))) fail ("the shifter's parameters are written");
-
-    // its defaults (ratio 0.5 of the note), onto the second Bode when the first is in the rack
-    r = load ({ FX_Rack_1: value ("bode", 1), Bd_On: 1, Bd_Shift: 0.4, VL_1: shifter (1), Sh_On: 1, Bd2_Delay: 0.1 });
-    if (r.get ("VL_1") !== value ("bode", 2) || r.get ("Bd2_Ratio") !== f (0.5) || r.get ("Bd2_Shift") !== 0 || r.get ("Bd2_Mix") !== f (0.5)
-        || r.get ("Bd2_Delay") !== def ("Bd2_Delay") || r.get ("Bd_Shift") !== f (0.4) || r.get ("FX_Rack_1") !== value ("bode", 1))
-        fail (`a shifter beside the rack's Bode loads as lane ${r.get ("VL_1")}, ratio ${r.get ("Bd2_Ratio")}`);
-
-    // an offset its connections took past ±1 kHz, where the knob ended, goes further now: said
-    r = load ({ VL_1: shifter (1), Sh_On: 1, Sh_Hz: 0.4 }, [{ source: "lfo1", target: "Sh_Hz", amount: 0.4 }]);
-    if (r.get ("VL_1") !== value ("bode", 1) || r.warnings.length !== 1 || ! r.warnings[0].includes ("±1 kHz"))
-        fail (`a shifter's offset modulated past its end: ${r.warnings}`);
-
-    // two shifters with two Bodes in the rack: the first takes the third, the second has none and
-    // leaves the lane, which closes up
-    r = load ({ FX_Rack_1: value ("bode", 1), FX_Rack_2: value ("bode", 2), VL_1: shifter (1), VL_2: value ("filter", 1), VL_3: shifter (2),
-                VL_FilterAt: 3, VL_AmpAt: 3, Sh2_On: 1, Sh2_Ratio: -0.2 }, [{ source: "lfo1", target: "Sh2_Ratio", amount: 0.5 }]);
-    const lane = [1, 2, 3, 4].map (n => r.get ("VL_" + n));
-    if (lane.join () !== [value ("bode", 3), value ("filter", 1), 0, 0].join () || r.get ("VL_FilterAt") !== 2 || r.get ("VL_AmpAt") !== 2
-        || r.warnings.length !== 1 || ! r.warnings[0].includes ("Shifter 2") || r.get ("Mod1_Source") !== 0)
-        fail (`two shifters, two Bodes: lane ${lane}, filter at ${r.get ("VL_FilterAt")}: ${r.warnings}`);
+    const p = Preset.make ("order");
+    const vals = new Map (p.values);
+    const get = id => vals.get (id) ?? 0;
+    const apply = list => list.forEach (([id, x]) => vals.set (id, x));
+    apply ([["FX_Rack_1", PorridgeParams.entryValue ("delay", 5)], ["D_Wet@1", 0.8], ["FX_Rack_2", PorridgeParams.entryValue ("flanger", 3)],
+            ["Fl_Rate@2", 0.25], ["Mod1_Source", 1], ["Mod1_Target", ModMatrix.slotTarget (0, 15)], ["Mod1_Amount", 0.5]]);
+    const [delay, flanger] = FxRack.read (get);
+    apply (FxRack.values (get, [flanger, delay]));
+    if (get ("FX_Rack_1") !== PorridgeParams.entryValue ("flanger", 3) || get ("FX_Rack_2") !== PorridgeParams.entryValue ("delay", 5)
+        || get ("Fl_Rate@1") !== 0.25 || get ("D_Wet@2") !== 0.8 || get ("Mod1_Target") !== ModMatrix.slotTarget (1, 15))
+        fail (`a reorder: ${get ("FX_Rack_1")} ${get ("FX_Rack_2")}, wet ${get ("D_Wet@2")}, target ${get ("Mod1_Target")}`);
+    const fresh = FxRack.free (FxRack.read (get), undefined, undefined, "flanger");
+    apply (FxRack.values (get, [...FxRack.read (get), fresh]));
+    if (get ("FX_Rack_3") !== PorridgeParams.entryValue ("flanger", 1) || get ("Fl_Rate@3") !== Preset.defaultValues ().get ("Fl_Rate@3"))
+        fail (`a second flanger: ${get ("FX_Rack_3")}`);
+    apply (FxRack.values (get, FxRack.read (get).filter (e => e.kind !== "delay")));
+    if (get ("Mod1_Source") !== 0 || get ("FX_Rack_3") !== 0) fail ("a removed delay's connection stays");
+    // (one convolver)
+    apply (FxRack.values (get, [FxRack.free ([], undefined, undefined, "convolve")]));
+    if (FxRack.free (FxRack.read (get), undefined, undefined, "convolve") !== undefined || ! FxRack.atLimit (FxRack.read (get)).includes ("convolve"))
+        fail ("a second convolver can be added");
 }
 
 // the noise's type and density, and its sample (Impulse's noise slot, beside the convolvers'

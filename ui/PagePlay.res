@@ -60,7 +60,7 @@ let macros = (ctx: Ctx.t, page, ~x, ~y, ~w, ~h) => {
     ModMatrix.slotNumbers->Array.filterMap(k => {
       let s = ModMatrix.readSlot(get, k)
       s.source == source(m) && s.target > 0
-        ? ModMatrix.targets[s.target]->Option.map(t => (t.label, k))
+        ? ModMatrix.targets[s.target]->Option.map(_ => (SlotParams.targetLabel(get, s.target), k))
         : None
     })
   let update = () =>

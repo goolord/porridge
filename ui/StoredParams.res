@@ -9,12 +9,14 @@
 // the values that differ from their defaults. (A state saved while they were endpoints names
 // them as parameters; the CLAP wrapper moves those into "params" when it loads one.)
 
-let distortion = PorridgeParams.rackKinds->Array.find(k => k.key == "distortion")->Option.getOrThrow
-
 let shaperIds = PorridgeParams.shaperParams->Array.map(Pair.first)
 
-// The distortions in shaperIn's order (`which`): Oatmeal's, then the rack's copies.
-let groups = [shaperIds, ...distortion.copies->Array.map(n => shaperIds->Array.map(PorridgeParams.copyId(_, n)))]
+// The distortions in shaperIn's order (`which`): Oatmeal's, then every slot's (a slot holding a
+// distortion keeps its points as "Sat_X1@3" ...), the rack's then the lane's.
+let groups = [
+  shaperIds,
+  ...PorridgeParams.slotKeys->Array.map(key => shaperIds->Array.map(PorridgeParams.slotParamId(_, key))),
+]
 
 let ids = groups->Array.flat
 
@@ -41,11 +43,13 @@ let send = (pc, k, get) =>
 // A program's values to the patch: the endpoints', and the stored ones in their events.
 let sendProgram = (pc, values: Map.t<string, float>) => {
   values->Map.forEachWithKey((x, id) =>
-    if !isStored(id) {
+    if !isStored(id) && !PorridgeParams.isSlotParam(id) {
       pc->PatchConnection.sendEventOrValueNow(id, x)
     }
   )
   let get = id => values->Map.get(id)->Option.getOr(init(id))
+  // (the slots' parameters are their knobs to the patch: SlotParams)
+  SlotParams.allKnobValues(get)->Array.forEach(((knob, v)) => pc->PatchConnection.sendEventOrValueNow(knob, v))
   groups->Array.forEachWithIndex((_, k) => send(pc, k, get))
 }
 

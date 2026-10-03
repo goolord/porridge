@@ -17,6 +17,7 @@ import * as ParamModel from "../../ui/ParamModel.res.mjs";
 import * as ParamDefs from "../../ui/ParamDefs.res.mjs";
 import * as StoredParams from "../../ui/StoredParams.res.mjs";
 import * as Preset from "../../ui/Preset.res.mjs";
+import * as PorridgeParams from "../../ui/PorridgeParams.res.mjs";
 import { root, checker } from "./lib.mjs";
 
 const { check, done } = checker ({ verbose: true });
@@ -48,14 +49,14 @@ const stored = () => JSON.parse (patch.state.get ("params") ?? "{}");
 const indexOf = id => StoredParams.groups[StoredParams.groupOf (id)].indexOf (id);
 
 // an edit
-ParamModel.gestureSet (model, "Sat2_Y2", 0.5);
+ParamModel.gestureSet (model, "Sat_Y2@1", 0.5);
 await tick();
 let events = shaper();
-check (events.length === 1 && events[0].which === 1 && events[0].values[indexOf ("Sat2_Y2")] === 0.5 && events[0].values.length === 49,
+check (events.length === 1 && events[0].which === 1 && events[0].values[indexOf ("Sat_Y2@1")] === 0.5 && events[0].values.length === 49,
        `an edit sends its distortion's 49 points in one shaperIn event (${JSON.stringify (events.map (e => e.which))})`);
-check (! patch.sent.some (([id]) => id === "Sat2_Y2" || id === "gesture" || id === "gestureEnd"), "and nothing as an endpoint or a gesture");
-check (JSON.stringify (stored()) === `{"Sat2_Y2":0.5}`, `and stores only what differs from the defaults (${patch.state.get ("params")})`);
-check (ParamModel.get (model, "Sat2_Y2") === 0.5, "the echo leaves the edit");
+check (! patch.sent.some (([id]) => id === "Sat_Y2@1" || id === "gesture" || id === "gestureEnd"), "and nothing as an endpoint or a gesture");
+check (JSON.stringify (stored()) === `{"Sat_Y2@1":0.5}`, `and stores only what differs from the defaults (${patch.state.get ("params")})`);
+check (ParamModel.get (model, "Sat_Y2@1") === 0.5, "the echo leaves the edit");
 
 // several points in one event: one shaperIn
 patch.sent = [];
@@ -72,16 +73,16 @@ ParamModel.undo (model);
 await tick();
 check (ParamModel.get (model, "Sat_X2") === StoredParams.init ("Sat_X2") &&shaper (0).length === 1,
        `undo puts the points back and sends them (Sat_X2 ${ParamModel.get (model, "Sat_X2")})`);
-check (stored().Sat_X2 === undefined && stored().Sat2_Y2 === 0.5, `and stores them (${patch.state.get ("params")})`);
+check (stored().Sat_X2 === undefined && stored()["Sat_Y2@1"] === 0.5, `and stores them (${patch.state.get ("params")})`);
 ParamModel.redo (model);
 await tick();
 check (ParamModel.get (model, "Sat_Y2") === 0.3 && stored().Sat_Y2 === 0.3, "redo does them again");
 
 // a host's state
 patch.sent = [];
-patch.sendStoredStateValue ("params", JSON.stringify ({ Sat3_C4: -0.75, Sat_Points: 5 }));
+patch.sendStoredStateValue ("params", JSON.stringify ({ "Sat_C4@2": -0.75, Sat_Points: 5 }));
 await tick();
-check (ParamModel.get (model, "Sat3_C4") === -0.75 && ParamModel.get (model, "Sat_Points") === 5 && ParamModel.get (model, "Sat2_Y2") === StoredParams.init ("Sat2_Y2"),
+check (ParamModel.get (model, "Sat_C4@2") === -0.75 && ParamModel.get (model, "Sat_Points") === 5 && ParamModel.get (model, "Sat_Y2@1") === StoredParams.init ("Sat_Y2@1"),
        "a stored value from elsewhere sets every stored parameter");
 check (shaper().length === 0 && patch.sent.filter (([k]) => k === "state:params").length === 1, "without sending anything back");
 patch.state.delete ("params");
@@ -90,21 +91,21 @@ check (StoredParams.ids.every (id => ParamModel.get (model, id) === StoredParams
 
 // a whole program
 patch.sent = [];
-ParamModel.setAll (model, new Map ([...Preset.init ("program").values, ["Sat4_X3", 0.125], ["Cutoff", 0.5]]));
-check (shaper().length === StoredParams.groups.length && shaper (3)[0].values[indexOf ("Sat4_X3")] === 0.125,
+ParamModel.setAll (model, new Map ([...Preset.init ("program").values, ["Sat_X3@3", 0.125], ["Cutoff", 0.5]]));
+check (shaper().length === StoredParams.groups.length && shaper (3)[0].values[indexOf ("Sat_X3@3")] === 0.125,
        `a program sends every distortion's points at once (${shaper().length} events)`);
-check (patch.sent.some (([id]) => id === "Cutoff") && stored().Sat4_X3 === 0.125, "and its endpoints, and stores them");
+check (patch.sent.some (([id]) => id === "Cutoff") && stored()["Sat_X3@3"] === 0.125, "and its endpoints, and stores them");
 
 // the stored value
 const values = StoredParams.decode (JSON.stringify ({ Sat_Y5: 0.5, nonsense: 3 }));
 check (values.size === StoredParams.ids.length && values.get ("Sat_Y5") === 0.5 && values.get ("Sat_X1") === StoredParams.init ("Sat_X1"),
        "a stored value decodes to every stored parameter, defaults where it has none");
-check (StoredParams.ids.length === 4 * 49, `${StoredParams.ids.length} stored parameters`);
+check (StoredParams.ids.length === 13 * 49, `${StoredParams.ids.length} stored parameters`);
 
 // presets
 const p = Preset.init ("shape");
-const [preset] = Preset.decodeBank (Preset.encodeBank ([{ ...p, values: new Map ([...p.values, ["Sat3_Y7", -0.5]]) }])) ?? [];
-check (preset?.values.get ("Sat3_Y7") === -0.5, "a preset keeps them");
+const [preset] = Preset.decodeBank (Preset.encodeBank ([{ ...p, values: new Map ([...p.values, ["Sat_Y7@2", -0.5], ["FX_Rack_2", PorridgeParams.entryValue ("distortion", 2)]]) }])) ?? [];
+check (preset?.values.get ("Sat_Y7@2") === -0.5, "a preset keeps them");
 
 // no endpoints
 const store = readFileSync (join (root, "dsp", "ParamStore.cmajor"), "utf8");

@@ -319,7 +319,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~w, ~h) => {
   let drawAll = () => redraws->Array.forEach(f => f())
   let drawMeters = perFrame(() => meterRedraws->Array.forEach(f => f()))
   ctx.pc->PatchConnection.addEndpointListener("compMeterOut", j =>
-    if meterWhich(j) == e.copy - 1 && body->offsetParent->Option.isSome {
+    if meterWhich(j) == FxRack.instance(x => model->ParamModel.get(x), e) && body->offsetParent->Option.isSome {
       meters := {level: meterLevel(j), gain: meterGain(j)}
       drawMeters()
     }

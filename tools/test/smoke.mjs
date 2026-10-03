@@ -15,6 +15,7 @@ import * as PorridgeParams from "../../ui/PorridgeParams.res.mjs";
 import * as FilterTypes from "../../ui/FilterTypes.res.mjs";
 import * as ModMatrix from "../../ui/ModMatrix.res.mjs";
 import * as DistTypes from "../../ui/DistTypes.res.mjs";
+import * as SlotParams from "../../ui/SlotParams.res.mjs";
 import { root, outDir, render, renderAsync, pool, levelAt, powerSpectrum, octaveBands, checker } from "./lib.mjs";
 
 const dir = outDir ("smoke");
@@ -31,8 +32,10 @@ const { check, done } = checker ({ verbose: true });
 // sounds queues a render of the chord and its check; flush runs the queued renders several at a
 // time and makes their checks, in order
 const queued = [];
+// (Porridge's own kinds' parameters: rack slot 5's, "Fl_On@5")
+const inSlot5 = sets => Object.fromEntries (Object.entries (sets).map (([k, v]) => [PorridgeParams.isWorkId (k) ? k + "@5" : k, v]));
 const sounds = (name, sets, opts) => queued.push (async () =>
-    soundCheck (name, await renderAsync ({ program: prog, events, frames, rate, sets, out: join (dir, name.replace (/[^A-Za-z0-9]+/g, "_") + ".f32") }), opts));
+    soundCheck (name, await renderAsync ({ program: prog, events, frames, rate, sets: inSlot5 (sets), out: join (dir, name.replace (/[^A-Za-z0-9]+/g, "_") + ".f32") }), opts));
 const flush = async () => { for (const [ok, msg] of await pool (queued.splice (0))) check (ok, msg); };
 
 function soundCheck (name, channels, { tail })
@@ -99,7 +102,7 @@ for (const t of [DistTypes.firstModel + 4, DistTypes.firstModel + 8])
     sounds (`dist ${DistTypes.all[t].short} gliding`, { Sat_Type: t, Sat_Mode: 0, Mod1_Source: ModMatrix.sourceIndex ("modEnv1"),
                                                        Mod1_Target: ModMatrix.targetIndex ("Sat_Drive"), Mod1_Amount: 0.8 }, { tail: true });
 sounds ("air under an LFO", { FX_Rack_5: air, Ai_On: 1, Mod1_Source: ModMatrix.sourceIndex ("lfo1"),
-                              Mod1_Target: ModMatrix.targetIndex ("Ai_Air"), Mod1_Amount: 0.5 }, { tail: true });
+                              Mod1_Target: SlotParams.targetOfParam ("Ai_Air@5"), Mod1_Amount: 0.5 }, { tail: true });
 await flush ();
 
 // the mix: the dry waits as long as the oversampling delays the distorted sound, so that the

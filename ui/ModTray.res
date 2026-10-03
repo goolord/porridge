@@ -33,7 +33,7 @@ let make = (ctx: Ctx.t, stage) => {
   }
 
   let drop = (source, amount, (d: ModEdit.dropTarget)) => {
-    let target = (ModMatrix.targets->Array.getUnsafe(d.target)).label
+    let target = Modulators.ownLabel(d.id)
     let route = `${name(source)} → ${target}`
     switch ModEdit.connect(model, source, d.target, ~amount) {
     | Ok(_) =>
@@ -79,7 +79,7 @@ let make = (ctx: Ctx.t, stage) => {
           if moved.contents {
             ctx.status->Status.show(
               switch hot.contents {
-              | Some(d) => `${name(source)} → ${(ModMatrix.targets->Array.getUnsafe(d.target)).label}: let go to connect`
+              | Some(d) => `${name(source)} → ${Modulators.ownLabel(d.id)}: let go to connect`
               | None => "Drop it on a parameter to modulate it"
               },
             )

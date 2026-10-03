@@ -126,10 +126,10 @@ namespace porridge
         float64 levelSum;
         KWeighting[2] kWeighting;
 
-        // every distortion's custom shape (Oatmeal's first), rendered when its points change
-        float[1026][1 + rack::distortionCount] shaperTables;
-        float[shaperValues][1 + rack::distortionCount] shaperDrawn;
-        bool[1 + rack::distortionCount] shaperValid;
+        // every distortion's custom shape (Oatmeal's, then each slot's), rendered when its points change
+        float[1026][numShapers] shaperTables;
+        float[shaperValues][numShapers] shaperDrawn;
+        bool[numShapers] shaperValid;
 
         //==============================================================================
         // voices: a pool with an explicit list, newest first
@@ -206,6 +206,7 @@ namespace porridge
         int numLiveTargets;
         bool[mods::numTargets] targetLive;
         float[mods::numTargets] modBase, modBaseNorm, modSum;
+        int[mods::numTargets] liveRow;          // each live parameter target's law (a row of mods::table)
         float bendNormTarget, bendNorm, wheel;
         Lcg modRng;
 
@@ -470,11 +471,7 @@ namespace porridge
         void clearCopies()
         {
             for (wrap<rack::chorusCount> k)
-            {
-                swapKind (rack::chorusKind, k);
                 choruses[k].clearState (chorusRngs[k], P, sampleRate);
-                swapKind (rack::chorusKind, k);
-            }
 
             for (wrap<rack::eqCount> k)          eqs[k].clearState();
             for (wrap<rack::distortionCount> k)  distortions[k].clearState();
@@ -491,21 +488,82 @@ namespace porridge
             for (wrap<rack::airCount> k)         airs[k].clearState();
         }
 
-        /// Swaps copy k of a rack kind's parameters with its first's, so that the first's code
-        /// runs the copy; swapping again puts both back.
-        void swapKind (int kind, int k)
+        //==============================================================================
+        // the slots: the rack's eight and the voice lane's four (ui/PorridgeParams.res). Each has
+        // knobs (endpoints, 0..1), whose values as its kind takes them (Q: rack::q + slot *
+        // rack::slotKnobs + knob) are worked out when a parameter changes; the modulation matrix
+        // moves those. A slot runs its kind's code with Q swapped into the kind's working
+        // parameters (rack::work: the first's, as the copies once were).
+
+        /// The kind a rack or lane value runs (-1: none, Oatmeal's four, or a retired value).
+        int kindOfValue (int fx)
         {
-            let first = rack::firstOffset.at (kind);
-            let n = rack::firstOffset.at (kind + 1) - first;
-            let base = rack::copiesOffset.at (kind) + k * n;
+            return fx > 0 && fx < rack::numEntries ? rack::kindOf.at (fx) : -1;
+        }
+
+        /// The kind slot g holds (-1: none).
+        int slotKind (int g)
+        {
+            return kindOfValue (int (P.at (rack::kindSlot.at (g))));
+        }
+
+        /// A knob's law: the internal value at knob position v (0..1) of a table row.
+        float rowLookup (int row, float v)
+        {
+            let base = row * mods::tableSize;
+            let x = v * float (mods::tableSize - 1);
+            let i = clamp (int (x), 0, mods::tableSize - 2);
+            let a = mods::table.at (base + i);
+            let b = mods::table.at (base + i + 1);
+            return a + (b - a) * (x - float (i));
+        }
+
+        /// Kind k's knob i's value at knob position v.
+        float knobValue (int k, int i, float v)
+        {
+            let at = k * rack::slotKnobs + i;
+            let row = rack::row.at (at);
+            let x = clamp (v, 0.0f, 1.0f);
+
+            if (row >= 0)
+                return rowLookup (row, x);
+
+            let lo = rack::lo.at (at);
+            return floor (lo + x * (rack::hi.at (at) - lo) + 0.5f);
+        }
+
+        /// Every slot's values from its knobs, as its kind takes them.
+        void convertSlots()
+        {
+            for (int g = 0; g < rack::numSlots; ++g)
+            {
+                let k = slotKind (g);
+
+                if (k < 0)
+                    continue;
+
+                let q = rack::q + g * rack::slotKnobs;
+                let n = min (rack::knobs.at (k), rack::knobCount.at (g));
+
+                for (int i = 0; i < n; ++i)
+                    P.at (q + i) = knobValue (k, i, P.at (rack::knobBase.at (g) + i));
+            }
+        }
+
+        /// Swaps slot g's values with its kind's working parameters, so that the kind's code runs
+        /// the slot; swapping again puts both back.
+        void swapSlot (int g, int kind)
+        {
+            let n = rack::knobs.at (kind);
+            let q = rack::q + g * rack::slotKnobs;
+            let w = kind * rack::slotKnobs;
 
             for (int i = 0; i < n; ++i)
             {
-                let a = rack::allFirst.at (first + i);
-                let b = rack::allCopies.at (base + i);
+                let a = rack::work.at (w + i);
                 let x = P.at (a);
-                P.at (a) = P.at (b);
-                P.at (b) = x;
+                P.at (a) = P.at (q + i);
+                P.at (q + i) = x;
             }
         }
 
@@ -518,61 +576,60 @@ namespace porridge
             return P[slot::EQ_On] != 0 ? eq.process (mix, active, P, sampleRate) : active;
         }
 
-        /// Renders distortion k's custom shape (0: Oatmeal's, whose points are in P at Sat_Points;
-        /// a copy's are swapped there to run it) into shaperTables[k] if its points changed.
+        /// Renders distortion k's custom shape (0: Oatmeal's, 1 + g: slot g's) into
+        /// shaperTables[k] if its points changed (its type, Sat_Type, in its working slot).
         void useShaper (int k)
         {
             if (int (P[slot::Sat_Type]) != satType::custom)
                 return;
 
+            let base = shaperSlots.at (k * shaperValues);
             var same = shaperValid.at (k);
 
             for (int i = 0; i < shaperValues && same; ++i)
-                same = shaperDrawn.at (k).at (i) == P.at (slot::Sat_Points + i);
+                same = shaperDrawn.at (k).at (i) == P.at (base + i);
 
             if (! same)
             {
-                renderShaper (shaperTables.at (k), P, slot::Sat_Points);
+                renderShaper (shaperTables.at (k), P, base);
 
                 for (int i = 0; i < shaperValues; ++i)
-                    shaperDrawn.at (k).at (i) = P.at (slot::Sat_Points + i);
+                    shaperDrawn.at (k).at (i) = P.at (base + i);
 
                 shaperValid.at (k) = true;
             }
         }
 
-        /// Runs the copy of an effect that a rack slot's value names, with its parameters swapped
-        /// into the first effect's (Porridge's own effects' entry 0 is the first itself).
-        bool runCopy (int fx, bool active)
+        /// Runs rack slot g, which holds value fx: its kind's instance, with the slot's values
+        /// swapped into the kind's working parameters.
+        bool runSlot (int g, int fx, bool active)
         {
-            let kind = fx > 0 && fx < rack::numEntries ? rack::kindOf.at (fx) : -1;
+            let kind = kindOfValue (fx);
 
-            // (a distortion copy only runs while there is sound; the resonator and octaver only
-            // in the voice lane)
+            // (a distortion only runs while there is sound; the resonator and octaver only in
+            // the voice lane)
             if (kind < 0 || (kind == rack::distortionKind && ! active) || ! rack::inRack.at (kind))
                 return active;
 
+            let k = rack::instOf.at (fx);
             let id = pooledId (fx);
 
-            if (id >= 0 && poolAt.at (id) < 0)
+            if (k < 0 || (id >= 0 && poolAt.at (id) < 0))
                 return active;
 
-            let k = fx - rack::kindValue.at (kind);
-            let copy = rack::kindOwn.at (kind) ? k - 1 : k;
             var out = active;
-
-            if (copy >= 0) swapKind (kind, copy);
+            swapSlot (g, kind);
 
             // every kind's first parameter is its switch
-            if (P.at (rack::allFirst.at (rack::firstOffset.at (kind))) != 0)
-                out = runKind (kind, k, active);
+            if (P.at (rack::work.at (kind * rack::slotKnobs)) != 0)
+                out = runKind (kind, k, g, active);
 
-            if (copy >= 0) swapKind (kind, copy);
+            swapSlot (g, kind);
             return out;
         }
 
-        /// Runs entry k of a rack kind, its parameters in the first's slots.
-        bool runKind (int kind, int k, bool active)
+        /// Runs instance k of a rack kind for slot g, the slot's values in the kind's working slots.
+        bool runKind (int kind, int k, int g, bool active)
         {
             if (kind == rack::chorusKind)   return choruses.at (k).process (fxTables, chorusRngs.at (k), mix, active, P, sampleRate);
             if (kind == rack::delayKind)    return delays.at (k).process (fxPool, fxTables, mix, active, P, sampleRate, samplesPerBeat);
@@ -589,8 +646,8 @@ namespace porridge
 
             if (kind == rack::distortionKind)
             {
-                useShaper (k + 1);
-                distortions.at (k).processStereo (distTables, shaperTables.at (k + 1), P, 0.0f, sampleRate, mix);
+                useShaper (1 + g);
+                distortions.at (k).processStereo (distTables, shaperTables.at (1 + g), P, 0.0f, sampleRate, mix);
                 return active;
             }
 
@@ -622,7 +679,7 @@ namespace porridge
                 return -1;
 
             let kind = rack::kindOf.at (fx);
-            let k = fx - rack::kindValue.at (max (kind, 0));
+            let k = rack::instOf.at (fx);
 
             if (kind == rack::delayKind)    return 1 + k;
             if (kind == rack::reverbKind)   return pooledReverbs + 1 + k;
@@ -2286,6 +2343,7 @@ namespace porridge
                                                slot::OE2_Breakpoint, slot::OE2_Sustain, slot::Curve_Osc2_Attack, slot::Curve_Osc2_Decay1,
                                                sampleRate, 1.0f);
                 penvC  = makePitchEnvCoefs (P, float64 (srInt));
+                convertSlots();
                 scanRoutings();
                 prepareMods();
             }
@@ -2555,7 +2613,7 @@ namespace porridge
                         for (int k = 0; k < viewTargets; ++k)
                         {
                             let t = k < numLiveTargets ? liveTargets.at (k) : 0;
-                            voices.at (vi).targetPos.at (k) = (t > 0 && mods::targetKind.at (t) == mods::knob)
+                            voices.at (vi).targetPos.at (k) = (t > 0 && (mods::targetKind.at (t) == mods::knob || mods::targetKind.at (t) == mods::slotKnob))
                                                                 ? clamp (modBaseNorm.at (t) + modSum.at (t), 0.0f, 1.0f) : -1.0f;
                         }
                     }
@@ -2641,6 +2699,22 @@ namespace porridge
                 if (s <= 0 || s >= mods::numSources || t <= 0 || t >= mods::numTargets || a == 0)
                     continue;
 
+                // a slot's knob moves what the slot's kind has there, by its law (a list's
+                // knobs, and a slot with nothing there, move nothing)
+                var row = mods::targetRow.at (t);
+
+                if (mods::targetKind.at (t) == mods::slotKnob)
+                {
+                    let at = mods::targetKnob.at (t);
+                    let g = at / rack::slotKnobs;
+                    let i = at - g * rack::slotKnobs;
+                    let k = slotKind (g);
+                    row = k >= 0 && i < rack::knobs.at (k) ? rack::row.at (k * rack::slotKnobs + i) : -1;
+
+                    if (row < 0)
+                        continue;
+                }
+
                 let v = (via > 0 && via < mods::numSources) ? via : 0;
                 liveSrc.at (numLive) = s;
                 liveTgt.at (numLive) = t;
@@ -2670,11 +2744,21 @@ namespace porridge
                     liveTargets.at (numLiveTargets) = t;
                     ++numLiveTargets;
 
+                    liveRow.at (t) = row;
+
                     if (mods::targetKind.at (t) == mods::knob)
                     {
                         let base = P.at (mods::targetSlot.at (t));
                         modBase.at (t) = base;
                         modBaseNorm.at (t) = modInvert (t, base);
+                    }
+                    else if (mods::targetKind.at (t) == mods::slotKnob)
+                    {
+                        // (the knob's own position: no inverse needed)
+                        let at = mods::targetKnob.at (t);
+                        let g = at / rack::slotKnobs;
+                        modBase.at (t) = P.at (mods::targetSlot.at (t));
+                        modBaseNorm.at (t) = clamp (P.at (rack::knobBase.at (g) + at - g * rack::slotKnobs), 0.0f, 1.0f);
                     }
                 }
             }
@@ -2892,7 +2976,7 @@ namespace porridge
             {
                 let t = liveTargets.at (i);
 
-                if (mods::targetKind.at (t) == mods::knob)
+                if (mods::targetKind.at (t) == mods::knob || mods::targetKind.at (t) == mods::slotKnob)
                     P.at (mods::targetSlot.at (t)) = modLookup (t, clamp (modBaseNorm.at (t) + modSum.at (t), 0.0f, 1.0f));
             }
         }
@@ -2903,7 +2987,7 @@ namespace porridge
             {
                 let t = liveTargets.at (i);
 
-                if (mods::targetKind.at (t) == mods::knob)
+                if (mods::targetKind.at (t) == mods::knob || mods::targetKind.at (t) == mods::slotKnob)
                     P.at (mods::targetSlot.at (t)) = modBase.at (t);
             }
         }
@@ -2927,18 +3011,13 @@ namespace porridge
         /// A target's knob law: internal value at knob position n (0..1).
         float modLookup (int t, float n)
         {
-            let row = mods::targetRow.at (t) * mods::tableSize;
-            let x = n * float (mods::tableSize - 1);
-            let i = clamp (int (x), 0, mods::tableSize - 2);
-            let a = mods::table.at (row + i);
-            let b = mods::table.at (row + i + 1);
-            return a + (b - a) * (x - float (i));
+            return rowLookup (liveRow.at (t), n);
         }
 
         /// The inverse: the knob position of an internal value (the laws are monotonic).
         float modInvert (int t, float value)
         {
-            let row = mods::targetRow.at (t) * mods::tableSize;
+            let row = liveRow.at (t) * mods::tableSize;
             let last = mods::tableSize - 1;
             let first = mods::table.at (row);
             let end = mods::table.at (row + last);
@@ -3799,13 +3878,11 @@ namespace porridge
                 if (kind < 0)
                     continue;
 
-                let k = fx - rack::kindValue.at (kind);
-                let copy = rack::kindOwn.at (kind) ? k - 1 : k;
-
-                if (copy >= 0) swapKind (kind, copy);
+                let g = rack::slots.size + s;
+                swapSlot (g, kind);
 
                 // every kind's first parameter is its switch (the distortion's, its type)
-                if (P.at (rack::allFirst.at (rack::firstOffset.at (kind))) != 0)
+                if (P.at (rack::work.at (kind * rack::slotKnobs)) != 0)
                 {
                     readyLane (v, s);
 
@@ -3834,15 +3911,15 @@ namespace porridge
                     else if (kind == rack::octaverKind)    voiceLanes.at (laneSlots * v.index + s).laneOctaver (P, noteHz, sampleRate, glide, bufM, bufR, split, n);
                     else if (kind == rack::distortionKind)
                     {
-                        useShaper (k + 1);
-                        voiceLaneBuffers.at (laneSlots * v.index + s).dist[0].processMono (distTables, shaperTables.at (k + 1), P, 0.0f, sampleRate, soundHz, bufM, n);
-                        if (split) voiceLaneBuffers.at (laneSlots * v.index + s).dist[1].processMono (distTables, shaperTables.at (k + 1), P, 0.0f, sampleRate, soundHz, bufR, n);
+                        useShaper (1 + g);
+                        voiceLaneBuffers.at (laneSlots * v.index + s).dist[0].processMono (distTables, shaperTables.at (1 + g), P, 0.0f, sampleRate, soundHz, bufM, n);
+                        if (split) voiceLaneBuffers.at (laneSlots * v.index + s).dist[1].processMono (distTables, shaperTables.at (1 + g), P, 0.0f, sampleRate, soundHz, bufR, n);
                     }
 
                     voiceLanes.at (laneSlots * v.index + s).fresh = false;
                 }
 
-                if (copy >= 0) swapKind (kind, copy);
+                swapSlot (g, kind);
             }
         }
 
@@ -4222,7 +4299,7 @@ namespace porridge
                 else if (fx >= 5 && fx < rack::numEntries && ! ran.at (fx))
                 {
                     ran.at (fx) = true;
-                    active = runCopy (fx, active);
+                    active = runSlot (int (k), fx, active);
                 }
             }
 

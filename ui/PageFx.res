@@ -64,7 +64,7 @@ let build = (ctx: Ctx.t, page) => {
   let destKey = dest =>
     switch dest {
     | Distortion => "distortion"
-    | Rack(e) => Int.toString(FxRack.value(e)) ++ (inLane(e) ? " per-voice" : "")
+    | Rack(e) => FxRack.tabKey(e)
     }
   let shownKey = ref("")
   // every tab made so far, and its destination
@@ -102,8 +102,8 @@ let build = (ctx: Ctx.t, page) => {
   )
   FxPanels.loadImpulse :=
     (
-      e => {
-        impulseFor := e.copy - 1
+      _ => {
+        impulseFor := 0
         pickImpulse()
       }
     )
@@ -126,44 +126,58 @@ let build = (ctx: Ctx.t, page) => {
   //==============================================================================
   // the rack and the lane
 
-  let setRack = list => VoiceLane.setAll(model, FxRack.values(list))
+  // (a drag moves each effect's slot parameters with it: FxRack.layout)
+  let setRack = list => VoiceLane.setAll(model, FxRack.values(get, list))
+
+  // where the effect at index i of a rack about to be written ends up (and what goes where)
+  let placedAt = (list, i) => FxRack.placed(list)->Array.getUnsafe(i)
 
   let move = (e, pos) => {
     let others = rack()->Array.filter(o => o != e)
     others->Array.splice(~start=pos, ~remove=0, ~insert=[e])
     setRack(others)
+    select(Rack(placedAt(others, pos)))
   }
 
-  // an effect comes into the rack switched on, at the end (or after `after`)
+  // an effect comes into the rack switched on, at the end (or after `after`); returns it as placed
   let insert = (e: FxRack.effect, ~after=?) => {
     let list = rack()
-    switch after->Option.map(a => list->Array.findIndex(x => x == a)) {
-    | Some(i) if i >= 0 => list->Array.splice(~start=i + 1, ~remove=0, ~insert=[e])
-    | _ => list->Array.push(e)
+    let i = switch after->Option.map(a => list->Array.findIndex(x => x == a)) {
+    | Some(i) if i >= 0 =>
+      list->Array.splice(~start=i + 1, ~remove=0, ~insert=[e])
+      i + 1
+    | _ =>
+      list->Array.push(e)
+      Array.length(list) - 1
     }
     setRack(list)
+    let e = placedAt(list, i)
     VoiceLane.switchOn(model, e)
     select(Rack(e))
+    e
   }
 
   let add = (kind, ~setup) =>
     FxRack.free(rack(), ~lane=VoiceLane.lane(model), kind)->Option.forEach(e => {
-      insert(e)
+      let e = insert(e)
       VoiceLane.setUp(model, e, setup)
     })
 
   // a copy with the same settings, right after it
   let duplicate = (e: FxRack.effect) =>
-    FxRack.free(rack(), ~lane=VoiceLane.lane(model), e.kind)->Option.forEach(copy => {
+    FxRack.free(rack(), ~lane=VoiceLane.lane(model), e.kind)->Option.forEach(fresh => {
+      let copy = insert(fresh, ~after=e)
       VoiceLane.copySettings(model, ~from=e, ~to=copy)
-      insert(copy, ~after=e)
     })
 
   let remove = e => setRack(rack()->Array.filter(o => o != e))
 
   // what the whole sound can still take, in its groups, each with its icon
   let addMenu = anchor => {
-    let (picks, items) = VoiceLane.kindMenu(~addable=FxRack.addable(rack(), ~lane=VoiceLane.lane(model)))
+    let (picks, items) = VoiceLane.kindMenu(
+      ~addable=FxRack.addable(rack(), ~lane=VoiceLane.lane(model)),
+      ~atLimit=FxRack.atLimit(rack()),
+    )
     ctx.menu->Menu.show(anchor, items, -1, i => picks[i]->Option.forEach(((k, setup)) => add(k, ~setup)))
   }
 
@@ -298,7 +312,7 @@ let build = (ctx: Ctx.t, page) => {
       }
     )
   and tabOf = (e: FxRack.effect) =>
-    switch effectTabs->Map.get(FxRack.value(e)) {
+    switch effectTabs->Map.get(FxRack.tabKey(e)) {
     | Some(t) => t
     | None =>
       let made = effectTab(
@@ -319,7 +333,7 @@ let build = (ctx: Ctx.t, page) => {
               let others =
                 rack()
                 ->Array.filter(o => o != e)
-                ->Array.filterMap(o => effectTabs->Map.get(FxRack.value(o))->Option.map(((t, _, _)) => t))
+                ->Array.filterMap(o => effectTabs->Map.get(FxRack.tabKey(o))->Option.map(((t, _, _)) => t))
               Reorder.start(ev, t, ~others, ~onDrop=pos => move(e, pos), ~onClick=() => select(Rack(e)))
             | 2 =>
               ev->preventDefault
@@ -328,7 +342,7 @@ let build = (ctx: Ctx.t, page) => {
             }
           },
       )
-      effectTabs->Map.set(FxRack.value(e), made)
+      effectTabs->Map.set(FxRack.tabKey(e), made)
       made
     }
   filterNode->onPointer(#pointerdown, ev => pressItem(FilterNode, ev))

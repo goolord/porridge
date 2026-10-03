@@ -28,8 +28,12 @@ dsp/                    Cmajor DSP
   Synth.cmajor            MIDI, voice manager, arpeggiator, per-voice rendering, effects chain,
                           a K-weighted level meter the view asks for (levelRequest/levelOut),
                           and reports of the sounding notes for the view (voiceView/voiceViewOut);
-                          it lends the rack's pool (Common.cmajor's FxPool, the memory the
-                          effects with long lines share) to the effects in the rack
+                          the rack's and the voice lane's slots, generic: each holds a kind
+                          (and in the rack one of the kind's eight instances, its state, one
+                          convolver) and has knobs (FX3_1 .. FX3_28, VL1_1 ..) whose values
+                          it swaps into the kind's working parameters to run it; and it lends
+                          the rack's pool (Common.cmajor's FxPool, the memory the effects with
+                          long lines share) to the effects in the rack
   Oscillator, Filter, Modulation, Effects, Tables, Voice, Types, Common
                           (Voice.cmajor also has the key EQ: a low shelf under each voice's
                           note and bands on its harmonics; Oscillator.cmajor each oscillator's
@@ -73,6 +77,10 @@ ui/                     patch view (ReScript)
                           input (MidiInput.res); SlotRows.res shows target slots as used rows + "+"
   VoiceView.res           the sounding notes as the DSP reports them: a mark per note on the
                           envelopes, LFOs, the filter graph and the modulated controls
+  SlotParams.res          the slots' parameters by name ("D_Wet@3": slot 3's delay's wet), which
+                          the view, programs and presets keep, and the patch's knobs for them
+                          (FX3_15: the knob position of whatever slot 3's kind has there), which
+                          ParamModel keeps in step with them; and the matrix's slot targets
   StoredParams.res        the parameters that aren't endpoints (the custom shapes' points): the
                           view and presets treat them as parameters, but they reach the DSP in
                           one shaperIn event per distortion and the host saves them in the
@@ -158,8 +166,9 @@ tools/
                           what changed
   test/                   native C++ test host built from the patch (cmaj generate --target=cpp),
                           golden.mjs (bit-exact factory renders, in Oat mode), presets.mjs
-                          (format round trips, and retired values loading as what replaced
-                          them: the rack's fourth copies, the key shifter as the bode),
+                          (format round trips, and programs from before the slots loading
+                          their effects' copies into their slots, two convolvers as one, the
+                          key shifter as the bode; reordering the rack),
                           pickers.mjs (every list value maps to and from its menu),
                           library.mjs (the preset browser's search),
                           smoke.mjs (Porridge's own effects and filter types sound, stay

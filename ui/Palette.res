@@ -136,6 +136,8 @@ let make = (ctx: Ctx.t, stage, ~commands: unit => array<command>) => {
     | _ => None
     }
   )->Map.fromArray
+  // (a slot's parameters' names say which slot: "flanger rate (FX 3)")
+  let targetNameOf = id => PorridgeParams.isSlotParam(id) ? Some(SlotParams.slotParamLabel(id)) : targetNames->Map.get(id)
 
   let flashWith = (e, text) => {
     Reach.flash(e)
@@ -206,7 +208,7 @@ let make = (ctx: Ctx.t, stage, ~commands: unit => array<command>) => {
       (title, 1.),
       (def.name, 1.),
       (ParamInfo.renamed(def.id)->Option.getOr(""), 0.9),
-      (targetNames->Map.get(def.id)->Option.getOr(""), 0.9),
+      (targetNameOf(def.id)->Option.getOr(""), 0.9),
       (detail, 0.8),
     ]->Array.map(((text, weight)) => (withSynonyms(words(text)), weight)),
     names: [title->String.toLowerCase, def.name->String.toLowerCase],
@@ -270,7 +272,8 @@ let make = (ctx: Ctx.t, stage, ~commands: unit => array<command>) => {
         FxRack.free(rack, ~lane, kind)->Option.map(e => {
           let name = FxRack.kindName(kind)
           item(~title="add " ++ name, ~detail="to the whole sound", ~also="effect", () => {
-            VoiceLane.setAll(model, FxRack.values([...rack, e]))
+            VoiceLane.setAll(model, FxRack.values(get, [...rack, e]))
+            let e = FxRack.placed([...rack, e])->Array.getUnsafe(Array.length(rack))
             VoiceLane.switchOn(model, e)
             added(e, name)
           })
@@ -362,7 +365,8 @@ let make = (ctx: Ctx.t, stage, ~commands: unit => array<command>) => {
           )
         )
       | Some(t) =>
-        let targets = ranked(ModMatrix.targets, t, (t: ModMatrix.target) => t.group == "retired" ? "" : t.label)
+        let named = ModMatrix.targets->Array.mapWithIndex((x, i) => x.group == "slot" ? {...x, label: SlotParams.targetLabel(get, i)} : x)
+        let targets = ranked(named, t, (t: ModMatrix.target) => t.group == "retired" ? "" : t.label)
         sources
         ->Array.slice(~start=0, ~end=3)
         ->Array.flatMap(((ss, si, src)) =>
@@ -376,6 +380,7 @@ let make = (ctx: Ctx.t, stage, ~commands: unit => array<command>) => {
                 ctx.toast(`Connected ${src.label} to ${tgt.label}`)
                 switch tgt.law {
                 | ModMatrix.Knob(id) => reach(id)
+                | ModMatrix.Slot(_, _) => SlotParams.targetParam(get, ti)->Option.forEach(reach)
                 | _ => ctx.openPage(#mod)
                 }
               | Error(e) => ctx.toast(`Couldn't connect ${src.label} to ${tgt.label}: ${e}`)

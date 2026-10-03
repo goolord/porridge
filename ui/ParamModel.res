@@ -45,6 +45,9 @@ type t = {
   storedSent: array<string>,
   // the stored-state value as the patch has it, as far as the view knows
   mutable storedValue: option<string>,
+  // the slots' knobs' endpoint values as the patch has them, as far as the view knows (what it
+  // sent, and what came from the patch): SlotParams
+  knobRaw: Map.t<string, float>,
 }
 
 let notifyListeners = (listeners, anyListeners, id) => {
@@ -57,19 +60,46 @@ let make = (pc, defs: array<ParamDefs.t>) => {
   let values = defs->Array.map(d => (d.id, d.init))->Map.fromArray
   let listeners = Map.make()
   let anyListeners = []
+  let knobRaw = Map.make()
+  let get = id => values->Map.get(id)->Option.getOr(0.)
+  let setFromPatch = (id, x) =>
+    switch values->Map.get(id) {
+    | Some(old) if old == x => ()
+    | _ =>
+      values->Map.set(id, x)
+      notifyListeners(listeners, anyListeners, id)
+    }
+  // a slot's parameters from its knobs as the patch has them (its kind came from the patch)
+  let slotFromKnobs = g =>
+    SlotParams.fromKnobs(~def=id => defsById->Map.get(id), get, id => knobRaw->Map.get(id), g)->Array.forEach(((id, x)) =>
+      setFromPatch(id, x)
+    )
 
   let onParam = ({endpointID, value}: PatchConnection.parameterEvent) =>
-    defsById
-    ->Map.get(endpointID)
-    ->Option.forEach(d => {
-      let x = d.isInt ? Math.round(value) : value
-      switch values->Map.get(d.id) {
-      | Some(old) if old == x => ()
-      | _ =>
-        values->Map.set(d.id, x)
-        notifyListeners(listeners, anyListeners, d.id)
+    switch PorridgeParams.parseKnobId(endpointID) {
+    // a knob: the parameter its slot's kind has there, unless it's what the view sent
+    | Some(_) =>
+      if knobRaw->Map.get(endpointID) != Some(value) {
+        knobRaw->Map.set(endpointID, value)
+        SlotParams.paramOfKnob(get, endpointID)->Option.forEach(id =>
+          defsById->Map.get(id)->Option.forEach(d => setFromPatch(id, SlotParams.fromKnob(d, value)))
+        )
       }
-    })
+    | None =>
+      defsById
+      ->Map.get(endpointID)
+      ->Option.forEach(d => {
+        let x = d.isInt ? Math.round(value) : value
+        switch values->Map.get(d.id) {
+        | Some(old) if old == x => ()
+        | _ =>
+          values->Map.set(d.id, x)
+          // (a slot that holds something else now: its knobs mean that kind's parameters)
+          SlotParams.slotOfKindId(d.id)->Option.forEach(slotFromKnobs)
+          notifyListeners(listeners, anyListeners, d.id)
+        }
+      })
+    }
 
   pc->PatchConnection.addAllParameterListener(onParam)
   {
@@ -92,6 +122,7 @@ let make = (pc, defs: array<ParamDefs.t>) => {
     storedFlushing: false,
     storedSent: [],
     storedValue: None,
+    knobRaw,
   }
 }
 
@@ -109,6 +140,37 @@ let def = (t, id) =>
   }
 
 let get = (t, id) => t.values->Map.get(id)->Option.getOr(0.)
+
+//==============================================================================
+// the slots' knobs (SlotParams)
+
+let knobDef = (t, id) => t.defs->Map.get(id)
+
+// Sends a knob's value, unless the patch has it already.
+let sendKnob = (t, knob, v, ~now) =>
+  if t.knobRaw->Map.get(knob) != Some(v) {
+    t.knobRaw->Map.set(knob, v)
+    if now {
+      t.pc->PatchConnection.sendEventOrValueNow(knob, v)
+    } else {
+      t.pc->PatchConnection.sendEventOrValue(knob, v)
+    }
+  }
+
+// Sends slot g's knobs for the kind it holds now.
+let sendSlotKnobs = (t, g, ~now) =>
+  SlotParams.knobValues(~def=knobDef(t, _), get(t, _), g)->Array.forEach(((knob, v)) => sendKnob(t, knob, v, ~now))
+
+// The endpoint a parameter's changes and gestures go to: its own, or for a slot's parameter the
+// knob it is on (None: its slot holds another kind, or it's stored state).
+let endpointOf = (t, id) =>
+  if StoredParams.isStored(id) {
+    None
+  } else if PorridgeParams.isSlotParam(id) {
+    SlotParams.knobOf(get(t, _), id)
+  } else {
+    Some(id)
+  }
 
 // Whether there is such a parameter.
 let has = (t, id) => t.defs->Map.has(id)
@@ -375,8 +437,11 @@ let set = (t, id, x) =>
       t.values->Map.set(id, x)
       if StoredParams.isStored(id) {
         storedChanged(t, id)
+      } else if PorridgeParams.isSlotParam(id) {
+        SlotParams.knobOf(get(t, _), id)->Option.forEach(knob => sendKnob(t, knob, SlotParams.toKnob(d, x), ~now=false))
       } else {
         t.pc->PatchConnection.sendEventOrValue(id, x)
+        SlotParams.slotOfKindId(id)->Option.forEach(g => sendSlotKnobs(t, g, ~now=false))
       }
       notify(t, id)
     }
@@ -386,15 +451,11 @@ let beginGesture = (t, id) => {
   if t.history.quiet == 0 {
     t.history.gestures->Set.add(id)
   }
-  if !StoredParams.isStored(id) {
-    t.pc->PatchConnection.sendParameterGestureStart(id)
-  }
+  endpointOf(t, id)->Option.forEach(e => t.pc->PatchConnection.sendParameterGestureStart(e))
 }
 
 let endGesture = (t, id) => {
-  if !StoredParams.isStored(id) {
-    t.pc->PatchConnection.sendParameterGestureEnd(id)
-  }
+  endpointOf(t, id)->Option.forEach(e => t.pc->PatchConnection.sendParameterGestureEnd(e))
   if t.history.gestures->Set.delete(id) && t.history.gestures->Set.size == 0 {
     sealSoon(t)
   }
@@ -466,10 +527,14 @@ let setAll = (t, values: Bank.values) => {
       t.values->Map.set(id, x)
       switch StoredParams.groupOf(id) {
       | Some(k) => t.storedDirty->Set.add(k)
+      | None if PorridgeParams.isSlotParam(id) => ()
       | None => t.pc->PatchConnection.sendEventOrValueNow(id, x)
       }
     })
   )
+  // (the slots' knobs, for the kinds they hold now: every one, as every endpoint is sent)
+  t.knobRaw->Map.clear
+  Array.fromInitializer(~length=PorridgeParams.slotCount, g => g)->Array.forEach(g => sendSlotKnobs(t, g, ~now=true))
   // (the stored ones now too, each distortion's in one event)
   if t.storedDirty->Set.size > 0 {
     flushStored(t)

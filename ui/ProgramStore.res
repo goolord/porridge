@@ -632,8 +632,12 @@ let loadImpulseFile = async (t, which, file) => {
     | None => t.message(`${name} is silent`)
     | Some(imp) =>
       setImpulse(t, which, Some(imp))
-      let param = which == 0 ? "Cv_Impulse" : PorridgeParams.copyId("Cv_Impulse", which + 1)
-      t.model->ParamModel.gestureSet(param, Int.toFloat(PorridgeParams.impulseFile))
+      // (the rack's convolver plays it: there's one)
+      FxRack.read(id => t.model->ParamModel.get(id))
+      ->Array.find(e => e.kind == #convolve)
+      ->Option.forEach(e =>
+        t.model->ParamModel.gestureSet(FxRack.id(e, "Cv_Impulse"), Int.toFloat(PorridgeParams.impulseFile))
+      )
       t.message(`Loaded ${name} (${Float.toFixed(Impulse.seconds(imp), ~digits=2)} s) into the convolver`)
     }
   }

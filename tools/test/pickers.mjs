@@ -76,7 +76,7 @@ check (Object.keys (counts).every (l => seen.has (l)), "a list no parameter show
 // the names the tools and gen.mjs's constants go by are where they were
 const named = [
     ["Filter", "SVF LP > BP > HP", 16], ["Filter", "reverb", 59], ["Filter", "MG low 24", 35], ["Filter2", "same as filter 1", 0],
-    ["Ff_Type", "Sallen-Key", 19], ["Sat_Type", "soft clip", 2], ["Sat_Type", "custom shape", 5], ["Sat_Type", "lo-fi sampler", 16],
+    ["Ff_Type@1", "Sallen-Key", 19], ["Sat_Type", "soft clip", 2], ["Sat_Type", "custom shape", 5], ["Sat_Type", "lo-fi sampler", 16],
     ["LFO_1_Unit", "16ths", 5], ["LFO_1_Unit", "2/3 8ths", 7], ["LFO_2_Unit", "whole notes", 17], ["D_Unit", "quarter notes", 11],
     ["Arp_Unit", "32nds", 5], ["Arp_Unit", "sec", 2], ["LFO_1_Shape", "User", 6], ["O1_Waveform", "Saw", 6],
     ["O1_Waveform", "Oat saw", 1], ["GlideMode", "constant time", 0], ["GlideMode", "by interval", 1],
@@ -94,17 +94,17 @@ check (FilterTypes.all.length === 60 && FilterTypes.all.every ((name, t) => Filt
     for (const [kind, [id, n]] of Object.entries (lists))
         for (let v = 0; v < n; ++v)
         {
-            const e = { kind, copy: 2 };
+            const e = { kind, place: { TAG: "Rack", _0: 1 } };
             const get = x => x === FxRack.id (e, id) ? v : 0;
             const i = SpaceModels.current (get, e);
             const m = models[i];
             check (m !== undefined && m.kind === kind && m.param[0] === id && m.param[1] === v, `${kind} ${id} ${v} is no model`);
             check (SpaceModels.offered (e, i).some (([_, j]) => j === i), `${kind} ${v} isn't in its list while set`);
         }
-    const oat = SpaceModels.current (() => 0, { kind: "reverb", copy: 1 });
+    const oat = SpaceModels.current (() => 0, { kind: "reverb", place: "Fixed" });
     check (models[oat]?.kind === "reverb", "Oatmeal's reverb is no model");
     // offered: no convolver room, hall or plate; the cabinets on the convolver's list only
-    const labels = kind => SpaceModels.offered ({ kind, copy: 1 }, -1).map (([m]) => m.label).join ();
+    const labels = kind => SpaceModels.offered ({ kind, place: { TAG: "Rack", _0: 0 } }, -1).map (([m]) => m.label).join ();
     check (labels ("space") === "hall,plate,nitrous,basin,vintage,Oatmeal,room,clear coat,tiny,spring,metal tank,cathedral,swell,noise bloom,file",
            "the reverbs' list: " + labels ("space"));
     check (labels ("convolve") === labels ("space") + ",cabinet 1×12,cabinet 4×12,telephone", "the convolver's list: " + labels ("convolve"));
