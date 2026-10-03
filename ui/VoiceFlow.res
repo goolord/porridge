@@ -166,6 +166,17 @@ let make = (ctx: Ctx.t, parent, box: box, ~show: block => unit) => {
     String.endsWith(text, " HQ") ? String.slice(text, ~start=0, ~end=String.length(text) - 3) : text
   }
   let distMode = label => get("Sat_Mode") == ParamDefs.choiceValue("Sat_Mode", label)
+  // A node's text with a number in it that changes as it's dragged (a cutoff, a transpose): the
+  // number keeps the width of `widest`, so that the strip doesn't jump about with every value.
+  let setSteady = (e, before, number, ~widest, after) => {
+    e->setTextContent(before)
+    let box = el("span", ~cls="fnum", ~parent=e)
+    el("span", ~cls="fsize", ~text=widest, ~parent=box)->ignore
+    el("span", ~text=number, ~parent=box)->ignore
+    if after != "" {
+      el("span", ~text=after, ~parent=e)->ignore
+    }
+  }
 
   let layout = () => {
     voice->setTextContent("")
@@ -181,9 +192,12 @@ let make = (ctx: Ctx.t, parent, box: box, ~show: block => unit) => {
     // the sources: the oscillators side by side, joined by their mix
     osc1->setTextContent("osc 1 · " ++ listText("O1_Waveform"))
     let transpose = get("Transpose")
-    osc2->setTextContent(
-      "osc 2 · " ++ listText("O2_Waveform") ++ (transpose != 0. ? " " ++ model->ParamModel.shortText("Transpose") : ""),
-    )
+    let osc2Text = "osc 2 · " ++ listText("O2_Waveform")
+    if transpose != 0. {
+      osc2->setSteady(osc2Text ++ " ", model->ParamModel.shortText("Transpose"), ~widest="-00.00 st", "")
+    } else {
+      osc2->setTextContent(osc2Text)
+    }
     // (an oscillator at no level, simply added, is heard nowhere: Init's osc 2)
     let silent = id => get("OscMix") == 0. && get(id) <= (model->ParamModel.def(id)).min
     osc1->toggleClass("off", silent("O1_Amp"))
@@ -224,11 +238,16 @@ let make = (ctx: Ctx.t, parent, box: box, ~show: block => unit) => {
         }
         let filterType = Float.toInt(get("Filter"))
         let cutoff = FilterTypes.cutoffHz(~filterType, get("Cutoff"))
-        filterNode->setTextContent(
-          filterType == 0
-            ? "no filter"
-            : `${listText("Filter")} · ${FxGraph.hzText(cutoff)}${get("F_Double") != 0. ? " + 2nd" : ""}`,
-        )
+        if filterType == 0 {
+          filterNode->setTextContent("no filter")
+        } else {
+          filterNode->setSteady(
+            `${listText("Filter")} · `,
+            FxGraph.hzText(cutoff),
+            ~widest="0.00 kHz",
+            get("F_Double") != 0. ? " + 2nd" : "",
+          )
+        }
         put(voice, filterNode)
         if distOn && distMode("per voice, after filter") {
           distPost->setTextContent(distText)

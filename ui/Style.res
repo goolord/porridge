@@ -194,6 +194,9 @@ let css = `
     background: var(--paper); box-shadow: inset 0 0 0 1px var(--edge); color: var(--ink);
 }
 .fnd:hover { background: var(--panel-hi); }
+.fnd .fnum { display: inline-grid; justify-items: end; font-variant-numeric: tabular-nums; }
+.fnd .fnum > span { grid-area: 1 / 1; }
+.fnd .fsize { visibility: hidden; }
 .fnd.grab { cursor: grab; }
 .fnd.lane { display: flex; align-items: center; gap: 5px; background: var(--tile); box-shadow: inset 0 0 0 1px var(--signal); font-weight: 700; }
 .fnd.lane > span { overflow: hidden; text-overflow: ellipsis; }
