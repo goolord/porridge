@@ -1,8 +1,9 @@
 //  The voice lane: up to laneSlots effects in every voice (VL_1 .. VL_4, the same values as the
 //  rack's slots), placed around the filter and the amp envelope (VL_FilterAt, VL_AmpAt). Each
 //  note runs its own copy of each, so its LFOs, envelopes and key move them for that note alone:
-//  the rack's filter, distortion, EQ, phaser, flanger and utility, and three that only work per
-//  note, a frequency shifter that follows the key, a resonator tuned to it and an octaver.
+//  the rack's filter, distortion, EQ, phaser, flanger, frequency shifter (whose ratio follows
+//  each note's key) and utility, and two that only work per note, a resonator tuned to it and an
+//  octaver.
 //
 //  The synth swaps a copy's parameters into its first's slots to run it, as the rack does, so
 //  the code here reads the first's. A voice renders in pieces of n samples (MIDI splits blocks),
@@ -54,12 +55,13 @@ namespace porridge
         // utility: gliding gain, balance and width
         float utGain, utPanL, utPanR, utWidth;
 
-        // shifter: the Hilbert pair's states per side (in z^-2), path B's delay, the
-        // oscillator, the gliding shift (Hz) and mix
+        // frequency shifter: the Hilbert pair's states per side (in z^-2), path B's delay, the
+        // oscillator, the gliding shift (Hz), mix and sides
         float[16] hx1L, hx2L, hy1L, hy2L, hx1R, hx2R, hy1R, hy2R;
         float hPrevL, hPrevR;
         float64 shPhase;
         float shHz, shMix;
+        float<2> shSide;
 
         // resonator: each mode's two outputs and inputs back, per side, and the gliding mix;
         // each mode's gain, feedback and weight, the weights' sum, and what they were worked
@@ -144,7 +146,7 @@ namespace porridge
             this.flPos = 0;
             this.flPhase = 0;
         }
-        else if (kind == rack::shifterKind)
+        else if (kind == rack::bodeKind)
         {
             this.hx1L = float[16](); this.hx2L = float[16](); this.hy1L = float[16](); this.hy2L = float[16]();
             this.hx1R = float[16](); this.hx2R = float[16](); this.hy1R = float[16](); this.hy2R = float[16]();
@@ -172,7 +174,7 @@ namespace porridge
         if (kind == rack::phaserKind)   return P[slot::Ph_Phase] != 0;
         if (kind == rack::flangerKind)  return P[slot::Fl_Phase] != 0;
         if (kind == rack::utilityKind)  return P[slot::Ut_Pan] != 0 || P[slot::Ut_InvL] != P[slot::Ut_InvR] || P[slot::Ut_Swap] != 0;
-        if (kind == rack::shifterKind)  return int (P[slot::Sh_Mode]) == bodeMode::stereo;
+        if (kind == rack::bodeKind)     return int (P[slot::Bd_Mode]) == bodeMode::stereo;
         return false;
     }
 
@@ -501,102 +503,66 @@ namespace porridge
     }
 
     //==============================================================================
-    // shifter: a frequency shift that follows the key. The Hilbert pair (Bode's design in
-    // FxExtra.cmajor, its coefficients shared by every voice) and a quadrature oscillator at Sh_Ratio of the note's frequency plus Sh_Hz, so that the
-    // shifted partials keep the same places relative to every note.
+    // frequency shifter: the rack's (FxExtra.cmajor's Bode: its Hilbert pair, with the
+    // coefficients every voice shares, its oscillator and its glides) on each note, whose own
+    // frequency Bd_Ratio follows, so that the shifted partials keep the same places relative to
+    // every note. No feedback in a voice: Bd_Feedback and Bd_Delay are the rack's.
 
-    /// Sh_Ratio's knob (-1..1) as a fraction of the note: cubed, times 2.
-    float shifterRatio (float v)        { let x = clamp (v, -1.0f, 1.0f); return 2.0f * x * x * x; }
-    /// Sh_Hz's knob as Hz: cubed, times 1000.
-    float shifterHz (float v)           { let x = clamp (v, -1.0f, 1.0f); return 1000.0f * x * x * x; }
-
-    void laneShifter (LaneFx& this, const float[hilbertCoefs]& c, const float[numSlots]& P, float noteHz, float64 sr, float glide,
-                      float[blockSize]& l, float[blockSize]& r, bool both, int n)
+    void laneBode (LaneFx& this, const float[hilbertCoefs]& c, const float[numSlots]& P, float noteHz, float64 sr, float glide,
+                   float[blockSize]& l, float[blockSize]& r, bool both, int n)
     {
-        let tHz = noteHz * shifterRatio (P[slot::Sh_Ratio]) + shifterHz (P[slot::Sh_Hz]);
-        let tMix = clamp (P[slot::Sh_Mix], 0.0f, 1.0f);
-        let mode = int (P[slot::Sh_Mode]);
-        let sideL = mode == bodeMode::down ? -1.0f : (mode == bodeMode::ring ? 0.0f : 1.0f);
-        let sideR = mode == bodeMode::down || mode == bodeMode::stereo ? -1.0f : (mode == bodeMode::ring ? 0.0f : 1.0f);
+        let tHz = bodeTargetHz (P, noteHz);
+        let tMix = clamp (P[slot::Bd_Mix], 0.0f, 1.0f);
+        let tSide = bodeSides (P);
 
         if (this.fresh)
         {
-            this.shHz = tHz; this.shMix = tMix;
+            this.shHz = tHz; this.shMix = tMix; this.shSide = tSide;
         }
 
-        let k = glide;
-        let hz0 = this.shHz, mix0 = this.shMix;
-        this.shHz += (tHz - this.shHz) * k;
-        this.shMix += (tMix - this.shMix) * k;
+        let hz0 = this.shHz, mix0 = this.shMix, side0 = this.shSide;
+        this.shHz += (tHz - this.shHz) * glide;
+        this.shMix += (tMix - this.shMix) * glide;
+        this.shSide += (tSide - this.shSide) * glide;
         let step = 1.0f / float (n);
-        let phase0 = this.shPhase;
-
-        // the oscillator turns by a fixed step through the piece (at its mean shift)
-        let turn = twoPi * float64 (0.5f * (hz0 + this.shHz)) / sr;
-        let rc = cos (turn), rs = sin (turn);
-        var pc = cos (twoPi * phase0), ps = sin (twoPi * phase0);
+        float64 pc0, ps0, rc, rs;
+        bodeTurn (this.shPhase, hz0, this.shHz, n, sr, pc0, ps0, rc, rs);
+        var pc = pc0, ps = ps0;
 
         for (int i = 0; i < n; ++i)
         {
             let f = float (i + 1) * step;
             let mix = mix0 + (this.shMix - mix0) * f;
+            let side = side0[0] + (this.shSide[0] - side0[0]) * f;
             let x = l.at (i);
-            var a = x + 1e-18f;
-            var b = this.hPrevL;
-            this.hPrevL = a;
-
-            for (wrap<hilbertCoefs / 2> j)
-            {
-                let ja = wrap<hilbertCoefs> (2 * j), jb = wrap<hilbertCoefs> (2 * j + 1);
-                let ya = c[ja] * (a + this.hy2L[ja]) - this.hx2L[ja];
-                this.hx2L[ja] = this.hx1L[ja]; this.hx1L[ja] = a; this.hy2L[ja] = this.hy1L[ja]; this.hy1L[ja] = ya;
-                a = ya;
-                let yb = c[jb] * (b + this.hy2L[jb]) - this.hx2L[jb];
-                this.hx2L[jb] = this.hx1L[jb]; this.hx1L[jb] = b; this.hy2L[jb] = this.hy1L[jb]; this.hy1L[jb] = yb;
-                b = yb;
-            }
-
+            float a, b;
+            hilbertPair (this.hx1L, this.hx2L, this.hy1L, this.hy2L, this.hPrevL, c, x + 1e-18f, a, b);
             let cs = float (pc), sn = float (ps);
             let c1 = pc * rc - ps * rs;
             ps = ps * rc + pc * rs;
             pc = c1;
-            l.at (i) = x + (b * cs + a * sn * sideL - x) * mix;
+            l.at (i) = x + (b * cs + a * sn * side - x) * mix;
         }
-
-        this.shPhase = phase0 + float64 (0.5f * (hz0 + this.shHz)) * float64 (n) / sr;
-        this.shPhase -= floor (this.shPhase);
 
         if (! both)
             return;
 
-        pc = cos (twoPi * phase0);
-        ps = sin (twoPi * phase0);
+        pc = pc0;
+        ps = ps0;
 
         for (int i = 0; i < n; ++i)
         {
             let f = float (i + 1) * step;
             let mix = mix0 + (this.shMix - mix0) * f;
+            let side = side0[1] + (this.shSide[1] - side0[1]) * f;
             let x = r.at (i);
-            var a = x + 1e-18f;
-            var b = this.hPrevR;
-            this.hPrevR = a;
-
-            for (wrap<hilbertCoefs / 2> j)
-            {
-                let ja = wrap<hilbertCoefs> (2 * j), jb = wrap<hilbertCoefs> (2 * j + 1);
-                let ya = c[ja] * (a + this.hy2R[ja]) - this.hx2R[ja];
-                this.hx2R[ja] = this.hx1R[ja]; this.hx1R[ja] = a; this.hy2R[ja] = this.hy1R[ja]; this.hy1R[ja] = ya;
-                a = ya;
-                let yb = c[jb] * (b + this.hy2R[jb]) - this.hx2R[jb];
-                this.hx2R[jb] = this.hx1R[jb]; this.hx1R[jb] = b; this.hy2R[jb] = this.hy1R[jb]; this.hy1R[jb] = yb;
-                b = yb;
-            }
-
+            float a, b;
+            hilbertPair (this.hx1R, this.hx2R, this.hy1R, this.hy2R, this.hPrevR, c, x + 1e-18f, a, b);
             let cs = float (pc), sn = float (ps);
             let c1 = pc * rc - ps * rs;
             ps = ps * rc + pc * rs;
             pc = c1;
-            r.at (i) = x + (b * cs + a * sn * sideR - x) * mix;
+            r.at (i) = x + (b * cs + a * sn * side - x) * mix;
         }
     }
 

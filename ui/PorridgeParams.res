@@ -324,6 +324,9 @@ type rackKind = {
   // Porridge's own effects: the first is in the rack too, as copy 1 (Oatmeal's chorus, delay,
   // reverb and EQ are the four FX_Order orders; its distortion sits before the rack)
   firstInRack: bool,
+  // the kind it became, if it is retired as a whole (every copy, its first too): its rack values
+  // keep their places, and a program that holds one loads it as that kind (Preset)
+  mergedInto?: string,
 }
 
 // The filter's drive: input gain into the analog types (FilterTypes.hasDrive), 0 .. +24 dB.
@@ -440,8 +443,10 @@ let convolveSpecs = [
   {id: "Cv_Gain", name: "Convolve gain", kind: decibels(-24., 24., 0.)},
 ]
 
-// The frequency shifter's shift: the knob (-1..1) cubed, times 5 kHz.
+// The frequency shifter's shift: the knob (-1..1) cubed, times 5 kHz; and its ratio of the note
+// (Bd_Ratio, which came later: bodeRatioSpecs): cubed, times 2.
 let bodeShift = (v: float) => v * v * v * 5000.
+let bodeRatio = (v: float) => 2. * v * v * v
 let bodeShiftText = v => {
   let hz = bodeShift(v)
   let size = Math.abs(hz)
@@ -597,8 +602,8 @@ let newKinds = [
     key: "bode",
     name: "Bode",
     menuName: "freq shifter",
-    about: "a frequency shifter (Bode), and a shifted delay",
-    runsIn: Rack,
+    about: "a frequency shifter (Bode): every partial moved by some Hz, or (in every voice) by a part of its note, and on the whole sound a shifted delay",
+    runsIn: Both,
     params: rackParams(bodeSpecs),
     copies: [2, 3],
     retired: [4],
@@ -659,9 +664,9 @@ let distModelSpecs = [
 let distModelParams = [("Sat_Drive", "drive"), ("Sat_Tone", "tone"), ("Sat_Character", "character"), ("Sat_Mix", "mix")]
 let isDistModelParam = id => distModelParams->Array.some(((first, _)) => first == id)
 
-// Effects only the voice lane holds (dsp/VoiceFx.cmajor): they follow each note's key.
-// The shifter moves every partial by a fraction of the note's frequency (and some Hz); the
-// resonator rings at the model's ratios of the note.
+// Effects only the voice lane holds (dsp/VoiceFx.cmajor): they follow each note's key. The
+// resonator rings at the model's ratios of the note. (The key shifter, which moved every partial
+// by a fraction of the note's frequency, is the Bode's ratio of the note now: bodeRatioSpecs.)
 let shifterRatioText = v => {
   let r = 2. * v * v * v
   (r > 0. ? "+" : "") ++ Float.toFixed(r, ~digits=Math.abs(r) < 0.1 ? 3 : 2) ++ " × note"
@@ -672,6 +677,9 @@ let shifterHzText = v => {
 }
 let resonatorModels = ["harmonic", "odd", "fifths", "bar", "bell", "membrane"]
 
+// The key shifter was a second frequency shifter, for the voice lane only. It is the Bode's
+// (Bd_Ratio and the Bode in the lane) since October 2026: its rack values and parameters are
+// retired, and a program with one loads it as a Bode (Preset).
 let shifterSpecs = [
   onSpec("Sh_On", "Shifter on"),
   {id: "Sh_Ratio", name: "Shifter ratio", kind: Float({min: -1., max: 1., init: 0.5, text: shifterRatioText})},
@@ -679,6 +687,29 @@ let shifterSpecs = [
   {id: "Sh_Mode", name: "Shifter mode", kind: Choice({names: ["up", "down", "stereo (L up, R down)", "ring"], init: 0})},
   {id: "Sh_Mix", name: "Shifter mix", kind: unit(0., 1., 0.5)},
 ]
+
+// A key shifter's settings as the frequency shifter's: each of its parameters, the Bode's it
+// becomes, and the factor on its knob (and on its connections' amounts). Sh_Hz (±1 kHz, the knob
+// cubed) is Bd_Shift (±5 kHz, cubed) at cbrt (1/5) of its turn; the ratio, mode and mix are the
+// same knobs. The Bode's feedback and delay (the whole sound's only) stay at their defaults.
+let shifterAsBode = [
+  ("Sh_On", "Bd_On", 1.),
+  ("Sh_Ratio", "Bd_Ratio", 1.),
+  ("Sh_Hz", "Bd_Shift", Math.cbrt(0.2)),
+  ("Sh_Mode", "Bd_Mode", 1.),
+  ("Sh_Mix", "Bd_Mix", 1.),
+]
+
+// The parameters of a kind retired as a whole (rackKind's mergedInto), as the kind it became's.
+let mergedParams = key => key == "shifter" ? shifterAsBode : []
+
+// A retired kind's parameter's default (its first's id).
+let retiredInit = id =>
+  switch shifterSpecs->Array.find(s => s.id == id)->Option.map(s => s.kind) {
+  | Some(Float({init})) => init
+  | Some(Choice({init})) => Int.toFloat(init)
+  | _ => 0.
+  }
 
 let resonatorSpecs = [
   onSpec("Rs_On", "Resonator on"),
@@ -713,6 +744,7 @@ let voiceKinds = [
     params: rackParams(shifterSpecs),
     copies: [2],
     firstInRack: true,
+    mergedInto: "bode",
   },
   {
     key: "resonator",
@@ -763,7 +795,8 @@ let laterKindParams = key =>
   laterKindSpecs->Array.find(((k, _)) => k == key)->Option.mapOr([], ((_, specs)) => rackParams(specs))
 let isLaterKindParam = id => laterKindSpecs->Array.some(((_, specs)) => specs->Array.some(s => s.id == id))
 
-let rackKinds = [
+// Every kind there has been (the retired ones too, which keep their rack values and endpoints).
+let allKinds = [
   {
     key: "chorus",
     name: "Chorus",
@@ -877,10 +910,16 @@ let rackKinds = [
   // tracking and random start later still: laterKindSpecs)
   ...newKinds->Array.map(k => {
     let k = k.key == "filter" ? {...k, params: [...k.params, ("Ff_Track", "note tracking")]} : k
+    let k = k.key == "bode" ? {...k, params: [...k.params, ("Bd_Ratio", "note ratio")]} : k
     {...k, params: [...k.params, ...laterKindParams(k.key)]}
   }),
   ...voiceKinds,
 ]
+
+let isRetiredKind = k => k.mergedInto != None
+
+// The kinds there are.
+let rackKinds = allKinds->Array.filter(k => !isRetiredKind(k))
 
 // The id of copy n's parameter (D_Wet, 3: D3_Wet).
 let copyId = (id, n) =>
@@ -890,7 +929,8 @@ let copyId = (id, n) =>
   }
 
 let retiredOf = k => k.retired->Option.getOr([])
-let isRetired = ((key, n)) => rackKinds->Array.some(k => k.key == key && retiredOf(k)->Array.includes(n))
+let isRetired = ((key, n)) =>
+  allKinds->Array.some(k => k.key == key && (isRetiredKind(k) || retiredOf(k)->Array.includes(n)))
 
 // Every value a rack slot has had, by value: nothing, Oatmeal's four, then every copy (the
 // retired ones too, which keep their values).
@@ -900,7 +940,7 @@ let rackHistory: array<option<(string, int)>> = [
   Some(("delay", 1)),
   Some(("reverb", 1)),
   Some(("eq", 1)),
-  ...rackKinds->Array.flatMap(k =>
+  ...allKinds->Array.flatMap(k =>
     [...(k.firstInRack ? [1] : []), ...k.copies, ...retiredOf(k)]->Array.map(n => Some((k.key, n)))
   ),
 ]
@@ -915,7 +955,7 @@ let rackNames = rackHistory->Array.map(entry =>
   switch entry {
   | None => "empty"
   | Some((key, n) as e) =>
-    let name = rackKinds->Array.find(k => k.key == key)->Option.mapOr(key, k => k.name)
+    let name = allKinds->Array.find(k => k.key == key)->Option.mapOr(key, k => k.name)
     let name = n == 1 ? name : `${name} ${Int.toString(n)}`
     isRetired(e) ? name ++ " (retired)" : name
   }
@@ -950,7 +990,7 @@ let copySpecsOf = (kinds, ~only=_ => true) => kinds->Array.flatMap(k =>
 // Oatmeal's effects' copies, and Porridge's own effects' copies (which come after them; the
 // ambience's, the distortion's model knobs' and the air's are in groups of their own)
 let laterKinds = ["ambience", "air", "shifter", "resonator", "octaver"]
-let laterParams = ["Ff_Track"]
+let laterParams = ["Ff_Track", "Bd_Ratio"]
 let copySpecs = copySpecsOf(
   rackKinds->Array.filter(k => !k.firstInRack),
   ~only=id => !isDistModelParam(id) && !isLaterKindParam(id),
@@ -1105,6 +1145,7 @@ type feature =
   | ResonatorGain
   | VoiceExtras
   | OscShape
+  | BodeRatio
 
 // The voice lane (dsp/VoiceFx.cmajor): up to laneSlots effects in every voice, which each note
 // runs its own copy of, holding the same values as the rack's slots (only the kinds that work in
@@ -1130,7 +1171,7 @@ let voiceLaneSpecs = Array.concat(
     Array.concat(filterTrackSpecs, copySpecsOf(rackKinds->Array.filter(k => k.key == "filter"), ~only=id => id == "Ff_Track")),
     Array.concat(
       Array.concat(shifterSpecs, resonatorSpecs),
-      copySpecsOf(rackKinds->Array.filter(k => k.key == "shifter" || k.key == "resonator"), ~only=id => id != "Rs_Gain"),
+      copySpecsOf(allKinds->Array.filter(k => k.key == "shifter" || k.key == "resonator"), ~only=id => id != "Rs_Gain"),
     ),
   ),
 )
@@ -1153,6 +1194,26 @@ let voiceExtraSpecs = [
   ...octaverSpecs,
   ...copySpecsOf(rackKinds->Array.filter(k => k.key == "octaver")),
   ...stepSpecs,
+]
+
+// The frequency shifter's ratio of the note (the key shifter's, which the Bode took in): the
+// note's frequency, times the knob cubed, times 2, added to the shift. In the voice lane each
+// note's own; on the whole sound the newest note's (as the rack's tracking follows).
+// What the frequency shifter has only on the whole sound: its echoes (a voice has no feedback).
+let rackOnlyParams = ["Bd_Feedback", "Bd_Delay"]
+
+let bodeRatioSpecs = [
+  {
+    id: "Bd_Ratio",
+    name: "Bode note ratio",
+    kind: Float({min: -1., max: 1., init: 0., text: shifterRatioText}),
+    about: "the shift as a part of the note: each note's partials keep their places (on the whole sound, the newest note's)",
+  },
+  ...[2, 3]->Array.map(n => {
+    id: copyId("Bd_Ratio", n),
+    name: `Bode ${Int.toString(n)} note ratio`,
+    kind: Like("Bd_Ratio"),
+  }),
 ]
 
 // (with the retired copies' parameters)
@@ -1192,11 +1253,17 @@ let groupsAsAdded = [
   ),
   (VoiceExtras, voiceExtraSpecs),
   (OscShape, oscShapeSpecs),
+  (BodeRatio, bodeRatioSpecs),
 ]
 
-// The retired copies' parameters: no longer the patch's, presets' or hosts'.
+// The retired copies' parameters (and every copy's of a retired kind): no longer the patch's,
+// presets' or hosts'.
 let retiredIds = Set.fromArray(
-  rackKinds->Array.flatMap(k => retiredOf(k)->Array.flatMap(n => k.params->Array.map(((id, _)) => copyId(id, n)))),
+  allKinds->Array.flatMap(k =>
+    (isRetiredKind(k) ? [1, ...k.copies, ...retiredOf(k)] : retiredOf(k))->Array.flatMap(n =>
+      k.params->Array.map(((id, _)) => n == 1 ? id : copyId(id, n))
+    )
+  ),
 )
 let isRetiredId = id => retiredIds->Set.has(id)
 

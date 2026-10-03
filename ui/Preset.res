@@ -189,7 +189,7 @@ let featureLoss = (feature: PorridgeParams.feature) =>
   // (Oatmeal always plays like Oat mode)
   | OatMode => None
   // the rack: what it holds says what's lost (the effects order, its extra effects)
-  | FxOrder | EffectsRack | EqSwitch | RackCopies | RackEffects | Ambience | AirEffect => None
+  | FxOrder | EffectsRack | EqSwitch | RackCopies | RackEffects | Ambience | AirEffect | BodeRatio => None
   // the custom shape and the models' knobs go with the distortion types they're for (the mix,
   // which works on every type, is told apart)
   | CustomShape | DistModels => None
@@ -415,6 +415,12 @@ let getNumber = (d, key) =>
 // as it did. With none free, it's left out with its connections, and the warning says so.
 // Connections to retired copies that no slot held moved nothing, and go. Returns the program's
 // params and modulations as they load, and the warnings.
+//
+// A kind retired as a whole (the key shifter, which became the frequency shifter's ratio of the
+// note: PorridgeParams.mergedInto) loads the same way, onto a free copy of the kind it became,
+// its settings read as that kind's (PorridgeParams.mergedParams: each parameter, the one it
+// becomes and the factor on its knob, which scales the connections' amounts too); the new
+// kind's other parameters keep their defaults.
 let retireCopies = (name, params: dict<JSON.t>, modulations: array<JSON.t>) => {
   let params = params->Dict.copy
   let modulations = ref(modulations)
@@ -438,7 +444,8 @@ let retireCopies = (name, params: dict<JSON.t>, modulations: array<JSON.t>) => {
 
   // its parameters, and the connections to them, go to copy `to`'s; the slots that held it
   // hold `value`
-  let move = (v, ~from, ~to, ~value) => {
+  // (each connection to one of from's parameters scaled by its factor)
+  let move = (v, ~from, ~to, ~value, ~factors=?) => {
     from->Array.forEachWithIndex((id, i) => {
       let id2 = to->Array.getUnsafe(i)
       switch params->Dict.get(id) {
@@ -453,11 +460,52 @@ let retireCopies = (name, params: dict<JSON.t>, modulations: array<JSON.t>) => {
         switch m {
         | Object(o) if from->Array.includes(getString(o, "target")) =>
           let o = o->Dict.copy
-          o->Dict.set("target", str(to->Array.getUnsafe(from->Array.indexOf(getString(o, "target")))))
+          let i = from->Array.indexOf(getString(o, "target"))
+          o->Dict.set("target", str(to->Array.getUnsafe(i)))
+          factors->Option.forEach(f => o->Dict.set("amount", num(getNumber(o, "amount") * f->Array.getUnsafe(i))))
           JSON.Object(o)
         | m => m
         }
       )
+  }
+
+  // a retired kind's copy `old` as copy n of the kind it became: its settings read as that
+  // kind's (with its own defaults where the program has none), the rest of copy n at theirs
+  let merge = (v, ~retired: PorridgeParams.rackKind, ~old, ~kind: PorridgeParams.rackKind, ~n, ~value) => {
+    let pairs = PorridgeParams.mergedParams(retired.key)
+    let from = pairs->Array.map(((p, _, _)) => idOf(p, old))
+    // (the key shifter's offset stopped at ±1 kHz, the end of its knob, where the shift goes on
+    // to ±5 kHz: connections that took it there now take it further)
+    if retired.key == "shifter" {
+      let id = idOf("Sh_Hz", old)
+      let base = number(id)->Option.getOr(PorridgeParams.retiredInit("Sh_Hz"))
+      let reach = modulations.contents->Array.reduce(0., (sum, m) =>
+        switch m {
+        | Object(o) if getString(o, "target") == id => sum + 2. * Math.abs(getNumber(o, "amount"))
+        | _ => sum
+        }
+      )
+      if Math.abs(base) + reach > 1. {
+        warnings->Array.push(
+          `"${name}" has a key shifter whose offset its connections take past ±1 kHz, where it used to stop: as the frequency shifter's shift it goes on, up to ±1.7 kHz`,
+        )
+      }
+    }
+    // its settings on the new kind's knobs
+    pairs->Array.forEachWithIndex(((p, _, factor), i) => {
+      let id = from->Array.getUnsafe(i)
+      setNumber(id, number(id)->Option.getOr(PorridgeParams.retiredInit(p)) * factor)
+    })
+    kind.params->Array.forEach(((first, _)) => params->Dict.delete(idOf(first, n)))
+    move(
+      v,
+      ~from,
+      ~to=pairs->Array.map(((_, q, _)) => idOf(q, n)),
+      ~value,
+      ~factors=pairs->Array.map(((_, _, factor)) => factor),
+    )
+    // (its other parameters go with it)
+    retired.params->Array.forEach(((first, _)) => params->Dict.delete(idOf(first, old)))
   }
 
   // out of the rack, or the lane, which is kept without gaps and whose places count the effects
@@ -488,7 +536,13 @@ let retireCopies = (name, params: dict<JSON.t>, modulations: array<JSON.t>) => {
   ->Array.forEach(v => {
     let v = Float.toInt(v)
     PorridgeParams.retiredEntry(v)->Option.forEach(((key, old)) => {
-      let kind = PorridgeParams.rackKinds->Array.find(k => k.key == key)->Option.getOrThrow
+      let retired = PorridgeParams.allKinds->Array.find(k => k.key == key)->Option.getOrThrow
+      // (the kind it became, for a kind retired as a whole)
+      let kind = switch retired.mergedInto {
+      | Some(into) => PorridgeParams.rackKinds->Array.find(k => k.key == into)->Option.getOrThrow
+      | None => retired
+      }
+      let key = kind.key
       let ids = n => kind.params->Array.map(((first, _)) => idOf(first, n))
       // a copy of its kind (not Oatmeal's chorus, delay, reverb or EQ, which FX_Order places)
       // that no slot holds and no connection moves
@@ -503,12 +557,20 @@ let retireCopies = (name, params: dict<JSON.t>, modulations: array<JSON.t>) => {
           | _ => false
           }
         )
-      switch free {
-      | Some((value, Some((_, n)))) => move(v, ~from=ids(old), ~to=ids(n), ~value)
-      | _ =>
+      switch (free, retired.mergedInto) {
+      | (Some((value, Some((_, n)))), None) => move(v, ~from=ids(old), ~to=ids(n), ~value)
+      | (Some((value, Some((_, n)))), Some(_)) => merge(v, ~retired, ~old, ~kind, ~n, ~value)
+      | (_, None) =>
         let what = `${kind.name} ${Int.toString(old)}`
         warnings->Array.push(
           `"${name}" has ${what}, which Porridge no longer has, and no other ${kind.name->String.toLowerCase} free to take it: it's left out`,
+        )
+        leaveOut(v)
+      | (_, Some(_)) =>
+        let what = old == 1 ? retired.name : `${retired.name} ${Int.toString(old)}`
+        let into = kind.menuName->Option.getOr(kind.name)
+        warnings->Array.push(
+          `"${name}" has ${what}, which Porridge now has as its ${into}, and no ${into} free to take it: it's left out`,
         )
         leaveOut(v)
       }

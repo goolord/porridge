@@ -1065,7 +1065,7 @@ let drive = (r, w, k: kind, m) => {
 }
 
 // One effect's settings, by its copy's parameters.
-let effectSettings = (r, w, m, e: FxRack.effect) => {
+let effectSettings = (r, w, m, e: FxRack.effect, ~lane=false) => {
   let s = (first, v) => put(m, FxRack.id(e, first), v)
   let level = (tame, whole) => ampOfDb(within(r, w, tame, whole))
   switch e.kind {
@@ -1153,6 +1153,14 @@ let effectSettings = (r, w, m, e: FxRack.effect) => {
     s("Ff_Morph", within(r, w, (0., 0.2), (0., 0.35)))
     s("Ff_Drive", within(r, w, (0., 0.2), (0., 0.6)))
     s("Ff_Mix", between(r, 0.5, 1.))
+  | #bode if lane =>
+    // in each voice: partials moved by a small part of the note (no Hz, and a voice has no
+    // echoes): a shine, or wild, a clang
+    let ratio = logWithin(r, w, (0.01, 0.05), (0.005, 0.5))
+    s("Bd_Shift", 0.)
+    s("Bd_Ratio", Math.cbrt(ratio / 2.))
+    s("Bd_Mode", tiered(r, w, [(2., 0., 2.), (0., 0., 1.), (1., 0.3, 0.6), (3., 0.7, 0.4)]))
+    s("Bd_Mix", within(r, w, (0.2, 0.4), (0.15, 0.55)))
   | #bode =>
     s("Bd_Shift", sign(r) * within(r, w, (0.08, 0.2), (0.03, 0.7)))
     s("Bd_Mode", tiered(r, w, [(0., 0., 1.), (1., 0., 1.), (2., 0., 1.), (3., 0.7, 0.5)]))
@@ -1172,12 +1180,6 @@ let effectSettings = (r, w, m, e: FxRack.effect) => {
     s("Ut_BassMono", PorridgeParams.bassMonoValue(between(r, 80., 160.)))
   | #distortion => distortion(r, w, m, first => FxRack.id(e, first))
   // (the voice lane's own: each follows the note)
-  | #shifter =>
-    // partials moved by a small part of the note: a shine, or wild, a clang
-    let ratio = logWithin(r, w, (0.01, 0.05), (0.005, 0.5))
-    s("Sh_Ratio", Math.cbrt(ratio / 2.))
-    s("Sh_Mode", tiered(r, w, [(2., 0., 2.), (0., 0., 1.), (1., 0.3, 0.6), (3., 0.7, 0.4)]))
-    s("Sh_Mix", within(r, w, (0.2, 0.4), (0.15, 0.55)))
   | #resonator =>
     // harmonic, odd, fifths, bar, bell, membrane: a string's first
     s("Rs_Model", tiered(r, w, [(0., 0., 2.), (3., 0., 1.), (1., 0.3, 0.6), (4., 0.3, 0.8), (2., 0.5, 0.5), (5., 0.6, 0.5)]))
@@ -1231,7 +1233,7 @@ let rank = (kind: FxRack.kind) =>
   | #delay => 6
   | #convolve => 7
   | #space | #reverb | #ambience => 8
-  | #shifter | #resonator | #octaver => 1
+  | #resonator | #octaver => 1
   }
 
 let rackOf = m => FxRack.read(get(m, ...))
@@ -1273,7 +1275,7 @@ let laneChoices = (k: kind) => [
   (#flanger, 0.2, 0.7),
   (#octaver, 0.3, k == #bass ? 1.2 : k == #lead ? 0.6 : 0.3),
   (#resonator, 0.3, k == #pluck || k == #bell || k == #keys ? 1.2 : 0.5),
-  (#shifter, 0.35, 0.6),
+  (#bode, 0.35, 0.6),
   (#distortion, 0.5, 0.5),
 ]
 
@@ -1292,7 +1294,7 @@ let addToLane = (r, w, m, kind: FxRack.kind) =>
     let ampAt = lane->Array.some(x => x.kind == #resonator) ? Array.length(lane) : 0
     FxRack.laneValues(lane, {filterAt: 0, ampAt})->Array.forEach(((id, v)) => put(m, id, v))
     put(m, FxRack.switchId(e), FxRack.onValue(e))
-    effectSettings(r, w, m, e)
+    effectSettings(r, w, m, e, ~lane=true)
     let s = (first, v) => put(m, FxRack.id(e, first), v)
     switch kind {
     | #phaser =>
@@ -1477,7 +1479,7 @@ let fxTargets = m =>
 let laneTargets = m =>
   laneOf(m)
   ->Array.flatMap(e =>
-    ["Ph_Freq", "Ph_Depth", "Fl_Mix", "Fl_Depth", "Ff_Cutoff", "Ff_Morph", "Sh_Ratio", "Sh_Mix", "Rs_Bright", "Rs_Decay", "Oc_Sub", "Oc_Up"]->Array.map(f =>
+    ["Ph_Freq", "Ph_Depth", "Fl_Mix", "Fl_Depth", "Ff_Cutoff", "Ff_Morph", "Bd_Ratio", "Bd_Mix", "Rs_Bright", "Rs_Decay", "Oc_Sub", "Oc_Up"]->Array.map(f =>
       FxRack.id(e, f)
     )
   )
@@ -2145,7 +2147,7 @@ let simulatedLevel = (m, ~note, ~within=?, ~tables=?) => {
 // about the same whatever its settings, and less each the more there are; louder as a phaser's
 // or an untuned flanger's feedback makes it ring), the frequency shifter, the distortion models'
 // own drive, the second filter, and the voice lane's flangers tuned to the note (which ring
-// there, the more the more feedback), resonator, octaver, shifter, filter and distortion.
+// there, the more the more feedback), resonator, octaver, frequency shifter, filter and distortion.
 let loudnessFeatures = m => {
   let mode = mixMode(m)
   let rack = rackOf(m)
@@ -2182,7 +2184,7 @@ let loudnessFeatures = m => {
     ringing,
     inLane(#resonator, "Rs_Mix"),
     inLane(#octaver, "Oc_Sub") + inLane(#octaver, "Oc_Up"),
-    inLane(#shifter, "Sh_Mix"),
+    inLane(#bode, "Bd_Mix"),
     inLane(#filter, "Ff_On"),
     lane->Array.some(e => e.kind == #distortion) ? 1. : 0.,
   ]
@@ -2346,12 +2348,16 @@ let nudges = (a: area) =>
 // their levels in and out (which the output gain answers for) nor what restarts an effect.
 let fixedFx = ["Gain", "Pregain", "Postgain", "Limit", "Wet", "InGain", "OutGain", "Predelay", "Length", "Dry", "Phase", "Spread", "Width", "Pan", "Freq", "Inv", "Swap", "Thresh", "Ratio", "Split"]
 // (nor the phaser's and flanger's tracking and random starts, which stay as they were made)
+// (nor in the voices what only the whole sound has: the frequency shifter's echoes)
 let rackNudges = m =>
-  Array.concat(rackOf(m), laneOf(m))->Array.flatMap(e =>
+  Array.concat(rackOf(m)->Array.map(e => (e, false)), laneOf(m)->Array.map(e => (e, true)))->Array.flatMap(((e, inLane)) =>
     FxRack.spec(e.kind).params->Array.filterMap(((first, _)) => {
       let id = FxRack.id(e, first)
       let d = def(id)
-      let fixed = fixedFx->Array.some(word => String.includes(id, word)) || PorridgeParams.isLaterKindParam(first)
+      let fixed =
+        fixedFx->Array.some(word => String.includes(id, word)) ||
+        PorridgeParams.isLaterKindParam(first) ||
+        (inLane && PorridgeParams.rackOnlyParams->Array.includes(first))
       d.names == None && !d.isInt && !fixed ? Some(nudge(id, Knob, ~scale=0.6)) : None
     })
   )
