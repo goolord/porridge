@@ -2,17 +2,19 @@
 //
 // A patch is made from Init in five areas, each with a wildness from tame (0) to wild (1):
 //
-//   osc     a wave or two and some unison; wilder, sync, FM, PM, ring and AM at odd ratios with an
-//           envelope on their depth, noise, roughness and wide unison
+//   osc     a wave or two (often a drawn one, played plainly or as a pulse, as most of Oatmeal's
+//           programs do) and some unison; wilder, stranger drawn waves, sync, FM, PM, ring and AM
+//           at odd ratios with an envelope on their depth, noise, roughness and wide unison
 //   filter  a lowpass that follows the keys, with a modest envelope; wilder, every kind of type
 //           (formants, combs, phasers), more resonance, deeper and stranger envelopes, a second
 //           filter and drive
 //   env     the amp envelope as the patch's kind has it; wilder, any times, two-stage decays and
 //           a pitch envelope
 //   mod     none at 0; a gentle routing or two (vibrato, velocity and note-to-note variation,
-//           slow sweeps); wilder, more and deeper ones: wobbles, blips, sample & hold, growls
-//   fx      dry at 0; a space, a delay or a chorus; wilder, more of the rack, drive, frequency
-//           shifting and odd impulses
+//           slow sweeps) and now and then the XY pad routed, to play; wilder, more and deeper
+//           ones: wobbles, blips, sample & hold, growls, and the pad wandering on its own
+//   fx      dry at 0; a space, a delay or a chorus; wilder, more of the rack, an effect in every
+//           voice (each note running its own), drive, frequency shifting and odd impulses
 //
 // A wildness widens each range from the tame one towards the whole of it (`within`), lets in
 // the wilder options (types, modes, routings, effects) as it passes their thresholds (`tiered`),
@@ -21,8 +23,11 @@
 //
 // `vary` moves any patch's settings by an amount: each continuous one in musical terms (times
 // and rates on a log scale, levels in dB), now and then a choice picked again, and, more often
-// the wilder its area may go, a part made again, added or taken away (osc 2 and the mix mode, the
-// filter type, the pitch envelope, a routing, an effect). Locked areas stay as they are.
+// the wilder its area may go, a part made again, added or taken away (osc 2 and the mix mode, a
+// drawn wave, the filter type, the pitch envelope, a routing, the XY pad, an effect). Locked
+// areas stay as they are.
+//
+// A patch is its values and its tables: the oscillators' drawn waves are the osc area's.
 //
 // The output gain follows an estimate of how loud the patch plays (`loudness`: K-weighted, as a
 // loudness meter hears it), so that new patches and variations come out at about the same
@@ -143,6 +148,14 @@ let copy = (m: Bank.values): Bank.values => Map.fromArray(m->Map.entries->Array.
 // puts these parameters back as Init has them
 let reset = (m, ids: array<string>) => ids->Array.forEach(id => m->Map.set(id, get(Lazy.get(initValues), id)))
 
+// A patch: its values and its tables (Oatmeal's: the oscillators' drawn waves, which patches made
+// here draw, and the LFO shapes and curves, which they keep as they came). A table is replaced
+// when it's drawn again, never changed in place.
+type patch = {values: Bank.values, mutable tables: OatmealFormat.tables}
+
+let initTables = Lazy.make(() => Preset.make("Init").tables)
+let copyPatch = t => {values: copy(t.values), tables: t.tables}
+
 let ampOfDb = db => Math.pow(10., ~exp=db / 20.)
 let dbOfAmp = a => 20. * Math.log10(Math.max(a, 1e-9))
 let noteHz = n => 440. * Math.pow(2., ~exp=(Int.toFloat(n) - 69.) / 12.)
@@ -167,6 +180,12 @@ let depthOf = mode => mode == fm ? "O1_Amp" : "O2_Amp"
 let mixMode = m => Float.toInt(get(m, "OscMix"))
 let secondSounds = m => get(m, "O2_Amp") > 0. || mixMode(m) != normal
 let isPulse = v => v == 2. || v == pulse
+// the drawn waves: played plainly, or as a pulse (the wave less itself further on in its cycle)
+let drawn = 4.
+let drawnPulse = 5.
+let isDrawn = v => v == drawn || v == drawnPulse
+// the waves with a pulse width
+let hasWidth = v => isPulse(v) || v == drawnPulse
 
 // a table's value at x, between its points (and its end ones beyond them)
 let interpolate = (xs: array<float>, ys: array<float>, x) => {
@@ -254,9 +273,9 @@ let owner = (id: string): option<area> => {
   } else if starts(["PEnv_", "Curve_Amp_"]) ||
   is(["Attack", "Hold", "Decay1", "Breakpoint", "Decay2", "Sustain", "Release", "VeloSens", "PolyMode", "Glide", "GlideMode"]) {
     Some(#env)
-  } else if starts(["LFO_", "M2_", "Curve_Mod2_"]) || ModMatrix.isSlotParam(id) || is(["LFOPhase", "LFOPhaseRand", "LFORetrig"]) {
+  } else if starts(["LFO_", "M2_", "Curve_Mod2_", "XY_"]) || ModMatrix.isSlotParam(id) || is(["LFOPhase", "LFOPhaseRand", "LFORetrig"]) {
     Some(#mod)
-  } else if starts(["Sat_", "FX_", "C_", "D_", "R_", "EQ_"]) || Lazy.get(rackParams)->Set.has(id) {
+  } else if starts(["Sat_", "FX_", "VL_", "C_", "D_", "R_", "EQ_"]) || Lazy.get(rackParams)->Set.has(id) {
     Some(#fx)
   } else {
     None
@@ -430,6 +449,121 @@ let kindOf = (m): kind => {
 }
 
 //==============================================================================
+// Drawn waves
+
+// What Oatmeal's own programs draw (three in four of them play a drawn wave, as often as a pulse
+// as plainly): mostly a rich, saw-like spectrum, then a few drawbars, odd harmonics, a sine with
+// a little colour; wilder, a formant's hump, a few high partials alone, or a shape drawn by hand.
+type recipe = Rich | Drawbars | Odd | NearSine | Hump | Sparse | ByHand
+
+// (recipe, threshold, weight)
+let recipes = (k: kind) => [
+  (Rich, 0., k == #bell ? 0.3 : 3.),
+  (Drawbars, 0., k == #keys || k == #pad || k == #bell ? 2. : 1.),
+  (Odd, 0., k == #bass || k == #lead ? 1.5 : 1.),
+  (NearSine, 0., k == #bell ? 2. : 0.6),
+  (Hump, 0.3, k == #brass || k == #lead || k == #pad ? 1. : 0.6),
+  (Sparse, 0.55, k == #bell ? 1. : 0.4),
+  (ByHand, 0.6, 0.5),
+]
+
+let drawbarHarmonics = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16]
+
+// A wave of this recipe: its harmonics' levels (phases at 0, as the harmonic editor draws a saw),
+// a little uneven the wilder it is; or a shape by hand, a line through a few random points.
+// 512 points, peak 1.
+let drawWave = (r, w, recipe) => {
+  let count = 64
+  let s = WaveImport.emptySpectrum(WaveImport.harmonics)
+  let set = (k, a) => s.amp->Array.setUnsafe(k - 1, a)
+  let uneven = () => Math.exp(gaussian(r) * (0.1 + 0.3 * w))
+  let falling = (p, k) => Math.pow(Int.toFloat(k), ~exp=-.p) * uneven()
+  switch recipe {
+  | Rich =>
+    let p = within(r, w, (0.9, 1.3), (0.5, 2.))
+    for k in 1 to count {
+      set(k, falling(p, k))
+    }
+  | Drawbars =>
+    set(1, 1.)
+    drawbarHarmonics->Array.forEach(k => k > 1 && chance(r, 0.45) ? set(k, between(r, 0.1, 0.8)) : ())
+  | Odd =>
+    let p = within(r, w, (1., 1.6), (0.6, 2.2))
+    let evens = chance(r, w) ? 0.15 : 0.
+    for k in 1 to count {
+      set(k, mod(k, 2) == 1 ? falling(p, k) : evens * falling(p, k))
+    }
+  | NearSine =>
+    set(1, 1.)
+    for _ in 1 to 3 {
+      set(Float.toInt(between(r, 2., 6.99)), between(r, 0.03, 0.25))
+    }
+  | Hump =>
+    let centre = logBetween(r, 3., 16.)
+    let width = between(r, 1.5, 4.)
+    for k in 1 to count {
+      let d = (Int.toFloat(k) - centre) / width
+      set(k, Math.exp(-0.5 * d * d))
+    }
+    set(1, between(r, 0.3, 1.))
+  | Sparse =>
+    set(1, between(r, 0., 0.3))
+    for _ in 1 to 1 + Float.toInt(r() * 2.99) {
+      set(Float.toInt(between(r, 2., 16.99)), between(r, 0.5, 1.))
+    }
+  | ByHand => ()
+  }
+  let wave = if recipe == ByHand {
+    // (DC taken out: the engine would play it as an offset)
+    let points = 4 + Float.toInt(r() * 9.)
+    let ys = Array.fromInitializer(~length=points, _ => between(r, -1., 1.))
+    let at = i => {
+      let x = Int.toFloat(i * points) / 512.
+      let k = Float.toInt(x)
+      let f = x - Int.toFloat(k)
+      ys->Array.getUnsafe(k) * (1. - f) + ys->Array.getUnsafe(mod(k + 1, points)) * f
+    }
+    let mean = Array.fromInitializer(~length=512, at)->Array.reduce(0., (s, y) => s + y) / 512.
+    let line = Array.fromInitializer(~length=512, i => at(i) - mean)
+    let peak = line->Array.reduce(1e-6, (p, y) => Math.max(p, Math.abs(y)))
+    Some(Float32Array.fromArray(line->Array.map(y => y / peak)))
+  } else {
+    WaveImport.synthesise(s)
+  }
+  wave->Option.getOr(Lazy.get(initTables).wave1)
+}
+
+// A drawn wave for an oscillator (its table: Wave1 or Wave2), of a recipe that suits the kind.
+let drawFor = (r, w, k, t: patch, table) =>
+  t.tables = t.tables->OatmealFormat.setTable(table, drawWave(r, w, tiered(r, w, recipes(k))))
+
+// how likely an oscillator plays a drawn wave
+let drawnOdds = w => 0.4 + 0.3 * w
+
+// A drawn wave's power against the sine Init has drawn (what LevelTables measured the drawn
+// waves with), as its fundamental's and the rest's: played plainly, or as a pulse of this width
+// (the wave less itself that far on: each harmonic k by 2 sin(pi k width); Init's sine at Init's
+// half width doubles).
+let drawnPower = (table: Float32Array.t, ~width=?) => {
+  let amps = WaveImport.spectrumOfCycle(table, ~start=0, ~n=512, ~count=32).amp
+  let through = k =>
+    width->Option.mapOr(1., pw => {
+      let s = Math.sin(Math.Constants.pi * Int.toFloat(k) * pw)
+      4. * s * s
+    })
+  let reference = width == None ? 0.5 : 2.
+  let power = k => {
+    let a = amps->Array.getUnsafe(k - 1)
+    a * a / 2. * through(k) / reference
+  }
+  let rest = ref(0.)
+  for k in 2 to 32 {
+    rest := rest.contents + power(k)
+  }
+  (power(1), rest.contents)
+}
+
+//==============================================================================
 // Oscillators
 
 let oscModeIds = [
@@ -458,14 +592,20 @@ let oscModeIds = [
 
 let pulseWidth = (r, w) => within(r, w, (0.3, 0.5), (0.06, 0.5))
 
-// osc 1's wave, and its pulse width modulation
-let oscWave = (r, w, p, m) => {
+// osc 1's wave (often a drawn one), and its pulse width modulation
+let oscWave = (r, w, k, p, t) => {
+  let m = t.values
   reset(m, ["O1_Waveform", "O1_PWM_W", "O1_PWM_R", "O1_PWM_D"])
-  let wave = modulating(mixMode(m)) && chance(r, 0.4)
-    ? weighted(r, [(sine, 2.), (triangle, 1.)])
-    : weighted(r, Array.concat(p.waves, w > 0.5 ? [(sine, 0.5)] : []))
+  let wave = if modulating(mixMode(m)) && chance(r, 0.4) {
+    weighted(r, [(sine, 2.), (triangle, 1.)])
+  } else if chance(r, drawnOdds(w)) {
+    drawFor(r, w, k, t, Wave1)
+    chance(r, 0.5) ? drawnPulse : drawn
+  } else {
+    weighted(r, Array.concat(p.waves, w > 0.5 ? [(sine, 0.5)] : []))
+  }
   put(m, "O1_Waveform", wave)
-  if wave == pulse {
+  if wave == pulse || wave == drawnPulse {
     put(m, "O1_PWM_W", pulseWidth(r, w))
     if chance(r, 0.3 + 0.3 * w) {
       put(m, "O1_PWM_R", logWithin(r, w, (0.15, 1.2), (0.05, 7.)))
@@ -475,8 +615,10 @@ let oscWave = (r, w, p, m) => {
 }
 
 // The mix mode and osc 2: at its interval and level, or as the modulator (its ratio and depth),
-// with mod env 1 sweeping the depth or the synced interval.
-let oscPair = (r, w, k: kind, p, m) => {
+// with mod env 1 sweeping the depth or the synced interval. Osc 2 playing osc 1's drawn wave plays
+// it from its own table; now and then it draws one of its own.
+let oscPair = (r, w, k: kind, p, t) => {
+  let m = t.values
   reset(m, oscModeIds)
   let mode = if k == #bell {
     weighted(r, [(pm, 3.), (fm, 1.5), (ring, 0.5 + w), (am, 0.3 + w)])
@@ -503,12 +645,18 @@ let oscPair = (r, w, k: kind, p, m) => {
     let wave2 = if modulating(mode) {
       tiered(r, w, [(sine, 0., 4.), (triangle, 0.3, 1.), (saw, 0.5, 1.), (pulse, 0.6, 0.7)])
     } else if chance(r, 0.6) {
+      if isDrawn(wave1) {
+        t.tables = t.tables->OatmealFormat.setTable(Wave2, t.tables.wave1)
+      }
       wave1
+    } else if chance(r, 0.5 * drawnOdds(w)) {
+      drawFor(r, w, k, t, Wave2)
+      chance(r, 0.5) ? drawnPulse : drawn
     } else {
       weighted(r, p.waves)
     }
     put(m, "O2_Waveform", wave2)
-    if isPulse(wave2) {
+    if hasWidth(wave2) {
       put(m, "O2_PWM_W", pulseWidth(r, w))
     }
     let semis = if mode == sync {
@@ -628,13 +776,14 @@ let oscNoise = (r, w, k: kind, m) => {
   }
 }
 
-let makeOsc = (r, w, k, m) => {
+let makeOsc = (r, w, k, t) => {
+  let m = t.values
   let p = profile(k)
-  oscWave(r, w, p, m)
-  oscPair(r, w, k, p, m)
+  oscWave(r, w, k, p, t)
+  oscPair(r, w, k, p, t)
   // (a modulating mode leans towards a sine carrier)
   if modulating(mixMode(m)) {
-    oscWave(r, w, p, m)
+    oscWave(r, w, k, p, t)
   }
   oscUnison(r, w, p, m)
   oscNoise(r, w, k, m)
@@ -1022,8 +1171,26 @@ let effectSettings = (r, w, m, e: FxRack.effect) => {
     s("Ut_Width", within(r, w, (1.1, 1.35), (0.8, 1.6)))
     s("Ut_BassMono", PorridgeParams.bassMonoValue(between(r, 80., 160.)))
   | #distortion => distortion(r, w, m, first => FxRack.id(e, first))
-  // (only in the voice lane, which random patches leave alone)
-  | #eq | #shifter | #resonator | #octaver => ()
+  // (the voice lane's own: each follows the note)
+  | #shifter =>
+    // partials moved by a small part of the note: a shine, or wild, a clang
+    let ratio = logWithin(r, w, (0.01, 0.05), (0.005, 0.5))
+    s("Sh_Ratio", Math.cbrt(ratio / 2.))
+    s("Sh_Mode", tiered(r, w, [(2., 0., 2.), (0., 0., 1.), (1., 0.3, 0.6), (3., 0.7, 0.4)]))
+    s("Sh_Mix", within(r, w, (0.2, 0.4), (0.15, 0.55)))
+  | #resonator =>
+    // harmonic, odd, fifths, bar, bell, membrane: a string's first
+    s("Rs_Model", tiered(r, w, [(0., 0., 2.), (3., 0., 1.), (1., 0.3, 0.6), (4., 0.3, 0.8), (2., 0.5, 0.5), (5., 0.6, 0.5)]))
+    s("Rs_Pitch", w > 0.7 && chance(r, 0.3) ? pick(r, [-12., 7., 12.]) : 0.)
+    s("Rs_Decay", PorridgeParams.expPos(10., 10000., logWithin(r, w, (300., 1500.), (100., 3000.))))
+    s("Rs_Bright", between(r, 0.3, 0.7))
+    s("Rs_Mix", within(r, w, (0.25, 0.5), (0.2, 0.6)))
+  | #octaver =>
+    s("Oc_Sub", within(r, w, (0.3, 0.6), (0.1, 0.9)))
+    s("Oc_Up", within(r, w, (0., 0.2), (0., 0.6)))
+    s("Oc_Dry", 1.)
+  // (random patches add no EQ)
+  | #eq => ()
   }
 }
 
@@ -1068,10 +1235,11 @@ let rank = (kind: FxRack.kind) =>
   }
 
 let rackOf = m => FxRack.read(get(m, ...))
+let laneOf = m => FxRack.readLane(get(m, ...))
 
 // The rack with one more effect of this kind (if it has room), in its place, set up.
 let addEffect = (r, w, m, kind: FxRack.kind, ~shuffled=false) =>
-  switch FxRack.free(rackOf(m), kind) {
+  switch FxRack.free(rackOf(m), ~lane=laneOf(m), kind) {
   | Some(e) =>
     let rack = rackOf(m)
     let at = shuffled
@@ -1097,6 +1265,77 @@ let nextEffect = (r, w, k, m) => {
   options == [] ? None : Some(weighted(r, options->Array.map(((kind, _, weight, _)) => (kind, weight))))
 }
 
+// What the voice lane can be given: (kind, threshold, weight). Each note runs its own copy, so
+// its key, envelopes and own random values move it for that note alone.
+let laneChoices = (k: kind) => [
+  (#phaser, 0., 1.),
+  (#filter, 0., 0.8),
+  (#flanger, 0.2, 0.7),
+  (#octaver, 0.3, k == #bass ? 1.2 : k == #lead ? 0.6 : 0.3),
+  (#resonator, 0.3, k == #pluck || k == #bell || k == #keys ? 1.2 : 0.5),
+  (#shifter, 0.35, 0.6),
+  (#distortion, 0.5, 0.5),
+]
+
+let laneIds = Array.concat(
+  Array.fromInitializer(~length=PorridgeParams.laneSlots, i => PorridgeParams.laneId(i + 1)),
+  ["VL_FilterAt", "VL_AmpAt"],
+)
+
+// An effect in the voice lane, set up: as in the rack, and what makes each note's its own (the
+// phaser's and flanger's sweeps starting at a random point and following the key, the flanger
+// now and then tuned to the note, so that it rings there; the filter following the key). A
+// lane with a resonator goes before the amp envelope, which damps it as a note ends.
+let addToLane = (r, w, m, kind: FxRack.kind) =>
+  FxRack.free(rackOf(m), ~lane=laneOf(m), ~forLane=true, kind)->Option.forEach(e => {
+    let lane = Array.concat(laneOf(m), [e])
+    let ampAt = lane->Array.some(x => x.kind == #resonator) ? Array.length(lane) : 0
+    FxRack.laneValues(lane, {filterAt: 0, ampAt})->Array.forEach(((id, v)) => put(m, id, v))
+    put(m, FxRack.switchId(e), FxRack.onValue(e))
+    effectSettings(r, w, m, e)
+    let s = (first, v) => put(m, FxRack.id(e, first), v)
+    switch kind {
+    | #phaser =>
+      // (its feedback held back: in every voice, a ringing phaser is louder than the estimate
+      // can follow)
+      s("Ph_Feedback", Math.max(-0.6, Math.min(0.6, get(m, FxRack.id(e, "Ph_Feedback")))))
+      s("Ph_PhaseRand", 1.)
+      s("Ph_RateTrack", within(r, w, (0.2, 0.5), (0., 1.)))
+      s("Ph_Track", between(r, 0.3, 1.))
+    | #flanger =>
+      s("Fl_PhaseRand", 1.)
+      s("Fl_RateTrack", within(r, w, (0.2, 0.5), (0., 1.)))
+      if chance(r, 0.3 + 0.3 * w) {
+        // (a delay of middle C's period, followed by each note's)
+        s("Fl_Track", 1.)
+        s("Fl_Delay", PorridgeParams.expPos(0.1, 20., 1000. / 261.63))
+        s("Fl_Depth", within(r, w, (0.03, 0.08), (0.02, 0.2)))
+        s("Fl_Feedback", within(r, w, (0.4, 0.6), (0.3, 0.7)) * (chance(r, 0.8) ? 1. : -1.))
+      }
+    | #filter => s("Ff_Track", between(r, 0.5, 1.))
+    | _ => ()
+    }
+  })
+
+// Now and then (the likelier the wilder) an effect in every voice; wild, two of different kinds.
+let voiceFx = (r, w, k, m) => {
+  laneOf(m)->Array.forEach(e => put(m, FxRack.switchId(e), 0.))
+  reset(m, laneIds)
+  if w >= 0.15 && chance(r, 0.1 + 0.45 * (w - 0.15) / 0.85) {
+    let count = w > 0.75 && chance(r, 0.3) ? 2 : 1
+    for _ in 1 to count {
+      let options = laneChoices(k)->Array.filter(((kind, from, _)) =>
+        w >= from &&
+        !(laneOf(m)->Array.some(e => e.kind == kind)) &&
+        FxRack.free(rackOf(m), ~lane=laneOf(m), ~forLane=true, kind) != None
+      )
+      if options != [] {
+        addToLane(r, w, m, weighted(r, options->Array.map(((kind, _, weight)) => (kind, weight))))
+      }
+    }
+  }
+}
+
 let makeFx = (r, w, k: kind, m) => {
   drive(r, w, k, m)
   // an empty rack, then up to five effects (pads and bells always get a space)
@@ -1112,6 +1351,7 @@ let makeFx = (r, w, k: kind, m) => {
     tries := tries.contents + 1
     nextEffect(r, w, k, m)->Option.forEach(kind => addEffect(r, w, m, kind, ~shuffled)->ignore)
   }
+  voiceFx(r, w, k, m)
 }
 
 //==============================================================================
@@ -1232,6 +1472,17 @@ let fxTargets = m =>
   )
   ->Array.filter(id => FxRack.all->Array.some(e => FxRack.params(e)->Array.includes(id)) && ModMatrix.targetIndex(id) > 0)
 
+// the parameters of the voice lane's effects that a routing can move, each note its own (their
+// tones and depths, not feedback, which can ring on, nor a distortion's gains)
+let laneTargets = m =>
+  laneOf(m)
+  ->Array.flatMap(e =>
+    ["Ph_Freq", "Ph_Depth", "Fl_Mix", "Fl_Depth", "Ff_Cutoff", "Ff_Morph", "Sh_Ratio", "Sh_Mix", "Rs_Bright", "Rs_Decay", "Oc_Sub", "Oc_Up"]->Array.map(f =>
+      FxRack.id(e, f)
+    )
+  )
+  ->Array.filter(id => laneOf(m)->Array.some(e => FxRack.params(e)->Array.includes(id)) && ModMatrix.targetIndex(id) > 0)
+
 // A kind of routing: the wildness it needs, how likely it is for each kind of patch, whether the
 // patch can take it, and what it adds (false if it couldn't).
 type route = {
@@ -1314,12 +1565,30 @@ let routes: array<route> = [
     fits: filtered,
     add: (r, _, m) => connect(m, "aftertouch", "Cutoff", between(r, 0.1, 0.25)),
   },
+  // the voice lane's effect moved by something of each note's own: a random value, its velocity,
+  // its key, an envelope
+  {
+    key: "voice fx",
+    from: 0.,
+    weight: _ => 1.5,
+    fits: m => laneTargets(m) != [],
+    add: (r, w, m) => {
+      let target = pick(r, laneTargets(m))
+      let amount = within(r, w, (0.05, 0.15), (0.05, 0.35))
+      switch weighted(r, [("random", 2.), ("velocity", 1.5), ("modEnv2", 1.), ("key", 0.5)]) {
+      | "modEnv2" =>
+        let env = takeModEnv(m, ~attack=logBetween(r, 0.2, 300.), ~decay=logWithin(r, w, (300., 2000.), (60., 6000.)))
+        connect(m, env, target, amount * sign(r))
+      | source => connect(m, source, target, amount * sign(r))
+      }
+    },
+  },
   // pulse width modulation
   {
     key: "pwm",
     from: 0.,
     weight: evenly,
-    fits: m => isPulse(get(m, "O1_Waveform")),
+    fits: m => hasWidth(get(m, "O1_Waveform")),
     add: (r, w, m) =>
       switch takeLfo(m, ~prefer=2, ~rate=Hz(logWithin(r, w, (0.3, 2.), (0.1, 8.))), ~shape=3., ~mode=0.) {
       | Some((_, lfo)) => connect(m, lfo, "O1_PWM_W", within(r, w, (0.05, 0.15), (0.05, 0.3)))
@@ -1539,6 +1808,66 @@ let addRoute = (r, w, k, m, ~taken: array<string>=[]) => {
   added.contents
 }
 
+// The XY pad: Oatmeal's four routes on each axis, and its random walk.
+let xyAxes = ["H", "V"]
+let xyTargetId = (axis, n) => `XY_${axis}_Target_${Int.toString(n)}`
+let xyDepthId = (axis, n) => `XY_${axis}_Depth_${Int.toString(n)}`
+let xyIds = Array.concat(
+  xyAxes->Array.flatMap(axis => [1, 2, 3, 4]->Array.flatMap(n => [xyTargetId(axis, n), xyDepthId(axis, n)])),
+  ["XY_X", "XY_Y", "XY_Var_Radius", "XY_Var_Rate"],
+)
+let xyRouted = m => xyAxes->Array.some(axis => [1, 2, 3, 4]->Array.some(n => get(m, xyTargetId(axis, n)) != 0.))
+
+// What the pad moves, as Oatmeal's programs route it most (the cutoff, the resonance, the pan,
+// then the rest): (target, weight, whether the patch has it, the tame depths and all of them).
+// Depths are -1..1 of the target's range (the cutoff's is 4 octaves either way).
+let xyChoices = m => [
+  ("cutoff 1", 4.8, filtered(m), (0.25, 0.5), (0.1, 1.)),
+  ("resonance", 3.1, filtered(m), (0.25, 0.5), (0.1, 0.9)),
+  ("pan", 2., true, (0.2, 0.4), (0.1, 0.8)),
+  ("filter env mod", 1.2, filtered(m) && get(m, "F_EnvMod") != 0., (0.1, 0.25), (0.05, 0.6)),
+  ("distortion", 1.3, get(m, "Sat_Type") != 0., (0.2, 0.4), (0.1, 0.8)),
+  ("LFO 1 speed", 1.3, sourceUsed(m, "lfo1"), (0.3, 0.6), (0.2, 1.)),
+  ("LFO 2 speed", 0.6, sourceUsed(m, "lfo2"), (0.3, 0.6), (0.2, 1.)),
+  ("amp envelope speed", 0.6, true, (0.2, 0.5), (0.2, 1.)),
+  ("noise amp", 0.2, get(m, "N_Amp") > 0., (0.1, 0.3), (0.1, 0.6)),
+]
+
+// Now and then the XY pad routed (half of Oatmeal's programs route it), for the Play page's pad
+// to play the patch with: a route or two, more when wild, on both axes mostly; and sometimes its
+// random walk, which moves the pad on its own.
+let xyPad = (r, w, m) => {
+  reset(m, xyIds)
+  if w >= 0.03 && chance(r, 0.35 + 0.35 * w) {
+    let left = ref(xyChoices(m)->Array.filter(((_, _, has, _, _)) => has))
+    let count = 1 + Float.toInt(r() * (1.5 + 2.5 * w))
+    let next = Dict.fromArray([("H", 1), ("V", 1)])
+    for i in 0 to count - 1 {
+      if left.contents != [] {
+        let (target, _, _, tame, whole) = weighted(r, left.contents->Array.map(c => {
+          let (_, weight, _, _, _) = c
+          (c, weight)
+        }))
+        left := left.contents->Array.filter(((t, _, _, _, _)) => t != target)
+        let axis = mod(i, 2) == 0 ? (chance(r, 0.25) ? "V" : "H") : chance(r, 0.8) ? "V" : "H"
+        let n = next->Dict.get(axis)->Option.getOr(1)
+        next->Dict.set(axis, n + 1)
+        // (the resonance no further than 0.9 with the pad in a corner: a filter ringing on
+        // past that can be far too loud)
+        let depth = within(r, w, tame, whole)
+        let depth = target == "resonance" ? Math.min(depth, Math.max(0.05, 0.9 - get(m, "Resonance"))) : depth
+        // (by Oatmeal's own name for it, which stays put while the menu words it its own way)
+        put(m, xyTargetId(axis, n), OatmealParams.xyTargets->Array.indexOf(target)->Int.toFloat)
+        put(m, xyDepthId(axis, n), depth * (chance(r, 0.35) ? -1. : 1.))
+      }
+    }
+    if chance(r, 0.25 + 0.4 * w) {
+      put(m, "XY_Var_Radius", within(r, w, (0.08, 0.25), (0.03, 0.8)))
+      put(m, "XY_Var_Rate", logWithin(r, w, (0.3, 2.5), (0.1, 8.)))
+    }
+  }
+}
+
 let makeMod = (r, w, k, m) => {
   reset(m, Lazy.get(modIds))
   let count = w < 0.03 ? 0 : Math.Int.max(1, Float.toInt(Math.round(w * (1.5 + 4. * r()))))
@@ -1546,6 +1875,7 @@ let makeMod = (r, w, k, m) => {
   for _ in 1 to count {
     addRoute(r, w, k, m, ~taken)->Option.forEach(key => taken->Array.push(key))
   }
+  xyPad(r, w, m)
 }
 
 //==============================================================================
@@ -1559,40 +1889,43 @@ let makeMod = (r, w, k, m) => {
 // to renders of random patches (tools/random-levels.mjs).
 
 // The oscillators' and the noise's power at the output (with the output gain at 1), as a saw's
-// spectrum (what's bright: saws, pulses, noise, a synced osc, a deep modulator) and as a sine's.
-let sources = m => {
+// spectrum (what's bright: saws, pulses, a drawn wave's harmonics, noise, a synced osc, a deep
+// modulator) and as a sine's.
+let sources = (m, ~tables: OatmealFormat.tables) => {
   let mode = mixMode(m)
-  let power = (amp, wave, width) => {
+  // an oscillator's power, and how much of it is pure (a sine's, or a drawn wave's fundamental)
+  let power = (amp, wave, width, table) => {
     let w = get(m, wave)
     let db =
       LevelTables.waves[Float.toInt(w)]->Option.getOr(-12.) +
         (isPulse(w) ? 10. * Math.log10(Math.max(0.01, 4. * get(m, width) * (1. - get(m, width)))) : 0.)
-    get(m, amp) * get(m, amp) * Math.pow(10., ~exp=db / 10.)
-  }
-  let sineLike = wave => {
-    let w = get(m, wave)
-    w == 0. || w == 3. || w == triangle
+    let p = get(m, amp) * get(m, amp) * Math.pow(10., ~exp=db / 10.)
+    if isDrawn(w) {
+      let (fundamental, rest) = drawnPower(table, ~width=?(w == drawnPulse ? Some(get(m, width)) : None))
+      (p * (fundamental + rest), fundamental / Math.max(1e-9, fundamental + rest))
+    } else {
+      (p, w == 0. || w == 3. || w == triangle ? 1. : 0.)
+    }
   }
   let bright = ref(0.)
   let pure = ref(0.)
-  let add = (p, wave, ~bright as b=false) =>
-    if b || !sineLike(wave) {
-      bright := bright.contents + p
-    } else {
-      pure := pure.contents + p
-    }
-  let p1 = power("O1_Amp", "O1_Waveform", "O1_PWM_W")
-  let p2 = power("O2_Amp", "O2_Waveform", "O2_PWM_W")
+  let add = ((p, sineShare), ~bright as b=false) => {
+    let share = b ? 0. : sineShare
+    pure := pure.contents + p * share
+    bright := bright.contents + p * (1. - share)
+  }
+  let (p1, s1) = power("O1_Amp", "O1_Waveform", "O1_PWM_W", tables.wave1)
+  let (p2, s2) = power("O2_Amp", "O2_Waveform", "O2_PWM_W", tables.wave2)
   let deep = get(m, mode == fm ? "O1_Amp" : "O2_Amp") > 0.3
   let heard = get(m, "O2_PairMix") * get(m, "O2_PairMix")
   if mode == fm {
-    add(p2, "O2_Waveform", ~bright=deep)
+    add((p2, s2), ~bright=deep)
   } else if mode == pm || mode == ring || mode == am {
-    add(mode == pm ? p1 : p1 * 0.5, "O1_Waveform", ~bright=deep)
-    add(p2 * heard, "O2_Waveform")
+    add((mode == pm ? p1 : p1 * 0.5, s1), ~bright=deep)
+    add((p2 * heard, s2))
   } else {
-    add(p1, "O1_Waveform", ~bright=mode == pmFeedback && get(m, "PM_Feedback") > 0.3)
-    add(p2, "O2_Waveform", ~bright=mode == sync)
+    add((p1, s1), ~bright=mode == pmFeedback && get(m, "PM_Feedback") > 0.3)
+    add((p2, s2), ~bright=mode == sync)
   }
   let n = get(m, "N_Amp")
   bright :=
@@ -1645,15 +1978,17 @@ let envelopeAt = (e, t) => {
 // velocity 100's scaling, by a velocity sensitivity (as dsp/Modulation.cmajor's velScale)
 let velocityScale = sens => sens > 0.001 ? Math.pow(100. / 127., ~exp=2. * sens) : 1.
 
-// What the rack's filters do to the level (dB), for a saw's spectrum or a sine's: each at its
-// cutoff against the note, with its resonance, mixed with the dry sound.
+// What the rack's and the voice lane's filters do to the level (dB), for a saw's spectrum or a
+// sine's: each at its cutoff (following the note as far as it tracks it) against the note, with
+// its resonance, mixed with the dry sound.
 let rackFilters = (m, rows, ~note) =>
-  rackOf(m)
+  Array.concat(laneOf(m), rackOf(m))
   ->Array.filter(e => e.kind == #filter)
   ->Array.reduce(0., (db, e) => {
     let id = first => FxRack.id(e, first)
     let t = Float.toInt(get(m, id("Ff_Type")))
-    let hz = PorridgeParams.expValue(20., 20000., get(m, id("Ff_Cutoff")))
+    let tracked = Math.pow(noteHz(note) / 261.63, ~exp=get(m, id("Ff_Track")))
+    let hz = PorridgeParams.expValue(20., 20000., get(m, id("Ff_Cutoff"))) * tracked
     let octaves = Math.log2(hz / noteHz(note))
     let level = filterLevel(rows, t, octaves) + resonanceLevel(t, get(m, id("Ff_Resonance")), octaves)
     let mix = get(m, id("Ff_Mix"))
@@ -1718,8 +2053,8 @@ let cutoffShift = (m, ~note) => {
 // gainAndDistort), so it takes each moment's level through its curve (LevelTables.drive): a
 // driven note's decay is squashed back up towards the clip, and only fades below 1/16 of the
 // envelope. The global distortion and the rack's come after that, on the whole sound.
-let simulated = (m, ~note, ~within=2000.) => {
-  let (bright, pure) = sources(m)
+let simulated = (m, ~note, ~within=2000., ~tables=?) => {
+  let (bright, pure) = sources(m, ~tables=tables->Option.getOr(Lazy.get(initTables)))
   let rackSaw = rackFilters(m, LevelTables.saw, ~note)
   let rackSine = rackFilters(m, LevelTables.sine, ~note)
   let t = Float.toInt(get(m, "Filter"))
@@ -1755,14 +2090,14 @@ let simulated = (m, ~note, ~within=2000.) => {
   let power10 = x => Math.pow(10., ~exp=x / 10.)
   let velocity = 20. * Math.log10(velocityScale(get(m, "VeloSens")))
   // the distortions: the voice's (by Sat_Mode: 0 global, 1 after the filter, 2 before it,
-  // 3 both), then the rack's, each as (type, pregain, postgain)
+  // 3 both), then the voice lane's and the rack's, each as (type, pregain, postgain)
   let driveType = Float.toInt(get(m, "Sat_Type"))
   let driveMode = Float.toInt(get(m, "Sat_Mode"))
   let voiceDrive = driveType != 0 && driveMode != 0
   let globalDrive = driveType != 0 && (driveMode == 0 || driveMode == 3)
   let (pregain, postgain) = (get(m, "Sat_Pregain"), get(m, "Sat_Postgain"))
   let rackDrives =
-    rackOf(m)
+    Array.concat(laneOf(m), rackOf(m))
     ->Array.filter(e => e.kind == #distortion)
     ->Array.map(e => {
       let id = first => FxRack.id(e, first)
@@ -1799,20 +2134,37 @@ let simulated = (m, ~note, ~within=2000.) => {
   (db(loudest.contents / Int.toFloat(window)) + gains, db(power->Array.reduce(0., Math.max)) + gains)
 }
 
-let simulatedLevel = (m, ~note, ~within=?) => {
-  let (level, _) = simulated(m, ~note, ~within?)
+let simulatedLevel = (m, ~note, ~within=?, ~tables=?) => {
+  let (level, _) = simulated(m, ~note, ~within?, ~tables?)
   level
 }
 
 // What the simulation leaves out, as `loudness` weighs it: the unison, osc 2's interval against
 // osc 1 (at one, they add more than their powers), the modes, the rack's compressor, its spaces
-// and echoes, the chorus's voices, the flanger and phaser, the frequency shifter, the
-// distortion models' own drive, and the second filter.
+// and echoes, the sweeping effects (chorus, flanger and phaser, in the rack or the voices: each
+// about the same whatever its settings, and less each the more there are; louder as a phaser's
+// or an untuned flanger's feedback makes it ring), the frequency shifter, the distortion models'
+// own drive, the second filter, and the voice lane's flangers tuned to the note (which ring
+// there, the more the more feedback), resonator, octaver, shifter, filter and distortion.
 let loudnessFeatures = m => {
   let mode = mixMode(m)
   let rack = rackOf(m)
+  let lane = laneOf(m)
   let has = kind => rack->Array.some(e => e.kind == kind) ? 1. : 0.
-  let chorus = rack->Array.find(e => e.kind == #chorus)
+  let inLane = (kind, first) => lane->Array.find(e => e.kind == kind)->Option.mapOr(0., e => get(m, FxRack.id(e, first)))
+  let sweeping = Array.concat(rack, lane)->Array.filter(e => e.kind == #chorus || e.kind == #flanger || e.kind == #phaser)
+  let feedback = (e: FxRack.effect, first) => Math.max(0., Math.abs(get(m, FxRack.id(e, first))) - 0.4)
+  let resonant = sweeping->Array.reduce(0., (sum, e) =>
+    switch e.kind {
+    | #phaser => sum + feedback(e, "Ph_Feedback")
+    | #flanger if get(m, FxRack.id(e, "Fl_Track")) == 0. => sum + feedback(e, "Fl_Feedback")
+    | _ => sum
+    }
+  )
+  let ringing =
+    lane
+    ->Array.filter(e => e.kind == #flanger && get(m, FxRack.id(e, "Fl_Track")) > 0.)
+    ->Array.reduce(0., (sum, e) => sum + Math.max(0., get(m, FxRack.id(e, "Fl_Feedback"))))
   [
     10. * Math.log10(Math.max(1., get(m, "U_Voices"))),
     secondSounds(m) && !modulating(mode) && Math.abs(get(m, "Transpose")) < 0.01 ? 1. : 0.,
@@ -1822,29 +2174,36 @@ let loudnessFeatures = m => {
     has(#compressor),
     has(#space) + has(#reverb) + has(#ambience) + has(#convolve),
     has(#delay),
-    chorus->Option.mapOr(0., e => get(m, FxRack.id(e, "C_Mix")) * Math.log2(get(m, FxRack.id(e, "C_Voices")))),
-    has(#flanger) + has(#phaser),
+    Math.log2(1. + Int.toFloat(Array.length(sweeping))),
+    resonant,
     has(#bode),
     get(m, "Sat_Type") >= Int.toFloat(DistTypes.firstModel) ? get(m, "Sat_Drive") - 0.5 : 0.,
     filtered(m) ? Int.toFloat(Float.toInt(get(m, "F_Double"))) : 0.,
+    ringing,
+    inLane(#resonator, "Rs_Mix"),
+    inLane(#octaver, "Oc_Sub") + inLane(#octaver, "Oc_Up"),
+    inLane(#shifter, "Sh_Mix"),
+    inLane(#filter, "Ff_On"),
+    lane->Array.some(e => e.kind == #distortion) ? 1. : 0.,
   ]
 }
 
-let loudnessWeights = [0.037, 0.048, -0.164, 0.54, 0.481, -4.44, -0.133, -0.361, -2.428, -1.714, -1.66, 3.559, -0.509]
-let loudnessBias = 1.628
+let loudnessWeights = [0.1, 0.341, -0.7, -0.134, -0.757, -4.822, -0.039, 0.04, -2.793, 6.748, -2.282, 3.717, -1.599, 2.388, -11.806, -0.147, -7.798, -2.987, -2.125]
+let loudnessBias = 1.904
 
 // About how loud a patch's note plays: dB over its loudest 300 ms, K-weighted (as a loudness
-// meter hears it), with the output gain at 1.
-let loudness = (m, ~note) =>
-  loudnessFeatures(m)->Array.reduceWithIndex(simulatedLevel(m, ~note) + loudnessBias, (s, x, i) =>
+// meter hears it), with the output gain at 1. (Without its tables, as if its drawn waves were
+// Init's sines.)
+let loudness = (m, ~note, ~tables=?) =>
+  loudnessFeatures(m)->Array.reduceWithIndex(simulatedLevel(m, ~note, ~tables?) + loudnessBias, (s, x, i) =>
     s + x * loudnessWeights->Array.getUnsafe(i)
   )
 
 // The loudest moment of a patch's note (dB, with the output gain at 1), with the estimate's
 // correction: its peak is mostly within a few dB above it (tools/random-levels.mjs).
-let loudestMoment = (m, ~note) => {
-  let (level, loudest) = simulated(m, ~note)
-  loudest + loudness(m, ~note) - level
+let loudestMoment = (m, ~note, ~tables=?) => {
+  let (level, loudest) = simulated(m, ~note, ~tables?)
+  loudest + loudness(m, ~note, ~tables?) - level
 }
 
 // the level a single note is set to, as the Vanilla bank's chords are (-18 dB for four notes),
@@ -1854,28 +2213,35 @@ let ceilingDb = -9.
 
 // The output gain that puts a patch's note at targetDb, unless that would take its loudest
 // moment over the ceiling (a short pluck, whose 300 ms are mostly its tail).
-let gainFor = (m, ~note) =>
-  Math.min(2., ampOfDb(Math.min(targetDb - loudness(m, ~note), ceilingDb - loudestMoment(m, ~note))))
+let gainFor = (t, ~note) =>
+  Math.min(
+    2.,
+    ampOfDb(Math.min(targetDb - loudness(t.values, ~note, ~tables=t.tables), ceilingDb - loudestMoment(t.values, ~note, ~tables=t.tables))),
+  )
 
 //==============================================================================
 // Making patches
 
 // A random patch: Init with each area made at its wildness, except the locked ones (`keep`:
-// the patch they come from, and which), which keep what that patch has. `note` is where it
-// will be auditioned.
-let generate = (~wild: wildness, ~kind: kind, ~random as r: rng, ~keep: option<(Bank.values, array<area>)>=?) => {
+// the patch they come from, and which), which keep what that patch has (the oscillators their
+// drawn waves too). `note` is where it will be auditioned.
+let generate = (~wild: wildness, ~kind: kind, ~random as r: rng, ~keep: option<(patch, array<area>)>=?) => {
   let m = copy(Lazy.get(initValues))
   let locked = a => keep->Option.mapOr(false, ((_, areas)) => areas->Array.includes(a))
-  keep->Option.forEach(((from, _)) =>
-    from->Map.forEachWithKey((v, id) =>
+  let t = {values: m, tables: Lazy.get(initTables)}
+  keep->Option.forEach(((from, _)) => {
+    from.values->Map.forEachWithKey((v, id) =>
       switch owner(id) {
       | Some(a) if locked(a) => m->Map.set(id, v)
       | _ => ()
       }
     )
-  )
+    if locked(#osc) {
+      t.tables = from.tables
+    }
+  })
   if !locked(#osc) {
-    makeOsc(r, wild.osc, kind, m)
+    makeOsc(r, wild.osc, kind, t)
   }
   if !locked(#filter) {
     makeFilter(r, wild.filter, kind, m)
@@ -1890,8 +2256,8 @@ let generate = (~wild: wildness, ~kind: kind, ~random as r: rng, ~keep: option<(
   if !locked(#mod) {
     makeMod(r, wild.mod, kind, m)
   }
-  m->Map.set("Gain", gainFor(m, ~note=profile(kind).note))
-  m
+  m->Map.set("Gain", gainFor(t, ~note=profile(kind).note))
+  t
 }
 
 //==============================================================================
@@ -1905,7 +2271,7 @@ type nudge = {id: string, law: law, scale: float, active: Bank.values => bool}
 
 let nudge = (~scale=1., ~active=always, id, law) => {id, law, scale, active}
 let nonzero = id => m => get(m, id) != 0.
-let pulsed = id => m => isPulse(get(m, id))
+let pulsed = id => m => hasWidth(get(m, id))
 let decay1On = id => m => get(m, id) < 1.
 
 // The settings each area moves.
@@ -1965,19 +2331,23 @@ let nudges = (a: area) =>
       ...ModMatrix.slotNumbers->Array.map(k =>
         nudge(ModMatrix.amountId(k), Factor, ~active=nonzero(ModMatrix.sourceId(k)))
       ),
+      ...xyAxes->Array.flatMap(axis =>
+        [1, 2, 3, 4]->Array.map(n => nudge(xyDepthId(axis, n), Factor, ~active=nonzero(xyTargetId(axis, n))))
+      ),
+      nudge("XY_Var_Radius", Lin(0.02, 1.), ~active=nonzero("XY_Var_Radius")),
+      nudge("XY_Var_Rate", Log(0.05, 16.), ~active=nonzero("XY_Var_Radius")),
     ]
   | #fx => [
       nudge("Sat_Pregain", Lin(-12., 36.), ~scale=0.5, ~active=nonzero("Sat_Type")),
     ]
   }
 
-// The rack's effects' settings that move: their continuous ones, but not their levels in and out
-// (which the output gain answers for) nor what restarts an effect.
+// The rack's and the voice lane's effects' settings that move: their continuous ones, but not
+// their levels in and out (which the output gain answers for) nor what restarts an effect.
 let fixedFx = ["Gain", "Pregain", "Postgain", "Limit", "Wet", "InGain", "OutGain", "Predelay", "Length", "Dry", "Phase", "Spread", "Width", "Pan", "Freq", "Inv", "Swap", "Thresh", "Ratio", "Split"]
-// (not the voices' extras, the phaser's and flanger's tracking among them, which random patches
-// leave alone as they leave the voice lane)
+// (nor the phaser's and flanger's tracking and random starts, which stay as they were made)
 let rackNudges = m =>
-  rackOf(m)->Array.flatMap(e =>
+  Array.concat(rackOf(m), laneOf(m))->Array.flatMap(e =>
     FxRack.spec(e.kind).params->Array.filterMap(((first, _)) => {
       let id = FxRack.id(e, first)
       let d = def(id)
@@ -2004,25 +2374,34 @@ let moveBy = (r, m, n: nudge, amount) => {
   put(m, n.id, next)
 }
 
-// feedback that would ring on is held back
-let tamedFeedback = m =>
+// feedback that would ring on is held back (in the voices, sooner: see addToLane)
+let tamedFeedback = m => {
+  let tame = (e, first, most) => {
+    let id = FxRack.id(e, first)
+    if FxRack.params(e)->Array.includes(id) {
+      put(m, id, Math.max(-.most, Math.min(most, get(m, id))))
+    }
+  }
   rackOf(m)->Array.forEach(e =>
-    ["C_Feedback", "D_FeedbackL", "D_FeedbackR", "Fl_Feedback", "Ph_Feedback", "Bd_Feedback"]->Array.forEach(first => {
-      let id = FxRack.id(e, first)
-      if FxRack.params(e)->Array.includes(id) {
-        put(m, id, Math.max(-0.92, Math.min(0.92, get(m, id))))
-      }
-    })
+    ["C_Feedback", "D_FeedbackL", "D_FeedbackR", "Fl_Feedback", "Ph_Feedback", "Bd_Feedback"]->Array.forEach(first =>
+      tame(e, first, 0.92)
+    )
   )
+  laneOf(m)->Array.forEach(e => {
+    tame(e, "Ph_Feedback", 0.6)
+    tame(e, "Fl_Feedback", 0.7)
+  })
+}
 
 // A part of an area made again, added or taken away.
-let restructure = (r, w, k: kind, m, a: area) => {
+let restructure = (r, w, k: kind, t, a: area) => {
+  let m = t.values
   let p = profile(k)
   switch a {
   | #osc =>
     switch weighted(r, [(0, 1.), (1, 0.5), (2, 0.5), (3, 0.4)]) {
-    | 0 => oscPair(r, w, k, p, m)
-    | 1 => oscWave(r, w, p, m)
+    | 0 => oscPair(r, w, k, p, t)
+    | 1 => oscWave(r, w, k, p, t)
     | 2 => oscUnison(r, w, p, m)
     | _ => oscNoise(r, w, k, m)
     }
@@ -2030,6 +2409,7 @@ let restructure = (r, w, k: kind, m, a: area) => {
   | #env => chance(r, 0.7) ? pitchEnv(r, w, k, m) : mono(r, w, k, m)
   | #mod =>
     switch usedSlots(m) {
+    | _ if chance(r, 0.2) => xyPad(r, w, m)
     | [] => addRoute(r, w, k, m)->ignore
     | used =>
       if chance(r, 0.4) {
@@ -2040,7 +2420,9 @@ let restructure = (r, w, k: kind, m, a: area) => {
     }
   | #fx =>
     let rack = rackOf(m)
-    if rack != [] && chance(r, 0.4) {
+    if chance(r, 0.2) {
+      voiceFx(r, w, k, m)
+    } else if rack != [] && chance(r, 0.4) {
       let gone = pick(r, rack)
       FxRack.values(rack->Array.filter(e => e != gone))->Array.forEach(((id, v)) => put(m, id, v))
       put(m, FxRack.switchId(gone), 0.)
@@ -2054,12 +2436,13 @@ let restructure = (r, w, k: kind, m, a: area) => {
 
 // Choices picked again now and then: the waves, the filter type within its family's wildness,
 // the LFOs' shapes, the distortion's type, the spaces' models.
-let repick = (r, w, k: kind, m, a: area, amount) => {
+let repick = (r, w, k: kind, t, a: area, amount) => {
+  let m = t.values
   let often = () => chance(r, amount * 0.3)
   switch a {
   | #osc =>
     if often() {
-      oscWave(r, w, profile(k), m)
+      oscWave(r, w, k, profile(k), t)
     }
     if secondSounds(m) && !modulating(mixMode(m)) && often() {
       put(m, "O2_Waveform", weighted(r, profile(k).waves))
@@ -2097,8 +2480,10 @@ let repick = (r, w, k: kind, m, a: area, amount) => {
 // A variation of any patch: its unlocked areas moved by `amount` (0..1: 0.15 is a little, 0.7 a
 // lot), each now and then made again in part, more often the wilder it may go. The output gain
 // moves by what the estimate says the change in level is.
-let vary = (src: Bank.values, ~amount, ~wild: wildness, ~locks: array<area>, ~kind: kind, ~random as r: rng) => {
-  let m = copy(src)
+let vary = (from: patch, ~amount, ~wild: wildness, ~locks: array<area>, ~kind: kind, ~random as r: rng) => {
+  let t = copyPatch(from)
+  let m = t.values
+  let src = from.values
   let free = areas->Array.filter(a => !(locks->Array.includes(a)))
   free->Array.forEach(a => {
     let w = wildOf(wild, a)
@@ -2108,9 +2493,9 @@ let vary = (src: Bank.values, ~amount, ~wild: wildness, ~locks: array<area>, ~ki
         moveBy(r, m, n, amount)
       }
     )
-    repick(r, w, kind, m, a, amount)
+    repick(r, w, kind, t, a, amount)
     if chance(r, amount * (0.25 + 0.6 * w)) {
-      restructure(r, w, kind, m, a)
+      restructure(r, w, kind, t, a)
     }
   })
   tamedFeedback(m)
@@ -2122,8 +2507,11 @@ let vary = (src: Bank.values, ~amount, ~wild: wildness, ~locks: array<area>, ~ki
   }
   let note = profile(kind).note
   let before = get(src, "Gain")
-  m->Map.set("Gain", Math.min(2., before * ampOfDb(loudness(src, ~note) - loudness(m, ~note))))
-  m
+  m->Map.set(
+    "Gain",
+    Math.min(2., before * ampOfDb(loudness(src, ~note, ~tables=from.tables) - loudness(m, ~note, ~tables=t.tables))),
+  )
+  t
 }
 
 //==============================================================================
@@ -2135,7 +2523,8 @@ let waveName = v =>
   | 1. | 6. => "saw"
   | 2. | 7. => "pulse"
   | 3. | 8. => "triangle"
-  | _ => "user wave"
+  | 4. => "drawn wave"
+  | _ => "drawn pulse"
   }
 
 let fixed1 = x => Float.toString(Math.round(x * 10.) / 10.)
@@ -2213,19 +2602,35 @@ let envText = m => {
 let targetLabel = i => ModMatrix.targets[i]->Option.mapOr("", t => t.label)
 let sourceLabel = i => ModMatrix.sources[i]->Option.mapOr("", s => s.label)
 
+// the XY pad's routes: "XY > cutoff 1, resonance (wandering)"
+let xyText = m => {
+  let targets = xyAxes->Array.flatMap(axis =>
+    [1, 2, 3, 4]->Array.filterMap(n => {
+      let t = Float.toInt(get(m, xyTargetId(axis, n)))
+      t == 0 ? None : def(xyTargetId(axis, n)).names->Option.flatMap(names => names[t])
+    })
+  )
+  targets == [] ? [] : [`XY > ${targets->Array.join(", ")}` ++ (get(m, "XY_Var_Radius") > 0. ? " (wandering)" : "")]
+}
+
 let modText = m =>
-  switch usedSlots(m)->Array.map(k => {
-    let slot = ModMatrix.readSlot(get(m, ...), k)
-    `${sourceLabel(slot.source)} > ${targetLabel(slot.target)}` ++ (slot.via == 0 ? "" : ` (${sourceLabel(slot.via)})`)
-  }) {
+  switch Array.concat(
+    usedSlots(m)->Array.map(k => {
+      let slot = ModMatrix.readSlot(get(m, ...), k)
+      `${sourceLabel(slot.source)} > ${targetLabel(slot.target)}` ++ (slot.via == 0 ? "" : ` (${sourceLabel(slot.via)})`)
+    }),
+    xyText(m),
+  ) {
   | [] => "none"
   | routes => routes->Array.join(", ")
   }
 
 let fxText = m => {
   let rack = rackOf(m)
+  let lane = laneOf(m)
   let drive = get(m, "Sat_Type") == 0. ? [] : [DistTypes.all[Float.toInt(get(m, "Sat_Type"))]->Option.mapOr("drive", t => t.name)]
-  switch Array.concat(drive, rack->Array.map(e => FxRack.label(rack, e))) {
+  let voices = lane == [] ? [] : [`${lane->Array.map(e => FxRack.label(lane, e))->Array.join(" and ")} in each voice`]
+  switch [drive, voices, rack->Array.map(e => FxRack.label(rack, e))]->Array.flat {
   | [] => "dry"
   | parts => parts->Array.join(", ")
   }
@@ -2257,7 +2662,8 @@ let nameOf = (m, ~kind, ~random as r: rng) => {
   let note = profile(kind).note
   let octaves = filtered(m) ? Math.log2(cutoffAt(m, ~note) / noteHz(note)) : 4.
   let family = filtered(m) ? Some(familyOf(Float.toInt(get(m, "Filter")))) : None
-  let rack = rackOf(m)
+  // (the rack's effects and the voices')
+  let rack = Array.concat(rackOf(m), laneOf(m))
   let has = kind => rack->Array.some(e => e.kind == kind)
   let routed = target => usedSlots(m)->Array.some(k => get(m, ModMatrix.targetId(k)) == Int.toFloat(ModMatrix.targetIndex(target)))
   let words = [
@@ -2269,7 +2675,10 @@ let nameOf = (m, ~kind, ~random as r: rng) => {
     (["Wide", "Lush", "Thick"], get(m, "U_Voices") >= 3. || has(#chorus)),
     (["Dark", "Warm", "Muted"], family == Some(Low) && octaves < 1.5),
     (["Bright", "Crisp"], octaves > 3.5),
-    (["Hollow", "Reedy"], isPulse(get(m, "O1_Waveform")) || family == Some(Band)),
+    (["Hollow", "Reedy"], hasWidth(get(m, "O1_Waveform")) || family == Some(Band)),
+    (["Drawn", "Sketched"], isDrawn(get(m, "O1_Waveform"))),
+    (["Ringing", "Resonant"], has(#resonator)),
+    (["Restless", "Wandering"], xyRouted(m) && get(m, "XY_Var_Radius") > 0.),
     (["Vocal", "Talking"], family == Some(Formant)),
     (["Acid", "Squelchy"], family == Some(Low) && get(m, "Resonance") > 0.55 && get(m, "F_EnvMod") > 0.1),
     (["Wobbly", "Wobble"], routed("Cutoff") && !lfoFree(m, 2)),

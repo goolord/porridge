@@ -31,12 +31,114 @@ let current = c => c.ctx.model->ParamModel.get(c.id)
 let gestureSet = (c, x) => c.ctx.model->ParamModel.gestureSet(c.id, x)
 let refreshStatus = c => c.status.refresh()
 
-// A double right-click opens the host's menu for the parameter (see HostMenu). Hook it before
-// the control's own pointer handlers.
-let hookHostMenu = (c, e) => c.ctx.hostMenu->HostMenu.attach(c.ctx.model, e, c.id)
+//==============================================================================
+// a control's menu
+
+// The value copied last, to paste into another control: its parameter, value and knob position.
+let clipboard = ref(None)
+
+// The control's menu: connect a source to it, show what moves it (selecting one: ModFocus),
+// reset, copy and paste its value, and the host's menu for it.
+//
+// A right-click keeps doing what it always has (resetting a knob or a switch, stepping a list):
+// it's the quickest reset there is, Oatmeal's, and the one the hints teach, and a menu in its
+// place would make every reset two clicks and put the host's double right-click behind a menu
+// that's in the way. So the menu is on ctrl+right-click (or the menu key, or shift+F10, on a
+// control with the keyboard's focus); the pages' hints say so.
+let contextMenu = (c, e, ~x, ~y) => {
+  let {ctx, id, def} = c
+  let model = ctx.model
+  let target = ModMatrix.targetOfParam(id)
+  let modulators = Modulators.on(model, id)
+  let get = id => model->ParamModel.get(id)
+  let connect = s => {
+    let name = `${ModEdit.sourceName(ctx.programs, s)} → ${(ModMatrix.targets->Array.getUnsafe(target)).label}`
+    switch ModEdit.connect(model, s, target, ~amount=ModEdit.defaultAmount) {
+    | Ok(_) =>
+      model->ParamModel.nameStep(name)
+      ctx.toast(`${name} (alt-drag it to change how much)`)
+    | Error(why) => ctx.toast(`${name}: ${why}`)
+    }
+  }
+  let showModulators = () =>
+    switch modulators {
+    | [m] => ModFocus.select(model, m.route.key)
+    | ms =>
+      ctx.menu->Menu.show(
+        e,
+        ms->Array.mapWithIndex((m, i) => {
+          Menu.label: Modulators.text(model, id, m),
+          value: i,
+          icon: ModEdit.swatch(Modulators.colour(m)),
+          heading: ?(i == 0 ? Some("see what one moves") : None),
+        }),
+        -1,
+        i => ms[i]->Option.forEach(m => ModFocus.select(model, m.route.key)),
+      )
+    }
+  let paste = () =>
+    clipboard.contents->Option.forEach(((from, value, norm)) => {
+      let same = from == id || {
+          let d = model->ParamModel.def(from)
+          d.min == def.min && d.max == def.max && d.isInt == def.isInt
+        }
+      model->ParamModel.gestureSet(id, def.clamp(same ? value : def.fromNorm(norm)))
+    })
+  let item = (label, value, ~disabled=false, ~rule=false, ~keys=?) => {Menu.label, value, disabled, rule, ?keys}
+  let shown = switch modulators {
+  | [] => "Moved by nothing"
+  | [_] => "Show its modulator"
+  | _ => "Show modulators ›"
+  }
+  ctx.menu->Menu.show(
+    e,
+    [
+      item("Modulate with ›", 0, ~disabled=target < 0),
+      item(shown, 1, ~disabled=modulators == []),
+      item("Reset to default", 2, ~rule=true, ~keys="right-click"),
+      item("Copy value", 3),
+      item("Paste value", 4, ~disabled=clipboard.contents == None),
+      item("Host menu…", 5, ~rule=true, ~keys="double right-click", ~disabled=!(ctx.hostMenu->HostMenu.has(id))),
+    ],
+    -1,
+    v =>
+      switch v {
+      | 0 =>
+        let taken = s => ModEdit.connectionsTo(get, target)->Array.some(k => ModMatrix.readSlot(get, k).source == s)
+        ctx.menu->Menu.show(e, ModEdit.sourceItems(ctx.programs, ~taken), -1, connect)
+      | 1 => showModulators()
+      | 2 => model->ParamModel.gestureSet(id, def.init)
+      | 3 => clipboard := Some((id, get(id), def.toNorm(get(id))))
+      | 4 => paste()
+      | _ => ctx.hostMenu->HostMenu.showAt(id, ~x, ~y)
+      },
+  )
+}
+
+// A control's menu on ctrl+right-click (and from the keyboard), and the host's menu on a double
+// right-click (see HostMenu). Hook them before the control's own pointer handlers, which a
+// ctrl+right-click never reaches.
+let hookMenus = (c, e) => {
+  e->onPointerCapture(#pointerdown, ev =>
+    if ev->button == 2 && ev->ctrlKey {
+      ev->preventDefault
+      ev->stopImmediatePropagation
+      contextMenu(c, e, ~x=ev->clientX, ~y=ev->clientY)
+    }
+  )
+  e->onKeyDown(ev =>
+    if ev->key == "ContextMenu" || ev->key == "F10" && ev->shiftKey {
+      ev->preventDefault
+      let r = e->getBoundingClientRect
+      contextMenu(c, e, ~x=r.left + r.width / 2., ~y=r.top + r.height / 2.)
+    }
+  )
+  c.ctx.hostMenu->HostMenu.attach(c.ctx.model, e, c.id)
+}
 
 // A control's element: focusable, with its label (after an on/off box, with ~box), showing the
-// parameter's status text while hovered, and the host's menu on a double right-click.
+// parameter's status text while hovered, its menu on ctrl+right-click and the host's menu on a
+// double right-click. Search finds it where it is (Reach).
 // (more: what the status text says after the parameter's own)
 let frame = (ctx: Ctx.t, parent, id, ~cls, ~x, ~y, ~w=?, ~label=?, ~labelCls=?, ~box=false, ~more=() => "") => {
   let e = el("div", ~cls, ~parent)->place(x, y, ~w?)
@@ -48,11 +150,12 @@ let frame = (ctx: Ctx.t, parent, id, ~cls, ~x, ~y, ~w=?, ~label=?, ~labelCls=?, 
     status: ctx.status->Status.live(e, () => def.longText(ctx.model->ParamModel.get(id)) ++ more()),
   }
   e->setTabIndex(0)
+  Reach.control(ctx.model, id, e)
   if box {
     el("b", ~parent=e)->ignore
   }
   el("span", ~cls=?labelCls, ~text=label->Option.getOr(c.def.name), ~parent=e)->ignore
-  hookHostMenu(c, e)
+  hookMenus(c, e)
   (c, e)
 }
 
@@ -142,7 +245,7 @@ let modulationText = (ctx: Ctx.t, id) =>
   switch Modulators.on(ctx.model, id) {
   | [] => ""
   | ms =>
-    let connections = ms->Array.filter(m => m.slot != None)->Array.length
+    let connections = ms->Array.filter(m => Modulators.slotOf(m) != None)->Array.length
     Modulators.statusText(ctx.model, [id]) ++ (
       connections == 0
         ? ""
@@ -150,18 +253,48 @@ let modulationText = (ctx: Ctx.t, id) =>
     )
   }
 
-// What moves a control, shown in its sources' colours (Modulators): a band under the track for
-// the range each matrix connection sweeps, one under another, and for what has no known range
-// on the knob (Oatmeal's own routings), a mark down the left edge, split between them. Any
+// What moves a control, shown in its sources' colours (Modulators): a band over the track for
+// the range each matrix connection sweeps, and for what has no known range on the knob (Oatmeal's
+// own routings, and the connections past maxBands), a mark down the left edge, split between
+// them. Several bands share the track's height between them, one under another, so that they
+// never reach up over the value. A press on a band or a mark selects its source (ModFocus). Any
 // control with a track can carry them; the edge marks go into e.
+let (maxBands, bandHeight) = (4, 4.)
+
 let modMarks = (ctx: Ctx.t, e, track, id, ~norm) => {
   let bands = ref(None)
   let edge = ref(None)
-  let lazyEl = (slot, cls, parent) =>
+  // the sources the bands and the marks show, in their order
+  let (bandKeys, edgeKeys) = (ref([]), ref([]))
+  let lazyEl = (slot, cls, parent, keys: ref<array<string>>) =>
     switch slot.contents {
     | Some(x) => x
     | None =>
       let x = el("span", ~cls, ~parent)
+      // (the one nearest the press, up or down: they're one above another)
+      x->onPointer(#pointerdown, ev =>
+        if ev->button == 0 {
+          let distance = m => {
+            let r = m->getBoundingClientRect
+            Math.abs(ev->clientY - (r.top + r.height / 2.))
+          }
+          let marks = x->querySelectorAll(":scope > *")->nodesToArray->Array.slice(~start=0, ~end=Array.length(keys.contents))
+          marks
+          ->Array.mapWithIndex((m, i) => (distance(m), i))
+          ->Array.reduce(None, (best, (d, i)) =>
+            switch best {
+            | Some((bd, _)) if bd <= d => best
+            | _ => Some((d, i))
+            }
+          )
+          ->Option.flatMap(((_, i)) => keys.contents[i])
+          ->Option.forEach(key => {
+            ev->stopPropagation
+            ev->preventDefault
+            ModFocus.select(ctx.model, key)
+          })
+        }
+      )
       slot := Some(x)
       x
     }
@@ -183,23 +316,27 @@ let modMarks = (ctx: Ctx.t, e, track, id, ~norm) => {
   }
   () => {
     let ms = Modulators.on(ctx.model, id)
-    let ranged = ms->Array.filterMap(m => m.range->Option.map(r => (m, r)))
-    let unranged = ms->Array.filter(m => m.range == None)
+    let ranged = ms->Array.filterMap(m => m.range->Option.map(r => (m, r)))->Array.slice(~start=0, ~end=maxBands)
+    let unranged = ms->Array.filter(m => !(ranged->Array.some(((r, _)) => r === m)))
+    bandKeys := ranged->Array.map(((m, _)) => m.route.key)
+    edgeKeys := unranged->Array.map(m => m.route.key)
     if ranged != [] || bands.contents != None {
       let n = clamp01(norm())
-      let box = lazyEl(bands, "mb", track)
+      let box = lazyEl(bands, "mb", track, bandKeys)
       marksIn(box, "em", Array.length(ranged))->Array.forEachWithIndex((band, i) => {
         let (m, (lo, hi)) = ranged->Array.getUnsafe(i)
         let (a, b) = (clamp01(n + lo), clamp01(n + hi))
         band->setStyle("left", Float.toString(a * 100.) ++ "%")
         band->setStyle("width", Float.toString(Math.max(0.5, (b - a) * 100.)) ++ "%")
         band->setStyle("background", Modulators.colour(m))
-        // several: one under another
-        band->setStyle("top", px(-1. - 2. * Int.toFloat(i)))
+        // (the track's 4 pixels, shared)
+        let h = bandHeight / Int.toFloat(Array.length(ranged))
+        band->setStyle("top", px(-1. + h * Int.toFloat(i)))
+        band->setStyle("height", px(h))
       })
     }
     if unranged != [] || edge.contents != None {
-      let box = lazyEl(edge, "me", e)
+      let box = lazyEl(edge, "me", e, edgeKeys)
       marksIn(box, "i", Array.length(unranged))->Array.forEachWithIndex((mark, i) =>
         mark->setStyle("background", Modulators.colour(unranged->Array.getUnsafe(i)))
       )
@@ -230,6 +367,8 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
   let get = id => ctx.model->ParamModel.get(id)
 
   let updateModBar = modMarks(ctx, e, track, id, ~norm)
+  // (lit while the selected source moves it)
+  ModFocus.register(ctx.model, e, () => [id], ~counted=true)
 
   let update = () => {
     let x = current(c)
@@ -272,8 +411,9 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
       | Some(k) =>
         let amountId = ModMatrix.amountId(k)
         let amountDef = ctx.model->ParamModel.def(amountId)
-        let source = ModMatrix.sources[ModMatrix.readSlot(get, k).source]->Option.mapOr("", s => s.label)
-        let show = () => ctx.status->Status.show(`${source} → ${c.def.name}: ${amountDef.valueText(get(amountId))}`)
+        let source = ModEdit.sourceName(ctx.programs, ModMatrix.readSlot(get, k).source)
+        let route = `${source} → ${(ModMatrix.targets->Array.getUnsafe(target)).label}`
+        let show = () => ctx.status->Status.show(`${route}: ${amountDef.valueText(get(amountId))}`)
         e->addClass("drag")
         ctx.model->ParamModel.beginGesture(amountId)
         let a = ref(get(amountId))
@@ -331,15 +471,23 @@ let paramControl = (ctx, parent, id, ~x, ~y, ~w=76., ~label=?) => {
     edit()
   })
   e->suppressContextMenu
+  // the arrow keys: a hundredth of the knob, a thousandth with shift, a tenth with ctrl; a whole
+  // number goes by one (a tenth of its range with ctrl)
+  let nudge = (ev, up) => {
+    ev->preventDefault
+    let d = up ? 1. : -1.
+    if c.def.isInt {
+      let coarse = Math.max(1., Math.round((c.def.max - c.def.min) / 10.))
+      gestureSet(c, current(c) + (ev->commandKey ? d * coarse : d))
+    } else {
+      let step = ev->shiftKey ? 0.001 : ev->commandKey ? 0.1 : 0.01
+      gestureSet(c, c.def.fromNorm(clamp01(norm() + d * step)))
+    }
+  }
   e->onKeyDown(ev => {
-    let step = ev->shiftKey ? 0.001 : 0.01
     switch ev->key {
-    | "ArrowUp" | "ArrowRight" =>
-      setNorm(norm() + step)
-      ev->preventDefault
-    | "ArrowDown" | "ArrowLeft" =>
-      setNorm(norm() - step)
-      ev->preventDefault
+    | "ArrowUp" | "ArrowRight" => nudge(ev, true)
+    | "ArrowDown" | "ArrowLeft" => nudge(ev, false)
     | "Enter" =>
       ev->preventDefault
       edit()
@@ -382,16 +530,13 @@ let namesOf = (def: ParamDefs.t) =>
   | None => JsError.panic(def.id ++ " has no value names")
   }
 
-// What the element of a list parameter does: a click opens the menu of items(), a right
-// click steps through the values (shift goes back), a middle or ctrl click picks the first.
-// Space and the arrow keys step (up goes back, unless upIsNext), Enter opens the menu.
-// Stepping and the first go by the menu's values, in its order: a list can leave a value out
-// (an effect's "off", which its light switches). Returns the step function.
-let listInput = (ctx: Ctx.t, e, id, ~items, ~upIsNext=false) => {
-  let model = ctx.model
-  let current = () => model->ParamModel.get(id)
-  let set = x => model->ParamModel.gestureSet(id, x)
-  let values = () => items()->Array.map((item: Menu.item) => Int.toFloat(item.value))
+// What the element of a list does: a click opens the menu of items(), a right click steps
+// through the values (shift goes back), a middle or ctrl click picks the first. Space and the
+// arrow keys step (up goes back, unless upIsNext), Enter opens the menu. Stepping and the first
+// go by stepping() (the menu's values, in its order, unless given): a list can leave a value
+// out (an effect's "off", which its light switches). Returns the step function.
+let listOf = (ctx: Ctx.t, e, ~items, ~current: unit => int, ~set: int => unit, ~stepping=?, ~upIsNext=false) => {
+  let values = () => stepping->Option.mapOr(Menu.values(items()), f => f())
   let step = d => {
     let values = values()
     let n = Array.length(values)
@@ -401,8 +546,7 @@ let listInput = (ctx: Ctx.t, e, id, ~items, ~upIsNext=false) => {
     values[next]->Option.forEach(set)
   }
   let first = () => values()[0]->Option.forEach(set)
-  let openMenu = () =>
-    ctx.menu->Menu.show(e, items(), Float.toInt(current()), i => set(Int.toFloat(i)))
+  let openMenu = () => ctx.menu->Menu.show(e, items(), current(), set)
 
   e->onPointer(#pointerdown, ev => {
     ev->preventDefault
@@ -434,6 +578,17 @@ let listInput = (ctx: Ctx.t, e, id, ~items, ~upIsNext=false) => {
   step
 }
 
+// A list parameter's element (see listOf).
+let listInput = (ctx: Ctx.t, e, id, ~items, ~upIsNext=false) =>
+  listOf(
+    ctx,
+    e,
+    ~items,
+    ~current=() => Float.toInt(ctx.model->ParamModel.get(id)),
+    ~set=i => ctx.model->ParamModel.gestureSet(id, Int.toFloat(i)),
+    ~upIsNext,
+  )
+
 // A choice: same footprint as a parameter row; click opens the menu, right click steps
 // through the values (shift goes back).
 let choice = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=76., ~label=?, ~names=?) => {
@@ -459,22 +614,65 @@ let choice = (ctx: Ctx.t, parent, id, ~x, ~y, ~w=76., ~label=?, ~names=?) => {
     refreshStatus(c)
   }
 
-  // (the filter types' and distortion types' menus show their groups)
-  let order = ValueList.menu(c.def.list, Array.length(menuNames))
-  let step = listInput(ctx, e, id, ~items=() =>
-    order->Array.map(((value, heading)) => {
-      let label = menuNames[value]->Option.getOr("")
-      switch icon(value) {
-      | Some((icon, label)) => {Menu.label, value, icon, ?heading}
-      | None => {Menu.label, value, ?heading}
+  // the list's menu, given the value it is at (ValueList): a row's icon is its value's, or the
+  // one of its variants' or its family's that is set; its hover text says what the value is,
+  // where its name doesn't
+  let about = c.def.list->Option.flatMap(l => ValueList.info(l).about)
+  let hintOf = (value, ~label) =>
+    switch about {
+    | Some(about) => Some(about(value))
+    | None => menuNames[value]->Option.filter(name => name != label)
+    }
+  let items = () => {
+    let now = Float.toInt(current(c))
+    let rec item = (row: ValueList.entry): Menu.item => {
+      let label = row.label->Option.getOr(menuNames[row.value]->Option.getOr(""))
+      let shown = ValueList.offered([row])->Array.includes(now) ? now : row.value
+      {
+        label,
+        value: row.value,
+        icon: ?icon(shown)->Option.map(Pair.first),
+        heading: ?row.heading,
+        rule: ?row.rule,
+        badge: ?row.badge,
+        more: ?row.more,
+        // (a family's row goes by the hints of its own menu's)
+        hint: ?(row.sub == None ? hintOf(row.value, ~label) : None),
+        variants: ?row.variants->Option.map(chips =>
+          chips->Array.map(((chip, pick)) => {Menu.chip, pick, about: ?hintOf(pick, ~label=chip)})
+        ),
+        sub: ?row.sub->Option.map(sub => sub->Array.map(item)),
       }
-    })
-  )
+    }
+    ValueList.menu(c.def.list, Array.length(menuNames), ~current=now)->Array.map(item)
+  }
+  let step = listInput(ctx, e, id, ~items)
   e->onWheel(ev => {
     ev->preventDefault
     step(ev->deltaY < 0. ? -1. : 1.)
   })
   bind(c, update)
+}
+
+// A list for a choice that is more than one parameter's values (the space effects' models,
+// which can swap the effect for another kind): labelled and drawn like a choice, showing
+// text(), with the menu items() at current(); set picks a value, stepping() is what a right
+// click steps through. Returns the function that shows a change.
+let picker = (ctx: Ctx.t, parent, ~x, ~y, ~w, ~label, ~text, ~items, ~current, ~set, ~stepping, ~status) => {
+  let e = el("div", ~cls="p ch", ~parent)->place(x, y, ~w)
+  e->setTabIndex(0)
+  el("span", ~cls="l", ~text=label, ~parent=e)->ignore
+  let v = el("span", ~cls="v", ~parent=e)
+  let live = ctx.status->Status.live(e, status)
+  let step = listOf(ctx, e, ~items, ~current, ~set, ~stepping)
+  e->onWheel(ev => {
+    ev->preventDefault
+    step(ev->deltaY < 0. ? -1. : 1.)
+  })
+  () => {
+    v->setTextContent(text())
+    live.refresh()
+  }
 }
 
 // An on/off box with a label. With a width, it fills it (as in a grid cell); without, it
@@ -509,6 +707,7 @@ let lfoMode = (ctx: Ctx.t, parent, id, ~x, ~y, ~w) => {
   let def = model->ParamModel.def(id)
   let e = el("div", ~cls="seg", ~parent)->place(x, y, ~w)
   e->setTabIndex(0)
+  Reach.control(model, id, e)
   let each = el("span", ~text="per-voice", ~parent=e)
   let shared = el("span", ~parent=e)
   let c = {
@@ -518,12 +717,12 @@ let lfoMode = (ctx: Ctx.t, parent, id, ~x, ~y, ~w) => {
     status: ctx.status->Status.live(e, () =>
       switch model->ParamModel.get(id) {
       | 0. => "Per-voice: each voice has its own, starting with its note. Click shared for one that every voice follows."
-      | 1. => "Shared by every note, restarted by each new one. Click again to let it run free; click per-voice for one in each voice."
-      | _ => "Shared by every note, running free. Click again to restart it with each note; click per-voice for one in each voice."
+      | 1. => "Shared by every voice, restarted by each new note. Click again to let it run free; click per-voice for one in each voice."
+      | _ => "Shared by every voice, running free. Click again to restart it with each note; click per-voice for one in each voice."
       }
     ),
   }
-  hookHostMenu(c, e)
+  hookMenus(c, e)
   let set = x => gestureSet(c, x)
   let update = () => {
     let x = current(c)
@@ -574,23 +773,32 @@ let button = (ctx: Ctx.t, parent, text, ~x, ~y, ~w, ~h=?, ~cls="", ~icon=?, ~sta
 }
 
 // A small "?" button, size wide and high at (x, y), that shows text in a tooltip tipW wide while
-// the pointer is over it, right-aligned under it (left-aligned, near a left edge, with ~left).
-let help = (parent, text, ~x, ~y, ~size, ~tipW, ~left=false) => {
+// the pointer is over it, right-aligned under it (left-aligned, near a left edge, with ~left; over
+// it, near the bottom, with ~above).
+let help = (parent, text, ~x, ~y, ~size, ~tipW, ~left=false, ~above=false) => {
   let e = el("button", ~cls="btn help", ~text="?", ~parent)->place(x, y, ~w=size, ~h=size)
   let tip = el("div", ~cls="tip", ~text, ~parent)->place(left ? x : x + size - tipW, y + size + 4., ~w=tipW)
-  e->onMouse(#mouseenter, _ => tip->addClass("on"))
+  e->onMouse(#mouseenter, _ => {
+    if above {
+      tip->addClass("on")
+      tip->setStyle("top", px(y - tip->offsetHeight - 4.))
+    }
+    tip->addClass("on")
+  })
   e->onMouse(#mouseleave, _ => tip->removeClass("on"))
 }
 
 // The corner switch of a graphical editor: swaps the graph for the raw values by toggling
-// the editor's "expanded" class.
+// the editor's "expanded" class. Returns the function that shows the values.
 let expandSwitch = (ctx: Ctx.t, editor) => {
   let e = el("button", ~cls="btn xbtn", ~text="values", ~parent=editor)
   let expanded = ref(false)
-  e->onMouse(#click, _ => {
-    expanded := !expanded.contents
-    editor->toggleClass("expanded", expanded.contents)
-    e->setTextContent(expanded.contents ? "graph" : "values")
-  })
+  let set = on => {
+    expanded := on
+    editor->toggleClass("expanded", on)
+    e->setTextContent(on ? "graph" : "values")
+  }
+  e->onMouse(#click, _ => set(!expanded.contents))
   ctx.status->Status.hover(e, () => "Switch between the graph and the raw values")
+  () => set(true)
 }

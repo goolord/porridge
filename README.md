@@ -23,8 +23,10 @@ dsp/                    Cmajor DSP
   ModTables.cmajor        modulation sources, targets and knob laws (generated)
   Synth.cmajor            MIDI, voice manager, arpeggiator, per-voice rendering, effects chain,
                           a K-weighted level meter the view asks for (levelRequest/levelOut),
-                          and reports of the sounding notes for the view (voiceView/voiceViewOut)
-  Oscillator, Filter, Modulation, Effects, Tables, Voice, Types
+                          and reports of the sounding notes for the view (voiceView/voiceViewOut);
+                          it lends the rack's pool (Common.cmajor's FxPool, the memory the
+                          effects with long lines share) to the effects in the rack
+  Oscillator, Filter, Modulation, Effects, Tables, Voice, Types, Common
                           (Voice.cmajor also has the key EQ: a low shelf under each voice's
                           note and bands on its harmonics; Oscillator.cmajor each oscillator's
                           roughness, noise in its phase)
@@ -45,12 +47,17 @@ dsp/                    Cmajor DSP
                           multiples of a voice's note) and the air rack effect (Air4)
   Convolve.cmajor         the convolver: zero-latency partitioned convolution, built-in impulses
 ui/                     patch view (ReScript)
-  Index.res               entry point; View.res builds the header (pages, program, the ≡ menu),
-                          the four pages and the shapes editor over them (ShapesOverlay.res),
-                          and binds undo and redo: ParamModel.res records every edit, a
-                          gesture a step, and ProgramStore.res whole-program changes
-  PagePlay.res            the Play page: macros, arpeggiator, XY pad, wheels and the MIDI input
-                          (MidiInput.res); SlotRows.res shows target slots as used rows + "+"
+  Index.res               entry point; View.res builds the header (pages, program and its A/B
+                          versions, the ≡ menu), the four pages and the shapes editor over
+                          them (ShapesOverlay.res), and binds undo and redo: ParamModel.res
+                          records every edit, a gesture a step, and ProgramStore.res
+                          whole-program changes (A/B switches too)
+  Palette.res             search (ctrl+K, /): any control, page, tab, effect or command by
+                          name, typed values, connections; Reach.res knows where each control
+                          lives (its page, tab, effect, values) and goes there
+  PagePlay.res            the Play page: macros, arpeggiator, XY pad, the patch summary
+                          (Summary.res, each line a link to its editor), wheels and the MIDI
+                          input (MidiInput.res); SlotRows.res shows target slots as used rows + "+"
   VoiceView.res           the sounding notes as the DSP reports them: a mark per note on the
                           envelopes, LFOs, the filter graph and the modulated controls
   Preset.res              Porridge's preset format; PorridgeParams.res and ModMatrix.res
@@ -59,13 +66,17 @@ ui/                     patch view (ReScript)
                           sources include chord position, gap, legato and the sounding
                           pitch); ModScope.res says
                           which sources each note has its own of and which targets are in the
-                          voice or on the whole sound, for PageMod.res (the Mod page);
-                          Modulators.res says what moves each parameter (connections and
-                          Oatmeal's own routings), which the parameter rows and the graphs'
-                          points show in the sources' colours, and what each source moves,
+                          voice or on the whole sound, for PageMod.res (the Mod page: every
+                          route in one list, Oatmeal's own included, and the selected source's
+                          editor, which SourceEditors.res builds for it and the synth page);
+                          Modulators.res lists every route in every system: what moves each
+                          parameter, which the parameter rows, the graphs' points and the
+                          envelopes show in the sources' colours, and what each source moves,
                           which Destinations.res shows as chips on the source's panel;
-                          ModEdit.res connects a source to a control, and ModTray.res is the
-                          source tray (from the status line) whose chips drop onto any control
+                          ModFocus.res lights what a selected source moves on every page;
+                          ModEdit.res connects a source to a control (as does a control's menu,
+                          Controls.contextMenu), and ModTray.res is the source tray (from the
+                          status line) whose chips drop onto any control
   PresetBrowser.res       the preset browser; Library.res searches and filters for it, and
                           BankLibrary.res asks the plugin for the banks it keeps
   random/                 random patches: RandomDrawer.res (the drawer: the wildness knobs,
@@ -83,14 +94,19 @@ ui/                     patch view (ReScript)
   PageMain.res            the synth page: VoiceFlow.res draws the voice's signal flow along its
                           top; Features.res says which features a patch uses, which the
                           panels' tabs mark (Panel.res)
-  FilterTypes.res         the filter types; FilterGraph.res their response pictures, with a
-                          point to drag for cutoff and resonance
+  ValueList.res           the list parameters' value lists: names, field texts, the values
+                          Porridge adds, and menus by sound (families, variant chips, "more"),
+                          which Menu.res shows and Controls.res' lists open
+  FilterTypes.res         the filter types, and their families for the menu; FilterGraph.res
+                          their response pictures, with a point to drag for cutoff and resonance
   FxPanels.res            the tabs of Porridge's own effects (CompEditor.res: the compressor's);
                           Impulse.res the convolvers' impulse files; AmbienceSim.res runs the
-                          ambience's models on an impulse for its graphs
-  DistTypes.res           the distortion's types: names, menu groups, what each model's knobs
-                          are; DistEditor.res its tab; AirwindowsSim.res runs the Airwindows
-                          models on a sine (and the air on sines) for their graphs
+                          ambience's models on an impulse for its graphs; SpaceModels.res is
+                          the space effects' one model list (reverb, ambience, convolution),
+                          swapping an effect for another kind in its place
+  DistTypes.res           the distortion's types: names, characters for the menu, what each
+                          model's knobs are; DistEditor.res its tab; AirwindowsSim.res runs the
+                          Airwindows models on a sine (and the air on sines) for their graphs
   oatmeal/                file formats, parameter table, value texts
   bindings/               Cmajor PatchConnection and browser API bindings
 worker/PatchWorker.res  restores shapes/curves and installs the factory bank
@@ -114,18 +130,23 @@ tools/
                           interface size setting, the host's parameter menu, the
                           64-sample latency, and a faster start (a QuickJS worker, one
                           rebuild per activation)
+  event-switch.mjs        turns the generated class's event dispatch into a switch (in the
+                          plugin and the test host), so MIDI doesn't try every parameter first
   clap/PorridgeBridge.h   the settings file, zoom and host menu code clap-patch.mjs adds
   sync-dir.mjs            copies the regenerated CLAP project over the old one, touching only
                           what changed
   test/                   native C++ test host built from the patch (cmaj generate --target=cpp),
                           golden.mjs (bit-exact factory renders, in Oat mode), presets.mjs
-                          (format round trips), library.mjs (the preset browser's search),
+                          (format round trips), pickers.mjs (every list value maps to and
+                          from its menu), library.mjs (the preset browser's search),
                           smoke.mjs (Porridge's own effects and filter types sound, stay
                           bounded and fall silent, the ambience's models and the distortion's
                           types too, and the distortion's mix lines up with oversampling; the
                           oscillator envelopes and the noise source; the key EQ's bands and
                           shelf; oscillator roughness; osc 2 heard in PM),
-                          host.cpp's --time prints the render's own CPU time, for benchmarks;
+                          host.cpp's --time prints the render's own CPU time, for benchmarks
+                          (--timefrom skips the attacks; an events file can also set
+                          parameters at given frames);
                           banklibrary.cpp (the plugin's bank library on real files), oneshot.mjs (one-shot LFOs hold their
                           end), levels.mjs (the Vanilla bank's gains, levels and motion),
                           random.mjs (random patches: sound values, the wildness knobs, the

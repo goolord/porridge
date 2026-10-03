@@ -19,6 +19,8 @@ type item =
   | Knob(string, string)
   | List(string, string)
   | Switch(string, string)
+  // a space effect's model (SpaceModels): its own and the other space kinds'
+  | SpaceModel
   // a button, given the effect
   | Button(string, string, FxRack.effect => unit)
 
@@ -102,15 +104,6 @@ let reverbBuild = model =>
   | _ => 0.04
   }
 
-let reverbModelText = model =>
-  switch model {
-  | 1 => "plate: dense and bright from the first moment"
-  | 2 => "nitrous: bright, dense and airy, a little metallic when small"
-  | 3 => "basin: dark and huge, blooming in slowly"
-  | 4 => "vintage: an 1980s digital reverb, grainy and band-limited"
-  | _ => "hall: a large, smooth room"
-  }
-
 let drawSpace = (p: FxGraph.plot, get: string => float) => {
   let (lo, hi) = (-60., 0.)
   let decay = expValue(0.1, 30., get("Rv_Decay"))
@@ -141,7 +134,7 @@ let drawSpace = (p: FxGraph.plot, get: string => float) => {
   })
   FxGraph.path(p.layer, ~cls="curve")->FxGraph.setPath(Plots.pathFrom(points))
   // (top right, clear of the tail, which starts at the top left)
-  FxGraph.note(p, ~x=p.right - 6., ~anchor="end", `${reverbModelText(model)}; decays 60 dB in ${PorridgeParams.secondsText(decay)}`)
+  FxGraph.note(p, ~x=p.right - 6., ~anchor="end", `${SpaceModels.algoAbout(model)}; decays 60 dB in ${PorridgeParams.secondsText(decay)}`)
 }
 
 //==============================================================================
@@ -400,21 +393,6 @@ let drawScene = (s, get: string => float, time: float) => {
 // Length keeps (fading out at its end) and the part it cuts (dim), reversed if so, as levels in
 // dB from the peak; beside it, the tone the low and high cuts and the gain leave the wet
 
-let builtInText = impulse =>
-  switch impulse {
-  | 0 => "a small room"
-  | 1 => "a concert hall"
-  | 2 => "a cathedral, with long echoes"
-  | 3 => "a plate: bright and dense"
-  | 4 => "a spring: boings and drips"
-  | 5 => "a 1×12 guitar cabinet"
-  | 6 => "a 4×12 guitar cabinet, darker"
-  | 7 => "a metal tank's ringing modes"
-  | 8 => "a telephone line"
-  | 9 => "a swell, rising like a reversed reverb"
-  | _ => "a slowly blooming noise cloud"
-  }
-
 // The part of the kept impulse its end fades over, with a half cosine (dsp/Convolve.cmajor):
 // 5 % of it at full length, more as Length shortens it.
 let convolveFade = (length: float) => 0.05 + 0.3 * (1. - length)
@@ -433,7 +411,7 @@ let drawConvolve = (p: FxGraph.plot, get: string => float, ~which, ~file: option
   }
   let text = isFile
     ? file->Option.mapOr("no file loaded: load one, or drop it on the graph", imp => `file: ${imp.name}`)
-    : builtInText(kind)
+    : SpaceModels.impulseAbout(kind)
 
   // the impulse on the left, the tone on the right
   let split = p.left + (p.right - p.left) * 0.72
@@ -648,7 +626,7 @@ let drawResonator = (p: FxGraph.plot, get: string => float) => {
   FxGraph.path(p.layer, ~cls="curve")->FxGraph.setPath(Plots.pathFrom(points))
   FxGraph.note(
     p,
-    `its resonances for a 220 Hz note (its partials dim), ringing for ${PorridgeParams.msText(decay * 1000.)}: each note gets its own`,
+    `its resonances for a 220 Hz note (its partials dim), ringing for ${PorridgeParams.msText(decay * 1000.)}: each voice tunes its own to its note`,
   )
 }
 
@@ -693,7 +671,7 @@ let drawOctaver = (p: FxGraph.plot, get: string => float) => {
   })
   FxGraph.path(p.layer, ~cls="curve dim")->FxGraph.setPath(Plots.pathFrom(input))
   FxGraph.path(p.layer, ~cls="curve")->FxGraph.setPath(Plots.pathFrom(output))
-  FxGraph.note(p, "four cycles of a note (dim) and the octaver's output: each note finds its own cycles")
+  FxGraph.note(p, "four cycles of a note (dim) and the octaver's output: each voice finds its own note's")
 }
 
 //==============================================================================
@@ -786,8 +764,7 @@ let ambienceModelText = (get: string => float) =>
   | 1 =>
     let (seats, a, b) = AmbienceSim.clearCoatRooms->Array.getUnsafe(AmbienceSim.clearCoatRoom(get("Am_Size")))
     `clear coat (Airwindows): a ${Int.toString(seats)}-seat room, ${Int.toString(a)} to ${Int.toString(b)} ms`
-  | 2 => "verb tiny (Airwindows): a small reverb fed across the sides"
-  | _ => "room: a few milliseconds of diffusion, different on each side"
+  | model => SpaceModels.ambienceAbout(model)
   }
 
 let drawAmbience = (p: FxGraph.plot, get: string => float) => {
@@ -940,11 +917,11 @@ let sections = (k: FxRack.kind) =>
       {title: "note", rows: [[Knob("Ph_Track", "note track"), Knob("Ph_RateTrack", "rate track")], [Knob("Ph_PhaseRand", "random start")]]},
     ]
   | #space => [
-      {title: "algo reverb", rows: [[List("Rv_Model", "model"), Knob("Rv_Size", "size"), Knob("Rv_Decay", "decay"), Knob("Rv_Predelay", "predelay")], [Knob("Rv_Damp", "damping"), Knob("Rv_LowCut", "low cut"), Knob("Rv_Width", "width"), Knob("Rv_Mod", "modulation")]]},
+      {title: "algo reverb", rows: [[SpaceModel, Knob("Rv_Size", "size"), Knob("Rv_Decay", "decay"), Knob("Rv_Predelay", "predelay")], [Knob("Rv_Damp", "damping"), Knob("Rv_LowCut", "low cut"), Knob("Rv_Width", "width"), Knob("Rv_Mod", "modulation")]]},
       {title: "level", rows: [[Knob("Rv_Mix", "mix")]]},
     ]
   | #convolve => [
-      {title: "impulse", rows: [[List("Cv_Impulse", "impulse"), Button("load file…", "Load an impulse response from a WAV, AIFF or other audio file (you can also drop one on the graph)", e => loadImpulse.contents(e))], [Knob("Cv_Length", "length"), Switch("Cv_Reverse", "reverse")]]},
+      {title: "impulse", rows: [[SpaceModel, Button("load file…", "Load an impulse response from a WAV, AIFF or other audio file (you can also drop one on the graph)", e => loadImpulse.contents(e))], [Knob("Cv_Length", "length"), Switch("Cv_Reverse", "reverse")]]},
       {title: "wet", rows: [[Knob("Cv_Predelay", "predelay"), Knob("Cv_LowCut", "low cut"), Knob("Cv_HighCut", "high cut")], [Knob("Cv_Width", "width"), Knob("Cv_Gain", "gain"), Knob("Cv_Mix", "mix")]]},
     ]
   | #bode => [
@@ -969,7 +946,7 @@ let sections = (k: FxRack.kind) =>
       {title: "bass", rows: [[Knob("Ut_BassMono", "mono below")]]},
     ]
   | #ambience => [
-      {title: "ambience", rows: [[List("Am_Model", "model"), Knob("Am_Size", "size"), Knob("Am_Time", "time"), Knob("Am_Density", "density")], [Knob("Am_Predelay", "predelay"), Knob("Am_HighCut", "high cut"), Knob("Am_Width", "width"), Knob("Am_Mix", "mix")]]},
+      {title: "ambience", rows: [[SpaceModel, Knob("Am_Size", "size"), Knob("Am_Time", "time"), Knob("Am_Density", "density")], [Knob("Am_Predelay", "predelay"), Knob("Am_HighCut", "high cut"), Knob("Am_Width", "width"), Knob("Am_Mix", "mix")]]},
       {title: "room's loops", rows: [[Knob("Am_HighTime", "high time"), Knob("Am_HighFreq", "high freq")], [Knob("Am_LowTime", "low time"), Knob("Am_LowFreq", "low freq")]]},
     ]
   | #air => [
@@ -988,19 +965,17 @@ let shows = (item, ~perVoice) =>
   | Knob(p, _) | List(p, _) | Switch(p, _) =>
     let elsewhere = perVoice ? wholeSoundOnly : perVoiceOnly
     !(elsewhere->Array.includes(p))
-  | Button(_) => true
+  | Button(_) | SpaceModel => true
   }
 
 let graphTitle = (k: FxRack.kind) =>
   switch k {
-  | #flanger | #phaser => "response"
-  | #filter => "response: drag the point for cutoff and resonance"
+  | #flanger | #phaser | #filter => "response"
   | #space => "tail"
-  | #convolve => "impulse"
-  | #bode => "partials"
+  | #convolve => "impulse and wet tone"
+  | #bode | #shifter => "partials"
   | #utility => "stereo"
   | #ambience | #air => "tone"
-  | #shifter => "partials: each note moves by a share of its own pitch"
   | #resonator => "response for a 220 Hz note"
   | #octaver => "waveform"
   | _ => ""
@@ -1041,6 +1016,7 @@ let make = (ctx: Ctx.t, body, e: FxRack.effect, ~perVoice, ~w, ~h) => {
         | List(p, label) => g->Grid.choice(id(p), c, r, label)
         | Switch(p, label) => g->Grid.toggle(id(p), c, r, label)
         | Button(label, status, f) => g->Grid.button(label, c, r, ~status, () => f(e))
+        | SpaceModel => g->Grid.at(c, r, "model", b => SpaceModels.picker(ctx, panel.el, e, ~x=b.x, ~y=b.y, ~w=b.w))
         }
       )
     )

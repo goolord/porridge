@@ -71,17 +71,48 @@ let kindName = (k: kind) => spec(k).menuName->Option.getOr(key(k))
 // What it does, for the add menu's hover texts.
 let about = (k: kind) => spec(k).about
 
-// The add menus' groups, by what the kinds do, in order: the per-voice menu and the whole
-// sound's show the kinds each can take, in the same groups.
-let menuGroups: array<(string, array<kind>)> = [
-  ("drive", [#distortion]),
-  ("tone", [#eq, #filter, #air]),
-  ("movement", [#chorus, #flanger, #phaser]),
-  ("pitch", [#bode, #shifter, #octaver, #resonator]),
-  ("echo", [#delay]),
-  ("space", [#reverb, #space, #ambience, #convolve]),
-  ("dynamics", [#compressor]),
-  ("utility", [#utility]),
+// An entry of the add menus: what it adds (the first of its kinds that is free), named and
+// drawn (Icons.rackKind) as it says, and set up so (the first's parameters, and values).
+type addEntry = {name: string, icon: string, about: string, kinds: array<kind>, setup: array<(string, float)>}
+
+let entryOf = k => {name: kindName(k), icon: key(k), about: about(k), kinds: [k], setup: []}
+
+// The add menus' groups, by what the entries do, in order: the per-voice menu and the whole
+// sound's show the entries each can take, in the same groups. The four space kinds are one
+// "reverb" (its tab's model list has them all: SpaceModels); the convolver's cabinets are a
+// tone of their own, all wet.
+let menuGroups: array<(string, array<addEntry>)> = [
+  (
+    "drive",
+    [
+      entryOf(#distortion),
+      {
+        name: "cabinet",
+        icon: "cabinet",
+        about: "a speaker cabinet (or a telephone): the convolver, all wet",
+        kinds: [#convolve],
+        setup: [("Cv_Impulse", Int.toFloat(PorridgeParams.impulseNames->Array.indexOf("cabinet 1×12"))), ("Cv_Mix", 1.)],
+      },
+    ],
+  ),
+  ("tone", [#eq, #filter, #air]->Array.map(entryOf)),
+  ("movement", [#chorus, #flanger, #phaser]->Array.map(entryOf)),
+  ("pitch", [#bode, #shifter, #octaver, #resonator]->Array.map(entryOf)),
+  ("echo", [entryOf(#delay)]),
+  (
+    "space",
+    [
+      {
+        name: "reverb",
+        icon: "reverb",
+        about: "a reverb: halls, plates, rooms, springs and more (its model list has them all)",
+        kinds: [#space, #reverb, #ambience, #convolve],
+        setup: [],
+      },
+    ],
+  ),
+  ("dynamics", [entryOf(#compressor)]),
+  ("utility", [entryOf(#utility)]),
 ]
 
 // The kinds a voice can run.

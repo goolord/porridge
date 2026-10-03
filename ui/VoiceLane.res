@@ -126,37 +126,51 @@ let move = (model, x, pos) => {
 
 let label = (model, e) => FxRack.label(lane(model), e)
 
-// An add menu's kinds that can be added, in their groups (FxRack.menuGroups), and its items,
-// each with its icon.
+// An add menu's entries that can be added, in their groups (FxRack.menuGroups): what each adds
+// (the first of its kinds that can be added, and how to set it up), and the menu's items, each
+// with its icon.
 let kindMenu = (~addable) => {
-  let kinds = FxRack.menuGroups->Array.flatMap(((title, kinds)) =>
-    kinds
-    ->Array.filter(k => addable->Array.includes(k))
-    ->Array.mapWithIndex((k, i) => (k, i == 0 ? Some(title) : None))
+  let entries = FxRack.menuGroups->Array.flatMap(((title, entries)) =>
+    entries
+    ->Array.filterMap((entry: FxRack.addEntry) =>
+      entry.kinds->Array.find(k => addable->Array.includes(k))->Option.map(k => (entry, k))
+    )
+    ->Array.mapWithIndex(((entry, k), i) => (entry, k, i == 0 ? Some(title) : None))
   )
-  let items = kinds->Array.mapWithIndex(((k, heading), i) => {
-    Menu.label: FxRack.kindName(k),
+  let items = entries->Array.mapWithIndex(((entry, _, heading), i) => {
+    Menu.label: entry.name,
     value: i,
-    icon: ?Icons.rackKind(FxRack.key(k))->Option.map(icon => {
+    icon: ?Icons.rackKind(entry.icon)->Option.map(icon => {
       let wrap = el("span", ~cls="icw")
       wrap->appendChild(Icons.render(icon))
       wrap
     }),
     ?heading,
-    hint: FxRack.about(k),
+    hint: entry.about,
   })
-  (kinds->Array.map(Pair.first), items)
+  (entries->Array.map(((entry, k, _)) => (k, entry.setup)), items)
 }
+
+// Sets an effect up as its add menu entry says.
+let setUp = (model, e, setup) =>
+  setup->Array.forEach(((first, x)) => model->ParamModel.gestureSet(FxRack.id(e, first), x))
 
 // The menu of kinds to add to the lane, below an element; onAdded gets the new effect.
 let addMenu = (ctx: Ctx.t, anchor, ~onAdded) => {
   let model = ctx.model
   let addable = FxRack.addable(rack(model), ~lane=lane(model), ~forLane=true)
-  let (kinds, items) = kindMenu(~addable)
-  if kinds == [] {
+  let (picks, items) = kindMenu(~addable)
+  if picks == [] {
     ctx.toast(`There are already ${Int.toString(PorridgeParams.laneSlots)} per-voice effects`)
   } else {
-    ctx.menu->Menu.show(anchor, items, -1, i => kinds[i]->Option.forEach(k => add(model, k)->Option.forEach(onAdded)))
+    ctx.menu->Menu.show(anchor, items, -1, i =>
+      picks[i]->Option.forEach(((k, setup)) =>
+        add(model, k)->Option.forEach(e => {
+          setUp(model, e, setup)
+          onAdded(e)
+        })
+      )
+    )
   }
 }
 

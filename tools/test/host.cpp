@@ -4,7 +4,7 @@
 //
 //   host --program prog.bin --events events.txt --frames 88200 --rate 44100 --out out.f32
 //        [--tempo 120] [--set Endpoint=value ...] [--input in.f32] [--preroll n] [--latency n]
-//        [--voices voices.txt] [--time]
+//        [--voices voices.txt] [--time] [--timefrom n]
 //
 // --input feeds a recorded signal to the effects instead of the voices. --preroll renders n
 // frames before frame 0 and drops them (the DLL harness renders 128 after loading a program).
@@ -12,14 +12,18 @@
 // a host compensating for the plugin's latency would, so frame 0 is the first one that hears
 // frame 0's MIDI. (Cmajor's C++ generator reports a latency of 0 whatever the patch declares.)
 // --voices asks for the view's reports of the sounding notes (VoiceView) and writes one line per
-// report: the frame, then the struct's 450 words as it's laid out (ints, bools as ints, floats).
+// report: the frame, then the struct's 450 words as it's laid out (ints, bools as ints, floats);
+// "--voices -" asks for them and drops them (what the open view costs).
 // --time renders 64 frames a call and prints how long the render loop took ("render_seconds
 // 0.123"), every call slower than 120 µs ("slow_block <frame> <µs>"; a 64-frame block has 1333 µs
 // at 48 kHz) and the slowest ("render_worst_us"), for CPU measurements: on
 // Windows the time the thread itself ran (its cycles over the TSC's rate), which other busy
-// processes don't add to; elsewhere, wall time.
+// processes don't add to; elsewhere, wall time. --timefrom starts the clock at that frame (after
+// the notes' attacks, say), and --time also prints the patch's size and how long constructing
+// and initialising it took.
 //
-// events.txt: one event per line: "frame status data1 data2" (decimal).
+// events.txt: one event per line: "frame status data1 data2" (decimal), or "frame Endpoint value"
+// to set a parameter at that frame (the rack's slots moving while effects ring, say).
 // Output format (same as tools/re/vsthost.py write_f32): int32 channels, int32 frames,
 // then channel-major float32 samples.
 
@@ -29,6 +33,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <cctype>
 #include <string>
 #include <vector>
 #include <fstream>
@@ -72,7 +77,8 @@ static std::vector<uint8_t> readFile (const std::string& path)
     return std::vector<uint8_t> ((std::istreambuf_iterator<char> (f)), std::istreambuf_iterator<char>());
 }
 
-struct Event { long frame; int status, d1, d2; };
+// a MIDI message, or a parameter's handle (non-zero) and its value's 4 bytes
+struct Event { long frame; int status, d1, d2; uint32_t param; unsigned char value[4]; };
 
 // sends a float or an int32
 template <typename T>
@@ -99,7 +105,7 @@ int main (int argc, char** argv)
     std::string programPath, eventsPath, inputPath, tuningPath, voicesPath, outPath = "out.f32";
     bool timing = false;
     double worst = 0;
-    long frames = 44100, preroll = 0, latency = 64;
+    long frames = 44100, preroll = 0, latency = 64, timeFrom = 0;
     double rate = 44100.0, tempo = 120.0;
     std::vector<std::pair<std::string, std::string>> overrides;
 
@@ -116,6 +122,7 @@ int main (int argc, char** argv)
         else if (a == "--input") inputPath = next();
         else if (a == "--voices") voicesPath = next();
         else if (a == "--time") timing = true;
+        else if (a == "--timefrom") timeFrom = atol (next().c_str());
         else if (a == "--preroll") preroll = atol (next().c_str());
         else if (a == "--latency") latency = atol (next().c_str());
         else if (a == "--tuning") tuningPath = next();
@@ -126,8 +133,18 @@ int main (int argc, char** argv)
         }
     }
 
+    const auto t0 = std::chrono::steady_clock::now();
     auto patch = std::make_unique<Patch>();
+    const auto t1 = std::chrono::steady_clock::now();
     patch->initialise (1, rate);
+    const auto t2 = std::chrono::steady_clock::now();
+
+    if (timing)
+    {
+        printf ("construct_ms %.3f%c", std::chrono::duration<double, std::milli> (t1 - t0).count(), 10);
+        printf ("initialise_ms %.3f%c", std::chrono::duration<double, std::milli> (t2 - t1).count(), 10);
+        printf ("sizeof_patch %zu%c", sizeof (Patch), 10);
+    }
 
     send (*patch, "tempoIn", (float) tempo);
 
@@ -165,13 +182,23 @@ int main (int argc, char** argv)
         }
     }
 
-    for (auto& [id, val] : overrides)
+    // a parameter's value by its endpoint ID, as an int or a float as the program's fields say
+    auto encode = [] (const std::string& id, const std::string& val, unsigned char* bytes)
     {
         bool isInt = false;
         for (auto& f : porridgeFields)
             if (id == f.id) isInt = f.isInt;
-        if (isInt) send (*patch, id.c_str(), atoi (val.c_str()));
-        else send (*patch, id.c_str(), (float) atof (val.c_str()));
+        const int32_t i = atoi (val.c_str());
+        const float x = (float) atof (val.c_str());
+        memcpy (bytes, isInt ? (const void*) &i : (const void*) &x, 4);
+    };
+
+    for (auto& [id, val] : overrides)
+    {
+        unsigned char b[4];
+        encode (id, val, b);
+        if (auto h = Patch::getEndpointHandleForName (id.c_str())) patch->addEvent (h, 0, b);
+        else fprintf (stderr, "no endpoint %s%c", id.c_str(), 10);
     }
 
     // --tuning: 128 numbers, each key's pitch in semitones from 440 Hz
@@ -198,8 +225,18 @@ int main (int argc, char** argv)
         while (std::getline (f, line))
         {
             std::istringstream ss (line);
-            Event e;
-            if (ss >> e.frame >> e.status >> e.d1 >> e.d2) events.push_back (e);
+            Event e {};
+            std::string a;
+            if (! (ss >> e.frame >> a)) continue;
+            if (isdigit ((unsigned char) a[0])) { e.status = atoi (a.c_str()); if (ss >> e.d1 >> e.d2) events.push_back (e); }
+            else if (std::string v; ss >> v)
+            {
+                // resolved here, so that the render loop times the patch, not the lookup
+                e.param = Patch::getEndpointHandleForName (a.c_str());
+                encode (a, v, e.value);
+                if (e.param != 0) events.push_back (e);
+                else fprintf (stderr, "no endpoint %s%c", a.c_str(), 10);
+            }
         }
         std::stable_sort (events.begin(), events.end(), [] (auto& a, auto& b) { return a.frame < b.frame; });
         for (auto& e : events) e.frame += preroll;
@@ -222,8 +259,9 @@ int main (int argc, char** argv)
     const auto outHandle = Patch::getEndpointHandleForName ("out");
     const auto midiHandle = Patch::getEndpointHandleForName ("midiIn");
     const auto voicesHandle = Patch::getEndpointHandleForName ("voiceViewOut");
-    FILE* voices = voicesPath.empty() ? nullptr : fopen (voicesPath.c_str(), "w");
-    if (voices) send (*patch, "voiceView", (int32_t) 1);
+    const bool voicesQuiet = voicesPath == "-";
+    FILE* voices = voicesPath.empty() || voicesQuiet ? nullptr : fopen (voicesPath.c_str(), "w");
+    if (voices || voicesQuiet) send (*patch, "voiceView", (int32_t) 1);
     const long totalFrames = frames + preroll + latency;
     std::vector<float> L (totalFrames), R (totalFrames), block (2 * Patch::maxFramesPerBlock);
 
@@ -231,10 +269,13 @@ int main (int argc, char** argv)
     size_t ei = 0;
     ThreadClock clock;
     clock.start();
+    bool clockStarted = timeFrom <= 0;
     while (pos < totalFrames)
     {
+        if (! clockStarted && pos >= timeFrom) { clock.start(); clockStarted = true; }
         while (ei < events.size() && events[ei].frame <= pos)
         {
+            if (events[ei].param != 0) { patch->addEvent (events[ei].param, 0, events[ei].value); ++ei; continue; }
             int32_t msg = (events[ei].status << 16) | (events[ei].d1 << 8) | events[ei].d2;
             unsigned char b[4]; memcpy (b, &msg, 4);
             patch->addEvent (midiHandle, 0, b);
@@ -279,6 +320,13 @@ int main (int argc, char** argv)
                 }
                 fputc (10, voices);
             }
+            patch->resetOutputEventCount (voicesHandle);
+        }
+        else if (voicesQuiet)
+        {
+            unsigned char data[1800];
+            for (uint32_t e = 0; e < patch->getNumOutputEvents (voicesHandle); ++e)
+                patch->readOutputEvent (voicesHandle, e, data);
             patch->resetOutputEventCount (voicesHandle);
         }
         for (long k = 0; k < n; ++k) { L[pos + k] = block[2 * k]; R[pos + k] = block[2 * k + 1]; }

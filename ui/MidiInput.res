@@ -1,5 +1,5 @@
-// The Play page's MIDI input panel: MPE, the sustain pedal and the six assignable controllers,
-// each with the targets it moves; the velocity and aftertouch maps and the channels a program
+// The Play page's MIDI input panel: MPE, the sustain pedal and the assignable controllers in use
+// (of six), each with the targets it moves; the velocity and aftertouch maps and the channels a program
 // listens on, which few programs change, are on tabs of their own.
 
 open! Web
@@ -95,16 +95,53 @@ let build = (ctx: Ctx.t, parent, ~x, ~y, ~w, ~h) => {
     )
     (head, targets, layoutRef)
   })
-  // a controller's row with its "+ target" button, then the targets it moves
+  // The controllers in use (a number set, or a target), and those "+ controller" showed since the
+  // program changed: six rows of "---" say nothing.
+  let ccIds = Array.fromInitializer(~length=6, k => "CC" ++ Int.toString(k + 1))
+  let added = Set.make()
+  let isShown = k => {
+    let (_, targets: SlotRows.t, _) = ccRows->Array.getUnsafe(k)
+    added->Set.has(k) || get(ccIds->Array.getUnsafe(k)) != 0. || targets.rows() > 0
+  }
+  let addLayout = ref(() => ())
+  let addController = Controls.button(ctx, list, "+ controller", ~x=Grid.padX, ~y=0., ~w=2. * cw - Grid.columnGap, ~cls="add", () =>
+    switch Array.fromInitializer(~length=6, k => k)->Array.find(k => !isShown(k)) {
+    | Some(k) =>
+      added->Set.add(k)
+      addLayout.contents()
+    | None => ()
+    }
+  )
+  ctx.status->Status.hover(addController, () =>
+    "Add an assignable controller: set its number, or click learn and move it, then pick what it moves"
+  )
+  // a controller's row with its "+ target" button, then the targets it moves; "+ controller" after
+  // them while one is free
   let layoutControllers = () => {
     let y = ref(0.)
-    ccRows->Array.forEach(((head, targets: SlotRows.t, _)) => {
-      head->place(Grid.padX, y.contents)->ignore
-      targets.place(y.contents + Grid.rowHeight)
-      y := y.contents + Int.toFloat(1 + targets.rows()) * Grid.rowHeight
-    })
+    ccRows->Array.forEachWithIndex(((head, targets: SlotRows.t, _), k) =>
+      if isShown(k) {
+        head->setStyle("display", "")
+        head->place(Grid.padX, y.contents)->ignore
+        targets.place(y.contents + Grid.rowHeight)
+        y := y.contents + Int.toFloat(1 + targets.rows()) * Grid.rowHeight
+      } else {
+        head->setStyle("display", "none")
+        // (which hides its rows: it has none in use)
+        targets.place(0.)
+      }
+    )
+    let free = Array.fromInitializer(~length=6, k => k)->Array.some(k => !isShown(k))
+    addController->setStyle("display", free ? "" : "none")
+    addController->setStyle("top", px(y.contents))
   }
+  addLayout := layoutControllers
   ccRows->Array.forEach(((_, _, layoutRef)) => layoutRef := layoutControllers)
+  model->ParamModel.listenEach(ccIds, layoutControllers)
+  ctx.programs->ProgramStore.onChanged(() => {
+    added->Set.clear
+    layoutControllers()
+  })
   layoutControllers()
 
   //==============================================================================

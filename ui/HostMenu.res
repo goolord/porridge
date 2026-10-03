@@ -1,5 +1,6 @@
-// The host's menu for a parameter, which a double right-click on a control opens. In FL Studio
-// it has Create automation clip, Link to controller, Edit events and so on.
+// The host's menu for a parameter, which a double right-click on a control opens, as does
+// "Host menu…" in the control's own menu (Controls.contextMenu). In FL Studio it has Create
+// automation clip, Link to controller, Edit events and so on.
 //
 // The CLAP plugin answers stored-state requests whose key starts with "porridge:host?" (see
 // tools/clap-patch.mjs): ?get with a "porridge:host" value {menu}, whether the host can show
@@ -70,8 +71,11 @@ let dismissOnNextInput = t => {
   )
 }
 
-// Shows the menu for the parameter id where ev happened.
-let show = (t, id, ev) => {
+// Whether the host has a menu for the parameter id: it can show one, and lists the parameter.
+let has = (t, id) => t.available && !ParamInfo.isSetup(id)
+
+// Shows the menu for the parameter id at a point in the view (client coordinates).
+let showAt = (t, id, ~x, ~y) => {
   t->dismissOnNextInput
   t.channel->HostChannel.request(
     "menu=" ++
@@ -79,8 +83,8 @@ let show = (t, id, ev) => {
       Object(
         Dict.fromArray([
           ("id", JSON.String(id)),
-          ("x", Number(ev->clientX)),
-          ("y", Number(ev->clientY)),
+          ("x", Number(x)),
+          ("y", Number(y)),
           ("scale", Number(devicePixelRatio)),
         ]),
       ),
@@ -88,19 +92,19 @@ let show = (t, id, ev) => {
   )
 }
 
-// Opens the menu on a double right-click on e, a control for the parameter id. The first click
+// Opens the menu (also from a control's own menu: Controls) on a double right-click on e, a
+// control for the parameter id. The first click
 // has already done what a right-click does there (reset the value, step it...), so the second
 // puts back the value from before it, and the control never sees it. The menu opens with the
 // context menu event, which comes with the release on Windows, as menus do there. (Hosts have
 // no menu for the routing and setup parameters, which they don't list: ParamInfo.isSetup.)
 let attach = (t, model, e, id) => {
-  let listed = !ParamInfo.isSetup(id)
   // the time of the last right press, and the value before it
   let last = ref(None)
   let armed = ref(false)
   e->onPointerCapture(#pointerdown, ev => {
     armed := false
-    if ev->button == 2 && t.available && listed {
+    if ev->button == 2 && has(t, id) {
       let now = Date.now()
       switch last.contents {
       | Some((at, before)) if now - at <= doubleClickMs =>
@@ -121,7 +125,7 @@ let attach = (t, model, e, id) => {
     ev->preventDefault
     if armed.contents {
       armed := false
-      show(t, id, ev)
+      showAt(t, id, ~x=ev->clientX, ~y=ev->clientY)
     }
   })
 }

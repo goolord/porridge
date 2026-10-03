@@ -20,7 +20,7 @@ open! Web
 // (FxRack.oatmealDistortion) or any per-voice or whole sound effect.
 let openEffect = ref((_: FxRack.effect) => ())
 
-let hint = "A tab's light switches its effect. Drag a tab sideways to move it, × takes it out, right-click for more, + adds one. On a graph, drag the points; shift for fine steps, right-click to reset."
+let hint = "A tab's light switches its effect. Drag a tab sideways to move it, × takes it out, right-click for more, + adds one. On a graph, drag the points; shift for fine steps, right-click to reset. Ctrl+right-click a control for its menu."
 
 type dest = Distortion | Rack(FxRack.effect)
 
@@ -146,7 +146,11 @@ let build = (ctx: Ctx.t, page) => {
     select(Rack(e))
   }
 
-  let add = kind => FxRack.free(rack(), ~lane=VoiceLane.lane(model), kind)->Option.forEach(insert(_))
+  let add = (kind, ~setup) =>
+    FxRack.free(rack(), ~lane=VoiceLane.lane(model), kind)->Option.forEach(e => {
+      insert(e)
+      VoiceLane.setUp(model, e, setup)
+    })
 
   // a copy with the same settings, right after it
   let duplicate = (e: FxRack.effect) =>
@@ -157,10 +161,10 @@ let build = (ctx: Ctx.t, page) => {
 
   let remove = e => setRack(rack()->Array.filter(o => o != e))
 
-  // the kinds the whole sound can still take, in their groups, each with its icon
+  // what the whole sound can still take, in its groups, each with its icon
   let addMenu = anchor => {
-    let (kinds, items) = VoiceLane.kindMenu(~addable=FxRack.addable(rack(), ~lane=VoiceLane.lane(model)))
-    ctx.menu->Menu.show(anchor, items, -1, i => kinds[i]->Option.forEach(add))
+    let (picks, items) = VoiceLane.kindMenu(~addable=FxRack.addable(rack(), ~lane=VoiceLane.lane(model)))
+    ctx.menu->Menu.show(anchor, items, -1, i => picks[i]->Option.forEach(((k, setup)) => add(k, ~setup)))
   }
 
   // a whole sound effect's right-click menu

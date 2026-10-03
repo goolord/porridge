@@ -19,12 +19,11 @@ type sourceScope = Fixed(scope) | Depends((string => float) => scope)
 // A macro knob (0 the first) or an assignable controller, or neither.
 type sourceKind = Plain | Macro(int) | Controller
 
-// short: a name short enough for a small chip; colour: its colour on the chips, the ranges it
-// sweeps and its cables; help: what the source is, for the mod page's status line
+// colour: its colour on the chips, the ranges it sweeps and its cables; help: what the source is,
+// for the status line
 type source = {
   key: string,
   label: string,
-  short: string,
   colour: string,
   bipolar: bool,
   scope: sourceScope,
@@ -52,7 +51,6 @@ let withMpe = (get: string => float) => get("MPE_On") != 0. ? EachNote : Shared
 let lfo = (n, colour, mode) => {
   key: `lfo${Int.toString(n)}`,
   label: `LFO ${Int.toString(n)}`,
-  short: `LFO ${Int.toString(n)}`,
   colour,
   bipolar: true,
   scope: Depends(get => perVoiceAt0(mode, get)),
@@ -63,7 +61,6 @@ let lfo = (n, colour, mode) => {
 let macro = n => {
   key: `macro${Int.toString(n)}`,
   label: `macro ${Int.toString(n)}`,
-  short: `macro ${Int.toString(n)}`,
   colour: macroColour,
   bipolar: false,
   scope: Fixed(Shared),
@@ -74,7 +71,6 @@ let macro = n => {
 let cc = n => {
   key: `cc${Int.toString(n)}`,
   label: `controller ${Int.toString(n)}`,
-  short: `cc ${Int.toString(n)}`,
   colour: ccColour,
   bipolar: false,
   scope: Fixed(Shared),
@@ -86,7 +82,6 @@ let sources = [
   {
     key: "none",
     label: "none",
-    short: "none",
     colour: playColour,
     bipolar: false,
     scope: Fixed(EachNote),
@@ -98,7 +93,6 @@ let sources = [
   {
     key: "modEnv1",
     label: "mod env 1",
-    short: "env 1",
     colour: "#2e6b3a",
     bipolar: false,
     scope: Fixed(EachNote),
@@ -108,7 +102,6 @@ let sources = [
   {
     key: "modEnv2",
     label: "mod env 2",
-    short: "env 2",
     colour: "#5c8f3c",
     bipolar: false,
     scope: Fixed(EachNote),
@@ -118,7 +111,6 @@ let sources = [
   {
     key: "ampEnv",
     label: "amp env",
-    short: "amp env",
     colour: envColour,
     bipolar: false,
     scope: Fixed(EachNote),
@@ -128,7 +120,6 @@ let sources = [
   {
     key: "filterEnv",
     label: "filter env",
-    short: "filter env",
     colour: envColour,
     bipolar: false,
     scope: Fixed(EachNote),
@@ -138,7 +129,6 @@ let sources = [
   {
     key: "velocity",
     label: "velocity",
-    short: "velocity",
     colour: playColour,
     bipolar: false,
     scope: Fixed(EachNote),
@@ -148,7 +138,6 @@ let sources = [
   {
     key: "key",
     label: "key",
-    short: "key",
     colour: playColour,
     bipolar: true,
     scope: Fixed(EachNote),
@@ -158,7 +147,6 @@ let sources = [
   {
     key: "aftertouch",
     label: "aftertouch",
-    short: "touch",
     colour: playColour,
     bipolar: false,
     // per-voice in poly touch mode
@@ -169,7 +157,6 @@ let sources = [
   {
     key: "modWheel",
     label: "mod wheel",
-    short: "wheel",
     colour: playColour,
     bipolar: false,
     scope: Fixed(Shared),
@@ -179,7 +166,6 @@ let sources = [
   {
     key: "bend",
     label: "pitch bend",
-    short: "bend",
     colour: playColour,
     bipolar: true,
     scope: Depends(withMpe),
@@ -189,7 +175,6 @@ let sources = [
   {
     key: "x",
     label: "X",
-    short: "X",
     colour: playColour,
     bipolar: true,
     scope: Fixed(Shared),
@@ -199,7 +184,6 @@ let sources = [
   {
     key: "y",
     label: "Y",
-    short: "Y",
     colour: playColour,
     bipolar: true,
     scope: Fixed(Shared),
@@ -209,7 +193,6 @@ let sources = [
   {
     key: "random",
     label: "random",
-    short: "random",
     colour: playColour,
     bipolar: true,
     scope: Fixed(EachNote),
@@ -221,7 +204,6 @@ let sources = [
   {
     key: "slide",
     label: "slide (CC 74)",
-    short: "slide",
     colour: playColour,
     bipolar: false,
     scope: Depends(withMpe),
@@ -231,7 +213,6 @@ let sources = [
   {
     key: "noise",
     label: "noise",
-    short: "noise",
     colour: playColour,
     bipolar: true,
     scope: Fixed(EachNote),
@@ -245,7 +226,6 @@ let sources = [
   {
     key: "interval",
     label: "interval",
-    short: "interval",
     colour: playColour,
     bipolar: true,
     scope: Fixed(EachNote),
@@ -255,7 +235,6 @@ let sources = [
   {
     key: "alternate",
     label: "alternate",
-    short: "alternate",
     colour: playColour,
     bipolar: true,
     scope: Fixed(EachNote),
@@ -265,7 +244,6 @@ let sources = [
   {
     key: "cycle",
     label: "cycle",
-    short: "cycle",
     colour: playColour,
     bipolar: false,
     scope: Fixed(EachNote),
@@ -275,7 +253,6 @@ let sources = [
   {
     key: "voiceLevel",
     label: "voice level",
-    short: "level",
     colour: envColour,
     bipolar: false,
     scope: Fixed(EachNote),
@@ -285,7 +262,6 @@ let sources = [
   {
     key: "wander",
     label: "wander",
-    short: "wander",
     colour: "#8a6d3b",
     bipolar: true,
     scope: Fixed(EachNote),
@@ -295,7 +271,6 @@ let sources = [
   {
     key: "glide",
     label: "glide",
-    short: "glide",
     colour: playColour,
     bipolar: false,
     scope: Fixed(EachNote),
@@ -305,7 +280,6 @@ let sources = [
   {
     key: "heldNotes",
     label: "held notes",
-    short: "held",
     colour: playColour,
     bipolar: false,
     scope: Fixed(Shared),
@@ -315,7 +289,6 @@ let sources = [
   {
     key: "chord",
     label: "chord place",
-    short: "chord",
     colour: playColour,
     bipolar: true,
     scope: Fixed(EachNote),
@@ -325,7 +298,6 @@ let sources = [
   {
     key: "gap",
     label: "gap",
-    short: "gap",
     colour: playColour,
     bipolar: false,
     scope: Fixed(EachNote),
@@ -335,7 +307,6 @@ let sources = [
   {
     key: "legato",
     label: "legato",
-    short: "legato",
     colour: playColour,
     bipolar: false,
     scope: Fixed(EachNote),
@@ -345,7 +316,6 @@ let sources = [
   {
     key: "pitch",
     label: "pitch",
-    short: "pitch",
     colour: playColour,
     bipolar: true,
     scope: Fixed(EachNote),
@@ -411,6 +381,8 @@ type law =
   // a parameter of a copy Porridge no longer has: moves nothing
   | Retired
 
+// label: the knob's own label, with its block where that alone is ambiguous ("osc 1 level"):
+// every route to it is named so, whatever system it's in (OatmealParams.targetName)
 type target = {key: string, label: string, group: string, law: law}
 
 let knob = (id, label, group) => {key: id, label, group, law: Knob(id)}
@@ -430,37 +402,37 @@ let targets = [
   {key: "finePitch", label: "pitch ±1 st", group: "voice", law: Pitch(1.)},
   {key: "volume", label: "volume", group: "voice", law: Volume},
   {key: "pan", label: "pan", group: "voice", law: Pan},
-  knob("O1_Amp", "osc 1 amp", "osc"),
-  knob("O1_PWM_W", "osc 1 pulsewidth", "osc"),
+  knob("O1_Amp", "osc 1 level", "osc"),
+  knob("O1_PWM_W", "osc 1 pulse width", "osc"),
   knob("O1_PWM_R", "osc 1 pwm rate", "osc"),
   knob("O1_PWM_D", "osc 1 pwm depth", "osc"),
-  knob("O2_Amp", "osc 2 amp", "osc"),
-  knob("O2_PWM_W", "osc 2 pulsewidth", "osc"),
+  knob("O2_Amp", "osc 2 level", "osc"),
+  knob("O2_PWM_W", "osc 2 pulse width", "osc"),
   knob("O2_PWM_R", "osc 2 pwm rate", "osc"),
   knob("O2_PWM_D", "osc 2 pwm depth", "osc"),
   knob("Transpose", "osc 2 transpose", "osc"),
   knob("Detune", "osc 2 detune", "osc"),
-  knob("N_Amp", "noise amp", "osc"),
+  knob("N_Amp", "noise level", "osc"),
   knob("N_Resonance", "noise resonance", "osc"),
   knob("N_Transpose", "noise transpose", "osc"),
   knob("U_Detune", "unison detune", "osc"),
   knob("U_Spread", "unison spread", "osc"),
   knob("Cutoff", "cutoff", "filter"),
   knob("Resonance", "resonance", "filter"),
-  knob("F_EnvMod", "filter env mod", "filter"),
-  knob("F_Track", "filter keytrack", "filter"),
+  knob("F_EnvMod", "filter env amount", "filter"),
+  knob("F_Track", "filter key track", "filter"),
   knob("F_Split", "filter split", "filter"),
   knob("F_Mix", "filter mix", "filter"),
   knob("Sat_Pregain", "dist pregain", "distortion"),
   knob("Sat_Postgain", "dist postgain", "distortion"),
   knob("LFO_1_Speed", "LFO 1 rate", "lfo"),
-  knob("LFO_1_Pitch", "LFO 1 pitch", "lfo"),
-  knob("LFO_1_Cutoff_1", "LFO 1 cut 1", "lfo"),
-  knob("LFO_1_Pan", "LFO 1 pan", "lfo"),
+  knob("LFO_1_Pitch", "LFO 1 pitch depth", "lfo"),
+  knob("LFO_1_Cutoff_1", "LFO 1 cutoff depth", "lfo"),
+  knob("LFO_1_Pan", "LFO 1 pan depth", "lfo"),
   knob("LFO_2_Speed", "LFO 2 rate", "lfo"),
-  knob("LFO_2_Pitch", "LFO 2 pitch", "lfo"),
-  knob("LFO_2_Cutoff_1", "LFO 2 cut 1", "lfo"),
-  knob("LFO_2_Pan", "LFO 2 pan", "lfo"),
+  knob("LFO_2_Pitch", "LFO 2 pitch depth", "lfo"),
+  knob("LFO_2_Cutoff_1", "LFO 2 cutoff depth", "lfo"),
+  knob("LFO_2_Pan", "LFO 2 pan depth", "lfo"),
   knob("C_Rate", "chorus rate", "chorus"),
   knob("C_Depth", "chorus depth", "chorus"),
   knob("C_Feedback", "chorus feedback", "chorus"),
@@ -510,10 +482,10 @@ let targets = [
   knob("Cp_Mix", "compressor mix", "compressor"),
   knob("Rv_Size", "algo reverb size", "space"),
   knob("Rv_Mix", "algo reverb mix", "space"),
-  knob("Cv_Mix", "convolve mix", "convolve"),
-  knob("Bd_Shift", "bode shift", "bode"),
-  knob("Bd_Feedback", "bode feedback", "bode"),
-  knob("Bd_Mix", "bode mix", "bode"),
+  knob("Cv_Mix", "convolution mix", "convolve"),
+  knob("Bd_Shift", "freq shifter shift", "bode"),
+  knob("Bd_Feedback", "freq shifter feedback", "bode"),
+  knob("Bd_Mix", "freq shifter mix", "bode"),
   knob("Ff_Cutoff", "FX filter cutoff", "fxfilter"),
   knob("Ff_Resonance", "FX filter resonance", "fxfilter"),
   knob("Ff_Morph", "FX filter morph", "fxfilter"),
@@ -667,7 +639,7 @@ let targets = {
     ),
     ...effectTargets(
       "convolve",
-      "convolve",
+      "convolution",
       [2],
       [
         ("Cv_Mix", "mix"),
@@ -680,7 +652,7 @@ let targets = {
     ),
     ...effectTargets(
       "bode",
-      "bode",
+      "freq shifter",
       [2, 3, 4],
       [("Bd_Shift", "shift"), ("Bd_Feedback", "feedback"), ("Bd_Mix", "mix"), ("Bd_Delay", "delay")],
     ),
@@ -729,10 +701,10 @@ let targets = {
 let targets = [
   ...targets,
   knob("LFO_3_Rate", "LFO 3 rate", "lfo"),
-  knob("LFO_3_Fade", "LFO 3 fade-in", "lfo"),
+  knob("LFO_3_Fade", "LFO 3 fade in", "lfo"),
   knob("Wander_Rate", "wander rate", "lfo"),
   ...effectTargets("fxfilter", "FX filter", [2, 3, 4], [("Ff_Track", "tracking")]),
-  ...effectTargets("shifter", "shifter", [2], [("Sh_Ratio", "ratio"), ("Sh_Hz", "offset"), ("Sh_Mix", "mix")]),
+  ...effectTargets("shifter", "key shifter", [2], [("Sh_Ratio", "ratio"), ("Sh_Hz", "offset"), ("Sh_Mix", "mix")]),
   ...effectTargets(
     "resonator",
     "resonator",
@@ -761,13 +733,13 @@ let groups = [
   ("phaser", "phaser"),
   ("compressor", "compressor"),
   ("space", "algo reverb"),
-  ("convolve", "convolve"),
-  ("bode", "bode"),
+  ("convolve", "convolution"),
+  ("bode", "freq shifter"),
   ("fxfilter", "FX filter"),
   ("utility", "utility"),
   ("ambience", "ambience"),
   ("air", "air"),
-  ("shifter", "shifter"),
+  ("shifter", "key shifter"),
   ("resonator", "resonator"),
   ("octaver", "octaver"),
 ]

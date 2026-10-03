@@ -77,7 +77,7 @@ namespace porridge
         // its own random numbers, so that adding one changes nothing else
         Chorus[rack::chorusCount] choruses;
         Rand[rack::chorusCount] chorusRngs;
-        RackDelay[rack::delayCount] delays;
+        Delay[rack::delayCount] delays;
         Reverb[rack::reverbCount] reverbs;
         EQ[rack::eqCount] eqs;
         Distortion[rack::distortionCount] distortions;
@@ -98,6 +98,21 @@ namespace porridge
         int blockCount;                             // blocks rendered
         int[rack::convolveCount] convolverRan;      // the block each convolver last ran in
         int[rack::convolveCount] viewSent;          // the impulse each convolver last showed the view
+
+        // the rack's pool (Common.cmajor's FxPool), and the first block of each effect that keeps
+        // its lines there (-1: none, it isn't in the rack), by pool id: Oatmeal's delay and the
+        // other delays, Oatmeal's reverb and the other reverbs, then the algo reverbs,
+        // convolvers, Bode shifters, ambiences and flangers
+        FxPool fxPool;
+        int[numPooled] poolAt;
+
+        let pooledReverbs = 1 + rack::delayCount;
+        let pooledSpaces = pooledReverbs + 1 + rack::reverbCount;
+        let pooledConvolvers = pooledSpaces + rack::spaceCount;
+        let pooledBodes = pooledConvolvers + rack::convolveCount;
+        let pooledAmbiences = pooledBodes + rack::bodeCount;
+        let pooledFlangers = pooledAmbiences + rack::ambienceCount;
+        let numPooled = pooledFlangers + rack::flangerCount;
 
         // the level meter the view asks for (levelRequestIn): readings still to send, and the
         // K-weighted power summed since the last one; the weighting's shelf and highpass, per
@@ -387,9 +402,17 @@ namespace porridge
             userSet1 = setUser1;
             userSet2 = setUser2;
 
+            for (int id = 0; id < numPooled; ++id)
+                setPoolAt (id, -1);
+
+            delay.capacity = delayMax;
+
+            for (wrap<rack::delayCount> k)
+                delays[k].capacity = rackDelayMax;
+
             globalDist.clearState();
-            delay.prepare();
-            reverb.prepare();
+            delay.prepare (fxPool);
+            reverb.prepare (fxPool);
             eq.clearState();
 
             // the chorus is set up while the program mirror is still all zero, so its
@@ -401,9 +424,9 @@ namespace porridge
             for (wrap<rack::chorusCount> k)
                 chorusRngs[k].state = 2 + int (k);
 
-            for (wrap<rack::delayCount> k)   delays[k].prepare();
-            for (wrap<rack::reverbCount> k)  reverbs[k].prepare();
-            for (wrap<rack::convolveCount> k)  convolvers[k].prepare();
+            for (wrap<rack::delayCount> k)   delays[k].prepare (fxPool);
+            for (wrap<rack::reverbCount> k)  reverbs[k].prepare (fxPool);
+            for (wrap<rack::convolveCount> k)  convolvers[k].prepare (fxPool);
             clearCopies();
 
             for (int i = 0; i < maxVoices; ++i)
@@ -425,12 +448,12 @@ namespace porridge
         {
             globalDist.clearState();
             chorus.clearState (rng, P, sampleRate);
-            delay.clearState();
-            reverb.clearState();
+            delay.clearState (fxPool);
+            reverb.clearState (fxPool);
             eq.clearState();
 
-            for (wrap<rack::delayCount> k)   delays[k].clearState();
-            for (wrap<rack::reverbCount> k)  reverbs[k].clearState();
+            for (wrap<rack::delayCount> k)   delays[k].clearState (fxPool);
+            for (wrap<rack::reverbCount> k)  reverbs[k].clearState (fxPool);
             clearCopies();
         }
 
@@ -446,12 +469,12 @@ namespace porridge
             for (wrap<rack::eqCount> k)          eqs[k].clearState();
             for (wrap<rack::distortionCount> k)  distortions[k].clearState();
 
-            for (wrap<rack::flangerCount> k)     flangers[k].clearState();
+            for (wrap<rack::flangerCount> k)     flangers[k].clearState (fxPool);
             for (wrap<rack::phaserCount> k)      phasers[k].clearState();
             for (wrap<rack::compressorCount> k)  compressors[k].clearState();
             for (wrap<rack::spaceCount> k)       spaces[k].clearState();
-            for (wrap<rack::convolveCount> k)    convolvers[k].clearState();
-            for (wrap<rack::bodeCount> k)        bodes[k].clearState();
+            for (wrap<rack::convolveCount> k)    convolvers[k].clearState (fxPool);
+            for (wrap<rack::bodeCount> k)        bodes[k].clearState (fxPool);
             for (wrap<rack::filterCount> k)      filterFxs[k].clearState();
             for (wrap<rack::utilityCount> k)     utilities[k].clearState();
             for (wrap<rack::ambienceCount> k)    ambiences[k].clearState();
@@ -480,8 +503,8 @@ namespace porridge
         bool runFirst (int fx, bool active)
         {
             if (fx == 0) return P[slot::C_Mode] != 0 ? chorus.process (fxTables, rng, mix, active, P, sampleRate) : active;
-            if (fx == 1) return P[slot::D_On] != 0 ? delay.process (fxTables, mix, active, P, sampleRate, samplesPerBeat) : active;
-            if (fx == 2) return P[slot::R_On] != 0 ? reverb.process (mix, active, P, sampleRate) : active;
+            if (fx == 1) return P[slot::D_On] != 0 && delay.fxAt >= 0 ? delay.process (fxPool, fxTables, mix, active, P, sampleRate, samplesPerBeat) : active;
+            if (fx == 2) return P[slot::R_On] != 0 && reverb.fxAt >= 0 ? reverb.process (fxPool, mix, active, P, sampleRate) : active;
             return P[slot::EQ_On] != 0 ? eq.process (mix, active, P, sampleRate) : active;
         }
 
@@ -519,6 +542,11 @@ namespace porridge
             if (kind < 0 || (kind == rack::distortionKind && ! active) || ! rack::inRack.at (kind))
                 return active;
 
+            let id = pooledId (fx);
+
+            if (id >= 0 && poolAt.at (id) < 0)
+                return active;
+
             let k = fx - rack::kindValue.at (kind);
             let copy = rack::kindOwn.at (kind) ? k - 1 : k;
             var out = active;
@@ -537,16 +565,16 @@ namespace porridge
         bool runKind (int kind, int k, bool active)
         {
             if (kind == rack::chorusKind)   return choruses.at (k).process (fxTables, chorusRngs.at (k), mix, active, P, sampleRate);
-            if (kind == rack::delayKind)    return delays.at (k).process (fxTables, mix, active, P, sampleRate, samplesPerBeat);
-            if (kind == rack::reverbKind)   return reverbs.at (k).process (mix, active, P, sampleRate);
+            if (kind == rack::delayKind)    return delays.at (k).process (fxPool, fxTables, mix, active, P, sampleRate, samplesPerBeat);
+            if (kind == rack::reverbKind)   return reverbs.at (k).process (fxPool, mix, active, P, sampleRate);
             if (kind == rack::eqKind)       return eqs.at (k).process (mix, active, P, sampleRate);
-            if (kind == rack::flangerKind)  return flangers.at (k).process (mix, active, P, sampleRate, noteHz);
+            if (kind == rack::flangerKind)  return flangers.at (k).process (fxPool, mix, active, P, sampleRate, noteHz);
             if (kind == rack::phaserKind)   return phasers.at (k).process (mix, active, P, sampleRate, noteHz);
-            if (kind == rack::spaceKind)    return spaces.at (k).process (mix, active, P, sampleRate);
-            if (kind == rack::bodeKind)     return bodes.at (k).process (mix, active, P, sampleRate);
+            if (kind == rack::spaceKind)    return spaces.at (k).process (fxPool, mix, active, P, sampleRate);
+            if (kind == rack::bodeKind)     return bodes.at (k).process (fxPool, mix, active, P, sampleRate);
             if (kind == rack::filterKind)   return filterFxs.at (k).process (fxTables, mix, active, P, sampleRate, noteHz);
             if (kind == rack::utilityKind)  return utilities.at (k).process (mix, active, P, sampleRate);
-            if (kind == rack::ambienceKind) return ambiences.at (k).process (mix, active, P, sampleRate);
+            if (kind == rack::ambienceKind) return ambiences.at (k).process (fxPool, mix, active, P, sampleRate);
             if (kind == rack::airKind)      return airs.at (k).process (mix, active, P, sampleRate);
 
             if (kind == rack::distortionKind)
@@ -568,10 +596,194 @@ namespace porridge
 
             // the convolver: switched back on, or back in the rack, its old tail is gone
             if (convolverRan.at (k) != blockCount - 1)
-                convolvers.at (k).clearState();
+                convolvers.at (k).clearState (fxPool);
 
             convolverRan.at (k) = blockCount;
-            return convolvers.at (k).process (mix, active, P, sampleRate);
+            return convolvers.at (k).process (fxPool, mix, active, P, sampleRate);
+        }
+
+        //==============================================================================
+        // the rack's pool
+
+        /// The pool id of the effect a rack value runs (-1: one that keeps no lines there).
+        int pooledId (int fx)
+        {
+            if (fx < 5 || fx >= rack::numEntries)
+                return -1;
+
+            let kind = rack::kindOf.at (fx);
+            let k = fx - rack::kindValue.at (max (kind, 0));
+
+            if (kind == rack::delayKind)    return 1 + k;
+            if (kind == rack::reverbKind)   return pooledReverbs + 1 + k;
+            if (kind == rack::spaceKind)    return pooledSpaces + k;
+            if (kind == rack::convolveKind) return pooledConvolvers + k;
+            if (kind == rack::bodeKind)     return pooledBodes + k;
+            if (kind == rack::ambienceKind) return pooledAmbiences + k;
+            if (kind == rack::flangerKind)  return pooledFlangers + k;
+            return -1;
+        }
+
+        /// How many blocks an effect keeps in the pool.
+        int poolBlocks (int id)
+        {
+            if (id == 0)                return stereoBlocks (delayMax);
+            if (id < pooledReverbs)     return stereoBlocks (rackDelayMax);
+            if (id < pooledSpaces)      return reverbBlocks;
+            if (id < pooledConvolvers)  return monoBlocks (spacePoolSize);
+            if (id < pooledBodes)       return convBlocks;
+            if (id < pooledAmbiences)   return stereoBlocks (bodeLineSize);
+            if (id < pooledFlangers)    return monoBlocks (ambPoolSize);
+            return stereoBlocks (flangerLineSize);
+        }
+
+        /// Gives an effect its blocks from `at` (-1: takes them back).
+        void setPoolAt (int id, int at)
+        {
+            poolAt.at (id) = at;
+
+            if (id == 0)                    delay.fxAt = at;
+            else if (id < pooledReverbs)    delays.at (id - 1).fxAt = at;
+            else if (id == pooledReverbs)   reverb.fxAt = at;
+            else if (id < pooledSpaces)     reverbs.at (id - pooledReverbs - 1).fxAt = at;
+            else if (id < pooledConvolvers) spaces.at (id - pooledSpaces).fxAt = at;
+            else if (id < pooledBodes)      convolvers.at (id - pooledConvolvers).fxAt = at;
+            else if (id < pooledAmbiences)  bodes.at (id - pooledBodes).fxAt = at;
+            else if (id < pooledFlangers)   ambiences.at (id - pooledAmbiences).fxAt = at;
+            else                            flangers.at (id - pooledFlangers).fxAt = at;
+        }
+
+        /// Starts an effect afresh in blocks it has just been given, whatever they held.
+        void startPooled (int id)
+        {
+            if (id == 0)                    delay.prepare (fxPool);
+            else if (id < pooledReverbs)    delays.at (id - 1).prepare (fxPool);
+            else if (id == pooledReverbs)   reverb.prepare (fxPool);
+            else if (id < pooledSpaces)     reverbs.at (id - pooledReverbs - 1).prepare (fxPool);
+            else if (id < pooledConvolvers) spaces.at (id - pooledSpaces).clearState();
+            else if (id < pooledBodes)      convolvers.at (id - pooledConvolvers).prepare (fxPool);
+            else if (id < pooledAmbiences)  bodes.at (id - pooledBodes).clearState (fxPool);
+            else if (id < pooledFlangers)   ambiences.at (id - pooledAmbiences).clearState();
+            else                            flangers.at (id - pooledFlangers).clearState (fxPool);
+        }
+
+        /// The first block of n free ones (-1: no run of n is free).
+        int freeBlocks (int n)
+        {
+            var at = 0;
+
+            while (true)
+            {
+                // past every region that a run from here would overlap
+                var moved = false;
+
+                for (int id = 0; id < numPooled; ++id)
+                {
+                    let a = poolAt.at (id);
+
+                    if (a >= 0 && a < at + n && at < a + poolBlocks (id))
+                    {
+                        at = a + poolBlocks (id);
+                        moved = true;
+                    }
+                }
+
+                if (! moved)
+                    return at + n <= fxPoolBlocks ? at : -1;
+            }
+
+            return -1;
+        }
+
+        /// Slides every effect's blocks down to the start of the pool, in order, so that the free
+        /// ones are a single run (their contents move with them: nothing restarts).
+        void compactPool()
+        {
+            var next = 0;
+
+            while (true)
+            {
+                // the lowest region not yet moved
+                var id = -1;
+
+                for (int i = 0; i < numPooled; ++i)
+                    if (poolAt.at (i) >= next && (id < 0 || poolAt.at (i) < poolAt.at (id)))
+                        id = i;
+
+                if (id < 0)
+                    return;
+
+                let from = poolAt.at (id);
+                let n = poolBlocks (id);
+
+                if (from > next)
+                {
+                    for (int p = 0; p < n; ++p)
+                        fxPool.at (next + p) = fxPool.at (from + p);
+
+                    setPoolAt (id, next);
+                }
+
+                next += n;
+            }
+        }
+
+        /// Before the rack runs: takes the blocks back from the effects that have left it, and
+        /// gives blocks to those that have come in, which start afresh (silent, as a new one). An
+        /// effect keeps its blocks while it stays in the rack, switched off or moved. The eight
+        /// largest fit together (see FxPool), so a request only fails, and its effect doesn't
+        /// run, if the pool's size is wrong.
+        void claimPool()
+        {
+            bool[numPooled] wanted;
+            let order = clamp (int (P[slot::FX_Order]), 0, fxOrders.size / 4 - 1);
+            int numFirsts = 0;
+
+            // as renderBlock runs them: the slots holding 1 .. 4 take Oatmeal's four in FX_Order's order
+            for (wrap<rack::slots.size> k)
+            {
+                let fx = int (P.at (rack::slots[k]));
+
+                if (fx >= 1 && fx <= 4)
+                {
+                    if (numFirsts < 4)
+                    {
+                        let first = fxOrders.at (order * 4 + numFirsts);
+                        if (first == 1) wanted[0] = true;
+                        if (first == 2) wanted.at (pooledReverbs) = true;
+                        ++numFirsts;
+                    }
+                }
+                else
+                {
+                    let id = pooledId (fx);
+                    if (id >= 0) wanted.at (id) = true;
+                }
+            }
+
+            for (int id = 0; id < numPooled; ++id)
+                if (poolAt.at (id) >= 0 && ! wanted.at (id))
+                    setPoolAt (id, -1);
+
+            for (int id = 0; id < numPooled; ++id)
+            {
+                if (wanted.at (id) && poolAt.at (id) < 0)
+                {
+                    var at = freeBlocks (poolBlocks (id));
+
+                    if (at < 0)
+                    {
+                        compactPool();
+                        at = freeBlocks (poolBlocks (id));
+                    }
+
+                    if (at >= 0)
+                    {
+                        setPoolAt (id, at);
+                        startPooled (id);
+                    }
+                }
+            }
         }
 
         //==============================================================================
@@ -3966,6 +4178,7 @@ namespace porridge
 
             int numFirsts = 0;
             bool[rack::numEntries] ran;     // the copies already run, by their rack values
+            claimPool();
 
             for (wrap<rack::slots.size> k)
             {

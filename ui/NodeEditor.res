@@ -24,7 +24,8 @@ let make = (ctx: Ctx.t, parent, box: box, ~hint, ~columns) => {
   let g = FxGraph.make(ctx, parent, box, ~hint)
   let vals = el("div", ~cls="vals", ~parent=g.root)
   let values = Grid.make(ctx, vals, ~x=0., ~y=22., ~cw=box.w / Int.toFloat(columns))
-  Controls.expandSwitch(ctx, g.root)
+  // (search shows the values to reach one of them)
+  Reach.place(vals, "", Controls.expandSwitch(ctx, g.root))
   let refresh = ref(() => ())
   {g, values, hover: None, dragging: None, refresh, schedule: perFrame(() => refresh.contents())}
 }

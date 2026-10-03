@@ -79,9 +79,10 @@ namespace porridge
     /// ahead; softly saturated feedback.
     let flangerLineSize = 65536;    // 341 ms at 192 kHz: 20 ms * 2^4 and the interpolator's taps
 
+    /// Its line is a stereo line in the pool (FxPool) from block fxAt.
     struct Flanger
     {
-        float<2>[flangerLineSize] line;
+        int fxAt;
         int pos;
         float64 phase;                      // LFO phase 0..1 (left)
         float delay, depth, fb, mix;        // smoothed: shortest delay (samples), depth, feedback, mix
@@ -89,10 +90,11 @@ namespace porridge
         int silentCount;                    // samples since a value above the threshold went into the line
     }
 
-    void clearState (Flanger& this)
+    void clearState (Flanger& this, FxPool& pool)
     {
-        for (wrap<flangerLineSize> i)
-            this.line[i] = float<2> (0.0f, 0.0f);
+        if (this.fxAt >= 0)
+            for (int i = 0; i < flangerLineSize; ++i)
+                setPoolFrame (pool, this.fxAt, i, float<2>());
 
         this.pos = 0;
         this.phase = 0;
@@ -200,18 +202,19 @@ namespace porridge
     }
 
     /// Channel ch of the line d samples back (d >= 2), cubic-interpolated.
-    float flangerRead (const Flanger& this, float d, int ch)
+    float flangerRead (const Flanger& this, const FxPool& pool, float d, int ch)
     {
         let di = int (d);
         let t = d - float (di);
         let m = flangerLineSize - 1;
         let p = this.pos - di;
-        return hermite (this.line.at ((p + 1) & m).at (ch), this.line.at (p & m).at (ch),
-                        this.line.at ((p - 1) & m).at (ch), this.line.at ((p - 2) & m).at (ch), t);
+        let at = this.fxAt;
+        return hermite (poolSide (pool, at, (p + 1) & m, ch), poolSide (pool, at, p & m, ch),
+                        poolSide (pool, at, (p - 1) & m, ch), poolSide (pool, at, (p - 2) & m, ch), t);
     }
 
     /// noteHz: the newest note's frequency (0 when none), for the tracking.
-    bool process (Flanger& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr, float noteHz)
+    bool process (Flanger& this, FxPool& pool, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr, float noteHz)
     {
         if (! active && this.idle)
             return false;
@@ -239,14 +242,14 @@ namespace porridge
 
             // delay = shortest * 2^(4 depth lfo), lfo 0..1
             let e = sweep.next (4.0f * 0.693147181f * this.depth);
-            let yL = this.flangerRead (clamp (this.delay * e[0], 2.0f, longest), 0);
-            let yR = this.flangerRead (clamp (this.delay * e[1], 2.0f, longest), 1);
+            let yL = this.flangerRead (pool, clamp (this.delay * e[0], 2.0f, longest), 0);
+            let yR = this.flangerRead (pool, clamp (this.delay * e[1], 2.0f, longest), 1);
             let y = float<2> (yL, yR);
             let x = buf[i];
 
             let back = extraSoftClip (this.fb * y);
             let w = x + back + 1e-18f;      // the offset keeps the decaying loop off denormals
-            this.line.at (this.pos) = w;
+            setPoolFrame (pool, this.fxAt, this.pos, w);
             this.pos = (this.pos + 1) & (flangerLineSize - 1);
             written = max (written, extraPeak (w));
 
@@ -498,9 +501,10 @@ namespace porridge
         return c;
     }
 
+    /// Its feedback delay is a stereo line in the pool (FxPool) from block fxAt.
     struct Bode
     {
-        float<2>[bodeLineSize] line;
+        int fxAt;
         int pos;
         float[hilbertCoefs] c;
         float64 designRate;                         // the rate c was designed for
@@ -514,10 +518,11 @@ namespace porridge
         int silentCount;
     }
 
-    void clearState (Bode& this)
+    void clearState (Bode& this, FxPool& pool)
     {
-        for (int i = 0; i < bodeLineSize; ++i)
-            this.line.at (i) = float<2> (0.0f, 0.0f);
+        if (this.fxAt >= 0)
+            for (int i = 0; i < bodeLineSize; ++i)
+                setPoolFrame (pool, this.fxAt, i, float<2>());
 
         for (wrap<hilbertCoefs> j)
         {
@@ -545,22 +550,23 @@ namespace porridge
     }
 
     /// The line's value d samples back (d >= 2), cubic-interpolated.
-    float<2> bodeRead (const Bode& this, float d)
+    float<2> bodeRead (const Bode& this, const FxPool& pool, float d)
     {
         let di = int (d);
         let t = d - float (di);
+        let at = this.fxAt;
         var p = this.pos - di - 2;
         if (p < 0) p += bodeLineSize;
-        let y3 = this.line.at (p);
+        let y3 = poolFrame (pool, at, p);
         p = p + 1 >= bodeLineSize ? 0 : p + 1;
-        let y2 = this.line.at (p);
+        let y2 = poolFrame (pool, at, p);
         p = p + 1 >= bodeLineSize ? 0 : p + 1;
-        let y1 = this.line.at (p);
+        let y1 = poolFrame (pool, at, p);
         p = p + 1 >= bodeLineSize ? 0 : p + 1;
-        return hermite (this.line.at (p), y1, y2, y3, t);
+        return hermite (poolFrame (pool, at, p), y1, y2, y3, t);
     }
 
-    bool process (Bode& this, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
+    bool process (Bode& this, FxPool& pool, float<2>[blockSize]& buf, bool active, const float[numSlots]& P, float64 sr)
     {
         if (! active && this.idle)
             return false;
@@ -614,7 +620,7 @@ namespace porridge
 
             if (this.fb > 1e-6f)
             {
-                let back = this.bodeRead (this.delay);
+                let back = this.bodeRead (pool, this.delay);
                 let h = back - this.hpX + hpR * this.hpY;
                 this.hpX = back;
                 this.hpY = h;
@@ -654,7 +660,7 @@ namespace porridge
             // up: b cos + a sin, down: b cos - a sin, ring: their mean (b cos); the mode's
             // sign glides so that switching modes doesn't click
             let wet = b * cs + a * sn * this.side;
-            this.line.at (this.pos) = wet;
+            setPoolFrame (pool, this.fxAt, this.pos, wet);
             this.pos = this.pos + 1 >= bodeLineSize ? 0 : this.pos + 1;
             written = max (written, extraPeak (wet));
 

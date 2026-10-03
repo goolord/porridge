@@ -48,6 +48,11 @@ let make = (parent, ~title="", ~tabs=[], ~bodies=true, ~onSelect=_ => (), ~x, ~y
   } else {
     show(p, 0)
   }
+  // where search finds what it holds: a tab, or the panel by its title
+  p.bodies->Array.forEachWithIndex((body, i) => Reach.place(body, tabs->Array.getUnsafe(i), () => select(p, i)))
+  if tabs == [] && title != "" {
+    Reach.place(e, title, () => ())
+  }
   p
 }
 

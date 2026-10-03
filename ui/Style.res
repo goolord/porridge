@@ -127,6 +127,8 @@ let css = `
 /* a panel the synth page's flow just opened */
 @keyframes pflash { from { box-shadow: 0 0 0 3px var(--signal); } to { box-shadow: 0 0 0 3px transparent; } }
 .blk.flash { animation: pflash 0.8s ease-out; }
+/* what search went to, or a summary line opened (Reach.flash) */
+.found { animation: pflash 0.6s ease-out 2; }
 .blk > .hdr, .pbody > .hdr { position: absolute; right: 6px; top: 1px; width: 40px; height: 18px; }
 
 /* the FX page: the strip is the signal path, per-voice (tinted) then the whole sound, with a tab
@@ -206,7 +208,8 @@ let css = `
 .fnd.dist { box-shadow: inset 0 0 0 1px var(--signal); }
 .fnd.add { flex: none; background: transparent; box-shadow: none; border: 1.5px dashed var(--edge); font-size: 14px; line-height: 17px; }
 .fnd.fx { flex: 0 1 auto; }
-.fnd.fx.off { color: var(--ink-faint); }
+.fnd.fx.off, .fnd.osc.off { color: var(--ink-faint); }
+.fnd.osc.off { background: transparent; }
 .fnd.drag { z-index: 3; cursor: grabbing; box-shadow: inset 0 0 0 1.5px var(--signal), 3px 3px 0 rgba(31,26,14,0.25); }
 .fnd.drop-before { box-shadow: inset 0 0 0 1px var(--edge), inset 3px 0 0 var(--signal); }
 .fnd.drop-after { box-shadow: inset 0 0 0 1px var(--edge), inset -3px 0 0 var(--signal); }
@@ -228,11 +231,28 @@ let css = `
 .dchip .dx { position: absolute; right: 6px; top: 0; line-height: 22px; font-weight: 400; font-size: 14px; color: var(--ink-faint); cursor: pointer; }
 .dchip .dx:hover { color: var(--ink); }
 .dchip.zero .dl, .dchip.zero .dv { opacity: 0.55; }
+.dchip.dflt { background: transparent; box-shadow: inset 0 0 0 1px var(--edge); color: var(--ink-soft); }
+.dchip.dflt .sw, .dchip.dflt .dt i { opacity: 0.45; }
 .dchip.add { cursor: pointer; justify-content: center; padding: 0; background: transparent; box-shadow: none;
     border: 1.5px dashed var(--edge); color: var(--ink-soft); }
 .dchip.add:hover { background: var(--panel-hi); color: var(--ink); }
 .dchip.add b { font-size: 15px; }
 .dchip:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
+.dests.wide { flex-direction: row; flex-wrap: wrap; align-content: flex-start; }
+.dests.wide .dchip { width: 176px; }
+/* the selected modulation source (ModFocus): what it moves ringed in its colour, the other
+   controls a little dimmer, the tabs of the panels and pages that hold what it moves marked */
+.pv-stage.mfocus .pv-page:not(.modp) .p:not(.mlit) { opacity: 0.6; }
+.p.mlit { background: var(--paper); box-shadow: inset 0 0 0 2px var(--mc); }
+.ed.mlit { box-shadow: 0 0 0 2px var(--mc); }
+/* what moves an envelope as a whole (EnvEditor): its modulators' colours down its left edge */
+.ed > .me { position: absolute; left: 1px; top: 4px; bottom: 16px; width: 4px; z-index: 2; display: flex;
+    flex-direction: column; gap: 1px; cursor: help; }
+.ed > .me i { flex: 1; border-radius: 1px; }
+.fnd.mlit { box-shadow: inset 0 0 0 2px var(--mc); }
+.ptab.mlit { box-shadow: inset 0 -3px 0 var(--mc); }
+.pv-head .pages .btn .pcount { margin-left: 5px; font-weight: 700; }
+.pv-head .pages .btn.on .pcount { color: var(--paper) !important; }
 .plot path.flow { fill: none; stroke: var(--ink-soft); stroke-width: 1.5; }
 .plot path.flowhead { fill: none; stroke: var(--ink-soft); stroke-width: 1.5; stroke-linejoin: round; }
 
@@ -305,11 +325,12 @@ let css = `
     position: absolute; top: 0; bottom: 0; background: var(--signal);
 }
 /* the range modulation sweeps */
-.p .t .mb em { position: absolute; height: 4px; background: var(--mod); opacity: 0.7; display: none; pointer-events: none; }
-/* what moves it with no known range on the knob (Oatmeal's own routings): its colours down the left edge */
-.p .me { position: absolute; left: 1px; top: 3px; bottom: 3px; width: 2px; display: flex; flex-direction: column;
-    gap: 1px; pointer-events: none; }
-.p .me i { flex: 1; display: none; opacity: 0.85; border-radius: 1px; }
+.p .t .mb em { position: absolute; height: 4px; background: var(--mod); opacity: 0.7; display: none; cursor: pointer; }
+/* what moves it with no known range on the knob (Oatmeal's own routings): its colours down the left edge
+   (a press on one selects its source, so the marks take a little more room than they show) */
+.p .me { position: absolute; left: 1px; top: 3px; bottom: 3px; width: 5px; display: flex; flex-direction: column;
+    gap: 1px; cursor: pointer; }
+.p .me i { flex: 1; display: none; margin-right: 3px; opacity: 0.85; border-radius: 1px; }
 /* the same on a graph's point: dots around it */
 .mdots { pointer-events: none; }
 /* a source from the tray over it */
@@ -336,6 +357,7 @@ let css = `
     background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-edge);
 }
 .tg:hover { background: var(--panel-hi); box-shadow: inset 0 0 0 1px var(--edge); }
+.tg.dim > * { opacity: 0.45; }
 .tg b { flex: none; width: 11px; height: 11px; border: 1.5px solid var(--ink); box-sizing: border-box; border-radius: 1px; background: transparent; }
 .tg.on b { background: var(--signal); border-color: var(--signal); box-shadow: inset 0 0 0 1.5px var(--paper); }
 .tg.on { color: var(--ink); }
@@ -494,6 +516,14 @@ let css = `
 .pv-head .btn.panic { width: 22px; color: #8a2a1a; }
 .pv-head .btn.panic .ic { height: 13px; }
 .pv-head .btn.panic:active { color: var(--paper); }
+/* A/B: the program's two versions, the live one lit (B faint until it is made) */
+.pv-head .ab { display: flex; flex: none; height: 20px; margin-left: 2px; border: 1px solid var(--edge); border-radius: 2px; overflow: hidden; }
+.pv-head .ab span { width: 17px; text-align: center; line-height: 20px; font-size: 11.5px; font-weight: 700; cursor: pointer;
+    color: var(--ink-soft); background: var(--panel-hi); }
+.pv-head .ab span + span { border-left: 1px solid var(--edge); }
+.pv-head .ab span:hover { color: var(--ink); background: var(--paper); }
+.pv-head .ab span.on { color: var(--paper); background: var(--signal); cursor: default; }
+.pv-head .ab:not(.two) span:not(.on) { color: var(--ink-faint); }
 
 /* status line: hover texts, or a hint for the page */
 .pv-status {
@@ -529,6 +559,7 @@ let css = `
 .mchip i { position: absolute; left: 4px; top: 4px; bottom: 4px; width: 3px; border-radius: 2px; }
 .mchip:hover { background: var(--panel-hi); box-shadow: inset 0 0 0 1px var(--edge); }
 .mchip.vary { font-weight: 700; padding-right: 9px; }
+.mchip.sel { background: var(--paper); box-shadow: inset 0 0 0 1.5px var(--signal); }
 .mghost { position: absolute; z-index: 80; height: 20px; padding: 0 8px; box-sizing: border-box; border: 2px solid;
     border-radius: 2px; background: var(--paper); font-size: 11.5px; line-height: 16px; pointer-events: none; white-space: nowrap; }
 
@@ -555,6 +586,22 @@ let css = `
 .menu div.off:hover { background: none; color: var(--ink-faint); }
 .menu.icons div { display: flex; align-items: center; }
 .menu.icons .icw { width: 38px; flex: none; }
+/* pickers (Menu): a row's own menu beside it, its variants' chips, a badge, the rare values behind "more" */
+.menu.pick div { display: flex; align-items: center; }
+.menu .hid { display: none !important; }
+.menu div.open { background: var(--panel-hi); }
+.menu .sa { margin-left: auto; padding-left: 14px; color: var(--ink-faint); }
+.menu div:hover .sa { color: var(--paper); }
+.menu .bdg { margin-left: 8px; padding: 0 3px; font-size: 9.5px; line-height: 12px; color: var(--ink-faint);
+    border: 1px solid var(--tile-edge); border-radius: 2px; letter-spacing: 0.04em; }
+.menu div:hover .bdg { color: var(--paper); border-color: var(--paper); }
+.menu .tail { margin-left: auto; padding-left: 14px; display: flex; gap: 3px; }
+.menu .chip { min-width: 12px; padding: 0 4px; font-size: 11px; line-height: 13px; text-align: center; font-weight: 400;
+    border: 1px solid var(--tile-edge); border-radius: 2px; }
+.menu .chip.cur { font-weight: 700; border-color: currentColor; }
+.menu div:hover .chip { border-color: var(--paper); }
+.menu .chip:hover { background: var(--paper); color: var(--signal); }
+.menu div.more { color: var(--ink-faint); font-style: italic; }
 
 /* icons (Icons.res): strokes in the text colour */
 .ic { display: block; height: 14px; width: auto; flex: none; overflow: visible;
@@ -618,6 +665,24 @@ let css = `
 }
 .toast.on { display: block; }
 
+/* search (Palette): a box over the page, and what it finds */
+.pal { position: absolute; left: 270px; top: 40px; width: 560px; z-index: 75; display: none; box-sizing: border-box;
+    background: var(--paper); border: 1px solid var(--ink); box-shadow: 3px 3px 0 rgba(31,26,14,0.35); }
+.pal.on { display: block; }
+.pal-q { display: block; width: 100%; height: 32px; box-sizing: border-box; padding: 0 10px; border: none;
+    border-bottom: 1px solid var(--tile-edge); background: transparent; font: inherit; font-size: 15px; color: var(--ink); outline: none; }
+.pal-q::placeholder { color: var(--ink-faint); }
+.pal-list { max-height: 292px; overflow-y: auto; padding: 2px 0; }
+.pal-row { display: flex; align-items: baseline; gap: 10px; height: 24px; line-height: 24px; padding: 0 10px;
+    font-size: 13px; white-space: nowrap; cursor: pointer; }
+.pal-row .t { flex: none; max-width: 330px; overflow: hidden; text-overflow: ellipsis; }
+.pal-row .d { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; color: var(--ink-faint); }
+.pal-row .v { flex: none; font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.pal-row.on { background: var(--signal); color: var(--paper); }
+.pal-row.on .d, .pal-row.on .v { color: var(--paper); }
+.pal-none { padding: 4px 10px; font-size: 12.5px; color: var(--ink-faint); }
+.pal-foot { padding: 3px 10px 4px; border-top: 1px solid var(--tile-edge); font-size: 11px; color: var(--ink-faint); white-space: pre; }
+
 /* mod page: source chips (with a jack on the right), target chips (jack on the left) */
 .src, .tgt {
     position: absolute; box-sizing: border-box; height: ${px(controlHeight)}; border-radius: 2px;
@@ -637,7 +702,23 @@ let css = `
 .tgt .jk { left: 6px; }
 .jk.on { background: var(--ink); }
 .src:hover, .tgt:hover, .src.lit, .src:focus-visible, .tgt:focus-visible { background: var(--panel-hi); box-shadow: inset 0 0 0 1px var(--edge); }
-.src.sel { background: var(--paper); box-shadow: inset 0 0 0 1.5px var(--signal); }
+.src.sel, .src.pick { background: var(--paper); box-shadow: inset 0 0 0 1.5px var(--signal); }
+.src.sel { box-shadow: inset 0 0 0 2px var(--signal); font-weight: 700; }
+.src.nojack { padding-right: 8px; cursor: pointer; }
+.tgt.fixed { cursor: default; }
+/* the selected source's rows stand out; Oatmeal's own routings carry a badge */
+.mrows.focus .conn:not(.sel) { opacity: 0.45; }
+.mbadge { position: absolute; height: 18px; box-sizing: border-box; padding: 0 7px; border: 1px solid var(--edge);
+    border-radius: 9px; font-size: 10.5px; line-height: 16px; color: var(--ink-soft); white-space: nowrap; cursor: help; }
+.mopt.mmore { font-size: 15px; font-weight: 700; color: var(--ink-soft); }
+/* the selected source's editor, over the lower part of the connections */
+.srced { display: none; z-index: 15; border-color: var(--signal); box-shadow: 0 -3px 0 rgba(31,26,14,0.15); }
+.srced.on { display: block; }
+.srced .xclose { height: 18px; line-height: 16px; font-size: 13px; padding: 0; }
+.srced .mdesc { font-size: 12px; color: var(--ink-soft); }
+.mempty .msub { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.mempty .msub .btn.help { position: static; width: 20px; height: 20px; }
+.mempty .tip { left: 50%; width: 380px; margin-left: -190px; top: 62px; text-align: left; }
 .src.plug { padding: 0; cursor: grab; }
 .tgt.on { font-weight: 700; }
 .tgt.on .jk { background: var(--ink); }
@@ -697,6 +778,11 @@ let css = `
 .addrow:hover, .addrow:focus-visible { background: var(--panel-hi); color: var(--ink); border-color: var(--ink); outline: none; }
 .addrow b { font-size: 17px; line-height: 1; }
 .addrow .sub { color: var(--ink-faint); font-size: 12px; margin-left: 6px; }
+/* Oatmeal's depths at their Init values: one quiet row, which opens to list them */
+.mdflt { position: absolute; box-sizing: border-box; align-items: center; padding: 0 10px; font-size: 12px;
+    color: var(--ink-faint); cursor: pointer; white-space: nowrap; }
+.mdflt:hover, .mdflt:focus-visible { color: var(--ink); outline: none; }
+.conn.dflt { opacity: 0.6; }
 .mempty { position: absolute; left: 20px; right: 20px; top: 92px; text-align: center; color: var(--ink-soft);
     font-size: 13px; line-height: 1.45; }
 .mempty .big { font-size: 17px; font-weight: 700; color: var(--ink); margin-bottom: 6px; }
@@ -724,6 +810,13 @@ let css = `
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mdest.none { color: var(--ink-faint); }
 .mdest:hover { color: var(--signal); }
+/* the Play page's patch summary: a line each, a link to where it is edited */
+.psum { position: absolute; display: flex; gap: 6px; height: 19px; line-height: 19px; border-radius: 2px;
+    font-size: 12.5px; white-space: nowrap; cursor: pointer; }
+.psum b { flex: none; width: 40px; padding-left: 3px; font-size: 11px; color: var(--ink-faint); }
+.psum span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.psum:hover { background: var(--panel-hi); }
+.psum:hover span { color: var(--signal); }
 .ptab.mark::after { content: ""; display: inline-block; width: 5px; height: 5px; margin-left: 4px; vertical-align: 2px;
     border-radius: 50%; background: var(--mod); }
 

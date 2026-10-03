@@ -13,7 +13,7 @@
 namespace porridge
 {
     let laneSlots = 4;
-    let laneFlangerLine = 2048;     // 42 ms at 48 kHz (21 ms at 96): the flanger's delays and depth
+    let laneFlangerLine = combSize; // 42 ms at 48 kHz (21 ms at 96): the flanger's delays and depth
 
     /// One lane slot's state in one voice, whichever kind it holds (only that kind's part is
     /// used; a different value in the slot starts it afresh). Its filters, distortions and
@@ -82,12 +82,13 @@ namespace porridge
 
     /// A lane slot's big parts, which only its kind uses (and startLane clears for it): kept
     /// apart from the rest of its state, which a new voice clears. The filter's and the
-    /// distortion's state per side, and the flanger's line (both sides).
+    /// distortion's state per side. The flanger's line is the filters' comb lines (the left
+    /// side in filt[0], the right in filt[1]): a slot holds one kind, and the line is the
+    /// filters' biggest part, so sharing it saves 16 kB in each of the 128 slots.
     struct LaneBuffers
     {
         Filter[2] filt;
         Distortion[2] dist;
-        float<2>[laneFlangerLine] flLine;
     }
 
     //==============================================================================
@@ -135,7 +136,10 @@ namespace porridge
         else if (kind == rack::flangerKind)
         {
             for (wrap<laneFlangerLine> i)
-                bufs.flLine[i] = float<2> (0.0f, 0.0f);
+            {
+                bufs.filt[0].comb[i] = 0.0f;
+                bufs.filt[1].comb[i] = 0.0f;
+            }
 
             this.flPos = 0;
             this.flPhase = 0;
@@ -396,8 +400,9 @@ namespace porridge
         let t = d - float (di);
         let m = laneFlangerLine - 1;
         let p = this.flPos - di;
-        return hermite (bufs.flLine.at ((p + 1) & m).at (ch), bufs.flLine.at (p & m).at (ch),
-                        bufs.flLine.at ((p - 1) & m).at (ch), bufs.flLine.at ((p - 2) & m).at (ch), t);
+        let c = wrap<2> (ch);
+        return hermite (bufs.filt[c].comb.at ((p + 1) & m), bufs.filt[c].comb.at (p & m),
+                        bufs.filt[c].comb.at ((p - 1) & m), bufs.filt[c].comb.at ((p - 2) & m), t);
     }
 
     void laneFlanger (LaneFx& this, LaneBuffers& bufs, const float[numSlots]& P, float noteHz, float64 sr, float glide,
@@ -438,7 +443,8 @@ namespace porridge
             let xR = both ? r.at (i) : xL;
             let backL = extraSoftClip (fb * yL);
             let backR = extraSoftClip (fb * yR);
-            bufs.flLine.at (this.flPos) = float<2> (xL + backL + 1e-18f, xR + backR + 1e-18f);
+            bufs.filt[0].comb.at (this.flPos) = xL + backL + 1e-18f;
+            bufs.filt[1].comb.at (this.flPos) = xR + backR + 1e-18f;
             this.flPos = (this.flPos + 1) & (laneFlangerLine - 1);
 
             l.at (i) = (xL + backL * min (1.0f, 2.0f * mix)) * (1.0f - mix) + yL * mix;
