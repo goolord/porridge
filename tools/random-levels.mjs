@@ -43,13 +43,15 @@ const measure = ([l, r]) =>
     return { rms: loudest ([l, r], rate), k: loudest ([kWeight (l, rate), kWeight (r, rate)], rate), peak: db (peak) };
 };
 
-// Renders a note of these values (with the output gain at 1) and measures it.
+// Renders a note of these values (and tables, Init's if not given) with the output gain at 1, and
+// measures it.
 let renders = 0;
-const level = (values, note) => new Promise ((done, fail) =>
+const level = (values, note, tables) => new Promise ((done, fail) =>
 {
     const name = "r" + (renders++ % (4 * jobs));
     const program = join (dir, name + ".bin"), events = join (dir, name + ".txt"), out = join (dir, name + ".f32");
-    writeFileSync (program, Preset.toOatmeal ({ ...Preset.make (name), values }));
+    const made = Preset.make (name);
+    writeFileSync (program, Preset.toOatmeal ({ ...made, values, tables: tables ?? made.tables }));
     writeFileSync (events, `0 144 ${note} 100\n${hold * rate} 128 ${note} 0\n`);
     // Oatmeal's export loses Porridge's values: set every one that isn't Init's, or isn't what
     // the DSP starts with (its rack holds Oatmeal's four, Init's is empty)
@@ -182,10 +184,11 @@ const patches = Array.from ({ length: count }, (_, i) =>
     const kind = PatchGen.kinds[i % PatchGen.kinds.length];
     const wild = { osc: r (), filter: r (), env: r (), mod: r (), fx: r () };
     if (fixedFx >= 0) wild.fx = fixedFx;
-    return { i, kind, wild, values: PatchGen.generate (wild, kind, r), note: PatchGen.profile (kind).note };
+    const { values, tables } = PatchGen.generate (wild, kind, r);
+    return { i, kind, wild, values, tables, note: PatchGen.profile (kind).note };
 });
 
-const measured = await pool (patches.map (p => () => level (p.values, p.note)), "rendered");
+const measured = await pool (patches.map (p => () => level (p.values, p.note, p.tables)), "rendered");
 const results = patches.map ((p, i) => ({ ...p, ...measured[i] }));
 
 const silent = results.filter (x => x.rms < -70);
@@ -207,20 +210,20 @@ const driven = x => x.values.get ("Sat_Type") !== 0 || FxRack.read (id => x.valu
 for (const [label, group] of [["driven", heard.filter (driven)], ["clean", heard.filter (x => ! driven (x))]])
     if (group.length > 1)
         console.log (`  ${label} (${group.length}): RMS ${stats (group.map (x => x.rms + db (x.values.get ("Gain"))))}; K-weighted ${stats (group.map (x => x.k + db (x.values.get ("Gain"))))}`);
-console.log (`the estimate as it is: ${stats (heard.map (x => PatchGen.loudness (x.values, x.note) - x.k))}`);
+console.log (`the estimate as it is: ${stats (heard.map (x => PatchGen.loudness (x.values, x.note, x.tables) - x.k))}`);
 const gained = heard.map (x => x.k + db (x.values.get ("Gain")));
 console.log (`with their output gains: ${stats (gained)} (aiming at ${PatchGen.targetDb} dB)`);
 const peaks = heard.map (x => x.peak + db (x.values.get ("Gain")));
 console.log (`their peaks with the gains: highest ${Math.max (...peaks).toFixed (1)} dBFS, ${peaks.filter (p => p > -1).length} above -1 dBFS`);
 // how far a note's peak is above its loudest moment as simulated (with the estimate's correction)
-const crests = heard.map (x => x.peak - PatchGen.loudestMoment (x.values, x.note)).sort ((a, b) => a - b);
+const crests = heard.map (x => x.peak - PatchGen.loudestMoment (x.values, x.note, x.tables)).sort ((a, b) => a - b);
 const at = q => crests[Math.floor (q * (crests.length - 1))].toFixed (1);
 console.log (`peaks above the simulated loudest moment: median ${at (0.5)} dB, 90% ${at (0.9)}, 98% ${at (0.98)}, most ${at (1)}`);
 
 // least squares with a little ridge (not on the constant): (X'X + λI) w = X'y, the estimate's
 // simulated level taken as it is
 const features = heard.map (x => PatchGen.loudnessFeatures (x.values));
-const base = heard.map (x => PatchGen.simulatedLevel (x.values, x.note));
+const base = heard.map (x => PatchGen.simulatedLevel (x.values, x.note, undefined, x.tables));
 const k = features[0].length + 1;
 const rows = features.map (f => [...f, 1]);
 const lambda = 1;
@@ -263,7 +266,7 @@ console.log (`let loudnessBias = ${num (w[k - 1])}`);
 // the loudest as they play, with their output gains
 console.log ("\nloudest with their gains:");
 for (const x of [...heard].sort ((p, q) => (q.k + db (q.values.get ("Gain"))) - (p.k + db (p.values.get ("Gain")))).slice (0, 8))
-    console.log (`${(x.k + db (x.values.get ("Gain"))).toFixed (1)} dB (RMS ${(x.rms + db (x.values.get ("Gain"))).toFixed (1)}, estimate ${(PatchGen.loudness (x.values, x.note) - x.k).toFixed (1)} off)  ${x.kind} #${x.i}\n  ${PatchGen.describe (x.values, x.note).map (([a, t]) => a + ": " + t).join ("\n  ")}`);
+    console.log (`${(x.k + db (x.values.get ("Gain"))).toFixed (1)} dB (RMS ${(x.rms + db (x.values.get ("Gain"))).toFixed (1)}, estimate ${(PatchGen.loudness (x.values, x.note, x.tables) - x.k).toFixed (1)} off)  ${x.kind} #${x.i}\n  ${PatchGen.describe (x.values, x.note).map (([a, t]) => a + ": " + t).join ("\n  ")}`);
 
 // the furthest from the fit, to see what it misses
 const worst = heard.map ((x, i) => ({ x, error: fitted[i] - x.k })).sort ((p, q) => Math.abs (q.error) - Math.abs (p.error)).slice (0, 10);
