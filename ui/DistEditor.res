@@ -361,7 +361,8 @@ let make = (ctx: Ctx.t, body, ~id: string => string, ~placement, ~perVoice: unit
 
   graph(~title="waveform", ~x=half + gap, ~drive=() => true, (g, grid, layer) => {
     let cy = g.h / 2.
-    let ry = g.h / 2. - m
+    // (clear of the line about the type along the top)
+    let ry = g.h / 2. - m - 16.
     let xOf = t => m + t * (g.w - 2. * m)
     let yOf = y => cy - FxDsp.clamp(y / scale.contents, -1.05, 1.05) * ry
     FxGraph.line(grid, ~cls="axis", m, cy, g.w - m, cy)

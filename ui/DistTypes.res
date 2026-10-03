@@ -86,7 +86,7 @@ let all: array<info> = [
     name: "bass amp",
     short: "bass amp",
     source: "BassAmp",
-    about: "a bass amp: an overdriven top over a clean bass bump and a sub octave",
+    about: "an overdriven top over a clean bass bump and a sub octave",
     knobs: {drive: "high", tone: "dub", character: "sub"},
   },
   {
