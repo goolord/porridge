@@ -110,7 +110,7 @@ let contextMenu = (c, e, ~x, ~y) => {
       | 2 => model->ParamModel.gestureSet(id, def.init)
       | 3 => clipboard := Some((id, get(id), def.toNorm(get(id))))
       | 4 => paste()
-      | _ => ctx.hostMenu->HostMenu.showAt(id, ~x, ~y)
+      | _ => ctx.hostMenu->HostMenu.showAt(ctx.model, id, ~x, ~y)
       },
   )
 }

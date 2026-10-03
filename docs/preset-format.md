@@ -114,4 +114,6 @@ The plugin keeps its bank in the host session as a bank document, under the stor
 `bank`. Sessions saved by earlier builds stored base64 Oatmeal chunks there; they are converted
 when loaded. The current program's custom shapes' points are under `params` (a JSON object of
 the values that differ from Init); sessions saved while they were host parameters have them
-moved there when loaded.
+moved there when loaded. Sessions saved before the rack's slots (October 2026) have their effects'
+copies' values moved there too, and the plugin loads them into the slots as it loads such a
+program (`ui/SessionSlots.res`).

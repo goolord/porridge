@@ -135,8 +135,9 @@ ui/                     patch view (ReScript)
                           Airwindows models on a sine (and the air on sines) for their graphs
   oatmeal/                file formats, parameter table, value texts
   bindings/               Cmajor PatchConnection and browser API bindings
-worker/PatchWorker.res  restores shapes/curves and the custom shapes' points, and installs the
-                          factory bank
+worker/PatchWorker.res  restores shapes/curves and the custom shapes' points, installs the
+                          factory bank, and loads a host's session from before the rack's
+                          slots into them (ui/SessionSlots.res)
 bundle/                 view.js, worker.js and the factory bank as a new instance stores it
                         (factory-bank.json), built by `npm run build`
 presets/oatmealprs.dat  Oatmeal's factory bank
@@ -155,7 +156,9 @@ tools/
                           menu, the view's requests), PorridgeLibrary.h (the bank library:
                           bank folders scanned and copied, files opened in the browser kept)
   clap-patch.mjs          patches the generated CLAP wrapper: parameter ids from
-                          dsp/param-ids.txt (not endpoint handles), aspect-locked resizing,
+                          dsp/param-ids.txt (not endpoint handles), the slots' knobs named
+                          and worded after the kinds they hold (a rescan when that changes),
+                          aspect-locked resizing,
                           the interface size setting, the host's parameter menu, the
                           64-sample latency, and a faster start (a QuickJS worker, one
                           rebuild per activation)
@@ -188,7 +191,9 @@ tools/
                           stored state, undo, a host's state),
                           claphost.cpp (a minimal CLAP host: parameters, values, state) and
                           clap-ids.mjs (a build keeps an earlier build's parameter ids, and
-                          loads its state),
+                          loads its state), clap-slots.mjs (the slots' knobs named after
+                          their kinds, the host asked to rescan, a session from before the
+                          slots loading into them),
                           banklibrary.cpp (the plugin's bank library on real files), oneshot.mjs (one-shot LFOs hold their
                           end), levels.mjs (the Vanilla bank's gains, levels and motion),
                           random.mjs (random patches: sound values, the wildness knobs, the

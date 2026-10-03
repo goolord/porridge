@@ -2,7 +2,9 @@
 // it loads the .clap, creates and activates the plugin, then runs its commands in order.
 //
 //   claphost <Porridge.clap> [command ...]
-//     list               every parameter: "id<TAB>name<TAB>module<TAB>min<TAB>max<TAB>default<TAB>value"
+//     list               every parameter: "id<TAB>name<TAB>module<TAB>min<TAB>max<TAB>default<TAB>value<TAB>flags"
+//
+// It prints "rescan <flags>" whenever the plugin asks it to rescan its parameters.
 //     load <file>        loads a state (what save wrote, or any plugin's saved state)
 //     save <file>        saves the state
 //     set <id> <value>   sends a parameter value event (CLAP id, plain value) through flush
@@ -10,7 +12,7 @@
 //     wait <ms>          pumps the message loop and on_main_thread for that long (the patch worker)
 //
 // Build (from a VS 2022 developer prompt):
-//   cl /std:c++17 /EHsc /I <clap>/include tools/test/claphost.cpp /Fe:claphost.exe
+//   cl /std:c++17 /EHsc /I <clap>/include tools/test/claphost.cpp /Fe:claphost.exe user32.lib
 // tools/test/clap-ids.mjs uses it to compare two builds' parameter ids.
 
 #define NOMINMAX
@@ -27,7 +29,15 @@
 
 static std::atomic<bool> callbackRequested { false };
 
-static const void* hostGetExtension (const clap_host_t*, const char*)   { return nullptr; }
+static void hostParamsRescan (const clap_host_t*, clap_param_rescan_flags flags)   { printf ("rescan %u\n", (unsigned) flags); fflush (stdout); }
+static void hostParamsClear (const clap_host_t*, clap_id, clap_param_clear_flags)  {}
+static void hostParamsRequestFlush (const clap_host_t*)                             {}
+static const clap_host_params_t hostParams { hostParamsRescan, hostParamsClear, hostParamsRequestFlush };
+
+static const void* hostGetExtension (const clap_host_t*, const char* id)
+{
+    return std::strcmp (id, CLAP_EXT_PARAMS) == 0 ? &hostParams : nullptr;
+}
 static void hostRequestRestart (const clap_host_t*)                     {}
 static void hostRequestProcess (const clap_host_t*)                     {}
 static void hostRequestCallback (const clap_host_t*)                    { callbackRequested = true; }
@@ -152,8 +162,8 @@ int main (int argc, char** argv)
                 params->get_info (plugin, k, &info);
                 double value = 0;
                 params->get_value (plugin, info.id, &value);
-                printf ("%u\t%s\t%s\t%g\t%g\t%g\t%g\n", info.id, info.name, info.module, info.min_value, info.max_value,
-                        info.default_value, value);
+                printf ("%u\t%s\t%s\t%g\t%g\t%g\t%g\t%u\n", info.id, info.name, info.module, info.min_value, info.max_value,
+                        info.default_value, value, (unsigned) info.flags);
             }
         }
         else if (command == "save")

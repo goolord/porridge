@@ -919,6 +919,17 @@ let allKinds = [
   ...voiceKinds,
 ]
 
+// Each kind's parameters' labels as a slot's knob's name ends: without the kind's name, which
+// Porridge's own kinds' specs start with ("Flanger rate": "rate").
+let shortLabel = (k, label) => {
+  let lower = String.toLowerCase(label)
+  switch [String.toLowerCase(k.name) ++ " ", "fx filter ", "dist "]->Array.find(p => String.startsWith(lower, p)) {
+  | Some(p) => String.slice(label, ~start=String.length(p))
+  | None => label
+  }
+}
+let allKinds = allKinds->Array.map(k => {...k, params: k.params->Array.map(((id, label)) => (id, shortLabel(k, label)))})
+
 let isRetiredKind = k => k.mergedInto != None
 
 // The kinds there are.
@@ -1318,7 +1329,7 @@ let parseKnobId = id => {
 
 // The kind of effect a rack or lane value is (None: empty, Oatmeal's four, or retired).
 let entryKind = v =>
-  rackEntries[v]->Option.flatMap(e => e)->Option.flatMap(((key, _)) => rackKinds->Array.find(k => k.key == key))
+  v <= 4 ? None : rackEntries[v]->Option.flatMap(e => e)->Option.flatMap(((key, _)) => rackKinds->Array.find(k => k.key == key))
 
 // A lane slot's value for a kind (its first instance's: the lane keeps no instances).
 let laneValue = (k: rackKind) => entryValue(k.key, firstInstance(k))
